@@ -296,6 +296,12 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
   const count = (value, fallback, min = 1) => Number.isSafeInteger(value) && value >= min ? value : fallback;
   const modelTiering = a.modelTiering === true || a.modelTiering === false || object(a.modelTiering) ? a.modelTiering : undefined;
   const skipLabels = Array.isArray(a.skipLabels) ? [...new Set(a.skipLabels.filter(named).map(s => s.trim()))] : undefined;
+  const siblingRepos = Array.isArray(a.siblingRepos)
+    ? a.siblingRepos.filter(item => named(item) || (object(item) && named(item.canonical ?? item.name ?? item.repo)))
+    : undefined;
+  const minIntakeConfidence = typeof a.minIntakeConfidence === 'number' && Number.isFinite(a.minIntakeConfidence) && a.minIntakeConfidence >= 0 && a.minIntakeConfidence <= 1
+    ? a.minIntakeConfidence
+    : undefined;
   const allowedIssues = Array.isArray(a.allowedIssues)
     ? [...new Set(a.allowedIssues.filter(n => Number.isSafeInteger(n) && n > 0))].sort((x, y) => x - y)
     : [];
@@ -318,6 +324,8 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
     repairs: count(a.maxRepairs, count(a.repairs, 6, 0), 0), testCommand: named(a.testCommand) ? a.testCommand : packageJson?.scripts?.test ? 'npm test' : null,
     ...(modelTiering !== undefined ? { modelTiering } : {}),
     ...(skipLabels !== undefined ? { skipLabels } : {}),
+    ...(siblingRepos !== undefined ? { siblingRepos } : {}),
+    ...(minIntakeConfidence !== undefined ? { minIntakeConfidence } : {}),
     ...(forensics !== undefined ? { forensics } : {}) };
 }
 const hygieneGateMode = ctx => ['off', 'observe', 'enforce'].includes(ctx?.settings?.hygieneGate) ? ctx.settings.hygieneGate : 'observe';
@@ -2671,7 +2679,7 @@ async function intake(ctx, rows) {
       return await checkActiveIntakeLogin();
     }
     // Check decision replies even before ready cards exist so answered questions clear pdd:needs-decision promptly.
-    const cardsNow = activeReadyCards(ctx.root, rows, ctx.fs);
+    const cardsNow = activeReadyCards(ctx.root, rows, ctx.fs, { minConfidence: settings.minIntakeConfidence });
     cards = cardsNow;
     if (!cards.size) {
       await decisionReplies(ctx, rows);

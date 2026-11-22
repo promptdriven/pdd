@@ -4,6 +4,7 @@ export const PREFLIGHT_REASON_CODES = Object.freeze([
   'cross_repo',
   'human_decision',
   'unverifiable_boundary',
+  'unclear_or_unsound',
 ]);
 
 const REASON_CODE_SET = new Set(PREFLIGHT_REASON_CODES);
@@ -18,6 +19,7 @@ const DEFAULT_CAPABILITIES = Object.freeze({
 
 const DEFAULT_LOCAL_TOP_DIRS = new Set([
   'src', 'prompts', 'test', 'tests', 'bin', 'scripts', 'docs', 'user_stories', 'skills',
+  'lib', 'pkg', 'cmd', 'internal', 'app', 'apps', 'packages', 'web', 'mobile', 'client', 'server',
 ]);
 
 const GENERIC_ROOT_FILES = new Set([
@@ -26,62 +28,88 @@ const GENERIC_ROOT_FILES = new Set([
   'go.mod', '.gitignore', 'license',
 ]);
 
-const PATH_PREFIX_RE = /^(?:src|prompts|test|tests|scripts|bin|docs|skills|user_stories|packages|apps|services|extensions|pdd_cloud|pdd-workflow|pdd_workflow|prompt-runtime|runtime-client|github_pdd_app|server|worker|api|lib|\.github)\/[A-Za-z0-9_./-]+$/;
+const PATH_PREFIX_RE = /^(?:src|prompts|test|tests|scripts|bin|docs|skills|user_stories|packages|apps|services|extensions|server|worker|api|lib|cmd|pkg|internal|app|web|mobile|client|\.github)\/[A-Za-z0-9_./-]+$/;
 const PATH_EXT_RE = /^(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|swift|sh|md|json|ya?ml|toml|sql|css|html)$/;
 const IGNORE_SLASH_RE = /^(?:origin|refs|application|text|image|audio|video|multipart|http|https|read|write|pass|fail|true|false|yes|no|auto|observe|before|after|stdout|stderr|input|output|client|server)\//i;
-
-const SIBLINGS = Object.freeze([
-  {
-    canonical: 'pdd_cloud',
-    short: 'pdd_cloud',
-    aliases: ['pdd_cloud', 'pdd-cloud'],
-    roots: ['pdd_cloud'],
-    prefixes: ['pdd_cloud/'],
-    mentionRe: /\bpdd[_-]cloud\b(?!#\d|\.(?:mjs|cjs|js|ts|py|md|json))/i,
-    framedRe: /(?:^\s*\[?pdd[_-]cloud\]?\s*[:\-]|\b(?:in|inside|for|on)\s+`?pdd[_-]cloud`?\b|`?pdd[_-]cloud`?\s+(?:service|backend|server|repo|repository))/im,
-  },
-  {
-    canonical: 'pdd-workflow',
-    short: 'pdd-workflow',
-    aliases: ['pdd-workflow', 'pdd_workflow'],
-    roots: ['pdd-workflow', 'pdd_workflow'],
-    prefixes: ['pdd-workflow/', 'pdd_workflow/'],
-    mentionRe: /\bpdd[_-]workflow\b(?!#\d|\.(?:mjs|cjs|js|ts|py|md|json))/i,
-    framedRe: /(?:^\s*\[?pdd[_-]workflow\]?\s*[:\-]|\b(?:in|inside|for|on)\s+`?pdd[_-]workflow`?\b|`?pdd[_-]workflow`?\s+(?:service|repo|repository|scripts?|pipeline|workflow))/im,
-  },
-  {
-    canonical: 'prompt-runtime',
-    short: 'prompt-runtime',
-    aliases: ['prompt-runtime', 'prompt_runtime'],
-    roots: ['prompt-runtime'],
-    prefixes: ['prompt-runtime/'],
-    mentionRe: /\bprompt[_-]runtime\b(?!#\d|\.(?:mjs|cjs|js|ts|py|md|json))/i,
-    framedRe: /(?:^\s*\[?prompt[_-]runtime\]?\s*[:\-]|\b(?:in|inside|for|on)\s+`?prompt[_-]runtime`?\b|`?prompt[_-]runtime`?\s+(?:service|server|worker|repo|repository|interpreter))/im,
-  },
-  {
-    canonical: 'runtime-client',
-    short: 'runtime-client',
-    aliases: ['runtime-client', 'packages/runtime-client'],
-    roots: ['runtime-client', 'packages/runtime-client'],
-    prefixes: ['runtime-client/', 'packages/runtime-client/'],
-    mentionRe: /\bruntime-client\b(?!#\d|\.(?:mjs|cjs|js|ts|py|md|json))/i,
-    framedRe: /(?:^\s*\[?runtime-client\]?\s*[:\-]|\b(?:in|inside|for|on)\s+`?runtime-client`?\b|`?runtime-client`?\s+(?:package|repo|repository|sdk|client))/im,
-  },
-  {
-    canonical: 'extensions/github_pdd_app',
-    short: 'github_pdd_app',
-    aliases: ['extensions/github_pdd_app', 'github_pdd_app', 'github-pdd-app'],
-    roots: ['extensions/github_pdd_app', 'github_pdd_app'],
-    prefixes: ['extensions/github_pdd_app/', 'github_pdd_app/'],
-    mentionRe: /\bgithub[_-]pdd[_-]app\b(?!#\d|\.(?:mjs|cjs|js|ts|py|md|json))/i,
-    framedRe: /(?:^\s*\[?github[_-]pdd[_-]app\]?\s*[:\-]|\b(?:in|inside|for|on)\s+`?github[_-]pdd[_-]app`?\b|`?github[_-]pdd[_-]app`?\s+(?:app|extension|service|repo|repository))/im,
-  },
-]);
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const asText = value => typeof value === 'string' ? value : '';
 const isPositiveInt = value => Number.isSafeInteger(value) && value > 0;
 const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function siblingVariantSet(raw) {
+  const clean = asText(raw).trim().replace(/^\/+|\/+$/g, '').toLowerCase();
+  if (!clean) return [];
+  const out = new Set([clean]);
+  const last = clean.includes('/') ? clean.split('/').at(-1) : clean;
+  if (last) {
+    out.add(last);
+    if (last.includes('-')) out.add(last.replaceAll('-', '_'));
+    if (last.includes('_')) out.add(last.replaceAll('_', '-'));
+  }
+  return [...out];
+}
+
+/**
+ * Normalize caller-configured sibling repositories (`autopilot.siblingRepos` in `pdd.json`).
+ * Accepts strings ("acme-api", "acme/mobile", "extensions/my-app") or descriptor objects.
+ */
+export function normalizeSiblingRepos(siblingRepos = []) {
+  if (!Array.isArray(siblingRepos)) return [];
+  const normalized = [];
+  const seen = new Set();
+  for (const entry of siblingRepos) {
+    let canonical = '', short = '', rawAliases = [], rawRoots = [], rawPrefixes = [];
+    if (typeof entry === 'string') {
+      canonical = entry.trim().replace(/^\/+|\/+$/g, '');
+      if (!canonical) continue;
+      short = canonical.includes('/') ? canonical.split('/').at(-1) : canonical;
+    } else if (isObject(entry)) {
+      canonical = asText(entry.canonical ?? entry.name ?? entry.repo).trim().replace(/^\/+|\/+$/g, '');
+      if (!canonical) continue;
+      short = asText(entry.short).trim().replace(/^\/+|\/+$/g, '')
+        || (canonical.includes('/') ? canonical.split('/').at(-1) : canonical);
+      rawAliases = Array.isArray(entry.aliases) ? entry.aliases : [];
+      rawRoots = Array.isArray(entry.roots) ? entry.roots : [];
+      rawPrefixes = Array.isArray(entry.prefixes) ? entry.prefixes : [];
+    } else {
+      continue;
+    }
+    const key = canonical.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const aliases = [...new Set([
+      ...siblingVariantSet(canonical),
+      ...siblingVariantSet(short),
+      ...rawAliases.flatMap(siblingVariantSet),
+    ])].filter(Boolean);
+    const roots = [...new Set([
+      ...(rawRoots.length ? rawRoots.map(r => asText(r).trim().replace(/^\/+|\/+$/g, '').toLowerCase()) : aliases),
+    ])].filter(Boolean);
+    const prefixes = [...new Set([
+      ...rawPrefixes.map(p => asText(p).trim().replace(/^\/+/, '').toLowerCase()).filter(p => p.endsWith('/')),
+      ...roots.map(r => `${r}/`),
+    ])];
+    const mentionTokens = [...new Set([
+      ...siblingVariantSet(short),
+      ...rawAliases.flatMap(a => siblingVariantSet(a).filter(v => !v.includes('/'))),
+    ])].filter(v => v.length >= 2);
+    const pattern = mentionTokens.length
+      ? mentionTokens.map(t => escapeRegex(t).replace(/\\[-_]/g, '[_-]')).join('|')
+      : escapeRegex(short.toLowerCase());
+    normalized.push({
+      canonical,
+      short,
+      aliases,
+      roots,
+      prefixes,
+      mentionRe: new RegExp(`\\b(?:${pattern})\\b(?!#\\d|\\.(?:mjs|cjs|js|ts|py|go|rs|rb|java|md|json))`, 'i'),
+      framedRe: new RegExp(`(?:^\\s*\\[?(?:${pattern})\\]?\\s*[:\\-]|\\b(?:in|inside|for|on)\\s+\`?(?:${pattern})\`?\\b|\`?(?:${pattern})\`?\\s+(?:service|backend|server|repo|repository|package|sdk|client|app|extension|scripts?|pipeline|workflow|worker|interpreter))`, 'im'),
+    });
+  }
+  return normalized;
+}
 
 function cleanSingleLine(value, max = 300) {
   return asText(value)
@@ -169,7 +197,7 @@ function splitClauses(sanitizedText) {
   return clauses;
 }
 
-function normalizeCandidatePath(raw) {
+function normalizeCandidatePath(raw, siblingPrefixes = []) {
   const cleaned = asText(raw)
     .trim()
     .replace(/^`+|`+$/g, '')
@@ -180,39 +208,42 @@ function normalizeCandidatePath(raw) {
   if (!cleaned || cleaned.startsWith('/') || cleaned.includes('..') || cleaned.includes('://') || cleaned.includes('*') || IGNORE_SLASH_RE.test(cleaned)) {
     return null;
   }
-  if (PATH_EXT_RE.test(cleaned) || PATH_PREFIX_RE.test(cleaned)) return cleaned;
+  const lower = cleaned.toLowerCase();
+  if (PATH_EXT_RE.test(cleaned) || PATH_PREFIX_RE.test(cleaned) || siblingPrefixes.some(p => lower.startsWith(p))) return cleaned;
   return null;
 }
 
 /**
  * Extract repository-relative file path candidates from plain or sanitized issue text.
  */
-export function extractReferencedPaths(fullText) {
+export function extractReferencedPaths(fullText, siblingRepos = []) {
+  const siblings = Array.isArray(siblingRepos) && siblingRepos[0]?.prefixes ? siblingRepos : normalizeSiblingRepos(siblingRepos);
+  const siblingPrefixes = siblings.flatMap(s => s.prefixes);
   const stripped = asText(fullText).replace(/https?:\/\/[^\s)`"'>]+/gi, ' ');
   const found = new Set();
   for (const match of stripped.matchAll(/`([^`\n]{2,180})`/g)) {
     for (const part of match[1].split(/\s+/)) {
-      const norm = normalizeCandidatePath(part);
+      const norm = normalizeCandidatePath(part, siblingPrefixes);
       if (norm) found.add(norm);
     }
   }
   for (const match of stripped.matchAll(/(?:^|[\s(["'])([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+)(?=$|[\s)\]"',.:;!?])/gm)) {
-    const norm = normalizeCandidatePath(match[1]);
+    const norm = normalizeCandidatePath(match[1], siblingPrefixes);
     if (norm) found.add(norm);
   }
   return [...found];
 }
 
-function matchSiblingAlias(raw) {
+function matchSiblingAlias(raw, siblings = []) {
   const lower = asText(raw).trim().replace(/^`+|`+$/g, '').replace(/^\[|\]$/g, '').toLowerCase();
   if (!lower) return null;
-  return SIBLINGS.find(sib => sib.aliases.includes(lower) || sib.canonical.toLowerCase() === lower) ?? null;
+  return siblings.find(sib => sib.aliases.includes(lower) || sib.canonical.toLowerCase() === lower) ?? null;
 }
 
-function canonicalTargetRepo(raw) {
+function canonicalTargetRepo(raw, siblings = []) {
   const cleaned = asText(raw).trim().replace(/^`+|`+$/g, '').replace(/^\[|\]$/g, '');
   if (!cleaned) return 'external-service';
-  const sib = matchSiblingAlias(cleaned);
+  const sib = matchSiblingAlias(cleaned, siblings);
   if (sib) return sib.canonical;
   return cleaned.toLowerCase();
 }
@@ -230,11 +261,15 @@ function createPathChecker(repoFiles) {
       hasInventory: false,
       pathExists: () => false,
       dirExists: topDir => DEFAULT_LOCAL_TOP_DIRS.has(asText(topDir).replace(/^\.\//, '').replace(/^\/+|\/+$/g, '')),
+      hasFilesInDir: () => false,
+      hasModuleBasename: () => false,
     };
   }
   const fileSet = new Set();
   const topDirs = new Set();
+  const fileTopDirs = new Set();
   const knownDirs = new Set();
+  const moduleBasenames = new Set();
   for (const entry of repoFiles) {
     if (typeof entry !== 'string') continue;
     const clean = entry.replace(/^\.\//, '').replace(/^\/+/, '');
@@ -246,6 +281,10 @@ function createPathChecker(repoFiles) {
       if (dir) knownDirs.add(dir);
     } else {
       fileSet.add(clean);
+      if (slash > 0) fileTopDirs.add(clean.slice(0, slash));
+      const base = clean.split('/').at(-1) ?? '';
+      const stem = base.replace(/\.(?:prompt\.md|test\.[a-z]+|spec\.[a-z]+|[a-z0-9]+)$/i, '').toLowerCase();
+      if (stem.length >= 3) moduleBasenames.add(stem);
     }
   }
   const pathExists = rel => {
@@ -261,7 +300,12 @@ function createPathChecker(repoFiles) {
     const clean = asText(topDir).replace(/^\.\//, '').replace(/^\/+|\/+$/g, '');
     return Boolean(clean && !clean.includes('..') && !clean.includes('/') && topDirs.has(clean));
   };
-  return { hasInventory: true, pathExists, dirExists };
+  const hasFilesInDir = topDir => {
+    const clean = asText(topDir).replace(/^\.\//, '').replace(/^\/+|\/+$/g, '');
+    return Boolean(clean && fileTopDirs.has(clean));
+  };
+  const hasModuleBasename = mod => moduleBasenames.has(asText(mod).toLowerCase());
+  return { hasInventory: true, pathExists, dirExists, hasFilesInDir, hasModuleBasename };
 }
 
 function isSiblingActive(sib, currentShort, pathExists) {
@@ -269,15 +313,15 @@ function isSiblingActive(sib, currentShort, pathExists) {
   return !sib.roots.some(pathExists);
 }
 
-function findSiblingForPath(pathStr, currentShort, pathExists) {
+function findSiblingForPath(pathStr, currentShort, pathExists, siblings = []) {
   const lower = pathStr.toLowerCase();
-  return SIBLINGS.find(sib => isSiblingActive(sib, currentShort, pathExists) && sib.prefixes.some(p => lower.startsWith(p))) ?? null;
+  return siblings.find(sib => isSiblingActive(sib, currentShort, pathExists) && sib.prefixes.some(p => lower.startsWith(p))) ?? null;
 }
 
 const TITLE_NON_REPO_SEG0_RE = /^(?:feat|fix|bug|chore|docs|test|tests|ci|cli|ui|ux|api|web|ops|wip|rfc|perf|build|style|refactor|revert|alpha|beta|p[0-3]|pr|os|io|cd|qa)$/i;
 const TITLE_NON_REPO_SEG1_RE = /^(?:cli|ui|ux|cd|ci|qa|pr|os|io)$/i;
 const META_FILTER_CLAUSE_RE = /\b(?:filter|reject|park|skip|detect|classify|flag|route|ignore)\b[^.\n]{0,75}\b(?:issues?|tickets?|prs?|runs?)\b|\b(?:when\s+they|when\s+an\s+issue|issues?\s+(?:that|which|meant\s+for|belonging\s+to))\b|\b(?:another|other)\s+repo(?:sitory|sitories)?\s*\([^)]*,[^)]*\)/i;
-const DEP_BUMP_CLAUSE_RE = /(?:\b(?:bump|pin|upgrade|package\.json|lockfile|npm\s+install)\b|@promptdriven\/[a-z0-9_.-]+|\b(?:have|already)\s+merged\s+to\b)/i;
+const DEP_BUMP_CLAUSE_RE = /(?:\b(?:bump|pin|upgrade|package\.json|lockfile|npm\s+install)\b|@[a-z0-9_.-]+\/[a-z0-9_.-]+|\b(?:have|already)\s+merged\s+to\b)/i;
 const MULTI_REPO_COORD_RE = /\b(?:coordinat(?:e|ed|ing)\s+(?:changes?|edits?|prs?|updates?|work|releases?|deploys?)|changes?\s+in\s+both\b|edits?\s+in\s+both\b|both\s+repos(?:itories)?\b|across\s+(?:both\s+)?repos(?:itories)?\b|paired\s+(?:pr|pull\s+request|deploy(?:ment)?|change)|ships?\s+together\s+in\s+both|in\s+tandem\s+with)\b/i;
 const ACROSS_PAIR_RE = /\bacross\s+`?([A-Za-z0-9_./-]+)`?\s+and\s+`?([A-Za-z0-9_./-]+)`?/gi;
 const ALONGSIDE_PAIR_RE = /\b(?:update|edit|change|modify|fix|deploy|ship)\s+(?:(?:the|an?)\s+)?`?([A-Za-z0-9_./-]+)`?(?:\s+[^.\n]{0,35})?\s+alongside\s+(?:(?:the|an?)\s+)?`?([A-Za-z0-9_./-]+)`?/gi;
@@ -307,16 +351,16 @@ function isSameOrgForeignSlug(raw, currentOwner, currentRepo) {
   return parts.length === 2 && parts[0] === currentOwner && /^[a-z0-9_.-]+$/.test(parts[1]);
 }
 
-function extractRepoHeader(title, body, currentOwner, currentRepo, currentShort, pathExists, dirExists) {
+function extractRepoHeader(title, body, currentOwner, currentRepo, currentShort, pathExists, dirExists, siblings = []) {
   const titlePrefix = title.match(/^\s*(?:\[([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)\]\s*|([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)\s*:\s+)/);
   if (titlePrefix) {
     const raw = (titlePrefix[1] || titlePrefix[2] || '').trim();
-    const sib = matchSiblingAlias(raw);
+    const sib = matchSiblingAlias(raw, siblings);
     if (sib && isSiblingActive(sib, currentShort, pathExists)) {
       return { targetRepo: sib.canonical, declared: raw };
     }
     if (raw.includes('/') && isValidExplicitSlug(raw, pathExists, dirExists) && isSameOrgForeignSlug(raw, currentOwner, currentRepo)) {
-      return { targetRepo: canonicalTargetRepo(raw), declared: raw };
+      return { targetRepo: canonicalTargetRepo(raw, siblings), declared: raw };
     }
   }
   for (const line of body.split('\n')) {
@@ -326,16 +370,16 @@ function extractRepoHeader(title, body, currentOwner, currentRepo, currentShort,
     const declared = meta[2].trim(), lower = declared.toLowerCase();
     if (['none', 'current', 'this', 'local', 'same', 'n/a'].includes(lower)) continue;
     if (sameRepository(declared, currentRepo, currentShort) || pathExists(declared)) continue;
-    const sib = matchSiblingAlias(declared);
+    const sib = matchSiblingAlias(declared, siblings);
     if (fieldKind === 'service') {
       if (sib && isSiblingActive(sib, currentShort, pathExists)) return { targetRepo: sib.canonical, declared };
       if (declared.includes('/') && isValidExplicitSlug(declared, pathExists, dirExists) && isSameOrgForeignSlug(declared, currentOwner, currentRepo)) {
-        return { targetRepo: canonicalTargetRepo(declared), declared };
+        return { targetRepo: canonicalTargetRepo(declared, siblings), declared };
       }
       continue;
     }
     if (declared.includes('/') && !isValidExplicitSlug(declared, pathExists, dirExists) && !sib) continue;
-    return { targetRepo: canonicalTargetRepo(declared), declared };
+    return { targetRepo: canonicalTargetRepo(declared, siblings), declared };
   }
   return null;
 }
@@ -379,20 +423,22 @@ function extractForeignUrls(segments, currentRepo, pathExists) {
   return urls;
 }
 
-function hasLocalCliOrModuleHint(fullText, hasInventory, pathExists) {
+function hasLocalCliOrModuleHint(fullText, hasInventory, hasModuleBasename, siblings = []) {
   if (/\bpdd\s+(?:autopilot|workflow|test|approve|owner|setup|accounts|doctor|init|metrics)\b/i.test(fullText) || /\bpdd\.json\b/i.test(fullText)) {
     return true;
   }
   if (!hasInventory) return false;
-  for (const token of fullText.matchAll(/\b([a-z][a-z0-9-]{2,40})\b/gi)) {
+  const siblingAliases = new Set(siblings.flatMap(s => s.aliases));
+  for (const token of fullText.matchAll(/\b([a-z][a-z0-9_-]{2,40})\b/gi)) {
     const mod = token[1].toLowerCase();
-    if (['prompt-runtime', 'runtime-client', 'pdd-cloud', 'pdd-workflow'].includes(mod)) continue;
-    if (pathExists(`src/${mod}.mjs`) || pathExists(`prompts/cli/${mod}.prompt.md`)) return true;
+    if (siblingAliases.has(mod)) continue;
+    if (hasModuleBasename(mod)) return true;
   }
   return false;
 }
 
-function analyzeRepositoryTargets({ repository, title, body, trustedSegments = [], trustedText = '', repoFiles = null }) {
+function analyzeRepositoryTargets({ repository, title, body, trustedSegments = [], trustedText = '', repoFiles = null, siblingRepos = [] }) {
+  const siblings = Array.isArray(siblingRepos) && siblingRepos[0]?.prefixes ? siblingRepos : normalizeSiblingRepos(siblingRepos);
   const currentRepo = asText(repository).trim().toLowerCase();
   const [currentOwner, currentShort] = currentRepo.includes('/')
     ? [currentRepo.split('/')[0], currentRepo.split('/').at(-1)]
@@ -403,8 +449,8 @@ function analyzeRepositoryTargets({ repository, title, body, trustedSegments = [
   const joinedTrusted = commentSegments.join('\n');
   const urlSegments = [title, body, ...commentSegments].filter(Boolean);
   const fullText = urlSegments.join('\n');
-  const { hasInventory, pathExists, dirExists } = createPathChecker(repoFiles);
-  const allPaths = extractReferencedPaths(fullText);
+  const { hasInventory, pathExists, dirExists, hasFilesInDir, hasModuleBasename } = createPathChecker(repoFiles);
+  const allPaths = extractReferencedPaths(fullText, siblings);
   const specificPaths = allPaths.filter(p => !GENERIC_ROOT_FILES.has(p.toLowerCase()));
   const existingLocal = hasInventory ? specificPaths.filter(pathExists) : [];
   const missingSpecific = hasInventory ? specificPaths.filter(p => !pathExists(p)) : specificPaths;
@@ -413,7 +459,7 @@ function analyzeRepositoryTargets({ repository, title, body, trustedSegments = [
   const siblingHits = [];
   const foreignMissing = [];
   for (const p of missingSpecific) {
-    const sib = findSiblingForPath(p, currentShort, pathExists);
+    const sib = findSiblingForPath(p, currentShort, pathExists, siblings);
     if (sib) {
       siblingHits.push({ path: p, sibling: sib });
       foreignMissing.push(p);
@@ -429,6 +475,7 @@ function analyzeRepositoryTargets({ repository, title, body, trustedSegments = [
   }
 
   return {
+    siblings,
     currentRepo,
     currentOwner,
     currentShort,
@@ -436,14 +483,15 @@ function analyzeRepositoryTargets({ repository, title, body, trustedSegments = [
     hasInventory,
     pathExists,
     dirExists,
+    hasFilesInDir,
     existingLocal,
     localGreenfield,
     siblingHits,
     foreignMissing,
     missingSpecific,
-    header: extractRepoHeader(title, `${body}\n${joinedTrusted}`, currentOwner, currentRepo, currentShort, pathExists, dirExists),
+    header: extractRepoHeader(title, `${body}\n${joinedTrusted}`, currentOwner, currentRepo, currentShort, pathExists, dirExists, siblings),
     foreignUrls: extractForeignUrls(urlSegments, currentRepo, pathExists),
-    namesLocalCli: hasLocalCliOrModuleHint(fullText, hasInventory, pathExists),
+    namesLocalCli: hasLocalCliOrModuleHint(fullText, hasInventory, hasModuleBasename, siblings),
   };
 }
 
@@ -451,14 +499,14 @@ function analyzeRepositoryTargets({ repository, title, body, trustedSegments = [
  * Extract absent foreign (non-local-greenfield, non-generic) paths across an issue's
  * title, sanitized body, and trusted comments for cross-repo routing explanations.
  */
-export function extractForeignMissingPaths({ repository = '', title = '', body = '', comments = [], repoFiles = null } = {}) {
+export function extractForeignMissingPaths({ repository = '', title = '', body = '', comments = [], repoFiles = null, siblingRepos = [] } = {}) {
   const cleanTitle = cleanSingleLine(title, 500);
   const cleanBody = sanitizeIssueText(asText(body));
   const trustedSegments = (Array.isArray(comments) ? comments : [])
     .filter(c => isObject(c) && c.trusted !== false)
     .map(c => sanitizeIssueText(asText(c.body)))
     .filter(Boolean);
-  const ctx = analyzeRepositoryTargets({ repository, title: cleanTitle, body: cleanBody, trustedSegments, repoFiles });
+  const ctx = analyzeRepositoryTargets({ repository, title: cleanTitle, body: cleanBody, trustedSegments, repoFiles, siblingRepos });
   const urlPaths = ctx.foreignUrls.filter(u => !u.isReference && u.path).map(u => u.path);
   return [...new Set([...ctx.foreignMissing, ...urlPaths])];
 }
@@ -468,13 +516,13 @@ export function extractForeignMissingPaths({ repository = '', title = '', body =
  * Returns null whenever any local existing or local-root greenfield path is present
  * (except when an explicit foreign Repo header appears with zero existing local files).
  */
-export function detectForeignOnlyTarget({ repository = '', title = '', body = '', repoFiles = null } = {}) {
+export function detectForeignOnlyTarget({ repository = '', title = '', body = '', repoFiles = null, siblingRepos = [] } = {}) {
   const cleanTitle = cleanSingleLine(title, 500);
   const cleanBody = sanitizeIssueText(asText(body));
   if (!cleanTitle && !cleanBody) return null;
 
-  const ctx = analyzeRepositoryTargets({ repository, title: cleanTitle, body: cleanBody, repoFiles });
-  const { currentShort, fullText, hasInventory, pathExists, existingLocal, localGreenfield, siblingHits, foreignMissing, missingSpecific, header, foreignUrls, namesLocalCli } = ctx;
+  const ctx = analyzeRepositoryTargets({ repository, title: cleanTitle, body: cleanBody, repoFiles, siblingRepos });
+  const { siblings, currentShort, fullText, hasInventory, pathExists, existingLocal, localGreenfield, siblingHits, foreignMissing, missingSpecific, header, foreignUrls, namesLocalCli } = ctx;
 
   if (header && existingLocal.length === 0) {
     return {
@@ -511,7 +559,7 @@ export function detectForeignOnlyTarget({ repository = '', title = '', body = ''
   }
 
   if (!namesLocalCli && !DEP_BUMP_CLAUSE_RE.test(fullText)) {
-    for (const sib of SIBLINGS) {
+    for (const sib of siblings) {
       if (!isSiblingActive(sib, currentShort, pathExists) || !sib.mentionRe.test(fullText)) continue;
       if (foreignMissing.length > 0 || sib.framedRe.test(fullText)) {
         return {
@@ -526,20 +574,20 @@ export function detectForeignOnlyTarget({ repository = '', title = '', body = ''
   return null;
 }
 
-function matchForeignTargetToken(token, currentOwner, currentRepo, currentShort, pathExists) {
+function matchForeignTargetToken(token, currentOwner, currentRepo, currentShort, pathExists, siblings = []) {
   const clean = asText(token).trim().replace(/^`+|`+$/g, '').replace(/[.,;:!?)]+$/, '');
   if (!clean) return null;
-  const sib = matchSiblingAlias(clean);
+  const sib = matchSiblingAlias(clean, siblings);
   if (sib && isSiblingActive(sib, currentShort, pathExists)) return { targetRepo: sib.canonical, isSibling: true };
-  const sibPath = findSiblingForPath(clean, currentShort, pathExists);
+  const sibPath = findSiblingForPath(clean, currentShort, pathExists, siblings);
   if (sibPath) return { targetRepo: sibPath.canonical, isSibling: true };
   if (isSameOrgForeignSlug(clean, currentOwner, currentRepo)) {
-    return { targetRepo: canonicalTargetRepo(clean), isSibling: false };
+    return { targetRepo: canonicalTargetRepo(clean, siblings), isSibling: false };
   }
   return null;
 }
 
-function findForeignHeadingTarget(clauses, currentOwner, currentRepo, currentShort, pathExists) {
+function findForeignHeadingTarget(clauses, currentOwner, currentRepo, currentShort, pathExists, siblings = []) {
   const ownerSlugRe = currentOwner
     ? new RegExp(`\\b(${escapeRegex(currentOwner)}\\/[A-Za-z0-9_.-]+)(?!#\\d)`, 'gi')
     : null;
@@ -559,10 +607,10 @@ function findForeignHeadingTarget(clauses, currentOwner, currentRepo, currentSho
       for (const m of rawHeading.matchAll(ownerSlugRe)) {
         const slug = m[1].toLowerCase();
         headingWithoutTargets = headingWithoutTargets.replaceAll(m[0], ' ');
-        if (slug !== currentRepo && !targetRepo) targetRepo = canonicalTargetRepo(slug);
+        if (slug !== currentRepo && !targetRepo) targetRepo = canonicalTargetRepo(slug, siblings);
       }
     }
-    for (const sib of SIBLINGS) {
+    for (const sib of siblings) {
       if (isSiblingActive(sib, currentShort, pathExists) && sib.mentionRe.test(rawHeading)) {
         if (!targetRepo) targetRepo = sib.canonical;
         headingWithoutTargets = headingWithoutTargets.replace(new RegExp(sib.mentionRe.source, 'gi'), ' ');
@@ -577,23 +625,26 @@ function findForeignHeadingTarget(clauses, currentOwner, currentRepo, currentSho
   return null;
 }
 
-function detectCrossRepo({ repository, title, body, trustedSegments = [], trustedText = '', repoFiles }) {
-  const ctx = analyzeRepositoryTargets({ repository, title, body, trustedSegments, trustedText, repoFiles });
-  const { currentRepo, currentOwner, currentShort, fullText, pathExists, existingLocal, localGreenfield, siblingHits, foreignMissing, header, foreignUrls, namesLocalCli } = ctx;
-  if (!fullText.trim()) return null;
+function detectCrossRepo({ repository, title, body, trustedSegments = [], trustedText = '', repoFiles, siblingRepos = [] }) {
+  const ctx = analyzeRepositoryTargets({ repository, title, body, trustedSegments, trustedText, repoFiles, siblingRepos });
+  const { siblings, currentRepo, currentOwner, currentShort, fullText, hasInventory, pathExists, existingLocal, localGreenfield, siblingHits, foreignMissing, header, foreignUrls, namesLocalCli } = ctx;
+  if (!fullText.trim()) return { ctx, crossRepo: null };
 
   const hasLocalTargets = existingLocal.length > 0 || localGreenfield.length > 0;
   const clauses = splitClauses(fullText);
   const reject = (targetRepo, signals, reason, missingPaths = foreignMissing) => ({
-    decision: 'reject',
-    reasonCode: 'cross_repo',
-    intakeClass: 'elsewhere',
-    label: 'needs-other-repo',
-    targetRepo,
-    reason: cleanSingleLine(reason),
-    question: null,
-    signals: [...new Set(signals)],
-    ...(missingPaths.length ? { missingPaths } : {}),
+    ctx,
+    crossRepo: {
+      decision: 'reject',
+      reasonCode: 'cross_repo',
+      intakeClass: 'elsewhere',
+      label: 'needs-other-repo',
+      targetRepo,
+      reason: cleanSingleLine(reason),
+      question: null,
+      signals: [...new Set(signals)],
+      ...(missingPaths.length ? { missingPaths } : {}),
+    },
   });
 
   // 1. Explicit foreign title prefix or Repo/Repository/Service header.
@@ -629,8 +680,8 @@ function detectCrossRepo({ repository, title, body, trustedSegments = [], truste
     }
   }
 
-  // 3. Dedicated implementation section heading for another repo (e.g., "### 1. Server (promptdriven/pdd_cloud)").
-  const headingTarget = findForeignHeadingTarget(clauses, currentOwner, currentRepo, currentShort, pathExists);
+  // 3. Dedicated implementation section heading for another repo (e.g., "### 1. Server (org/other-repo)").
+  const headingTarget = findForeignHeadingTarget(clauses, currentOwner, currentRepo, currentShort, pathExists, siblings);
   if (headingTarget) {
     const signals = ['coordinated_multi_repo', ...(siblingHits.length ? ['foreign_root_path'] : ['sibling_service'])];
     return reject(
@@ -663,14 +714,14 @@ function detectCrossRepo({ repository, title, body, trustedSegments = [], truste
     }
   }
 
-  // 5. Clause-scoped coordinated-edit phrases bound directly to an active sibling, same-org foreign repo, or external service.
+  // 5. Clause-scoped coordinated-edit phrases bound directly to an active sibling, same-org foreign repo, absent foreign root path, or external service.
   const ownerSlugRe = currentOwner
     ? new RegExp(`\\b(${escapeRegex(currentOwner)}\\/[A-Za-z0-9_.-]+)(?!#\\d)`, 'gi')
     : null;
   for (const clause of clauses) {
     if (META_FILTER_CLAUSE_RE.test(clause) || DEP_BUMP_CLAUSE_RE.test(clause) || PASSIVE_PATH_RE.test(clause)) continue;
     if (MULTI_REPO_COORD_RE.test(clause)) {
-      for (const sib of SIBLINGS) {
+      for (const sib of siblings) {
         if (isSiblingActive(sib, currentShort, pathExists) && sib.mentionRe.test(clause)) {
           return reject(
             sib.canonical,
@@ -684,18 +735,30 @@ function detectCrossRepo({ repository, title, body, trustedSegments = [], truste
           const slug = m[1].toLowerCase();
           if (slug !== currentRepo) {
             return reject(
-              canonicalTargetRepo(slug),
+              canonicalTargetRepo(slug, siblings),
               ['coordinated_multi_repo'],
-              `Requires coordinated changes across ${repository || 'this repository'} and ${canonicalTargetRepo(slug)}.`,
+              `Requires coordinated changes across ${repository || 'this repository'} and ${canonicalTargetRepo(slug, siblings)}.`,
             );
           }
+        }
+      }
+      // Repo-agnostic foreign-root path inside an explicit multi-repo coordination clause.
+      if (hasInventory && foreignMissing.length > 0) {
+        const hitPath = foreignMissing.find(p => p.includes('/') && clause.includes(p));
+        if (hitPath) {
+          const foreignRoot = hitPath.split('/')[0];
+          return reject(
+            foreignRoot,
+            ['foreign_root_path', 'coordinated_multi_repo'],
+            `Requires coordinated edits in ${foreignRoot} (${hitPath}) alongside ${repository || 'this repository'}.`,
+          );
         }
       }
     }
     for (const pairRe of [ACROSS_PAIR_RE, ALONGSIDE_PAIR_RE]) {
       for (const m of clause.matchAll(pairRe)) {
-        const hit = matchForeignTargetToken(m[1], currentOwner, currentRepo, currentShort, pathExists)
-          ?? matchForeignTargetToken(m[2], currentOwner, currentRepo, currentShort, pathExists);
+        const hit = matchForeignTargetToken(m[1], currentOwner, currentRepo, currentShort, pathExists, siblings)
+          ?? matchForeignTargetToken(m[2], currentOwner, currentRepo, currentShort, pathExists, siblings);
         if (hit) {
           return reject(
             hit.targetRepo,
@@ -703,6 +766,17 @@ function detectCrossRepo({ repository, title, body, trustedSegments = [], truste
             `Requires coordinated edits in ${hit.targetRepo} alongside ${repository || 'this repository'}.`,
           );
         }
+      }
+    }
+    if (hasInventory && STRONG_COORD_RE.test(clause) && foreignMissing.length > 0) {
+      const hitPath = foreignMissing.find(p => p.includes('/') && clause.includes(p));
+      if (hitPath) {
+        const foreignRoot = hitPath.split('/')[0];
+        return reject(
+          foreignRoot,
+          ['foreign_root_path', 'coordinated_multi_repo'],
+          `Requires coordinated edits in ${foreignRoot} (${hitPath}) alongside ${repository || 'this repository'}.`,
+        );
       }
     }
     if (EXTERNAL_SERVICE_EDIT_RE.test(clause)) {
@@ -716,7 +790,7 @@ function detectCrossRepo({ repository, title, body, trustedSegments = [], truste
 
   // 6. Foreign-only sibling framing when no local targets or local CLI/module references exist.
   if (!hasLocalTargets && !namesLocalCli && !DEP_BUMP_CLAUSE_RE.test(fullText)) {
-    for (const sib of SIBLINGS) {
+    for (const sib of siblings) {
       if (!isSiblingActive(sib, currentShort, pathExists) || !sib.mentionRe.test(fullText)) continue;
       if (foreignMissing.length > 0 || sib.framedRe.test(fullText)) {
         return reject(
@@ -728,10 +802,10 @@ function detectCrossRepo({ repository, title, body, trustedSegments = [], truste
     }
   }
 
-  return null;
+  return { ctx, crossRepo: null };
 }
 
-const EXPLICIT_DECISION_MARKER_RE = /\b(?:open\s+question|needs?\s+(?:a\s+)?(?:product|pricing|billing|ux|design|policy|human)?\s*decision|decision\s+needed|product\s+decision|pricing\s+decision|ux\s+decision|question\s+for\s+(?:product|design|leadership|maintainers?|serhan|team|humans?))\s*:/i;
+const EXPLICIT_DECISION_MARKER_RE = /\b(?:open\s+question|needs?\s+(?:a\s+)?(?:product|pricing|billing|ux|design|policy|human)?\s*decision|decision\s+needed|product\s+decision|pricing\s+decision|ux\s+decision|question\s+for\s+(?:product|design|leadership|maintainers?|owners?|leads?|team|humans?))\s*:/i;
 const PROSE_DECISION_NEED_RE = /\bneeds?\s+(?:a\s+)?(?:product|pricing|billing|ux|design|policy)(?:\s+(?:and|or)\s+(?:product|pricing|billing|ux|design|policy))*\s+decision\b/i;
 const POLICY_DOMAIN_RE = /\b(?:pric(?:e|ing)|billing\s+(?:tier|model|plan)|subscription\s+(?:tier|plan)|free\s+tier|pro\s+tier|paid\s+tier|per[- ]seat|seat\s+pric(?:e|ing)|monetiz(?:e|ation)|product\s+(?:direction|decision|policy)|ux\s+(?:policy|direction|decision)|user[- ]facing\s+(?:policy|ux|copy)|default\s+(?:output\s+)?view|onboarding\s+flow|branding|pricing\s+model)\b|\$\d+(?:\s*\/\s*(?:seat|month|mo|user|year))?/i;
 const CHOICE_PROMPT_RE = /\bshould\s+(?:we|pdd|autopilot|[a-z0-9_`' -]{2,40})\b[^?\n]{2,140}\bor\b[^?\n]{1,100}\?|\boptions?\s*:\s*(?:\(?A\)?|1\))[\s\S]{1,200}(?:\(?B\)?|2\))/i;
@@ -966,6 +1040,72 @@ function normalizeTrustedComments(comments) {
   return allDated ? trusted.sort((a, b) => a.ts - b.ts || a.idx - b.idx) : trusted;
 }
 
+const PLACEHOLDER_BODY_RE = /^(?:tbd|todo|wip|placeholder|draft|coming\s+soon|\.{2,}|n\/a|none|fixme)\W*$/i;
+const DRAFT_TITLE_PREFIX_RE = /^\s*(?:\[(?:wip|draft)\]|(?:wip|draft)\s*:)/i;
+const UNCLEAR_LABELS = new Set(['draft', 'wip', 'needs-repro', 'needs-info', 'needs-triage', 'incomplete', 'invalid']);
+const CREATE_VERB_RE = /\b(?:add(?:ing)?|creat(?:e|ing)|introduc(?:e|ing)|new|scaffold(?:ing)?|implement(?:ing)?\s+(?:a\s+)?new|writ(?:e|ing)\s+(?:a\s+)?new)\b/i;
+const INPLACE_EDIT_VERB_RE = /\b(?:fix(?:ing)?|updat(?:e|ing)|edit(?:ing)?|modif(?:y|ying)|refactor(?:ing)?|patch(?:ing)?|delet(?:e|ing)|remov(?:e|ing))\b/i;
+
+function detectUnclearOrUnsound({ title, body, labels = [], trustedComments = [], decisionNote, targetCtx }) {
+  if (typeof decisionNote === 'string' && decisionNote.trim().length > 0) return null;
+  const labelNames = (Array.isArray(labels) ? labels : [])
+    .map(l => (typeof l === 'string' ? l : l?.name ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  const blockerLabel = labelNames.find(name => UNCLEAR_LABELS.has(name));
+  if (DRAFT_TITLE_PREFIX_RE.test(title) || blockerLabel) {
+    const why = blockerLabel
+      ? `Issue carries triage/draft label "${blockerLabel}" and is not ready for autonomous implementation.`
+      : 'Issue title is explicitly marked as WIP/Draft and is not ready for autonomous implementation.';
+    return {
+      decision: 'park',
+      reasonCode: 'unclear_or_unsound',
+      intakeClass: 'person',
+      label: 'pdd:needs-decision',
+      targetRepo: null,
+      reason: cleanSingleLine(why, 300),
+      question: 'Please finalize the issue specification and remove the draft/triage marker before Autopilot starts.',
+      signals: ['explicit_draft_or_needs_repro'],
+    };
+  }
+
+  const combinedBody = [body, ...trustedComments.map(c => c.sanitized)].filter(Boolean).join('\n').trim();
+  const titlePaths = extractReferencedPaths(title, targetCtx?.siblings ?? []);
+  if ((!combinedBody || PLACEHOLDER_BODY_RE.test(combinedBody)) && titlePaths.length === 0) {
+    return {
+      decision: 'park',
+      reasonCode: 'unclear_or_unsound',
+      intakeClass: 'person',
+      label: 'pdd:needs-decision',
+      targetRepo: null,
+      reason: 'Issue body is empty or placeholder text with no concrete scope, reproduction, or target files.',
+      question: 'Please add concrete expected behavior, reproduction steps, or target files so Autopilot can verify what to change.',
+      signals: ['empty_or_stub_issue'],
+    };
+  }
+
+  if (targetCtx?.hasInventory && targetCtx.existingLocal.length === 0 && targetCtx.localGreenfield.length > 0) {
+    const missingInKnownDir = targetCtx.localGreenfield.filter(p => {
+      const topDir = p.includes('/') ? p.slice(0, p.indexOf('/')) : '';
+      return topDir && targetCtx.hasFilesInDir(topDir);
+    });
+    const fullText = [title, combinedBody].filter(Boolean).join('\n');
+    if (missingInKnownDir.length > 0 && INPLACE_EDIT_VERB_RE.test(fullText) && !CREATE_VERB_RE.test(fullText)) {
+      return {
+        decision: 'park',
+        reasonCode: 'unclear_or_unsound',
+        intakeClass: 'person',
+        label: 'pdd:needs-decision',
+        targetRepo: null,
+        reason: cleanSingleLine(`Issue asks to modify non-existent local file(s): ${missingInKnownDir.slice(0, 3).join(', ')}.`, 300),
+        question: 'Please confirm the exact existing file path(s) to edit, or clarify if these new files should be created.',
+        signals: ['missing_target_paths'],
+      };
+    }
+  }
+
+  return null;
+}
+
 /**
  * Deterministically classify an open GitHub issue before Autopilot claims it or spends build tokens.
  */
@@ -973,6 +1113,7 @@ export function classifyPreflightIssue({
   repository = '',
   issue = null,
   repoFiles = null,
+  siblingRepos = [],
   decisionNote = null,
   workerCapabilities = null,
 } = {}) {
@@ -993,7 +1134,7 @@ export function classifyPreflightIssue({
   const trustedComments = normalizeTrustedComments(issue.comments);
   const trustedSegments = trustedComments.map(c => c.sanitized);
 
-  const crossRepo = detectCrossRepo({ repository, title, body, trustedSegments, repoFiles });
+  const { ctx: targetCtx, crossRepo } = detectCrossRepo({ repository, title, body, trustedSegments, repoFiles, siblingRepos });
   if (crossRepo) {
     const { missingPaths: _ignored, ...publicResult } = crossRepo;
     return publicResult;
@@ -1004,6 +1145,9 @@ export function classifyPreflightIssue({
 
   const unverifiable = detectUnverifiableBoundary({ title, body, trustedComments, workerCapabilities, decisionNote });
   if (unverifiable) return unverifiable;
+
+  const unclear = detectUnclearOrUnsound({ title, body, labels: issue.labels, trustedComments, decisionNote, targetCtx });
+  if (unclear) return unclear;
 
   return allow;
 }
@@ -1035,7 +1179,7 @@ export function summarizeIntakeFilterPrecision({ skips = [], runs = [] } = {}) {
     }
   }
 
-  const byReasonCode = { cross_repo: 0, human_decision: 0, unverifiable_boundary: 0 };
+  const byReasonCode = { cross_repo: 0, human_decision: 0, unverifiable_boundary: 0, unclear_or_unsound: 0 };
   for (const entry of latestSkips.values()) byReasonCode[entry.reasonCode] += 1;
   const skipped = latestSkips.size;
 

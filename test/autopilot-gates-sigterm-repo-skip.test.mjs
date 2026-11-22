@@ -508,7 +508,8 @@ test('#3473: reconcileSuiteQueue reclaims recycled PIDs via pidIdentity, and aut
 });
 
 test('#3500: detectWrongRepositoryIssue skips wrong-repo issues before claim with one deduped comment while leaving greenfield paths and shadow mode untouched', async t => {
-  const w = await coreWorld(t, { repository: 'promptdriven/pdd', settings: { runs: 2 } });
+  const configuredSiblings = ['pdd_cloud', 'extensions/github_pdd_app', 'prompt-runtime', 'runtime-client'];
+  const w = await coreWorld(t, { repository: 'promptdriven/pdd', settings: { runs: 2, siblingRepos: configuredSiblings } });
   mkdirSync(join(w.cwd, 'src'), { recursive: true });
   writeFileSync(join(w.cwd, 'src', 'runtime-seam.mjs'), 'export const localSeam = true;\n');
 
@@ -516,7 +517,7 @@ test('#3500: detectWrongRepositoryIssue skips wrong-repo issues before claim wit
   assert.equal(
     detectWrongRepositoryIssue(
       { title: 'Add new helper', body: 'Create `src/brand-new-helper.mjs` and `test/brand-new-helper.test.mjs`.' },
-      { repo: 'promptdriven/pdd', cwd: w.cwd },
+      { repo: 'promptdriven/pdd', cwd: w.cwd, siblingRepos: configuredSiblings },
     ),
     null,
     'missing greenfield paths in the current repo never trigger wrong-repo skip',
@@ -527,7 +528,7 @@ test('#3500: detectWrongRepositoryIssue skips wrong-repo issues before claim wit
         title: 'Add src/runtime-retry.mjs for prompt-runtime transient 503s',
         body: 'Create `src/runtime-retry.mjs` and `test/runtime-retry.test.mjs` so PDD retries transient 503s from `prompt-runtime` (see https://github.com/promptdriven/pdd-cloud/blob/main/pdd_cloud/gateway/retry.py for reference).',
       },
-      { repo: 'promptdriven/pdd', cwd: w.cwd },
+      { repo: 'promptdriven/pdd', cwd: w.cwd, siblingRepos: configuredSiblings },
     ),
     null,
     'greenfield local-root paths in pdd are never skipped even when prose mentions prompt-runtime and links an external GitHub blob URL',
@@ -535,7 +536,7 @@ test('#3500: detectWrongRepositoryIssue skips wrong-repo issues before claim wit
   assert.equal(
     detectWrongRepositoryIssue(
       { title: 'Fix runtime-client payload in CLI', body: 'Update `src/runtime-seam.mjs` when calling `runtime-client`.' },
-      { repo: 'promptdriven/pdd', cwd: w.cwd },
+      { repo: 'promptdriven/pdd', cwd: w.cwd, siblingRepos: configuredSiblings },
     ),
     null,
     'issue naming an existing local file in cwd is never skipped',
@@ -543,21 +544,21 @@ test('#3500: detectWrongRepositoryIssue skips wrong-repo issues before claim wit
   assert.ok(
     detectWrongRepositoryIssue(
       { title: 'Fix Stripe webhook retry', body: 'Repo: promptdriven/pdd-cloud\nUpdate `pdd_cloud/billing/stripe.py` and `README.md`.' },
-      { repo: 'promptdriven/pdd', cwd: w.cwd },
+      { repo: 'promptdriven/pdd', cwd: w.cwd, siblingRepos: configuredSiblings },
     ),
     'explicit Repo header + missing sibling path triggers wrong-repo detection even when README.md exists',
   );
   assert.ok(
     detectWrongRepositoryIssue(
       { title: 'GitHub App installation token refresh', body: 'Fix token refresh in `extensions/github_pdd_app/webhook.ts`.' },
-      { repo: 'promptdriven/pdd', cwd: w.cwd },
+      { repo: 'promptdriven/pdd', cwd: w.cwd, siblingRepos: configuredSiblings },
     ),
     'sibling repo root path absent locally triggers wrong-repo detection',
   );
   assert.ok(
     detectWrongRepositoryIssue(
       { title: 'Worker sandbox timeout inside prompt-runtime', body: 'See https://github.com/promptdriven/prompt-runtime/blob/main/src/runner.ts#L42' },
-      { repo: 'promptdriven/pdd', cwd: w.cwd },
+      { repo: 'promptdriven/pdd', cwd: w.cwd, siblingRepos: configuredSiblings },
     ),
     'external GitHub blob URL with zero local files triggers wrong-repo detection',
   );
