@@ -18,7 +18,6 @@ import {
   lintValidationCode,
 } from '../src/autopilot-validator.mjs';
 import {
-  lintBoundaryMockOnlyTests,
   lintNativeOnlyContract,
   lintRepoProject,
 } from '../src/repo-hygiene-lint.mjs';
@@ -150,6 +149,8 @@ test('3574 Part 1: lintNativeOnlyContract warns on thin stubs, passes complete s
   execFileSync('git', ['-C', repo, 'config', 'user.name', 'Test']);
   execFileSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
   writeFile(repo, 'prompts/trust/service.prompt.md', `${thinStub}\n`);
+  writeFile(repo, 'prompts/trust/error-store.prompt.md', '# Error store\n\n## Ports\n- `store.load`\n- `store.save`\n\n## Dependencies\nNone.\n');
+  writeFile(repo, 'prompts/trust/verify-smoke.prompt.md', '# Verify smoke\n\n## Dependencies\nNone.\n');
   commitAll(repo, 'thin native-only stub');
   const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
 
@@ -486,8 +487,8 @@ test('3574 Part 4: all 4 real-host OS/CLI failure classes fail closed when mocke
   assert.equal(fullOutcome.decision, 'allow-merge');
 });
 
-test('3574 Part 4 integration: lintRepoProject flags mock-only tests on kind: native-only modules and Autopilot core blocks mocked os-boundary PRs without touching autopilot-core', async (t) => {
-  // 1. lintRepoProject resolves kind: native-only ownership automatically and flags mock-only test on an ordinary-named native-only module
+test('3574 Part 4 integration: Layer-2 validator flags mock-only tests on kind: native-only modules while Layer-1 lintRepoProject stays PDD-files-only, and Autopilot core blocks mocked os-boundary PRs', async (t) => {
+  // 1. Layer-2 detectNativeOnlyModules + lintValidationCode flags mock-only test on an ordinary-named native-only module; Layer-1 lintRepoProject stays PDD-files-only
   const repo = makeTempGitRepo(t, 'pdd-3574-native-lint-');
   writeFile(
     repo,
@@ -524,35 +525,49 @@ test('3574 Part 4 integration: lintRepoProject flags mock-only tests on kind: na
   );
   commitAll(repo, 'mock-only native-only service');
 
-  const before = lintRepoProject({ root: repo });
-  const mockHit = before.findings.find((f) => f.code === 'boundary-mock-only-test');
-  assert.ok(mockHit, 'mock-only test on native-only module must emit boundary-mock-only-test');
-  assert.equal(mockHit.path, 'test/trust-mock.test.mjs');
-  assert.match(mockHit.message, /native-only/);
+  const coreLint = lintRepoProject({ root: repo });
+  assert.equal(coreLint.ok, true);
+  assert.equal(coreLint.findings.some((f) => f.code === 'boundary-mock-only-test'), false, 'Layer-1 core lint stays PDD-files-only');
 
-  // Direct lintBoundaryMockOnlyTests and inspectTestBoundaryTargets honor nativeOnlyTargets
-  const targets = inspectTestBoundaryTargets('test/trust-mock.test.mjs', readFileSync(join(repo, 'test/trust-mock.test.mjs'), 'utf8'), {
-    nativeOnlyTargets: ['src/trust/service.mjs'],
+  const nativeDetected = detectNativeOnlyModules({
+    changedFiles: ['prompts/trust/service.prompt.md', 'src/trust/service.mjs'],
+    promptFiles: [{ path: 'prompts/trust/service.prompt.md', content: readFileSync(join(repo, 'prompts/trust/service.prompt.md'), 'utf8') }],
+    fileHeads: [{ path: 'src/trust/service.mjs', content: readFileSync(join(repo, 'src/trust/service.mjs'), 'utf8') }],
+  });
+  assert.ok(nativeDetected.nativeOnlyModules.includes('src/trust/service.mjs'));
+
+  const mockText = readFileSync(join(repo, 'test/trust-mock.test.mjs'), 'utf8');
+  const targets = inspectTestBoundaryTargets('test/trust-mock.test.mjs', mockText, {
+    nativeOnlyTargets: nativeDetected.nativeOnlyModules,
   });
   assert.ok(targets.boundarySurfaces.includes('native-only'));
-  assert.equal(
-    lintBoundaryMockOnlyTests(readFileSync(join(repo, 'test/trust-mock.test.mjs'), 'utf8'), {
-      path: 'test/trust-mock.test.mjs',
-      hasRealE2eCoverage: false,
-      nativeOnlyTargets: ['src/trust/service.mjs'],
-    }).length,
-    1,
-  );
+  const beforeVal = lintValidationCode({
+    path: 'test/trust-mock.test.mjs',
+    kind: 'test',
+    text: mockText,
+    hasRealE2eCoverage: false,
+    nativeOnlyTargets: nativeDetected.nativeOnlyModules,
+  });
+  assert.ok(beforeVal.codes.includes('boundary-mock-only-test'), 'Layer-2 validator must emit boundary-mock-only-test');
 
-  // Adding a real SQLite / subprocess smoke test clears boundary-mock-only-test cleanly
+  // Adding a real SQLite / subprocess smoke test provides real-host coverage and clears boundary-mock-only-test cleanly
   writeFile(
     repo,
     'test/trust-smoke.test.mjs',
     "import { DatabaseSync } from 'node:sqlite';\nimport { createTrustService } from '../src/trust/service.mjs';\nconst db = new DatabaseSync(':memory:');\ncreateTrustService(db);\n",
   );
   commitAll(repo, 'add real sqlite smoke');
-  const after = lintRepoProject({ root: repo });
-  assert.equal(after.findings.some((f) => f.code === 'boundary-mock-only-test'), false);
+  const smokeText = readFileSync(join(repo, 'test/trust-smoke.test.mjs'), 'utf8');
+  const smokeProbes = detectRealHostProbesInTest('test/trust-smoke.test.mjs', smokeText);
+  assert.equal(smokeProbes.hasRealHostSmoke, true);
+  const afterVal = lintValidationCode({
+    path: 'test/trust-mock.test.mjs',
+    kind: 'test',
+    text: mockText,
+    hasRealE2eCoverage: true,
+    nativeOnlyTargets: nativeDetected.nativeOnlyModules,
+  });
+  assert.equal(afterVal.codes.includes('boundary-mock-only-test'), false);
 
   // 2. End-to-end coreWorld check: OS sandbox boundary file with only an argv-prefix unit test fails closed (Bucket 3) and merges once real subprocess smoke is added!
   const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });

@@ -8,80 +8,18 @@ import { isAbsolute, join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { buildCodexLintPrompt, runCodexLint } from '../src/codex-lint.mjs';
 import {
-  isInspectableTestCodePath,
-  lintFakeTests,
   lintNativeOnlyPortParity,
   lintPromptCodeBlocks,
   lintPromptSize,
   lintPromptStructure,
-  lintPublicInterfaceTests,
-  lintRepoAntiPatterns,
   lintRepoProject,
-  lintTestFixedSleeps,
   loadProjectLintConfig,
   stripPromptMetadata,
 } from '../src/repo-hygiene-lint.mjs';
-import { lint as seamLint, runCheck, runtimePreflightSlice } from '../src/runtime-seam.mjs';
+import { lintTestFixedSleeps } from '../src/autopilot/lint-sleep-skip.mjs';
+import { lint as seamLint, runCheck } from '../src/runtime-seam.mjs';
 import { lintStories, lintStory } from '../src/story-lint.mjs';
 import { fakeRuntime, harbor, portsFor, sink, TOKEN } from './helpers/runtime-fake.mjs';
-
-test('3453 lintFakeTests warns on prompt reads, repo existence checks and source text matching with path:line', () => {
-  assert.equal(isInspectableTestCodePath('test/order.test.mjs'), true);
-  assert.equal(isInspectableTestCodePath('tests/unit/calc.spec.ts'), true);
-  assert.equal(isInspectableTestCodePath('tests/place-order.json'), false);
-  assert.equal(isInspectableTestCodePath('test/fixtures/sample.test.mjs'), false);
-  assert.equal(isInspectableTestCodePath('test/helpers/fake.mjs'), false);
-  assert.equal(isInspectableTestCodePath('test/runtime-seam.test.mjs'), false);
-
-  const fakeSuite = [
-    "import test from 'node:test';",
-    "import assert from 'node:assert/strict';",
-    "import { existsSync, readFileSync, statSync } from 'node:fs';",
-    "import { join } from 'node:path';",
-    '',
-    "test('anti-patterns', () => {",
-    "  const prompt = readFileSync('prompts/cli/order.prompt.md', 'utf8');",
-    "  assert.ok(prompt.includes('total'));",
-    "  assert.equal(existsSync('src/order.mjs'), true);",
-    "  assert.ok(statSync(join(process.cwd(), 'prompts/cli/order.prompt.md')).isFile());",
-    "  const impl = readFileSync('src/order.mjs', 'utf8');",
-    '  assert.match(impl, /export function placeOrder/);',
-    "  assert.ok(readFileSync('src/pricing.mjs', 'utf8').includes('discount'));",
-    '});',
-  ].join('\n');
-
-  const warnings = lintFakeTests(fakeSuite, { path: 'test/order.test.mjs' });
-  assert.ok(warnings.every(w => w.startsWith('Warning:')));
-  assert.ok(warnings.some(w => w.includes('test/order.test.mjs:7') && w.includes('[fake-test-prompt-read]')));
-  assert.ok(warnings.some(w => w.includes('test/order.test.mjs:9') && w.includes('[fake-test-exists-check]')));
-  assert.ok(warnings.some(w => w.includes('test/order.test.mjs:10') && w.includes('[fake-test-exists-check]')));
-  assert.ok(warnings.some(w => w.includes('test/order.test.mjs:12') && w.includes('[fake-test-source-match]')));
-  assert.ok(warnings.some(w => w.includes('test/order.test.mjs:13') && w.includes('[fake-test-source-match]')));
-
-  // Clean behavioral tests, comments, string literals for temp sandboxes and structural seam files produce 0 warnings.
-  const cleanBehavioral = [
-    "import test from 'node:test';",
-    "import assert from 'node:assert/strict';",
-    "import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';",
-    "import { tmpdir } from 'node:os';",
-    "import { join } from 'node:path';",
-    "import { placeOrder } from '../src/order.mjs';",
-    '',
-    "// Comment mentioning readFileSync('prompts/cli/order.prompt.md') does not warn.",
-    "test('behavioral check', () => {",
-    "  const sandbox = mkdtempSync(join(tmpdir(), 'pdd-sandbox-'));",
-    "  writeFileSync(join(sandbox, 'src-copy.txt'), \"readFileSync('prompts/cli/order.prompt.md')\");",
-    "  assert.equal(existsSync(join(sandbox, 'src-copy.txt')), true);",
-    "  const fixtureText = readFileSync('test/fixtures/harbor/prompts/place_order.prompt.md', 'utf8');",
-    '  assert.ok(fixtureText.length > 0);',
-    "  assert.deepEqual(placeOrder({ items: ['drip'] }), { totalCents: 210 });",
-    '});',
-  ].join('\n');
-
-  assert.deepEqual(lintFakeTests(cleanBehavioral, { path: 'test/order-behavior.test.mjs' }), []);
-  assert.deepEqual(lintFakeTests(fakeSuite, { path: 'test/runtime-seam.test.mjs' }), []);
-  assert.deepEqual(lintFakeTests(fakeSuite, { path: 'test/fixtures/fake.test.mjs' }), []);
-});
 
 test('3453 lintPromptCodeBlocks allows mermaid and short declarative examples while warning on long or imperative fences', () => {
   const longMermaid = [
@@ -327,7 +265,7 @@ test('3453 pdd lint --local emits advisory repo-hygiene warnings with exit code 
 
   const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
 
-  // 1. Repo-wide pdd lint --local --json exits 0 and emits all three advisory warning categories.
+  // 1. Repo-wide pdd lint --local --json exits 0, emits PDD-file warnings, and skips code-test regex noise.
   const jsonOut = sink(), jsonErr = sink();
   const exitJson = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: jsonOut, stderr: jsonErr });
   assert.equal(exitJson, 0, jsonErr.text);
@@ -336,7 +274,7 @@ test('3453 pdd lint --local emits advisory repo-hygiene warnings with exit code 
   assert.deepEqual(parsed.problems, []);
   assert.ok(parsed.warnings.some(w => w.startsWith('Warning:') && w.includes('prompts/bloated.prompt.md:6') && w.includes('[prompt-imperative-code]')));
   assert.ok(parsed.warnings.some(w => w.startsWith('Warning:') && w.includes('user_stories/bloated-story.md:13') && w.includes('[story-bloated-criteria]')));
-  assert.ok(parsed.warnings.some(w => w.startsWith('Warning:') && w.includes('test/fake-bloated.test.mjs:5') && w.includes('[fake-test-prompt-read]')));
+  assert.equal(parsed.warnings.some(w => w.includes('test/fake-bloated.test.mjs')), false, 'core lint stays PDD-files-only');
 
   // 2. Plain-text pdd lint --local also exits 0 and prints Warning: lines.
   const txtOut = sink(), txtErr = sink();
@@ -344,9 +282,8 @@ test('3453 pdd lint --local emits advisory repo-hygiene warnings with exit code 
   assert.equal(exitTxt, 0, txtErr.text);
   assert.match(txtOut.text, /Warning:.*prompts\/bloated\.prompt\.md:6/);
   assert.match(txtOut.text, /Warning:.*user_stories\/bloated-story\.md:13/);
-  assert.match(txtOut.text, /Warning:.*test\/fake-bloated\.test\.mjs:5/);
 
-  // 3. Story-scoped pdd lint --local clean-order omits unrelated prompts, Stories and fake tests.
+  // 3. Story-scoped pdd lint --local clean-order omits unrelated prompts and Stories.
   const scopedOut = sink(), scopedErr = sink();
   const exitScoped = await runPdd(['lint', '--local', 'clean-order', '--json'], { cwd: repo, env, stdout: scopedOut, stderr: scopedErr });
   assert.equal(exitScoped, 0, scopedErr.text);
@@ -354,13 +291,11 @@ test('3453 pdd lint --local emits advisory repo-hygiene warnings with exit code 
   assert.equal(scopedParsed.exit_code, 0);
   assert.ok(!scopedParsed.warnings.some(w => w.includes('bloated')));
 
-  // 4. Direct runtimePreflightSlice().lintLocalHygiene includes lintRepoAntiPatterns warnings.
-  const { lintLocalHygiene } = runtimePreflightSlice();
-  const directWarnings = lintLocalHygiene({ root: repo });
-  assert.ok(directWarnings.some(w => w.includes('prompts/bloated.prompt.md:6')));
-  assert.ok(directWarnings.some(w => w.includes('user_stories/bloated-story.md:13')));
-  assert.ok(directWarnings.some(w => w.includes('test/fake-bloated.test.mjs:5')));
-  assert.ok(lintRepoAntiPatterns({ root: repo }).length >= 3);
+  // 4. Direct lintRepoProject returns PDD-file warnings cleanly without scanning code tests.
+  const directReport = lintRepoProject({ root: repo });
+  assert.ok(directReport.warnings.some(w => w.includes('prompts/bloated.prompt.md:6')));
+  assert.ok(directReport.warnings.some(w => w.includes('user_stories/bloated-story.md:13')));
+  assert.equal(directReport.warnings.some(w => w.includes('test/fake-bloated.test.mjs')), false);
 
   // 5. Explicit ports.lintSvgLayouts override on runCheck still wins (SEAM9 parity).
   const overridePorts = portsFor(env, {
@@ -439,87 +374,6 @@ test('3499 lintPromptSize enforces prompt lines strictly smaller than owned gene
 
   // Prompts with no generated code yet are skipped without warnings.
   assert.deepEqual(lintPromptSize(promptWithMetadata, [], { path: 'prompts/uncompiled.prompt.md' }), []);
-});
-
-test('3499 lintPublicInterfaceTests warns on private module imports, private symbols, private member access, rewire hooks and vm source eval', () => {
-  const reachingIntoInternals = [
-    "import test from 'node:test';",
-    "import { readFileSync } from 'node:fs';",
-    "import { runInNewContext } from 'node:vm';",
-    "import { quote } from '../src/internal/pricing.mjs';",
-    "import secret from '../src/_secret.mjs';",
-    "import { calculateTax, _roundHalfEven } from '../src/tax.mjs';",
-    "import * as ledger from '../src/ledger.mjs';",
-    "import { OrderService, createStore } from '../src/orders.mjs';",
-    "const { _buildCache } = require('../src/cache.cjs');",
-    '',
-    "test('reaches into internals', async () => {",
-    "  const priv = await import('../src/private/engine.mjs');",
-    '  ledger._resetState();',
-    '  const svc = new OrderService();',
-    '  svc._pendingQueue.push(1);',
-    '  const store = createStore();',
-    '  store?._flush();',
-    "  const mod = rewire('../src/tax.mjs');",
-    "  mod.__get__('RATE');",
-    "  const raw = readFileSync('src/tax.mjs', 'utf8');",
-    '  runInNewContext(raw, {});',
-    '  void quote; void secret; void calculateTax; void _roundHalfEven; void _buildCache; void priv;',
-    '});',
-  ].join('\n');
-
-  const warnings = lintPublicInterfaceTests(reachingIntoInternals, { path: 'test/orders.test.mjs' });
-  assert.ok(warnings.every(w => w.startsWith('Warning: public-interface test:')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:4') && w.includes('[test-private-import]') && w.includes('../src/internal/pricing.mjs')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:5') && w.includes('[test-private-import]') && w.includes('../src/_secret.mjs')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:6') && w.includes('[test-private-import]') && w.includes('_roundHalfEven')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:9') && w.includes('[test-private-import]') && w.includes('_buildCache')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:12') && w.includes('[test-private-import]') && w.includes('../src/private/engine.mjs')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:13') && w.includes('[test-private-access]') && w.includes('ledger._resetState')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:15') && w.includes('[test-private-access]') && w.includes('svc._pendingQueue')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:17') && w.includes('[test-private-access]') && w.includes('store._flush')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:18') && w.includes('[test-private-access]') && w.includes('rewire')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:19') && w.includes('[test-private-access]') && w.includes('__get__')));
-  assert.ok(warnings.some(w => w.includes('test/orders.test.mjs:21') && w.includes('[test-private-access]') && w.includes('src/tax.mjs')));
-
-  // Python test suite importing private module paths, private symbols, and accessing private members.
-  const pyBad = [
-    'from billing._internal import quote_cents',
-    'from billing.tax import calculate_tax, _round_cents, __version__',
-    'import billing._secret as sec',
-    '',
-    'def test_tax():',
-    '    assert calculate_tax(100) == 108',
-    '    assert sec._raw_key() is not None',
-  ].join('\n');
-  const pyWarnings = lintPublicInterfaceTests(pyBad, { path: 'tests/test_tax.py' });
-  assert.ok(pyWarnings.some(w => w.includes('tests/test_tax.py:1') && w.includes('[test-private-import]') && w.includes('billing._internal')));
-  assert.ok(pyWarnings.some(w => w.includes('tests/test_tax.py:2') && w.includes('[test-private-import]') && w.includes('_round_cents')));
-  assert.ok(!pyWarnings.some(w => w.includes('__version__')));
-  assert.ok(pyWarnings.some(w => w.includes('tests/test_tax.py:3') && w.includes('[test-private-import]') && w.includes('billing._secret')));
-  assert.ok(pyWarnings.some(w => w.includes('tests/test_tax.py:7') && w.includes('[test-private-access]') && w.includes('sec._raw_key')));
-
-  // Clean public interface tests, test helpers, local mock objects, comments and strings emit 0 warnings.
-  const cleanPublicSuite = [
-    "import test from 'node:test';",
-    "import assert from 'node:assert/strict';",
-    "import { placeOrder } from '../src/orders.mjs';",
-    "import { _seedFakeClock } from './helpers/fake-clock.mjs';",
-    '',
-    "// Comment mentioning ../src/internal/pricing.mjs and orders._secret should not warn.",
-    "test('uses only public interface', () => {",
-    '  const localMock = { _calls: 0, _lastOrder: null };',
-    '  localMock._calls += 1;',
-    "  const note = 'svc._pendingQueue and mod.__get__(\"x\")';",
-    '  _seedFakeClock();',
-    "  assert.equal(placeOrder({ sku: 'latte' }).ok, true);",
-    '  assert.equal(localMock._calls, 1);',
-    '  assert.ok(note.length > 0);',
-    '});',
-  ].join('\n');
-  assert.deepEqual(lintPublicInterfaceTests(cleanPublicSuite, { path: 'test/orders-public.test.mjs' }), []);
-  assert.deepEqual(lintPublicInterfaceTests(reachingIntoInternals, { path: 'test/runtime-seam.test.mjs' }), []);
-  assert.deepEqual(lintPublicInterfaceTests(reachingIntoInternals, { path: 'test/helpers/internal-harness.mjs' }), []);
 });
 
 test('3499 lintPromptStructure checks top-level title, Dependencies section and diagrams or tables on multi-branch or state-machine prompts', () => {
@@ -626,7 +480,7 @@ test('3499 pdd.json lint config supports disabling rules, promoting rules to err
     mkdirSync(dir, { recursive: true });
   }
 
-  // Prompt (8 lines, missing ## Dependencies) >= owned code (3 lines) -> triggers prompt-larger-than-code & prompt-missing-dependencies.
+  // Prompt (30 lines, missing ## Dependencies) >= owned code (26 lines >= 25 floor) -> triggers prompt-larger-than-code & prompt-missing-dependencies.
   writeFileSync(
     join(repo, 'prompts/calc.prompt.md'),
     [
@@ -638,11 +492,19 @@ test('3499 pdd.json lint config supports disabling rules, promoting rules to err
       'Reject negative subtotals.',
       'TODO: add multi-jurisdiction table.',
       'Return `{ taxCents }`.',
+      ...Array.from({ length: 22 }, (_, i) => `- Jurisdiction rule ${i + 1}: apply standard rate.`),
     ].join('\n') + '\n',
   );
   writeFileSync(
     join(repo, 'src/calc.mjs'),
-    '// Generated from prompts/calc.prompt.md\nexport const calcTax = cents => Math.round(cents * 0.08);\n',
+    [
+      '// Generated from prompts/calc.prompt.md',
+      'export function calcTax(cents) {',
+      '  if (!Number.isInteger(cents) || cents < 0) throw new RangeError("invalid cents");',
+      ...Array.from({ length: 22 }, (_, i) => `  const r${i} = cents + ${i}; void r${i};`),
+      '  return Math.round(cents * 0.08);',
+      '}',
+    ].join('\n') + '\n',
   );
   writeFileSync(
     join(repo, 'user_stories/tax-calc.md'),
@@ -685,7 +547,6 @@ test('3499 pdd.json lint config supports disabling rules, promoting rules to err
   assert.equal(baseProject.configured, false);
   assert.ok(baseProject.warnings.some(w => w.includes('[prompt-larger-than-code]')));
   assert.ok(baseProject.warnings.some(w => w.includes('[prompt-missing-dependencies]')));
-  assert.ok(baseProject.warnings.some(w => w.includes('[test-private-import]')));
 
   // 2. Configure pdd.json with disabled rules, promoted "error" built-in rule, and custom_rules across prompt/story/test/code.
   writeFileSync(
@@ -694,7 +555,6 @@ test('3499 pdd.json lint config supports disabling rules, promoting rules to err
       lint: {
         disable: ['prompt-missing-dependencies'],
         rules: {
-          'test-private-import': 'off',
           'prompt-larger-than-code': 'error',
         },
         custom_rules: [
@@ -738,7 +598,6 @@ test('3499 pdd.json lint config supports disabling rules, promoting rules to err
   assert.equal(configuredProject.ok, false);
   assert.equal(configuredProject.configured, true);
   assert.ok(!configuredProject.warnings.some(w => w.includes('[prompt-missing-dependencies]')));
-  assert.ok(!configuredProject.warnings.some(w => w.includes('[test-private-import]')));
   assert.ok(configuredProject.warnings.some(w => w.includes('[story-rules-heading]')));
   assert.ok(configuredProject.warnings.some(w => w.includes('[test-requires-assert]')));
   assert.ok(configuredProject.warnings.some(w => w.includes('[code-max-lines]')));
@@ -1563,7 +1422,7 @@ test('3574 + 3578: default-on native-only-unknown-port fails closed without pdd.
   assert.equal(brokenParsed.ok, false);
   assert.equal(brokenParsed.exit_code, 1);
   assert.equal(brokenParsed.problems.length, 3);
-  assert.ok(brokenParsed.warnings.some(w => w.includes('[fake-test-prompt-read]')), 'advisory warnings remain visible');
+  assert.ok(brokenParsed.warnings.some(w => w.includes('[native-only-contract-incomplete]')), 'advisory warnings remain visible');
   assert.ok(!brokenParsed.warnings.some(w => w.includes('prompt-code-fence-')));
 
   // 2. pdd.json without a "lint" key still fails closed by default.
@@ -1604,7 +1463,7 @@ test('3574 + 3578: default-on native-only-unknown-port fails closed without pdd.
   const fixedParsed = JSON.parse(fixedOut.text);
   assert.equal(fixedParsed.exit_code, 0);
   assert.deepEqual(fixedParsed.problems, []);
-  assert.ok(fixedParsed.warnings.some(w => w.includes('[fake-test-prompt-read]')), 'warn-only rule still never fails exit code');
+  assert.ok(fixedParsed.warnings.some(w => w.includes('[native-only-contract-incomplete]')), 'warn-only rule still never fails exit code');
 });
 
 test('3574 adversarial review fixes: linear ReDoS safety, scoped table/prose extraction, split/nested/subheading port declarations, Runtime interface headings, SQL DDL extensions and single-scan seam collector', async t => {
@@ -1834,18 +1693,11 @@ test('3574 adversarial review fixes: linear ReDoS safety, scoped table/prose ext
   execFileSync('git', ['add', '.'], { cwd: repo });
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
 
-  const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
-  const collected = [];
-  const seamCode = await seamLint(
-    { cwd: repo, local: true },
-    { stdout: sink(), stderr: sink(), env, onProjectLintResult: res => collected.push(res) },
-  );
-  assert.equal(seamCode, 0);
-  assert.equal(collected.length, 1, 'seam.lint must run lintRepoProject exactly once');
-  assert.equal(collected[0].ok, false);
-  assert.equal(collected[0].errors.length, 1);
-  assert.ok(collected[0].errors[0].includes('prompts/broken-adapter.prompt.md') && collected[0].errors[0].includes('"store.missing"'));
-  assert.ok(!collected[0].errors.some(e => e.includes('only-native-dep.prompt.md')), 'heading-style native-only peer must be recognized as native-only');
+  const report = lintRepoProject({ root: repo });
+  assert.equal(report.ok, false);
+  assert.equal(report.errors.length, 1);
+  assert.ok(report.errors[0].includes('prompts/broken-adapter.prompt.md') && report.errors[0].includes('"store.missing"'));
+  assert.ok(!report.errors.some(e => e.includes('only-native-dep.prompt.md')), 'heading-style native-only peer must be recognized as native-only');
 });
 
 test('3574 + 3578 Round 2 regressions: Story-scoped sibling isolation (P1-A), ## Ports subheadings (P1-B), adapter/idiom/separator false-positive guards (P1-C), and O(N) SQL/heading scans (P1-D)', async t => {
