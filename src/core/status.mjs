@@ -94,6 +94,16 @@ async function detectChangedFiles(root, ports = {}) {
   if (existsSync(changedMapPath)) {
     try {
       const mod = await import(pathToFileURL(changedMapPath).href);
+      if (typeof mod.analyzeChangedMap === 'function') {
+        const res = mod.analyzeChangedMap({ cwd: root }, ports);
+        if (res?.ok && res.report) {
+          const all = [
+            ...(res.report.modules ?? []).map(m => m?.path),
+            ...(res.report.unowned ?? []).map(u => u?.path),
+          ].filter(canonicalPath);
+          if (all.length) return [...new Set(all)].sort();
+        }
+      }
       const fn = mod.mapChangedFiles ?? mod.inspectChangedMap ?? mod.default;
       if (typeof fn === 'function') {
         const res = await fn({ root }, ports);

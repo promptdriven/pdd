@@ -692,8 +692,6 @@ registerHooks({
   );
 
   const ALLOWED_BASE_CYCLES = new Set([
-    'src/issue-sort-github.mjs <-> src/issue-sort.mjs',
-    'src/issue-mixed.mjs <-> src/issue-sort-github.mjs <-> src/issue-sort.mjs',
     'src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs',
     'src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs <-> src/runtime/try-doors.mjs',
     'src/toml-string.mjs <-> src/workflow-herdr-layout.mjs',
@@ -844,9 +842,9 @@ registerHooks({
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
   const coveredLocals = new Set([
-    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'update-sync', 'prompt-approve',
+    'help', 'version', 'version-detailed', 'completion', 'setup', 'init', 'status', 'lint', 'prove', 'project-files', 'file-owner', 'update-sync', 'prompt-approve',
     'runtime-check', 'runtime-try', 'contracts', 'contracts-sync', 'runtime-jobs', 'mcp', 'metrics',
-    'issue-dependency-graph', 'dependencies-prepare', 'dependencies-complete',
+    'issue-dependency-graph',
     'product-status', 'product-next', 'product-start',
     'workflow-list', 'workflow-status', 'workflow-run', 'workflow-done', 'workflow-publish', 'workflow-ask', 'workflow-request-uptake',
     'workflow-approve', 'workflow-resend', 'workflow-card', 'workflow-changes', 'workflow-open', 'workflow-view',
@@ -854,7 +852,7 @@ registerHooks({
     'workflow-park', 'workflow-yield', 'workflow-cancel', 'workflow-tidy',
     'autopilot-status', 'autopilot-logs', 'autopilot-doctor', 'autopilot-regressions', 'autopilot-alerts', 'autopilot-alert',
     'autopilot-start', 'autopilot-suite', 'autopilot-stop', 'autopilot-add', 'autopilot-release', 'autopilot-report',
-    'autopilot-intake', 'autopilot-audit', 'autopilot-check-base',
+    'autopilot-intake', 'autopilot-check-base',
     'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot-trust', 'autopilot-untrust', 'accounts', 'upgrade',
   ]);
   for (const route of PUBLIC_COMMAND_ROUTES) {
@@ -875,12 +873,15 @@ registerHooks({
     ['cli:--version', [bin, '--version'], repo],
     ['cli:completion', [bin, 'completion', 'bash'], repo],
     ['cli:setup', [bin, 'setup', '--yes'], repo],
+    ['cli:init', [bin, 'init'], repo],
+    ['cli:status', [bin, 'status', '--json'], repo],
     ['cli:files', [bin, 'files', '--json'], repo],
     ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:update', [bin, 'update', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
+    ['cli:prove', [bin, 'prove', '--json'], repo],
     ['cli:simulate', [bin, 'simulate', '--stop', 'a'], repo],
     ['cli:contracts', [bin, 'contracts'], repo],
     ['cli:contracts-sync', [bin, 'contracts', 'sync'], repo],
@@ -888,8 +889,6 @@ registerHooks({
     ['cli:mcp', [bin, 'mcp'], repo],
     ['cli:metrics', [bin, 'metrics', '--json'], repo],
     ['cli:graph', [bin, 'graph', '--issue', '1'], nonGit],
-    ['cli:dependencies-prepare', [bin, 'dependencies', 'prepare'], nonGit],
-    ['cli:dependencies-complete', [bin, 'dependencies', 'complete', '--input', '-'], nonGit],
     ['cli:product-status', [bin, 'product', 'status'], repo],
     ['cli:product-next', [bin, 'product', 'next'], repo],
     ['cli:product-start', [bin, 'product', 'start', 'r1', '--no-run'], repo],
@@ -911,7 +910,6 @@ registerHooks({
     ['child:workflow-replay-selector', ['--input-type=module', '-e', replayScript, repo, JSON.stringify(['tests/a.json'])], nonGit],
     ['child:try-doors-launcher', ['--input-type=commonjs', '-e', launcherScript, '--', pathToFileURL(join(root, 'src/try-doors.mjs')).href, join(scratch, 'missing.door.json')], nonGit],
     ['child:scripts/autopilot-smoke.mjs', [join(root, 'scripts/autopilot-smoke.mjs')], nonGit],
-    ['child:scripts/route-runtime-issues.mjs', [join(root, 'scripts/route-runtime-issues.mjs')], nonGit],
     ['tick:autopilot-launcher', [join(root, 'src/autopilot-launcher.mjs'), join(scratch, 'missing-state.json')], nonGit],
     ['lib:svg-layout.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`], nonGit],
     ['lib:prompt-approve.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/prompt-approve.mjs')).href)})`], nonGit],
@@ -929,7 +927,6 @@ registerHooks({
   ]);
   const ZERO_SRC_ENTRIES = new Set([
     'child:scripts/autopilot-smoke.mjs',
-    'child:scripts/route-runtime-issues.mjs',
   ]);
   const LIGHT_ENTRIES = new Set([
     'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion',

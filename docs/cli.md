@@ -146,34 +146,24 @@ Choose one scope:
 - Omit both to inspect staged, unstaged, and untracked non-ignored changes in
   the current working tree.
 
-`pdd update` maps each touched file through `pdd owner` (`pdd-bindings.json`,
-`Generated from` or `Prompt:` headers, opening-sentence prose claims, and
-unique path/stem matches), groups owned modules by owning `.prompt.md` with
-`+added/-removed` diff stats and changed exported/top-level symbols, and lists
-touched unowned files separately without fabricating ownership.
+`pdd update` is read-only and writes zero sidecar files or prompt edits. It maps
+each touched file through `pdd owner` (`pdd-bindings.json`, `Generated from` or
+`Prompt:` headers, opening-sentence prose claims, and unique path/stem matches),
+groups owned modules by owning `.prompt.md` with `+added/-removed` diff stats and
+changed exported/top-level symbols, and lists touched unowned files separately
+without fabricating ownership.
 
-Per-module currency is tracked without a shared repository-wide commit SHA,
-without mutating `.prompt.md` files (preserving `prose_sha256` and human
-approvals byte-for-byte), and without adding extra keys to `pdd-bindings.json`:
-each owned module stores its derived hashes in a disjoint per-module sidecar
-file at `.pdd/sync/<module>.json` (`pdd.module-sync.v1`), while `module_sha256`
-hashes normalized code content without the derived header hash suffix. Parallel
-PRs touching different modules—even modules owned by the same prompt—edit
-disjoint sidecar files.
-
-- Default (plan): print each affected prompt's status (`current`,
-  `prompt-stale`, `code-drifted`, `both-drifted`, `unpinned`, or `deleted`),
-  diff stats, changed symbols, and next steps without writing files; exits 0.
+- Default: print each affected prompt's status (`current`, `prompt-stale`,
+  `changed`, or `deleted`), diff stats, and changed symbols without writing
+  files; exits 0. Use `pdd status --changed` for the same overview alongside the
+  Feature Map.
 - `--check`: read-only verification that exits 0 when every touched owned
-  module is `current` (and no stale sidecars remain for deleted or renamed
-  modules) and exits 1 when any touched owned module has drift.
-- `--write`: after syncing prompt prose to match reviewed code diffs,
-  atomically write or prune only the touched modules' `.pdd/sync/<module>.json`
-  sidecars and refresh any existing `Generated from` / `Prompt:` header hashes
-  without modifying `.prompt.md` files, `pdd-bindings.json`, or untouched
-  modules.
+  module is `current` and exits 1 when any touched owned module has changes or a
+  stale prompt header.
+- `--write`: refused with exit 2 because `pdd update` never writes sidecar files
+  or modifies headers on disk.
 - `--json`: emit machine-readable `pdd.update-sync.v1` JSON (`scope`,
-  `prompts`, `modules`, `unowned`, `drifted`, `updated`, `ok`).
+  `prompts`, `modules`, `unowned`, `ok`).
 
 Path traversal (`..`), leading-`-` options/ranges, symlinks, secret-looking
 paths (`.env`, credentials), malformed `pdd-bindings.json`, and binary owned or
@@ -454,17 +444,19 @@ of `@openai/codex` (isolated in `$PDD_STATE_DIR/codex-home`, default `~/.local/s
   own `~/.codex/` untouched, and zero tokens appear in process arguments. Claude
   steps pass `CLAUDE_CODE_OAUTH_TOKEN` in the child environment, plus
   `ANTHROPIC_BASE_URL` on shared gateway grants.
-- **Isolated PDD Codex home and opt-in terminal auto-switch.** Local Codex leases
+- **Isolated PDD homes and opt-in terminal auto-switch.** Local Codex leases
   live inside `$PDD_STATE_DIR/codex-home` (`~/.local/state/pdd/codex-home`, mode
   `0700`, with `cli_auth_credentials_store = "file"`, merged user `~/.codex/config.toml`
   settings, and symlinked `~/.codex` skills, memories, sessions, history, and rules),
   leaving `~/.codex/auth.json` untouched. `pdd accounts auto on` writes one marked
-  block in `~/.zshrc`, `~/.bashrc`, and `~/.config/fish/config.fish` that sets
-  `CODEX_HOME` to the isolated PDD Codex home when a healthy lease is active, leaves
-  `codex login` and `codex logout` on normal `~/.codex` (refusing if `CODEX_HOME`
-  was manually exported to the PDD Codex home), and leaves `CODEX_HOME` unset to fall
-  back to `~/.codex/auth.json` whenever PDD Cloud is unreachable or no valid active
-  lease exists. `pdd accounts auto off` removes the marked block cleanly.
+  block in `~/.zshrc`, `~/.bashrc`, and `~/.config/fish/config.fish` that routes
+  plain `codex` and `claude` invocations through `PDD_CODEX_AUTO_FAIL_OPEN=1 command pdd-codex`
+  and `PDD_CLAUDE_AUTO_FAIL_OPEN=1 command pdd-claude` (passing through to stock
+  `codex` / `claude` when `pdd-codex` / `pdd-claude` is absent, or failing open to
+  personal credentials on transient Cloud outage while keeping `codex login` / `logout`
+  on `~/.codex`). Set `PDD_LEGACY_PTY_ROTATE=1` to use the legacy `pdd accounts sync`
+  and `pdd accounts codex --` PTY rotation path. `pdd accounts auto off` removes the
+  marked block cleanly.
 
 ## GitHub API budget
 
@@ -489,14 +481,13 @@ same limit. The counts stay on this machine, one file for each repository in
 `~/.local/state/pdd/autopilot/github/`. Each tick keeps the last 2 hours.
 
 A conditional read sends the ETag of the last reply. A `304` reply means that
-nothing changed, and GitHub does not count it against the limit. The tick,
-`pdd dependencies prepare` and `complete` use conditional reads for an Autopilot
-repository. They share one file of ETags and reply bodies in the same folder. A
+nothing changed, and GitHub does not count it against the limit. The Autopilot
+tick uses conditional reads with one shared ETag file in the same folder. A
 full page (100 items) that has no next page is read without its ETag: a `304`
 reply does not show that a next page came.
 
 pdd keeps one saved dependency snapshot for each repository in the same folder
-(`*.snapshot.json`, private to you). `pdd dependencies complete` uses it. A read
+(`*.snapshot.json`, private to you). A read
 asks GitHub only for the issues that changed since the last read (`since`, in
 update order). It reads the comments, links and history of an issue again when its
 update time, comment count or link identities changed. It checks the open index

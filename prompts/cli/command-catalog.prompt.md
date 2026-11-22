@@ -169,12 +169,13 @@ import the Runtime client for this route.
 Catalog `update` (stable id `update`, local `update-sync`) immediately after
 `owner`. Its form is `pdd update [FILE...] [--from RANGE] [--check] [--write] [--json]`:
 zero or more text operands FILE, optional text option `--from`, and optional
-Boolean flags `--check`, `--write`, and `--json`. Help says it inspects or syncs
-touched code files with their owning prompts and per-module content hashes using
-local Git and working files only, with zero AI calls, using `--check` to fail on
-drift and `--write` to refresh derived hashes for touched modules. Include it in
-root help (Core PDD workflow, within 80 columns) and completion. [Code-to-prompt sync](update-sync.prompt.md)
-owns its behavior and validation; do not import the Runtime client for this route.
+Boolean flags `--check`, `--write`, and `--json`. Help says it inspects touched
+code files with their owning prompts and changed symbols using local Git and
+working files only, with zero AI calls and zero file writes (`--check` fails on
+drift; `--write` is refused read-only; prefer `pdd status --changed`). Include
+it in root help (Core PDD workflow, within 80 columns) and completion.
+[Changed-map wrapper](update-sync.prompt.md) owns its behavior and validation;
+do not import the Runtime client for this route.
 
 ## Shared contract routes
 

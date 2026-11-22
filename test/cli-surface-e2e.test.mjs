@@ -1148,23 +1148,20 @@ test('core local authoring commands: setup, init, status, files, owner, contract
   assert.match(ownerText.stdout, /app\.mjs: prompts\/app\.prompt\.md \(header\)/);
   markExecuted('owner');
 
-  // update: inspect plan, --check drift refusal, --write pin refresh, and --check pass
+  // update: read-only changed-map report, --check clean pass, and --write refusal (exit 2)
   const updatePlan = await fx.cli(['update', 'app.mjs', 'README.md', '--json']);
   assert.equal(updatePlan.code, 0, updatePlan.stderr);
   const planData = JSON.parse(updatePlan.stdout);
   assert.equal(planData.schema_version, 'pdd.update-sync.v1');
   assert.equal(planData.prompts[0].prompt, 'prompts/app.prompt.md');
-  assert.equal(planData.modules[0].status, 'unpinned');
+  assert.equal(planData.modules[0].status, 'current');
   assert.deepEqual(planData.unowned, [{ path: 'README.md', reason: 'no owning prompt' }]);
-  const updateCheckFail = await fx.cli(['update', 'app.mjs', '--check', '--json']);
-  assert.equal(updateCheckFail.code, 1, updateCheckFail.stderr);
-  assert.equal(JSON.parse(updateCheckFail.stdout).ok, false);
-  const updateWrite = await fx.cli(['update', 'app.mjs', '--write', '--json']);
-  assert.equal(updateWrite.code, 0, updateWrite.stderr);
-  assert.equal(JSON.parse(updateWrite.stdout).modules[0].status, 'current');
   const updateCheckPass = await fx.cli(['update', 'app.mjs', '--check', '--json']);
   assert.equal(updateCheckPass.code, 0, updateCheckPass.stderr);
   assert.equal(JSON.parse(updateCheckPass.stdout).ok, true);
+  const updateWrite = await fx.cli(['update', 'app.mjs', '--write', '--json']);
+  assert.equal(updateWrite.code, 2, updateWrite.stderr);
+  assert.match(updateWrite.stderr, /read-only|Invariant:/i);
   markExecuted('update');
 
   // contracts & contracts sync [--write]

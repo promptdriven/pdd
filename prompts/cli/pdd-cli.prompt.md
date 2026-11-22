@@ -98,12 +98,12 @@ code. This local route imports no Runtime client, reads no token and installs no
 skills.
 
 Dispatch `update-sync` to `runUpdate({cwd,files,from,check,write,json}, {stdout,stderr})`
-from [Code-to-prompt sync](update-sync.prompt.md), with FILE operands as `files`,
+from [Changed-map wrapper](update-sync.prompt.md), with FILE operands as `files`,
 `--from` as `from` (when present), and Boolean flags `--check`, `--write`, and
-`--json`. Return its exit code, catching unexpected errors with one finite stderr
-line and exit 1. This local route imports no Runtime client, spawns zero AI
-subprocesses, skips post-upgrade skill sync and the cached release notice (zero
-network even in TTY terminals), reads no token and installs no skills.
+`--json`. It stays read-only (zero `.pdd/sync/` sidecars, refusing `--write`
+with exit 2), returns its exit code, catches unexpected errors with one finite
+stderr line and exit 1, imports no Runtime client, spawns zero AI subprocesses,
+and skips post-upgrade skill sync and the cached release notice.
 
 ## Finished chat maintenance route
 

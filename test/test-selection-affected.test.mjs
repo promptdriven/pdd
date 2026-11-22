@@ -738,13 +738,12 @@ test('3065 real repository prompt sync and affected selection remain aligned', (
 
   const projectFiles = selectAffectedTests({ root: repoRoot, changedFiles: ['src/project-files.mjs'] });
   assert.ok(projectFiles.selectedCount > 0);
-  assert.ok(projectFiles.selectedTests.includes('test/plain-prompts-and-frontmatter.test.mjs'));
-  assert.ok(projectFiles.selectedTests.includes('test/runtime-seam.test.mjs'));
+  assert.ok(projectFiles.selectedTests.includes('test/project-files.test.mjs'));
 
-  const setupInteraction = selectAffectedTests({ root: repoRoot, changedFiles: ['src/setup-interaction.mjs'] });
-  assert.ok(setupInteraction.selectedCount > 0);
-  assert.ok(setupInteraction.selectedTests.includes('test/setup.test.mjs'));
-  assert.ok(setupInteraction.selectedTests.includes('test/setup-defaults.test.mjs'));
+  const projectSetup = selectAffectedTests({ root: repoRoot, changedFiles: ['src/project-setup.mjs'] });
+  assert.ok(projectSetup.selectedCount > 0);
+  assert.ok(projectSetup.selectedTests.includes('test/setup.test.mjs'));
+  assert.ok(projectSetup.selectedTests.includes('test/project-setup.test.mjs'));
 
   const realSelection = selectAffectedTests({
     root: repoRoot,
