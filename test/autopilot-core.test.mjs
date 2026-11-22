@@ -4580,7 +4580,7 @@ test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt
   await w.tick();
 
   const input = w.job(17, 'build').input;
-  const rule1 = input.split('\n').find(line => line.startsWith('1. Choose the PDD skill')) ?? '';
+  const rule1 = input.split('\n').find(line => line.startsWith('1. Read the PDD skill')) ?? '';
   assert.match(rule1, /pdd-small-change/);
   assert.match(rule1, /path d/);
   assert.match(rule1, /never[^\n]*\*\.prompt\.md/);
