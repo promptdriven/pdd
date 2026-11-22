@@ -29,7 +29,7 @@ Show a native-only declaration's kind and reason before approval (whether author
 
 - [Human boundary card](human-boundary-card.prompt.md): required authoring/generation/verification context for building and formatting the compact `<= 25`-line advisory boundary card and source/observation provenance above raw schema and prose details.
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
+Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
 
 ## Caller navigation
 

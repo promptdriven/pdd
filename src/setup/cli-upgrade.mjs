@@ -46,7 +46,8 @@ export function classifyInstallKind(packageRoot, ports = {}) {
   const match = /^(.*?)\/(?:lib\/)?node_modules\/(?:@promptdriven\/pdd|pdd)$/.exec(norm);
   if (!match?.[1]) return { kind: 'unknown', realPackageRoot: real, hint: 'npm install -g @promptdriven/pdd && pdd setup' };
   const prefix = match[1];
-  if (fs.existsSync(join(prefix, 'package.json')) || fs.existsSync(join(prefix, '.git'))) {
+  // Only classify as local-project when parent holds package.json; never check prefix/.git (Apple Silicon /opt/homebrew/.git is global!).
+  if (fs.existsSync(join(prefix, 'package.json'))) {
     return { kind: 'local-project', prefix, realPackageRoot: real, hint: 'npm install @promptdriven/pdd@latest' };
   }
   try {
@@ -73,7 +74,7 @@ function resolveInstalledRoot(prefix, fallbackRoot, fs) {
 
 async function queryGitHubJson(endpoint, { fetchImpl, spawnSyncImpl, env = process.env } = {}) {
   const effectiveFetch = typeof fetchImpl === 'function' ? fetchImpl : (!spawnSyncImpl ? globalThis.fetch : null);
-  const effectiveSpawn = typeof spawnSyncImpl === 'function' ? spawnSyncImpl : (!fetchImpl && !env.NODE_TEST_CONTEXT ? nativeSpawnSync : null);
+  const effectiveSpawn = typeof spawnSyncImpl === 'function' ? spawnSyncImpl : (fetchImpl === undefined ? nativeSpawnSync : null);
   let fetchError = null;
   if (effectiveFetch) {
     try {

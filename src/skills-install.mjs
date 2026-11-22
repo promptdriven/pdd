@@ -1,7 +1,7 @@
 // Prompt: prompts/cli/skills-install.prompt.md
 import { createHash } from 'node:crypto';
-import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { accessSync, constants, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 import { resolvePddStateBase } from './shared/state-dir.mjs';
 
 export const PDD_SKILL_NAMES = Object.freeze([
@@ -100,7 +100,25 @@ function resolveClaudeBase({ home, claudeConfigDir }) {
   return claudeConfigDir && isAbsolute(claudeConfigDir) ? claudeConfigDir : join(home, '.claude');
 }
 
-const PDD_PLUGIN_KEY = /(?:^|[@/])pdd(?:$|[@/])|promptdriven\/pdd/i;
+const PDD_PLUGIN_KEY = /^(?:pdd(?:@|$)|promptdriven\/pdd(?:@|$))/i;
+
+function executableOnPath(name, env) {
+  return (env?.PATH ?? '').split(delimiter).filter(Boolean).some(folder => {
+    try {
+      const full = join(folder, name);
+      accessSync(full, constants.X_OK);
+      const st = lstatSync(full);
+      return st.isFile() || st.isSymbolicLink();
+    } catch { return false; }
+  });
+}
+
+function hasAntigravityInstall({ home, env }) {
+  if (!home) return false;
+  return existsSync(join(home, '.gemini/antigravity-cli'))
+    || existsSync(join(home, '.gemini/config/mcp_config.json'))
+    || executableOnPath('agy', env);
+}
 
 // Detect a Claude Code plugin-managed PDD install so `pdd setup` avoids duplicate `/pdd` skills.
 export function hasClaudePluginInstall({ home, claudeConfigDir } = {}) {
@@ -183,7 +201,7 @@ function hasOwnedSkill(root) {
 }
 
 export function setupSkills(options) {
-  const { packageRoot, cwd = process.cwd(), home, claudeConfigDir, skillsDir } = options;
+  const { packageRoot, cwd = process.cwd(), home, claudeConfigDir, skillsDir, env = process.env } = options;
   const { version, skills } = loadBundledSkills(packageRoot);
 
   if (typeof skillsDir === 'string' && skillsDir.trim()) {
@@ -193,10 +211,13 @@ export function setupSkills(options) {
 
   const claudeRoot = join(resolveClaudeBase({ home, claudeConfigDir }), 'skills');
   const pluginManaged = hasClaudePluginInstall({ home, claudeConfigDir });
+  const agyRoot = join(home, '.gemini/config/skills');
   const agents = [
     { agent: 'Codex', root: join(home, '.agents/skills'), read: [join(home, '.agents/skills')] },
     { agent: 'Claude', root: claudeRoot, read: [claudeRoot], pluginManaged },
-    { agent: 'Antigravity', root: join(home, '.gemini/config/skills'), read: [join(home, '.gemini/config/skills')] },
+    ...(hasAntigravityInstall({ home, env }) || hasOwnedSkill(agyRoot)
+      ? [{ agent: 'Antigravity', root: agyRoot, read: [agyRoot] }]
+      : []),
   ];
   const results = agents.map(agent => setupAgent(agent, skills, version));
   const seen = new Set(results.map(result => canonicalPath(result.root)));
@@ -233,10 +254,11 @@ export function syncOwnedUserSkills({ packageRoot, home, claudeConfigDir, codexH
     } catch { /* Missing or unreadable sync state falls through to folder inspection. */ }
   }
   const claudeRoot = join(resolveClaudeBase({ home, claudeConfigDir }), 'skills');
+  const claudePluginManaged = Boolean(hasClaudePluginInstall({ home, claudeConfigDir }));
   const candidates = [
     join(home, '.agents/skills'),
     ...secondaryCodexRoots({ home, codexHome }),
-    claudeRoot,
+    ...(claudePluginManaged ? [] : [claudeRoot]),
     join(home, '.gemini/config/skills'),
   ];
   const seen = new Set();

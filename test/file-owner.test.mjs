@@ -339,10 +339,12 @@ test('3295/S2 test-prompt detection, mixed-owner bug fix, and non-blocking warni
   assert.ok(violations.violations.some(v => v.message.includes('prompts/tests/bad.prompt.md')));
   assert.ok(violations.violations.some(v => v.message.includes('prompts/prod.prompt.md')));
 
-  // Querying a prompt path that mentions test files in prose warns on stderr; a clean prompt stays silent.
+  // Querying a prompt path that mentions test files in prose warns on stderr (exit 0), but findTestPromptViolations does NOT raise a blocking error for prose mentions.
   const byPrompt = await run(['owner', 'prompts/prose.prompt.md', 'prompts/clean.prompt.md']);
   assert.equal(byPrompt.code, 0);
   assert.equal(byPrompt.err, 'Warning: misplaced prompt owner: prompts/prose.prompt.md claims src/unit.test.mjs. Prompts own production modules, not test files.\n');
+  const proseViolations = findTestPromptViolations({ root, promptPaths: ['prompts/prose.prompt.md'] });
+  assert.deepEqual(proseViolations, { ok: true, violations: [] }, 'prose mention must not raise blocking test-file-claim error');
 });
 
 test('3295 isTestOwnedPath requires canonicalPath and runOwner never opens non-visible or symlinked test claims', async t => {

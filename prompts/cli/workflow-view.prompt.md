@@ -14,7 +14,7 @@ Keep the output small and textual. Do not embed entire documents or build a serv
 
 ## Dependencies
 
-- Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring. [Run records](workflow-runs.prompt.md) owns run selection; [Runtime seam](runtime-seam.prompt.md#public-contract) owns test/interface discovery and prose hashes (`findTests`, `LIMITS`, `interfaceBlocks`, `proseSha256`, and `PROMPT_TESTS_WORDS`).
+- Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before authoring. [Run records](workflow-runs.prompt.md) owns run selection; [Runtime seam](runtime-seam.prompt.md#public-contract) owns test/interface discovery and prose hashes (`findTests`, `LIMITS`, `interfaceBlocks`, `proseSha256`, and `PROMPT_TESTS_WORDS`).
 - Runtime: Node filesystem/path/URL primitives, Git local read commands through optional `ports.execFile`, and `ports.env`/`stateDir` for existing run-index selection. No runner/chat mutation helpers.
 - [Results reader](workflow-results.prompt.md): required generation/runtime/verification context for formatting saved per-step results; viewing does not acquire fresh results.
 

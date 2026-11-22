@@ -1,7 +1,7 @@
 // Prompt: prompts/cli/project-setup.prompt.md
-import { existsSync, lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { resolveRepoRoot } from './shared/git-context.mjs';
 
 const START = '<!-- pdd:start -->';
@@ -51,24 +51,44 @@ export function detectProjectStack(root) {
   return { language: null, testCommand: null };
 }
 
-function assertRegularFileIfExists(file) {
+function resolveWritableTarget(file, root) {
   let st;
   try {
     st = lstatSync(file);
   } catch (error) {
-    if (error.code === 'ENOENT') return null;
+    if (error.code === 'ENOENT') return { target: file, stat: null };
     throw error;
   }
-  if (st.isSymbolicLink() || !st.isFile()) {
-    const kind = st.isSymbolicLink() ? 'a symbolic link' : 'not a regular file';
+  if (st.isSymbolicLink()) {
+    let resolved, targetStat, realRoot;
+    try {
+      realRoot = realpathSync(root);
+      resolved = realpathSync(file);
+      targetStat = statSync(resolved);
+    } catch {
+      resolved = null;
+    }
+    const rel = resolved ? relative(realRoot, resolved) : '..';
+    if (resolved && targetStat?.isFile() && rel && !rel.startsWith('..') && !isAbsolute(rel)) {
+      // Allow common in-repo symlinks such as `CLAUDE.md -> AGENTS.md` and update the in-repo target cleanly.
+      return { target: resolved, stat: targetStat };
+    }
     throw new Error(
-      `${file}: cannot write PDD block because the target is ${kind}.\n`
+      `${file}: cannot write PDD block because the target is a symbolic link pointing outside the repository (or broken).\n`
+      + '  Invariant: pdd init only updates regular CLAUDE.md / AGENTS.md files inside the repository.\n'
+      + `  Fix: Replace "${file}" with a regular file (or in-repo symlink) or add the 4-line PDD block manually.\n`
+      + '  Rerun: pdd init',
+    );
+  }
+  if (!st.isFile()) {
+    throw new Error(
+      `${file}: cannot write PDD block because the target is not a regular file.\n`
       + '  Invariant: pdd init only updates regular CLAUDE.md / AGENTS.md files inside the repository.\n'
       + `  Fix: Replace "${file}" with a regular file or add the 4-line PDD block manually.\n`
       + '  Rerun: pdd init',
     );
   }
-  return st;
+  return { target: file, stat: st };
 }
 
 function writeAtomicRegular(file, content, mode = 0o644) {
@@ -84,8 +104,10 @@ function writeAtomicRegular(file, content, mode = 0o644) {
 
 export function setupProject({ cwd }) {
   const claude = join(cwd, 'CLAUDE.md');
-  const file = existsSync(claude) ? claude : join(cwd, 'AGENTS.md');
-  const existingStat = assertRegularFileIfExists(file);
+  let claudePresent = false;
+  try { lstatSync(claude); claudePresent = true; } catch {}
+  const chosen = claudePresent ? claude : join(cwd, 'AGENTS.md');
+  const { target: file, stat: existingStat } = resolveWritableTarget(chosen, resolve(cwd));
   const old = existingStat ? readFileSync(file, 'utf8') : null;
   const eol = old?.includes('\r\n') ? '\r\n' : '\n';
   const wanted = eol === '\r\n' ? PDD_BLOCK.replaceAll('\n', '\r\n') : PDD_BLOCK;

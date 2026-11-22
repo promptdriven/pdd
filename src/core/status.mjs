@@ -1,6 +1,6 @@
 // Prompt: prompts/cli/status.prompt.md
 import { spawnSync } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findOwners } from '../file-owner.mjs';
@@ -43,18 +43,24 @@ function matchVerifyPaths(paths, verifyPaths) {
 }
 
 function readInstructionBlockState(root) {
+  const realRoot = (() => { try { return realpathSync(root); } catch { return resolve(root); } })();
   for (const name of ['CLAUDE.md', 'AGENTS.md']) {
     const full = join(root, name);
-    if (!existsSync(full)) continue;
-    try {
-      const text = readBoundedUtf8(full, { maxBytes: 256 * 1024, noFollow: true });
-      const lines = text.split(/\r?\n/);
-      const hasStart = lines.includes(START);
-      const hasEnd = lines.includes(END);
-      return { instruction_file: name, has_pdd_block: hasStart && hasEnd };
-    } catch {
-      return { instruction_file: name, has_pdd_block: false };
+    let st;
+    try { st = lstatSync(full); } catch { continue; }
+    let target = full;
+    if (st.isSymbolicLink()) {
+      try {
+        const resolved = realpathSync(full);
+        const rel = relative(realRoot, resolved);
+        if (!rel || rel.startsWith('..') || isAbsolute(rel) || !statSync(resolved).isFile()) return { instruction_file: name, has_pdd_block: false };
+        target = resolved;
+      } catch { return { instruction_file: name, has_pdd_block: false }; }
     }
+    try {
+      const lines = readBoundedUtf8(target, { maxBytes: 256 * 1024, noFollow: true }).split(/\r?\n/);
+      return { instruction_file: name, has_pdd_block: lines.includes(START) && lines.includes(END) };
+    } catch { return { instruction_file: name, has_pdd_block: false }; }
   }
   return { instruction_file: null, has_pdd_block: false };
 }
@@ -108,6 +114,10 @@ async function detectChangedFiles(root, ports = {}) {
       if (canonicalPath(path)) found.add(path);
       if ((code[0] === 'R' || code[0] === 'C') && tokens[i + 1]) i++;
     }
+  }
+  const diff = spawnSync('git', ['diff', '--name-only', '-z', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  if (diff.status === 0 && diff.stdout) {
+    for (const path of diff.stdout.split('\0').filter(Boolean)) if (canonicalPath(path)) found.add(path);
   }
   return [...found].sort();
 }
@@ -197,25 +207,30 @@ function formatStatusText(view) {
   return `${lines.join('\n')}\n`;
 }
 
+const epipeGuards = new WeakMap();
+function guardEpipe(stream) {
+  if (!stream || typeof stream.on !== 'function') return { closed: false };
+  let state = epipeGuards.get(stream);
+  if (!state) {
+    state = { closed: false };
+    epipeGuards.set(stream, state);
+    stream.on('error', err => { if (err?.code === 'EPIPE') { state.closed = true; return; } throw err; });
+  }
+  state.closed = false;
+  return state;
+}
+
 export async function runStatus({ cwd = process.cwd(), paths = [], changed = false, json = false } = {}, ports = {}) {
-  const stdout = ports.stdout ?? process.stdout;
-  const stderr = ports.stderr ?? process.stderr;
-  let closed = false;
-  const onPipeError = err => { if (err?.code === 'EPIPE') { closed = true; return; } throw err; };
-  const canListen = typeof stdout?.on === 'function' && typeof stdout?.off === 'function';
-  if (canListen) stdout.on('error', onPipeError);
+  const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr;
+  const pipeState = guardEpipe(stdout);
   try {
     const view = await inspectStatus({ cwd, paths, changed }, ports);
     const out = json ? `${JSON.stringify(view)}\n` : formatStatusText(view);
-    if (!closed) {
-      try { stdout.write(out); } catch (err) { if (err?.code !== 'EPIPE') throw err; }
-    }
+    if (!pipeState.closed) { try { stdout.write(out); } catch (err) { if (err?.code !== 'EPIPE') throw err; } }
     return 0;
   } catch (error) {
     if (error?.code === 'EPIPE') return 0;
     stderr.write(`${error.message}\n`);
     return error.exitCode ?? 1;
-  } finally {
-    if (canListen) stdout.off('error', onPipeError);
   }
 }

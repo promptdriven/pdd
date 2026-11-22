@@ -71,5 +71,5 @@ A verified assignment has exactly `{version:1,runId,repository,issueNumber,workf
 
 ## Dependencies
 
-- Load the complete [Prompting guide](../../docs/prompting-guide.md) for authoring/generation; it owns module contracts and preservation.
+- Load the complete [Prompting guide](../../skills/pdd/references/prompting.md) for authoring/generation; it owns module contracts and preservation.
 - Runtime: Node `child_process.execFile`, `crypto.randomUUID`, `fs/promises`, `fs.constants`, `path`, `util`, and installed normal Git. Filesystem metadata creation/reads/fsync are helper-owned; execFile is the sole injected port. Tests use disposable real local repositories and injected command failures, with no live GitHub/native actions.

@@ -521,8 +521,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       const interactive = Boolean(confirm) || Boolean(stdin?.isTTY && stdout?.isTTY);
       let code = 0;
       const account = checkPddAccountNonBlocking(env);
-      if (account.connected) line(stdout, 'Connected to promptdriven.ai (via gh).');
-      else if (account.checked) line(stdout, 'Not signed in to promptdriven.ai yet — run `gh auth login` or visit https://promptdriven.ai/login (continuing setup).');
+      if (account.connected) line(stdout, 'GitHub CLI (gh) sign-in detected (for promptdriven.ai).');
+      else line(stdout, 'GitHub CLI (gh) is not signed in — run `gh auth login` or visit https://promptdriven.ai/login (continuing setup).');
       try {
         const skillsFn = setupSkills ?? (await import('./skills-install.mjs')).setupSkills;
         const skillOpts = {
@@ -530,6 +530,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           cwd,
           home: env.HOME || homedir(),
           claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+          env,
           ...(!setupSkills && env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
           ...(plan.options['--skills-dir'] !== undefined ? { skillsDir: plan.options['--skills-dir'] } : {}),
         };
