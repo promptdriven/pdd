@@ -62,24 +62,35 @@ export function inspectProjectFiles(root) {
   return { schema_version: 'pdd.files.v1', prompts: promptRows, stories, tests, orphans: found.orphans, refusals, warnings: [...new Set(warnings)] };
 }
 
+const epipeGuards = new WeakMap();
+function guardEpipe(stream) {
+  if (!stream || typeof stream.on !== 'function') return { closed: false };
+  let state = epipeGuards.get(stream);
+  if (!state) {
+    state = { closed: false };
+    epipeGuards.set(stream, state);
+    // Keep the EPIPE handler attached through async stream drain so `pdd files | head -1` exits 0 cleanly.
+    stream.on('error', err => {
+      if (err?.code === 'EPIPE') { state.closed = true; return; }
+      throw err;
+    });
+  }
+  state.closed = false;
+  return state;
+}
+
 export function runProjectFiles({ cwd = process.cwd(), json = false } = {}, ports = {}) {
   const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr;
   const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   if (top.status !== 0) { stderr.write('pdd files works in a Git repository.\n'); return 2; }
-  let closed = false;
-  const onPipeError = error => {
-    if (error?.code === 'EPIPE') { closed = true; return; }
-    throw error;
-  };
-  const canListen = typeof stdout?.on === 'function' && typeof stdout?.off === 'function';
-  if (canListen) stdout.on('error', onPipeError);
+  const pipeState = guardEpipe(stdout);
   const safeWrite = text => {
-    if (closed) return false;
+    if (pipeState.closed) return false;
     try {
       stdout.write(text);
-      return !closed;
+      return !pipeState.closed;
     } catch (error) {
-      if (error?.code === 'EPIPE') { closed = true; return false; }
+      if (error?.code === 'EPIPE') { pipeState.closed = true; return false; }
       throw error;
     }
   };
@@ -103,7 +114,5 @@ export function runProjectFiles({ cwd = process.cwd(), json = false } = {}, port
     if (error?.code === 'EPIPE') return 0;
     stderr.write(`${error.message}\n`);
     return error.exitCode ?? 4;
-  } finally {
-    if (canListen) stdout.off('error', onPipeError);
   }
 }

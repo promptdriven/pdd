@@ -85,7 +85,7 @@ export async function checkReleaseNotice({ currentVersion, isVersionCommand = fa
   const cacheFile = join(stateDir, 'release-check.json');
   let cache = readCache(cacheFile, fs);
   const staleCache = !cache || !Number.isFinite(cache.checkedAt) || now - cache.checkedAt >= DAY_MS;
-  const mayFetch = typeof ports.fetchLatestRelease === 'function' || (interactive === true && !env.NODE_TEST_CONTEXT);
+  const mayFetch = typeof ports.fetchLatestRelease === 'function' || (interactive === true && ports.fetchLatestRelease !== null);
   if (staleCache && mayFetch) {
     try {
       const release = await (ports.fetchLatestRelease ?? defaultFetchLatestRelease)();

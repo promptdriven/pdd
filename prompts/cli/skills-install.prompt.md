@@ -11,10 +11,10 @@ Own `src/skills-install.mjs`. Export `PDD_SKILL_NAMES`, `RETIRED_SKILL_NAMES`, `
   - Default targets:
     1. `Codex` (`<home>/.agents/skills`) — open agentskills.io standard (Codex, Gemini, Cursor, etc.).
     2. `Claude` (`<claudeConfigDir>/skills` when `claudeConfigDir` is absolute, else `<home>/.claude/skills`).
-    3. `Antigravity` (`<home>/.gemini/config/skills`).
+    3. `Antigravity` (`<home>/.gemini/config/skills`) — targeted **only** when Antigravity is detected (`<home>/.gemini/antigravity-cli`, `<home>/.gemini/config/mcp_config.json`, `agy` executable on `PATH`, or existing `.pdd-skill.json`-marked skills in `<home>/.gemini/config/skills`).
   - When `skillsDir` is provided, target only `[resolve(cwd, skillsDir)]` (`agent: 'Custom'`).
   - **Never skip global setup because `cwd` has project skills:** `setupSkills` reads only each target's own global root, never `<cwd>/.agents/skills` or `<cwd>/.claude/skills`.
-  - **Plugin-aware Claude install:** before writing into Claude's skills folder, inspect `<claudeBase>/plugins/installed_plugins.json` (`<claudeConfigDir>` if absolute, else `<home>/.claude`). If a PDD plugin (`pdd` / `promptdriven`) is already installed, skip copying into Claude's skills folder and return `{agent: 'Claude', root, found: pluginPath, pluginManaged: true, stale: null, staleSkills: [], installed: [], updated: [], removed: []}` to avoid duplicate `/pdd` entries.
+  - **Plugin-aware Claude install & sync:** before writing into Claude's skills folder in both `setupSkills` and `syncOwnedUserSkills`, inspect `<claudeBase>/plugins/installed_plugins.json` (`<claudeConfigDir>` if absolute, else `<home>/.claude`). Match strictly PDD plugin IDs (`/^pdd(?:@|$)|^promptdriven\/pdd(?:@|$)/i`, never arbitrary plugins in a marketplace named `pdd`). When installed, skip copying/syncing into Claude's skills folder (`setupSkills` returns `{agent: 'Claude', root, found: pluginPath, pluginManaged: true, ...}`) to avoid duplicate `/pdd` entries.
   - Also refresh existing marker-owned secondary Codex user folders (`<home>/.codex/skills` and absolute `<codexHome>/skills`) without creating absent ones.
 - **Marker ownership & atomic replacement:**
   - Marker file `.pdd-skill.json` holds `{"package":"pdd","version","digest"}` where `digest` is the SHA-256 of sorted relative paths and file bytes.

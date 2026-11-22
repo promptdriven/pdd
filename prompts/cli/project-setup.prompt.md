@@ -13,8 +13,8 @@ Own `src/project-setup.mjs`. Export `PDD_BLOCK`, `detectProjectStack(root)`, `se
   - Line 4: `<!-- pdd:end -->`
   - Never include `pdd workflow run` or `RUNBOOK.md`.
 - **Target file selection:** inside the target directory, choose `CLAUDE.md` when it already exists, else `AGENTS.md` (creating `AGENTS.md` with the block and a trailing newline when neither exists).
-- **Safe marker replacement, CRLF preservation, and symlink refusal:**
-  - Inspect the target file with `lstatSync` before reading or writing. Refuse symbolic links and non-regular files with an explicit 4-part error naming the path, the invariant violated, a 1-line fix, and the rerun command (`pdd init`).
+- **Safe marker replacement, CRLF preservation, and symlink handling:**
+  - Inspect the target file with `lstatSync` before reading or writing. If `CLAUDE.md` (or `AGENTS.md`) is an in-repo symbolic link resolving to a regular file inside `cwd` (such as `CLAUDE.md -> AGENTS.md`), update that in-repo regular file target cleanly while preserving the symlink. Refuse out-of-repo symlinks, broken symlinks, and non-regular files with an explicit 4-part error naming the path, the invariant violated, a 1-line fix, and the rerun command (`pdd init`).
   - Split lines on `/\r?\n/` so CRLF files never miss existing markers or append a duplicate block, and preserve the file's dominant line ending (`\r\n` when present, else `\n`).
   - If the file has no marker lines, append one blank line and `PDD_BLOCK`. If it has exactly one `<!-- pdd:start -->` followed by one `<!-- pdd:end -->`, replace that inclusive span in place while preserving all surrounding text. Any other marker count or order throws without writing.
   - If the resulting content equals the existing content byte-for-byte, write nothing and return `changed: false`. Otherwise write atomically via a temporary sibling file and rename, preserving existing permissions (`0o644` for new files).

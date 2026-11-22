@@ -1,6 +1,6 @@
 # Contributing to PDD
 
-Read the entire [Prompting guide](docs/prompting-guide.md) before authoring a Story or prompt in the actual conversation. Use the same guide as the skill and recipes; do not create a competing set of prompt rules.
+Read the entire [Prompting guide](skills/pdd/references/prompting.md) before authoring a Story or prompt in the actual conversation. Use the same guide as the skill and recipes; do not create a competing set of prompt rules.
 
 ## Work from a local checkout
 

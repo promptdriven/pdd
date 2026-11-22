@@ -333,17 +333,19 @@ function loadOwnerContext({ root }, ports = {}) {
   return { visible, visibleSet, isRegularVisible, attempt, attemptVisible, bindings, table, prompts, promptMap };
 }
 
-function collectPromptTestClaims(ctx, queriedPrompts, skipTargets) {
+function collectPromptTestClaims(ctx, queriedPrompts, skipTargets, { includeProse = false } = {}) {
   const claimsByPrompt = new Map();
   if (!queriedPrompts.length) return claimsByPrompt;
   const extra = new Set();
   const proseByPrompt = new Map();
-  for (const promptPath of queriedPrompts) {
-    const proseSet = new Set();
-    for (const claim of promptClaims(promptPath, ctx.promptMap.get(promptPath) || null)) {
-      if (isTestOwnedPath(claim)) { extra.add(claim); proseSet.add(claim); }
+  if (includeProse) {
+    for (const promptPath of queriedPrompts) {
+      const proseSet = new Set();
+      for (const claim of promptClaims(promptPath, ctx.promptMap.get(promptPath) || null)) {
+        if (isTestOwnedPath(claim)) { extra.add(claim); proseSet.add(claim); }
+      }
+      proseByPrompt.set(promptPath, proseSet);
     }
-    proseByPrompt.set(promptPath, proseSet);
   }
   if (ctx.table) {
     for (const [mod, owners] of ctx.table.entries()) {
@@ -357,7 +359,7 @@ function collectPromptTestClaims(ctx, queriedPrompts, skipTargets) {
   for (const promptPath of queriedPrompts) {
     const proseSet = proseByPrompt.get(promptPath) ?? new Set();
     const claimed = checked.files
-      .filter(row => row.owners.includes(promptPath) || proseSet.has(row.path))
+      .filter(row => row.owners.includes(promptPath) || (includeProse && proseSet.has(row.path)))
       .map(row => row.path)
       .sort();
     if (claimed.length) claimsByPrompt.set(promptPath, claimed);
@@ -454,7 +456,7 @@ export function runOwner({ cwd = process.cwd(), paths = [], json = false } = {},
     }
   }
   const queriedPrompts = unique(named.filter(path => path.endsWith('.prompt.md') && !isTestPromptPath(path)));
-  for (const [promptPath, claimed] of collectPromptTestClaims(ctx, queriedPrompts, warnedTargets)) {
+  for (const [promptPath, claimed] of collectPromptTestClaims(ctx, queriedPrompts, warnedTargets, { includeProse: true })) {
     warnings.push(`Warning: misplaced prompt owner: ${promptPath} claims ${claimed.join(', ')}. Prompts own production modules, not test files.`);
   }
   for (const error of errors) stderr.write(`${error}\n`);

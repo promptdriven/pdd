@@ -71,6 +71,8 @@ function existingMode(file) {
   } catch { return 0o600; }
 }
 
+const PDD_TOML_KEYS = /^\s*(?:command|args|default_tools_approval_mode|tool_timeout_sec)\s*=/;
+
 function replaceTomlPddSection(before, wantedBlock) {
   const lines = before.split(/\r?\n/);
   const start = lines.findIndex(line => /^\s*\[mcp_servers\.pdd\]\s*(?:#.*)?$/.test(line));
@@ -81,7 +83,8 @@ function replaceTomlPddSection(before, wantedBlock) {
   }
   const beforePart = lines.slice(0, start);
   const afterPart = lines.slice(end);
-  const blockLines = wantedBlock.trimEnd().split('\n');
+  const preservedExtras = lines.slice(start + 1, end).filter(line => line.trim() && !PDD_TOML_KEYS.test(line));
+  const blockLines = [...wantedBlock.trimEnd().split('\n'), ...preservedExtras];
   const merged = [
     ...beforePart,
     ...blockLines,
@@ -132,9 +135,10 @@ function planConfig({ name, file, boundary, wanted, toml }) {
     }
   } else {
     data[key] ??= {};
-    data[key].pdd = wanted;
+    const mergedEntry = updating ? { ...existing, ...wanted } : wanted;
+    data[key].pdd = mergedEntry;
     after = `${JSON.stringify(data, null, 2)}\n`;
-    preview = `${updating ? 'Update' : 'Add'} /mcpServers/pdd = ${JSON.stringify(wanted, null, 2)}\nPreserve other values; format this JSON file with two-space indentation and a final newline.`;
+    preview = `${updating ? 'Update' : 'Add'} /mcpServers/pdd = ${JSON.stringify(mergedEntry, null, 2)}\nPreserve other values; format this JSON file with two-space indentation and a final newline.`;
   }
   return { name, file, boundary, before, after, preview, updating };
 }
@@ -189,7 +193,8 @@ export async function setupAgentMcp(
       name: 'Antigravity',
       file: agyFile,
       boundary: agyDir,
-      detected: existsSync(agyFile) || existsSync(agyDir) || executable('agy', env),
+      // Never detect Antigravity solely from ~/.gemini/config (which skills or other Gemini tools may create).
+      detected: existsSync(agyFile) || existsSync(join(home, '.gemini/antigravity-cli')) || executable('agy', env),
       wanted: { command, args },
     },
   ].filter(item => item.detected);

@@ -103,6 +103,6 @@ and messages come from the same read snapshot.
 
 ## Dependencies
 
-- [Prompting guide](../../docs/prompting-guide.md): authoring and generation.
+- [Prompting guide](../../skills/pdd/references/prompting.md): authoring and generation.
 - [Public boundary](public-boundary.prompt.md): authoring and verification; use
   Node built-ins only, with no services or private runtime dependencies.

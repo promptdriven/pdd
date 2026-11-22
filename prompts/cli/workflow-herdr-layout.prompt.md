@@ -155,7 +155,7 @@ A layout with phase closed normally refuses reopening. Permit it only for its sa
 
 ## Dependencies
 
-- Load the complete [Prompting guide](../../docs/prompting-guide.md) for authoring/generation.
+- Load the complete [Prompting guide](../../skills/pdd/references/prompting.md) for authoring/generation.
 - Load the [worktree assignment owner](workflow-worktree.prompt.md) for generation/verification of origin, commonDir, verified parent and assigned paths. No Git allocation rule is changed here.
 - Runtime Herdr public workspace/worktree/tab/pane commands and JSON identities, capability baseline 0.9.1 without version pin, supplied by the area-chat command port.
 - Node filesystem/crypto primitives supply canonical identity, SHA-256 label qualification and the private cross-process lock. Durable run custody is supplied by the caller, not reconstructed from a registry.

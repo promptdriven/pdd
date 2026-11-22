@@ -83,6 +83,16 @@ test('S1 classifyInstallKind guards Git checkouts, PyPI pdd-cli, pnpm, npx, loca
   assert.equal(ok.kind, 'npm-global');
   assert.equal(ok.prefix, globalPrefix);
   assert.deepEqual(detectGlobalInstallPrefix(globalPkg), { prefix: globalPrefix, realPackageRoot: globalPkg });
+
+  // Regression: Apple Silicon Homebrew has `/opt/homebrew/.git` while `/opt/homebrew/lib/node_modules/@promptdriven/pdd` is global npm!
+  const homebrewPrefix = join(sandbox, 'opt/homebrew');
+  const homebrewPkg = join(homebrewPrefix, 'lib/node_modules/@promptdriven/pdd');
+  mkdirSync(join(homebrewPrefix, '.git'), { recursive: true });
+  mkdirSync(homebrewPkg, { recursive: true });
+  const hb = classifyInstallKind(homebrewPkg);
+  assert.equal(hb.kind, 'npm-global');
+  assert.equal(hb.prefix, homebrewPrefix);
+  assert.deepEqual(detectGlobalInstallPrefix(homebrewPkg), { prefix: homebrewPrefix, realPackageRoot: homebrewPkg });
 });
 
 test('S1 runCliUpgrade tries npm @promptdriven/pdd@ver first, falls back to github tag, reports 4-part EEXIST hint, and clears release cache', async t => {
@@ -227,4 +237,21 @@ test('C1 status inspects repo offline: counts files, ownership, PDD block, Featu
   let nogitErr = '';
   assert.equal(await runStatus({ cwd: outside }, { stdout: { write() {} }, stderr: { write(s) { nogitErr += s; } } }), 2);
   assert.match(nogitErr, /Git repository/);
+});
+
+test('S1/C1 in-repo symlink CLAUDE.md -> AGENTS.md updates AGENTS.md cleanly and status sees has_pdd_block: true', async t => {
+  const { symlinkSync, lstatSync, readFileSync } = await import('node:fs');
+  const repo = temp(t, 'pdd-inrepo-symlink-');
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  writeFileSync(join(repo, 'AGENTS.md'), '# Repo Rules\n');
+  symlinkSync('AGENTS.md', join(repo, 'CLAUDE.md'));
+
+  const res = await initProject({ cwd: repo });
+  assert.equal(res.changed, true);
+  assert.equal(lstatSync(join(repo, 'CLAUDE.md')).isSymbolicLink(), true, 'CLAUDE.md symlink stays intact');
+  assert.match(readFileSync(join(repo, 'AGENTS.md'), 'utf8'), /<!-- pdd:start -->[\s\S]*<!-- pdd:end -->/);
+
+  const status = await inspectStatus({ cwd: repo });
+  assert.equal(status.instruction_file, 'CLAUDE.md');
+  assert.equal(status.has_pdd_block, true);
 });

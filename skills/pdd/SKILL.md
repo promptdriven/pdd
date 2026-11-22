@@ -20,10 +20,10 @@ In PDD, three concepts drive every change: **Prompt** (`prompts/*.prompt.md`), *
 3. **Hybrid rule:** Bug + Feature → reproduce the defect first (`bug`), then clarify only the new behavior branch (`feature`).
 4. *(Optional UX hint)* For multi-step features or bugs, keep a brief progress list; skip it on `small-change`. Real readiness comes strictly from deterministic outputs (`pdd lint`, `pdd test`, native tests, and `pdd prove`).
 
-## Step 1 — Explore and clarify (capped `grill-me`, max 2 rounds)
+## Step 1 — Explore and clarify (design check, max 2 rounds)
 
 - Explore existing code, prompts, tests, and ownership *before* asking anything. Settle convention-decided details silently as stated defaults.
-- Skip grilling when `0` high-blast-radius forks exist (public API/schema, UX flow, security/data loss, or >30% rework).
+- Skip clarifying questions when `0` high-blast-radius forks exist (public API/schema, UX flow, security/data loss, or >30% rework).
 - Batch 3–4 real forks in one message with **bold recommended defaults** (*"Reply `ok` for defaults, or override by number"*). Hard cap: **max 2 rounds** on single features (reserve deeper design trees for `product`).
 - **Tool-agnostic & headless-safe:** Use native structured question UI (`ask_question`, `AskUserQuestion`, `request_user_input`) **only** when available and interactive. Never block headless or Autopilot runs — pick recommended defaults and log them.
 
@@ -54,7 +54,7 @@ Read [references/verification.md](references/verification.md) before finalizing 
 - **Spec / Story / Prompt:** 1 session for a coupled slice; parallel subagents for independent modules (`stories > 1` or multi-part).
 - **Build / Verify / Review:**
   - *Small change* (1–2 files, ~<100 LOC, short chat): build in the same session + **1 fresh verifier**.
-  - *Medium / big change* (3+ files, >100 LOC, >15 turns, or tricky state/security): **Fresh Builder + Fresh Verifier + Blind Read-Only Reviewer** via your editor's native subagents, passing **only clean file paths** (prompt, Story, `git diff`, real test outputs — zero Builder chat history). Fresh Verifier/Reviewer runs the fast **Deliberate-Break Probe** (flip 1–3 changed logic conditions/returns in a scratch edit, verify a test goes red, revert).
+  - *Medium / big change* (3+ files, >100 LOC, >15 turns, or tricky state/security): **Fresh Builder + Fresh Verifier + Blind Read-Only Reviewer** via your editor's native subagents, passing **only clean file paths** (prompt, Story, `git diff`, real test outputs — zero Builder chat history). Fresh Verifier/Reviewer runs a fast **1-to-3 line mutation check** (flip 1–3 changed logic conditions/returns in a scratch edit, verify a test goes red, revert).
   - On hosts without subagents, run offline `pdd lint --diff` + real test outputs and disclose same-session verification honestly.
 - Cap automatic repair loops at **2 rounds** before escalating to the human.
 
@@ -67,4 +67,4 @@ Read [references/verification.md](references/verification.md) before finalizing 
 | Multi-part product maps, plans, contracts & native-only boundary specs | [references/product.md](references/product.md) |
 | External fakes, DB/HTTP/CLI, 3-Port Rule, telemetry & `pdd mcp` | [references/ports-and-cli.md](references/ports-and-cli.md) |
 | Single-file plain-prose UI, optional `app-map.json`, `.ui.svg` & `pdd sim` | [references/ui-and-screens.md](references/ui-and-screens.md) |
-| Native testing, bug TDD, Deliberate-Break Probe, PBT, Feature Map & `pdd prove` | [references/verification.md](references/verification.md) |
+| Native testing, bug TDD, 1-to-3 line mutation checks, PBT, Feature Map & `pdd prove` | [references/verification.md](references/verification.md) |

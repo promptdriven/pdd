@@ -81,7 +81,7 @@ PR status reads also request `headRefOid` and return optional `headSha` when Git
 
 - [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
-- Load the entire [Prompting guide](../../docs/prompting-guide.md) for authoring and generation; it owns module contracts and preservation. The helper owns local-runner GitHub effects, not CLI dispatch.
+- Load the entire [Prompting guide](../../skills/pdd/references/prompting.md) for authoring and generation; it owns module contracts and preservation. The helper owns local-runner GitHub effects, not CLI dispatch.
 - Runtime: Node `child_process.execFile`, `fs/promises`, `path` and `util`; installed normal Git and GitHub CLI (`git remote/status/symbolic-ref/rev-parse/rev-list/log/check-ref-format/push/ls-files/ls-remote`, `gh repo view`, `gh api`, `gh pr list/create`). Use their normal login/environment. [Runtime seam](runtime-seam.prompt.md#public-contract) `causeText` bounds and scrubs a quoted gh line after this module removes private absolute paths; preserve HTTP URLs as useful diagnostics. No private modules or service dependencies.
 
 <details>

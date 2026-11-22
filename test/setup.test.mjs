@@ -102,18 +102,26 @@ test('SETUP4: pdd help says how to call the single /pdd skill in Codex and in Cl
   );
 });
 
-test('SETUP5: pdd setup is laptop-only — installs global skills without editing repo files or probing coding-agent logins', t => {
+test('SETUP5: pdd setup --yes is laptop-only, never false-detects Antigravity on a clean machine, and installs Antigravity when present', t => {
   const { sandbox, home, project, run } = fixture(t);
   spawnSync('git', ['init', '-q', project]);
-  const res = run('setup');
+  const res = run('setup', '--yes');
   assert.equal(res.status, 0, res.stderr);
   assert.ok(existsSync(join(home, '.agents/skills/pdd/SKILL.md')));
   assert.ok(existsSync(join(home, '.claude/skills/pdd/SKILL.md')));
-  assert.ok(existsSync(join(home, '.gemini/config/skills/pdd/SKILL.md')));
+  assert.equal(existsSync(join(home, '.gemini/config/skills')), false, 'clean laptop without Antigravity must not create ~/.gemini/config/skills');
+  assert.equal(existsSync(join(home, '.gemini/config/mcp_config.json')), false, 'clean laptop without Antigravity must not create ~/.gemini/config/mcp_config.json');
   assert.deepEqual(readdirSync(project).filter(f => f !== '.git'), [], 'pdd setup never edits repository files');
   assert.equal(existsSync(join(project, 'AGENTS.md')), false);
   assert.equal(existsSync(join(project, '.gitignore')), false);
   assert.equal(existsSync(join(project, 'pdd.json')), false);
+
+  // When Antigravity is present (~/.gemini/antigravity-cli), pdd setup --yes installs both skills and MCP config.
+  mkdirSync(join(home, '.gemini/antigravity-cli'), { recursive: true });
+  const agyRes = run('setup', '--yes');
+  assert.equal(agyRes.status, 0, agyRes.stderr);
+  assert.ok(existsSync(join(home, '.gemini/config/skills/pdd/SKILL.md')));
+  assert.ok(existsSync(join(home, '.gemini/config/mcp_config.json')));
 
   // --skills-dir targets an explicit folder cleanly.
   const customDir = join(sandbox, 'my-skills');
