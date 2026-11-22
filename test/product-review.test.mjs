@@ -5,9 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { productStatus, productNext, productStart, runProduct } from '../src/product.mjs';
-import { storyEvidence } from '../src/workflow-runner.mjs';
-import { sourceFingerprint } from '../src/workflow-replay.mjs';
+import { productStatus, productNext, productStart, runProduct, storyEvidence, sourceFingerprint } from '../src/product.mjs';
 
 const marker = run => `<!-- pdd-product: run=${run} -->`;
 const item = (run, number = 81, extra = {}) => ({ number, body: marker(run), user: { login: 'member' }, author_association: 'MEMBER', created_at: '2026-10-01T00:00:00Z', ...extra });

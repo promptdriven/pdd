@@ -5,13 +5,9 @@ import { cpSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { readProduct, productStatus, productNext, productStart, runProduct } from '../src/product.mjs';
+import { computeProductWaves, readProduct, productStatus, productNext, productStart, resolveProductRepository, runProduct, sourceFingerprint, storyEvidence } from '../src/product.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
-import { readWorkflowAreas } from '../src/workflow-areas.mjs';
-import { storyEvidence } from '../src/workflow-runner.mjs';
-import { sourceFingerprint } from '../src/workflow-replay.mjs';
-import { resolveWorkflowRepository } from '../src/workflow-github.mjs';
 
 const root = new URL('../', import.meta.url).pathname;
 const stream = () => ({ text: '', write(value) { this.text += value; } });
@@ -60,12 +56,21 @@ function fixture(t) {
 }
 const issue = (run, number = 81) => ({ number, state: 'OPEN', body: `<!-- pdd-product: run=${run} -->` });
 
-test('product workflow parses without changing runner phases; catalog exposes commands and options', () => {
-  const areas = readWorkflowAreas({ packageRoot: root, cwd: root, home: '/missing', name: 'product' }).areas;
-  assert.deepEqual(areas.map(area => [area.name, area.gate]), [['map', 'approve'], ['plan', 'pr']]);
+test('product catalog exposes commands and options and computes topological waves', () => {
+  assert.deepEqual(
+    computeProductWaves([
+      { run: 'server-1', needs: ['plan PR'] },
+      { run: 'phone-1', needs: ['plan PR'] },
+      { run: 'journeys', needs: ['server-1', 'phone-1'] },
+    ]),
+    [
+      { wave: 1, runs: ['server-1', 'phone-1'] },
+      { wave: 2, runs: ['journeys'] },
+    ],
+  );
   assert.equal(parseArgv(['product', 'status', '--json']).local, 'product-status');
   assert.equal(parseArgv(['product', 'start', 'phone-1', '--no-run', '--agent', 'claude']).options['--no-run'], true);
-  // 2901: --agent also takes an agents.json entry name; the workflow agents owner refuses an unknown one, not the parser.
+  // 2901: --agent also takes an agents.json entry name; product validation refuses an unknown one, not the parser.
   assert.equal(parseArgv(['product', 'start', 'phone-1', '--agent', 'Claude (account-a)']).options['--agent'], 'Claude (account-a)');
 });
 
@@ -185,7 +190,7 @@ test('default plan lookup honors existing origin ref absence without falling bac
 
 test('shared repository identity export uses verified GitHub origin metadata', async () => {
   const calls = [];
-  const result = await resolveWorkflowRepository({ cwd: '/repo' }, { execFile: async (file, args) => {
+  const result = await resolveProductRepository({ cwd: '/repo' }, { execFile: async (file, args) => {
     calls.push([file, ...args]); return { stdout: file === 'git' ? 'git@github.com:example/coffee.git\n' : JSON.stringify({ nameWithOwner: 'example/coffee', url: 'https://github.com/example/coffee', defaultBranchRef: { name: 'alpha' } }) };
   } });
   assert.deepEqual(result, { repository: 'example/coffee', defaultBranch: 'alpha' }); assert.equal(calls.length, 2);
