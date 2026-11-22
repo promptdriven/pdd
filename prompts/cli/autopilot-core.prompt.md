@@ -270,9 +270,9 @@ that issue for this tick.
 
 ## Claim and start
 
-**No label, no claim.** When the settings have `labelRequired` (the launcher sets it), no `label`, and `intake` is not `active`, intake claims
+**No label, no claim.** When the settings have `labelRequired` (the launcher sets it), no `label`, no non-empty `allowedIssues` allowlist, and `intake` is not `active`, intake claims
 nothing and returns `intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with
-pdd autopilot add N`. Jobs still advance. Without `labelRequired` (a direct `tickCore` call) or when `intake` is `active`, no opt-in label is required.
+pdd autopilot add N`. Jobs still advance. Without `labelRequired` (a direct `tickCore` call), with a non-empty `settings.allowedIssues` allowlist (positive safe integer issue numbers), or when `intake` is `active`, no opt-in label is required. When `settings.allowedIssues` is non-empty, `decisionReplies`, `readyRows`, and intake scope consider only issues in that allowlist, and `coreStatus` displays `; only issues #N, ...`.
 
 **Active intake selection, grouping and area serialization (#3189, #3190, #3233).** When `settings.intake` is `active`, `tickCore` first calls `collectActiveIntake` of [intake cards](autopilot-intake.prompt.md) so finished card and auto-improve passes update `ROOT/intake/cards/` before core selection. Active intake card checks run only on sandboxed `codex` or `claude` logins (never `gemini`, `agy`, `--yolo` or `--dangerously-skip-permissions`): when neither `ports.selectLogin({allowedKinds: ["codex", "claude"]})` nor `state.agent` can supply a ready `codex` or `claude` login and no ready cards can start, `intake()` records `state.intakeNote` (`intake held: active intake needs a codex or claude login` or the active intake pool cooldown note) and surfaces it in the tick hold and `coreStatus` so status never sits silent with zero issues claimed. In `active` mode, core selection considers only ready issues whose saved intake card matches the current `issueVersion(row)` (or pre-comment auto-improved version) with `card.class === "ready"`; unvetted, `improve`, `person` and other card classes never start a build. Eligible issues are ranked with `wouldPick` (unblockers with `total_blocking > 0` first, then issues continuing an active group, then high-clarity small or bug wins, then priority labels, ahead of oldest age). When 2 to 3 small `ready` issues share a `group_with` cluster or overlapping module `areas` (`groupReadyIssues`), core claims them together into one grouped job (`job.issues = [primary, ...companions]`, `job.companions`, `job.areas`), includes all companion specs and any refined specification in `issueText`, requires `Closes #A`, `Closes #B` in the PR body and `writeEvidenceBlock`, heartbeats all member claims (detaching any companion whose claim expired or was won by another machine), and closes, marks or releases only verified-owned member issues on merge, observe `would-merge`, END or stop. Candidate groups are ordered with spread-first two-pass dispatch (`orderGroupsSpreadFirst` of [areas](autopilot-areas.prompt.md), enriched with resolved repository prompt owners from `ownerTable` without any catch-all root lock): Pass 1 places groups that overlap neither running `busyJobs` nor earlier Pass-1 selections first so parallel slots spread across distinct prompts and files, and Pass 2 places remaining overlapping groups right behind Pass 1 so free worker slots never sit idle on small or shared-module repositories (#3455, never double-claiming a running issue).
 
@@ -494,12 +494,12 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    `100%` quota exhaustion reports
    usage and rotates to the next ready account (`soonest weekly_reset_at`) with zero issue
    strikes, zero `holdIssue`, zero `pending` and zero `streak` increment. When every login
-   is cooling (`state: "all_cooling"` or `exhausted`), the engine saves `poolOut {since,
-   resetAt, wakeAt, cloud, reason}` in `core.json`, reports `Waiting on AI quota until <wake_at>`
-   for Cloud accounts (or `Login pool exhausted since ...` for local `pool.json`), sends at
-   most one deduplicated `usage-limit` alert, holds a phase `pr` job or releases an unbuilt
-   job cleanly (`owner: "service"`, zero strikes), and auto-wakes once `now >= resetAt` or
-   `ports.selectLogin()` finds a `ready` login again (clearing `poolOut`).
+   is cooling (`state: "all_cooling"` or `exhausted`, or `exhaustLogin` returns `null`/non-ready, or a terminal account error such as `401 Unauthorized`, `authentication_error`, `invalid_api_key`, `oauth access token is invalid`, `reauth_required`, `token_revoked`, `not logged in`, `auth unavailable`, `zero quota`, or `all accounts exhausted` occurs even without a configured pool), the engine immediately saves `poolOut {since,
+   resetAt, wakeAt, cloud, reason}` in `core.json` with a concrete future `resetAt` (defaulting to `now + POOL_FALLBACK_COOLDOWN_MS` whenever the provider supplies no future timestamp), reports `Waiting on AI quota until <wake_at>`
+   for Cloud accounts (or `Login pool exhausted since ...` for local `pool.json` / single-login auth/quota park), sends at
+   most one deduplicated `usage-limit` alert, rolls back the failed repair/conflict/review counter and holds a phase `pr` job (or releases an unbuilt
+   job cleanly with `owner: "service"`, `poolExhausted: true`, zero strikes and zero slots held), holds intake immediately before claiming while `now < resetAt` without retry storms, and auto-wakes once `now >= resetAt` and
+   `ports.selectLogin()` (or `ports.agentReady()` when single-login) reports ready again (clearing `poolOut`).
 4. `history.jsonl` is read line by line and a line that does not parse is skipped.
    Before each append, the file gets a newline when it does not end with one, so a cut
    line never swallows the next record.
@@ -1066,8 +1066,10 @@ the evidence record.
   `<!-- pdd:autopilot-core:follow-ups:N -->`), each updated in place and with no item twice.
   A follow-up never closes an issue: an issue reference (`#18`, `owner/repo#18` or an issue
   URL) becomes `issue 18` (`owner/repo issue 18`).
-- **Suite** (in `worktrees/N-suite`): `node bin/pdd.mjs workflow suite --command
-  TEST --timeout 0` through the [shared full-suite queue](test-suite-queue.prompt.md):
+- **Suite** (in `worktrees/N-suite`): `node src/test-suite-entry.mjs suite --command
+  TEST --timeout 0` (or `node bin/pdd.mjs autopilot suite --command TEST --timeout 0`
+  when `ports.suiteRunner === "cli"`, repair runner label `local full-suite runner
+  (pdd autopilot suite)`) through the [shared full-suite queue](test-suite-queue.prompt.md):
   no fixed time limit (the process rule watches it), with `CI=true` in its environment so
   watch modes end. Exit 0 is green; any other
   exit code of the repository's test command is a red suite, and repairs apply. Only a

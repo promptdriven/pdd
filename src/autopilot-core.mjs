@@ -296,6 +296,9 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
   const count = (value, fallback, min = 1) => Number.isSafeInteger(value) && value >= min ? value : fallback;
   const modelTiering = a.modelTiering === true || a.modelTiering === false || object(a.modelTiering) ? a.modelTiering : undefined;
   const skipLabels = Array.isArray(a.skipLabels) ? [...new Set(a.skipLabels.filter(named).map(s => s.trim()))] : undefined;
+  const allowedIssues = Array.isArray(a.allowedIssues)
+    ? [...new Set(a.allowedIssues.filter(n => Number.isSafeInteger(n) && n > 0))].sort((x, y) => x - y)
+    : [];
   const forensics = typeof a.forensics === 'boolean' ? a.forensics : undefined;
   const ciRaw = a.ci ?? a.ciPolicy;
   const ci = ciRaw !== undefined ? (['local', 'github'].includes(ciRaw) ? ciRaw : 'github') : undefined;
@@ -304,6 +307,7 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
     : undefined;
   return { engine: autopilotEngine(config), mode: ['off', 'observe', 'auto'].includes(a.mode) ? a.mode : 'off',
     trust: Array.isArray(a.trust) ? a.trust.filter(named) : [], runs: machine ? slotCount({ ...machine, repoRuns: a.runs }).slots : count(a.runs, 2), label: named(a.label) ? a.label.trim() : null,
+    ...(allowedIssues.length ? { allowedIssues } : {}),
     ...(a.intake !== undefined ? { intake: intakeMode(a.intake) } : {}),
     ...(ci !== undefined ? { ci } : {}),
     ...(hygieneGate !== undefined ? { hygieneGate } : {}),
@@ -924,7 +928,7 @@ function context({ state, settings, budget }, ports) {
   const ctx = { state, settings, budget, ports, fs, now, root, dirs, repo, gh, jobs, git, owners, heartbeat, execFile, machineId, counts: { started: 0, merged: 0, wouldMerge: 0, ended: 0, repairs: 0 },
     // Floors: the quiet period is at least 2 ticks and the pending-CI limit at least 3 ticks of the machine timer.
     quiet: Math.max(settings.quietMinutes, 2 * (ports.tickMinutes ?? 10)) * MIN, ciStuck: Math.max(settings.ciStuckMinutes, 3 * (ports.tickMinutes ?? 10)) * MIN,
-    ceiling: settings.maxJobHours * HOUR, pdd: join(state.packageRoot ?? PACKAGE_ROOT, 'bin', 'pdd.mjs'), skip: new Set(), warn: ports.warn ?? (() => {}) };
+    ceiling: settings.maxJobHours * HOUR, pdd: join(state.packageRoot ?? PACKAGE_ROOT, 'bin', 'pdd.mjs'), suiteEntry: join(state.packageRoot ?? PACKAGE_ROOT, 'src', 'test-suite-entry.mjs'), skip: new Set(), warn: ports.warn ?? (() => {}) };
   ctx.saveJob = job => save(fs, join(dirs.jobs, `${job.issue}.json`), job);
   // An issue author's trust, read once per login and tick (the ready rule and the prompts' open issues share it).
   const trust = new Map();
@@ -999,10 +1003,15 @@ async function blocked(ctx, row) {
 // T10 (trial, Nov 11): a trusted reply to this engine's question ends the wait. An issue with pdd:needs-decision is read
 // once per change (its updated_at, saved as decisionSeen in the machine state); with a trusted reply after the question,
 // the engine removes the label itself and the issue is ready in this tick.
+const allowedIssueSet = settings => Array.isArray(settings?.allowedIssues) && settings.allowedIssues.length
+  ? new Set(settings.allowedIssues.filter(n => Number.isSafeInteger(n) && n > 0))
+  : null;
 async function decisionReplies(ctx, rows) {
   const parkedIssues = new Set((ctx.machineState().validationParks ?? []).map(p => p.issue));
+  const allowed = allowedIssueSet(ctx.settings);
   const ready = new Set(), waiting = rows.filter(row => !row.pull_request && row.state === 'open' && !skippedIssueLabel(row, ctx.settings) && !parkedIssues.has(row.number) && labelsOf(row).includes(DECISION) && row.comments > 0
-    && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label)));
+    && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
+    && (!allowed || allowed.has(row.number)));
   if (!waiting.length) return ready;
   const seen = { ...(object(ctx.machineState().decisionSeen) ? ctx.machineState().decisionSeen : {}) };
   let changed = false;
@@ -1073,10 +1082,12 @@ async function* readyRows(ctx, rows) {
   // The loop guard (Stop owners): only issues with a hold line are checked for a hold.
   const holding = new Set(history.filter(row => row.hold === true).map(row => row.issue));
   const fixedHolding = new Set(history.filter(row => row.fixedHold === true).map(row => row.issue));
+  const allowed = allowedIssueSet(ctx.settings);
   const candidates = rows.filter(row => !row.pull_request && row.state === 'open' && !row.assignees?.length && !row.assignee
     && !skippedIssueLabel(row, ctx.settings)
     && !parkedIssues.has(row.number)
     && !labelsOf(row).includes('pdd:stuck') && (!labelsOf(row).includes(DECISION) || replied.has(row.number)) && !labelsOf(row).includes(WOULD_MERGE) && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
+    && (!allowed || allowed.has(row.number))
     && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number)
     && shouldClaimWithCooldowns({ issueRequiredTools: issueRequiredTools(row), toolCooldowns: machine.toolCooldowns }).claimable)
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
@@ -2206,9 +2217,9 @@ function clearPoolExhausted(ctx) {
 async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
   const m = ctx.machineState();
   const already = Boolean(m.poolOut);
-  const resetAt = Number.isFinite(exhausted?.resetAt) && exhausted.resetAt > ctx.now() ? exhausted.resetAt : null;
+  const resetAt = Number.isFinite(exhausted?.resetAt) && exhausted.resetAt > ctx.now() ? exhausted.resetAt : ctx.now() + POOL_FALLBACK_COOLDOWN_MS;
   const cloud = Boolean(exhausted?.cloud || m.poolOut?.cloud);
-  const wakeAt = typeof exhausted?.wakeAt === 'string' && exhausted.wakeAt ? exhausted.wakeAt : (resetAt ? new Date(resetAt).toISOString() : null);
+  const wakeAt = typeof exhausted?.wakeAt === 'string' && exhausted.wakeAt ? exhausted.wakeAt : new Date(resetAt).toISOString();
   const cleanReason = safeLine(reason ?? exhausted?.cooling?.[0]?.reason ?? 'usage-limit', 200);
   const poolOut = {
     since: m.poolOut?.since ?? ctx.now(),
@@ -2602,8 +2613,9 @@ async function intake(ctx, rows) {
   if (!['codex', 'claude', 'gemini', 'agy'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex, Claude, Gemini or agy agent; run pdd autopilot start from a signed-in Codex, Claude, Gemini or agy';
   const activeMode = intakeMode(settings.intake) === 'active';
   if (!activeMode) delete state.intakeNote;
-  // The launcher asks for an opt-in label unless active intake evaluates open issues.
-  if (settings.labelRequired && !settings.label && !activeMode) return 'intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with pdd autopilot add N';
+  const hasAllowlist = Boolean(allowedIssueSet(settings));
+  // The launcher asks for an opt-in label unless active intake or an explicit issue allowlist scopes the work.
+  if (settings.labelRequired && !settings.label && !activeMode && !hasAllowlist) return 'intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with pdd autopilot add N';
   // The machine pause: no new job starts until it ends; then intake goes on as usual.
   const pausedText = () => { const m = ctx.machineState(); return m.pausedUntil ? `new jobs paused until ${new Date(m.pausedUntil).toISOString()} (${m.pausedHours} h): the agent ended ${STRIKES} or more jobs in a row with no result` : null; };
   if (pausedText()) return pausedText();
@@ -2615,13 +2627,24 @@ async function intake(ctx, rows) {
     : `intake held: every login in the pool is exhausted${poolOut?.resetAt ? ` until ${new Date(poolOut.resetAt).toISOString()}` : ''}; no issue was claimed`;
   const checkIdlePool = async () => {
     const m = ctx.machineState();
-    if (ctx.ports.selectLogin && m.poolOut && (!Number.isFinite(m.poolOut.resetAt) || ctx.now() >= m.poolOut.resetAt)) {
+    if (!m.poolOut) return null;
+    if (Number.isFinite(m.poolOut.resetAt) && ctx.now() < m.poolOut.resetAt) return poolHeldText(m.poolOut);
+    if (ctx.ports.selectLogin) {
       const check = await ctx.ports.selectLogin();
       if (check === null || check?.state === 'ready') { clearPoolExhausted(ctx); return null; }
-      if (check?.state === 'exhausted') return poolHeldText(await recordPoolExhausted(ctx, check, check.cooling?.[0]?.reason ?? 'usage-limit', m.poolOut.issue));
+      const reason = check?.cooling?.[0]?.reason ?? check?.unavailable?.[0]?.reason ?? m.poolOut.reason ?? 'usage-limit';
+      return poolHeldText(await recordPoolExhausted(ctx, check, reason, m.poolOut.issue));
     }
-    return m.poolOut ? poolHeldText(m.poolOut) : null;
+    if (ctx.ports.agentReady) {
+      const readyNow = await ctx.ports.agentReady().catch(() => false);
+      if (readyNow) { clearPoolExhausted(ctx); return null; }
+      return poolHeldText(await recordPoolExhausted(ctx, null, m.poolOut.reason ?? 'auth-unavailable', m.poolOut.issue));
+    }
+    clearPoolExhausted(ctx);
+    return null;
   };
+  const poolHeld = await checkIdlePool();
+  if (poolHeld) return poolHeld;
   let others = [], candidateGroups = [], cards = null, busyJobs = [];
   if (activeMode) {
     delete state.intakeNote;
@@ -4992,11 +5015,19 @@ async function reviewState(ctx, job, prBody = '', preselected = null, { noLaunch
       ctx.saveJob(job);
       return reviewState(ctx, job, prBody);
     }
-    const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, job.review.agent) : null;
-    const reviewPooled = service && isPoolRotatableService(service)
+    const service = serviceProblem(ctx, job.review.agent);
+    const preserveReviewShell = () => {
+      const preserved = {
+        ...(job.review?.scoped ? { scoped: job.review.scoped } : {}),
+        ...(job.review?.crossFamilyFallback ? { crossFamilyFallback: true } : {}),
+        ...(Array.isArray(job.review?.failedReviewLoginIds) && job.review.failedReviewLoginIds.length ? { failedReviewLoginIds: job.review.failedReviewLoginIds } : {}),
+      };
+      return Object.keys(preserved).length ? { head: job.head, ...preserved } : null;
+    };
+    const reviewPooled = service && isPoolRotatableService(service) && ctx.ports.exhaustLogin
       ? (job.review.agent?.cloud || !ctx.ports.selectLogin || (await ctx.ports.selectLogin()) !== null)
       : false;
-    if (service && isPoolRotatableService(service) && reviewPooled) {
+    if (service && isPoolRotatableService(service) && ctx.ports.exhaustLogin && reviewPooled) {
       const prevReviewAgent = job.review.agent;
       const rateClass = isQuotaExhaustionMessage(service) ? classifyRateLimitFailure(service, prevReviewAgent?.accountWindows) : null;
       if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
@@ -5043,27 +5074,27 @@ async function reviewState(ctx, job, prBody = '', preselected = null, { noLaunch
         accountWindows: prevReviewAgent?.accountWindows ?? null,
         ...(sameFamilyAllowedKinds?.length ? { allowedKinds: sameFamilyAllowedKinds } : {}),
       });
-      if (next !== null) {
-        if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
-          job.poolRotations = (job.poolRotations ?? 0) + 1;
-          delete job.review.burstRetried;
-          clearPoolExhausted(ctx);
-          job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
-          job.review.agent = null;
-          job.review.retry = true;
-          ctx.saveJob(job);
-          return reviewState(ctx, job, prBody, next);
-        }
-        const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
-        const preserved = {
-          ...(job.review?.scoped ? { scoped: job.review.scoped } : {}),
-          ...(job.review?.crossFamilyFallback ? { crossFamilyFallback: true } : {}),
-          ...(Array.isArray(job.review?.failedReviewLoginIds) && job.review.failedReviewLoginIds.length ? { failedReviewLoginIds: job.review.failedReviewLoginIds } : {}),
-        };
-        job.review = Object.keys(preserved).length ? { head: job.head, ...preserved } : null;
-        await pausePrForPool(ctx, job, poolOut, service);
-        return { state: 'pool-paused' };
+      if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
+        job.poolRotations = (job.poolRotations ?? 0) + 1;
+        delete job.review.burstRetried;
+        clearPoolExhausted(ctx);
+        job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
+        job.review.agent = null;
+        job.review.retry = true;
+        ctx.saveJob(job);
+        return reviewState(ctx, job, prBody, next);
       }
+      const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
+      job.review = preserveReviewShell();
+      await pausePrForPool(ctx, job, poolOut, service);
+      return { state: 'pool-paused' };
+    }
+    if (service && isTerminalAccountError(service)) {
+      if (!await cleanupPart(ctx, job, job.review.agent, 'review')) return { state: 'running' };
+      const poolOut = await recordPoolExhausted(ctx, null, service, job.issue);
+      job.review = preserveReviewShell();
+      await pausePrForPool(ctx, job, poolOut, service);
+      return { state: 'pool-paused' };
     }
     if (job.review.attempts >= 2) return { state: 'missing' };
     job.review.retry = true; return reviewState(ctx, job, prBody);
@@ -5317,7 +5348,9 @@ function queuedCommand(ctx, cwd, testCommand) {
   const rawShare = ctx.ports.machine?.priority?.('suite')?.checkCpus ?? (Number.isSafeInteger(envShare) && envShare > 0 ? envShare : null);
   const shareCpus = Number.isSafeInteger(rawShare) && rawShare > 0 ? rawShare : null;
   const effectiveCommand = boundSuiteCommand(testCommand, pkg, shareCpus);
-  const suite = [ctx.pdd, 'workflow', 'suite', '--command', effectiveCommand, '--timeout', '0'];
+  const suite = ctx.ports.suiteRunner === 'cli'
+    ? [ctx.pdd, 'autopilot', 'suite', '--command', effectiveCommand, '--timeout', '0']
+    : [ctx.suiteEntry, 'suite', '--command', effectiveCommand, '--timeout', '0'];
   const deps = ['dependencies', 'devDependencies', 'optionalDependencies'].some(key => object(pkg?.[key]) && Object.keys(pkg[key]).length);
   const has = name => Boolean(ctx.fs.existsSync?.(join(cwd, name)));
   const install = !deps ? null
@@ -5395,7 +5428,7 @@ async function suiteState(ctx, job, { baseSuiteCommand = undefined, reviewPassed
   const failure = {
     kind: 'suite',
     command: suiteCommand,
-    runner: 'local full-suite runner (pdd workflow suite)',
+    runner: 'local full-suite runner (pdd autopilot suite)',
     platform: `${process.platform} (${process.arch})`,
     concurrency: '$PDD_CHECK_CPUS (shared full-suite queue)',
     env: 'CI=true',
@@ -10293,6 +10326,19 @@ async function issueStop(ctx, job, hang) {
   if (repair) return repairOrEnd(ctx, job, [hangRed(hang)], []);
   return end(ctx, job, cause('job', 'no-result', `${hangWords(hang)} with no output and almost no CPU at head ${short(hang.head)} (the same command hung again at this head)`, { owner: 'issue', hang }));
 }
+function rollbackStepCounters(job) {
+  if (job.role === 'repair') {
+    job.repairs = Math.max(0, (job.repairs ?? 1) - 1);
+    if (job.lastRepairCounters?.localTest) job.localTestRepairs = job.lastRepairCounters.prevLocalTestRepairs;
+    if (job.lastRepairCounters?.validation) job.validationRepairs = job.lastRepairCounters.prevValidationRepairs;
+    delete job.lastRepairCounters;
+    if (Array.isArray(job.rounds) && job.rounds.length) job.rounds = job.rounds.slice(0, -1);
+    delete job.repairReproduce;
+  } else if (job.role === 'conflict') {
+    job.conflictExits = Math.max(0, (job.conflictExits ?? 1) - 1);
+    delete job.conflict;
+  }
+}
 // A build, repair or conflict agent that T1 stopped, or that ended with no result: service, issue or machine.
 async function agentStop(ctx, job, seen, quiet) {
   recordPartTelemetry(ctx, job, job.agent, job.role, seen);
@@ -10345,34 +10391,32 @@ async function agentStop(ctx, job, seen, quiet) {
       }
     }
     const next = await ctx.ports.exhaustLogin({ loginId: prevAgent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service, accountWindows: prevAgent?.accountWindows ?? null });
-    if (next !== null) {
-      if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
-        job.poolRotations = (job.poolRotations ?? 0) + 1;
-        clearPoolExhausted(ctx);
-        await restartStepWith(next, false);
-        return;
-      }
-      const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
-      if (Number.isSafeInteger(job.pr)) {
-        if (job.role === 'repair') {
-          job.repairs = Math.max(0, (job.repairs ?? 1) - 1);
-          if (job.lastRepairCounters?.localTest) job.localTestRepairs = job.lastRepairCounters.prevLocalTestRepairs;
-          if (job.lastRepairCounters?.validation) job.validationRepairs = job.lastRepairCounters.prevValidationRepairs;
-          delete job.lastRepairCounters;
-          if (Array.isArray(job.rounds) && job.rounds.length) job.rounds = job.rounds.slice(0, -1);
-          delete job.repairReproduce;
-        } else if (job.role === 'conflict') {
-          job.conflictExits = Math.max(0, (job.conflictExits ?? 1) - 1);
-          delete job.conflict;
-        }
-        job.agent = null;
-        return pausePrForPool(ctx, job, poolOut, service);
-      }
-      const endMsg = poolOut?.cloud && poolOut?.wakeAt
-        ? `Waiting on AI quota until ${poolOut.wakeAt}`
-        : `all logins in the pool reached quota limits: "${service}"`;
-      return end(ctx, job, cause('job', 'no-result', endMsg, { service, owner: 'service', poolExhausted: true }));
+    if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
+      job.poolRotations = (job.poolRotations ?? 0) + 1;
+      clearPoolExhausted(ctx);
+      await restartStepWith(next, false);
+      return;
     }
+    const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
+    if (Number.isSafeInteger(job.pr)) {
+      rollbackStepCounters(job);
+      job.agent = null;
+      return pausePrForPool(ctx, job, poolOut, service);
+    }
+    const endMsg = poolOut?.cloud && poolOut?.wakeAt
+      ? `Waiting on AI quota until ${poolOut.wakeAt}`
+      : `all logins in the pool reached quota limits: "${service}"`;
+    return end(ctx, job, cause('job', 'no-result', endMsg, { service, owner: 'service', poolExhausted: true }));
+  }
+  if (service && isTerminalAccountError(service)) {
+    if (!await cleanupPart(ctx, job, job.agent, job.role)) return;
+    const poolOut = await recordPoolExhausted(ctx, null, service, job.issue);
+    if (Number.isSafeInteger(job.pr)) {
+      rollbackStepCounters(job);
+      job.agent = null;
+      return pausePrForPool(ctx, job, poolOut, service);
+    }
+    return end(ctx, job, cause('job', 'no-result', `account auth or quota unavailable: "${service}"`, { service, owner: 'service', poolExhausted: true }));
   }
   const said = service ? `: the AI service said "${service}" (an agent account or service problem, not this issue)` : '';
   const text = quiet ? `${quietText(ctx, `${job.role} agent`)}${said}`
@@ -10965,7 +11009,20 @@ const SERVICE_WORDS = new RegExp([
   /\bresource_exhausted\b/, /\bquota (?:has been )?exhausted\b/, /\b(?:weekly|daily|monthly|spending)[_ ](?:usage[_ ])?limit\b/, /\bspend[_ ]control\b/,
   /\bhit your (?:usage|rate) limit\b/, /\busage[_ ]limit[_ ](?:reached|exceeded)\b/, /\brate[_ ]limit[_ ](?:reached|exceeded|error)\b/, /\btoo many requests\b/,
   /\boverloaded_error\b/, /\bnot logged in\b/, /\bplease (?:run \/login|log ?in|sign ?in)\b/, /\bfailed to (?:authenticate|refresh token)\b/, /\boauth access token is invalid\b/, /\binvalid[_ ]api[_ ]key\b/, /\bauthentication_error\b/,
+  /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_(?:reused|expired)|oauth_token_revoked|oauth_(?:not_allowed_for_organization|org_not_allowed)|gateway_grant_revoked|share_revoked)\b/,
+  /\bauth(?:entication)? (?:is )?unavailable\b/, /\baccount (?:is )?(?:disabled|suspended|deactivated|pool (?:is )?exhausted)\b/,
+  /\b(?:zero[_ ]quota|(?:0|no) remaining quota|all (?:accounts|logins) (?:are )?exhausted|no available (?:accounts|logins))\b/,
+  /disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code/,
 ].map(re => re.source).join('|'), 'i');
+const TERMINAL_ACCOUNT_ERROR = new RegExp([
+  /\b(?:api error|http|status(?: code)?)\W{0,3}401\b/, /\b401\s+unauthorized\b/,
+  /\b(?:authentication_error|invalid[_ ]api[_ ]key|oauth access token is invalid|failed to (?:authenticate|refresh token)|not logged in|please run \/login)\b/,
+  /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_(?:reused|expired)|oauth_token_revoked|oauth_(?:not_allowed_for_organization|org_not_allowed)|gateway_grant_revoked|share_revoked)\b/,
+  /\bauth(?:entication)? (?:is )?unavailable\b/, /\baccount (?:is )?(?:disabled|suspended|deactivated|pool (?:is )?exhausted)\b/,
+  /\b(?:zero[_ ]quota|(?:0|no) remaining quota|all (?:accounts|logins) (?:are )?exhausted|no available (?:accounts|logins))\b/,
+  /disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code/,
+].map(re => re.source).join('|'), 'i');
+const isTerminalAccountError = text => Boolean(typeof text === 'string' && text.trim() && !TEST_DIAGNOSTIC.test(text) && TERMINAL_ACCOUNT_ERROR.test(text));
 // In a terminal error event a clear account or service phrase counts too (an ordinary test error keeps its strike).
 const SERVICE_EVENT = /\bout of credits\b|\b(?:service|server|model|provider|api)(?: is)? (?:at|over) capacity\b|\b(?:service|server|model|provider|api)(?: is)? overloaded\b|^\W*(?:sign-?in|log-?in|login|authentication) required\b|\bquota exceeded\b/i;
 // A message that reads like a test diagnostic is never a service problem, in any shape (Codex round 4).
@@ -11482,8 +11539,11 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), jobs = readJobs(fs, ports.root), machine = readMachine(fs, ports.root, null, now);
   const busy = jobs.filter(holdsSlot).length, age = at => `${Math.max(0, Math.round((now - at) / MIN))}m`;
   const from = sources.engine === 'machine' ? ' (this machine: pdd autopilot start --engine core)' : sources.engine === 'pdd.json' ? ' (pdd.json autopilot.engine)' : '';
+  const allowedText = Array.isArray(settings.allowedIssues) && settings.allowedIssues.length
+    ? `; only issues ${settings.allowedIssues.map(n => `#${n}`).join(', ')}`
+    : '';
   const lines = [`Autopilot engine core${from}, mode ${settings.mode}${sources.mode === 'machine' ? ' (this machine)' : ''}${settings.mode === 'observe' ? ' (every check, no merge)' : ''}: ${state.repo ?? 'repository unknown'} in ${state.cwd} · base ${state.baseBranch ?? 'unknown'} · agent ${state.agent?.kind ?? 'none'}`,
-    `Jobs: ${busy} of ${settings.runs} slots busy; no-progress limit ${settings.quietMinutes} minutes; repairs ${settings.repairs}; reports ${settings.report}${sources.report === 'machine' ? ' (this machine)' : ''}; decisions ${settings.decisions ?? 'decide'}${sources.decisions === 'machine' ? ' (this machine)' : ''}${settings.label ? `; only issues with ${settings.label}${sources.label === 'machine' ? ' (this machine)' : sources.label === 'pdd.json' ? ' (pdd.json)' : ''}` : intakeMode(settings.intake) === 'active' ? '; active intake (ready cards)' : ''}`];
+    `Jobs: ${busy} of ${settings.runs} slots busy; no-progress limit ${settings.quietMinutes} minutes; repairs ${settings.repairs}; reports ${settings.report}${sources.report === 'machine' ? ' (this machine)' : ''}; decisions ${settings.decisions ?? 'decide'}${sources.decisions === 'machine' ? ' (this machine)' : ''}${settings.label ? `; only issues with ${settings.label}${sources.label === 'machine' ? ' (this machine)' : sources.label === 'pdd.json' ? ' (pdd.json)' : ''}` : intakeMode(settings.intake) === 'active' ? '; active intake (ready cards)' : ''}${allowedText}`];
   if (named(guard)) lines.push(guard);
   lines.push(machine.pausedUntil ? `New jobs paused until ${new Date(machine.pausedUntil).toISOString()} (${machine.pausedHours} h): the agent ended ${machine.streak} jobs in a row with no result; then intake goes on.`
     : `No pause: ${machine.streak} no-result end(s) in a row (a pause starts at ${STRIKES}; the next pause is ${machine.hours} h).`);

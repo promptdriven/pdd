@@ -85,10 +85,14 @@ function appendDiff(ctx, f, row) {
   appendJsonl(ctx.fs, f.diff(at), { at: new Date(at).toISOString(), ...row });
 }
 
-// The issues in scope: the open issues that the core would consider (its opt-in label, no PRs, no report issues).
-export function intakeRows(rows, label) {
+// The issues in scope: the open issues that the core would consider (its opt-in label, optional allowlist, no PRs, no report issues).
+export function intakeRows(rows, label, allowedIssues = null) {
+  const allowed = Array.isArray(allowedIssues) && allowedIssues.length
+    ? new Set(allowedIssues.filter(n => Number.isSafeInteger(n) && n > 0))
+    : null;
   return (rows ?? []).filter(row => object(row) && Number.isSafeInteger(row.number) && !row.pull_request && (row.state ?? 'open') === 'open'
-    && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!label || labelsOf(row).includes(label)))
+    && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!label || labelsOf(row).includes(label))
+    && (!allowed || allowed.has(row.number)))
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
 }
 
@@ -1080,7 +1084,7 @@ export async function collectActiveIntake(ctx, rows) {
   if (intakeMode(ctx.settings?.intake) !== 'active' || !Array.isArray(rows)) return;
   const f = intakeFolders(ctx.root);
   for (const dir of [f.base, f.cards, f.jobs, f.logs, f.empty]) ctx.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const scoped = intakeRows(rows, ctx.settings?.label), scope = new Map(scoped.map(row => [row.number, row]));
+  const scoped = intakeRows(rows, ctx.settings?.label, ctx.settings?.allowedIssues), scope = new Map(scoped.map(row => [row.number, row]));
   for (const saved of listJson(ctx.fs, f.jobs)) {
     const n = saved.issue, file = join(f.jobs, `${n}.json`);
     try {
@@ -1251,7 +1255,7 @@ function savePreflightNativeCard(ctx, f, cards, row, pre, { version, agent, card
 export async function shadowIntake(ctx, rows) {
   const f = intakeFolders(ctx.root);
   for (const dir of [f.base, f.cards, f.jobs, f.logs, f.empty]) ctx.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const scoped = intakeRows(rows, ctx.settings?.label), scope = new Map(scoped.map(row => [row.number, row]));
+  const scoped = intakeRows(rows, ctx.settings?.label, ctx.settings?.allowedIssues), scope = new Map(scoped.map(row => [row.number, row]));
   await collect(ctx, f, scope);
   pruneOld(ctx, f);
   const cards = new Map(listJson(ctx.fs, f.cards).filter(c => Number.isSafeInteger(c.issue)).map(c => [c.issue, c]));
@@ -1375,7 +1379,7 @@ export async function activeIntake(ctx, rows) {
   const f = intakeFolders(ctx.root);
   for (const dir of [f.base, f.cards, f.jobs, f.logs, f.empty]) ctx.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   await collectActiveIntake(ctx, rows);
-  const scoped = intakeRows(rows, ctx.settings?.label);
+  const scoped = intakeRows(rows, ctx.settings?.label, ctx.settings?.allowedIssues);
   pruneOld(ctx, f);
   const cards = new Map(listJson(ctx.fs, f.cards).filter(c => Number.isSafeInteger(c.issue)).map(c => [c.issue, c]));
   const before = new Map(cards);

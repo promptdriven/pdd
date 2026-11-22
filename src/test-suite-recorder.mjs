@@ -75,6 +75,7 @@ process.on('message', async message => {
     for (const stream of ['stdout','stderr']) { filters[stream].end(); flush(stream); }
     log.flush();
     record.exitCode = result.exitCode; record.signal = result.signal ?? null;
+    if (result.signalDiagnostics) record.signalDiagnostics = result.signalDiagnostics;
     record.outcome = result.ownershipConfirmed === false ? 'unknown' : 'completed';
     record.exitCode = result.ownershipConfirmed === false ? null : result.exitCode;
     record.counts = record.outcome === 'completed' && !pending ? complete : null;

@@ -57,7 +57,12 @@ A timeout of 0 means no time limit (`timeoutMs` 0: `executeSuite` starts no time
 caller that watches the run itself, such as the Autopilot core.
 The compatibility script accepts `--check` without executing, uses `SUITE` when
 nonblank, otherwise `POCKET_BROWSER_BIN=/usr/bin/google-chrome npm test`, and
-returns the child's status. Preserve the compatibility queued/started/finished
+returns the child's status. `src/test-suite-entry.mjs` also accepts direct CLI
+arguments `[suite] --command COMMAND [--timeout MIN]` (running `runTestSuite`
+directly with default timeout 30, or 0 for no time limit, returning exit code 2
+with an actionable diagnostic when `--command` or `--timeout` is invalid), so
+Autopilot core executes queued suites directly without routing through
+`workflow-runner.mjs`. Preserve the compatibility queued/started/finished
 log lines and history file at `PDD_VM_SUITE_LOCK.history`, else
 `HOME/.local/state/pdd/vm-suite/fullsuite.lock.history`. An explicit legacy lock
 path still needs an existing writable parent; the default log parent is created. No GitHub writes, private paths or live agent calls.
@@ -96,8 +101,10 @@ reported child group is confirmed dead. A missing child PID after that call is
 uncertain ownership and must retain the reservation.
 
 Build the child environment from an allowlist: caller `PATH` (fallback
-`/usr/bin:/bin`), `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TERM`, `CI`, `SystemRoot`
-and `WINDIR` when supplied. Set `POCKET_BROWSER_BIN` to the caller's value or
+`/usr/bin:/bin`), `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TERM`, `CI`, `SystemRoot`,
+`WINDIR`, language toolchain roots (`GOPATH`, `CARGO_HOME`, `RUSTUP_HOME`,
+`VIRTUAL_ENV`), and explicit test sandbox variables (`PDD_TEST_ENV_*`) when
+supplied. Set `POCKET_BROWSER_BIN` to the caller's value or
 `/usr/bin/google-chrome`, as for the VM suite. Include the assigned
 `PDD_CHECK_CPUS`. All other inherited variables are absent, including
 `CODEX_HOME`, `PDD_AUTOPILOT_CONTEXT`, `HERDR_*`, agent credentials, session and
@@ -202,8 +209,12 @@ owned descendants, drain output, remove the owned temporary environment, and
 atomically save the terminal receipt before returning or forwarding completion.
 
 Receipts and `readSuiteProgress` expose the added fields above plus `exitCode`
-(integer or null), `signal` (termination signal or null), `outcome` (`running`,
-`completed`, `interrupted`, or `unknown`), and `counts` (null without a complete TAP summary,
+(integer or null), `signal` (termination signal or null), `signalDiagnostics`
+(null unless interrupted or terminated by a signal, else `{signal, exitCode,
+phase, source, pid, ppid, parentCommand, cgroup, elapsedMs, waitedMs, at}`
+with secret-safe bounded strings; when `announceReceipt !== false`,
+`runTestSuite` also emits one secret-safe `Signal diagnostic:` line), `outcome`
+(`running`, `completed`, `interrupted`, or `unknown`), and `counts` (null without a complete TAP summary,
 else `{tests, suites, pass, fail, cancelled, skipped, todo}`, each a nonnegative
 integer). Parse only a complete final top-level stdout TAP summary after a TAP 13 header
 and a top-level plan. Later non-summary output or an unfinished final line
@@ -364,10 +375,9 @@ come from the machine resource owner.
 - [Machine observations](machine-resources.prompt.md): required shared native readers
   and tick observation shape for machine-sized checks.
 
-- [Native admission lock](workflow-runner.prompt.md#native-admission-lock): only this
-  independent interface selection is required context, supplying
-  `acquireRunLock` for PID/token admission ownership. No runner execution policy
-  is loaded by this selection.
+- Self-contained PID/token admission lock (`acquireSuiteLock`) inside
+  `src/test-suite-queue.mjs` using atomic `wx` + `.claim` stale-PID recovery
+  (`code: "run_busy"`), with zero runtime dependency on `workflow-runner.mjs`.
 - Native Node filesystem, OS, child process and clock facilities implement ports.
 - Inject `fs`, `now`, `sleep`, `alive(pid)`, `acquireLock(directory)`,
   `execute(command, {cwd, env, timeoutMs, onChild})`, `pid`, `uuid()` (temporary-file identity), `queueRoot`, and

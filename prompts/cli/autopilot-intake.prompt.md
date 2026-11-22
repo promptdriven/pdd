@@ -44,9 +44,9 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   GitHub call. A tick that ends before the hook (core mode off, the GitHub reserve)
   runs no pass; the [launcher](autopilot-launcher.prompt.md) calls `stopCardJobs`
   for core mode off and for `pdd autopilot stop`.
-- Scope: `intakeRows(rows, label)` keeps the open issues (no pull requests) without
-  a report label (`pdd:runtime`, `pdd:autopilot-report`) and, when the core has an
-  opt-in label, with that label; oldest first, then the lower number. The scope is
+- Scope: `intakeRows(rows, label, allowedIssues)` keeps the open issues (no pull requests) without
+  a report label (`pdd:runtime`, `pdd:autopilot-report`), matching `label` when set and
+  matching `allowedIssues` when a non-empty array of positive safe integers is supplied; oldest first, then the lower number. The scope is
   wider than the core's ready rule: it does not skip issues that cool down after a
   no-result, or issues whose blocker is named only in the text or in an END comment.
   A person who reads the would-pick list must keep that in mind.

@@ -52,7 +52,7 @@ change). When Cloud Accounts is active for the saved agent provider (`isCloudAcc
 exit code 2 with `Use --auto-update release, --auto-update main or --auto-update off.`); after each enabled core tick,
 run `maybeAutoUpdateAutopilot` of [Autopilot self-update](autopilot-update.prompt.md) under the machine admission lock
 when no job is publishing or merging, and include `autoUpdateStatusLine` in status. Optional `--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and
-remove them when a start omits them.
+remove them when a start omits them. Optional `start --issues N,M` / `--issue N` (`input.allowedIssues`, `input.issue`, or start `input.issues`) pins an explicit operator allowlist of positive safe integer issue numbers (`state.allowedIssues`), sorted and deduplicated; `off`, `all`, `clear` or `none` removes `state.allowedIssues`; omitting it preserves any saved allowlist; invalid values return exit code 2 with an actionable diagnostic naming the option, invariant, example fix, and rerun command before any state write. A non-empty `state.allowedIssues` satisfies the start opt-in scope check without requiring `--label`, forwards `core.allowedIssues` on every core tick, and appears in `start`, `status`, and `status --json`.
 
 ## Automatic continuation custody
 
