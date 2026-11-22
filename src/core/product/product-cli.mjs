@@ -171,9 +171,9 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', t
           return entry.id ? `- ${entry.id} (${entry.owner}): ${entry.rule}${verified}` : `- ${entry.rule}${verified}`;
         })]
         : [];
-      // #3328 mechanical fix: only single-part slices mock other parts from contracts; `all`/journey runs test real unmocked cross-part integration.
+      // #3328 mechanical fix: only single-part slices mock other parts from contracts; `all`/journey runs test real unmocked cross-part integration while still protecting contracts/.
       const integrationGuidance = planned.part === 'all'
-        ? 'Integration run across all parts: verify real unmocked cross-part journeys (no fake parts) and run `pdd sim --product`.'
+        ? `Integration run across all parts: verify real unmocked cross-part journeys (no fake parts) and run \`pdd sim --product\`.${contractFiles.length ? ' Do not change contracts/ in this run.' : ''}`
         : (contractFiles.length ? 'Other parts are fakes from their contracts. Do not change contracts/ in this run.' : '');
       const body = [
         parentIssueNumber ? `Part of #${parentIssueNumber} (product).` : '',
@@ -228,7 +228,7 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', t
     const handoffLines = [
       warning,
       `Issue #${issue.number} ready for ${run}${meta ? ` (${meta})` : ''}.`,
-      `Next: open your coding agent and run /pdd for issue #${issue.number} (or queue it with pdd autopilot --issue ${issue.number}).`,
+      `Next: open your coding agent and run /pdd for issue #${issue.number} (or queue it with pdd autopilot start --issue ${issue.number}).`,
     ].filter(Boolean).join('\n');
     return { exitCode: 0, message: handoffLines, issue: issue.number, created, started: false, handoff: '/pdd' };
   } catch (error) {

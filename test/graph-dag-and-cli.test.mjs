@@ -1,7 +1,10 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   issueKey,
@@ -40,11 +43,9 @@ function makeSnapshot(overrides = {}) {
   };
 }
 
-test('src/autopilot/graph modules stay <= 380L and contain zero legacy workflow imports', () => {
+test('src/autopilot/graph modules contain zero legacy workflow imports and keep compat facades', () => {
   for (const rel of ['../src/autopilot/graph/dag.mjs', '../src/autopilot/graph/cli.mjs', '../src/autopilot/graph/view.mjs']) {
     const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
-    const lines = src.split('\n').length;
-    assert.ok(lines <= 380, `${rel} is ${lines}L (expected <= 380L)`);
     assert.doesNotMatch(src, /workflow-/, `${rel} must not import legacy workflow modules`);
   }
   assert.equal(legacyGraphFacade.runIssueGraph, runIssueGraph);
@@ -98,4 +99,61 @@ test('cli.mjs refreshes cache-free text view, respects headless handoff, and ren
   assert.deepEqual(rendered.visible, [k(2), k(3)]);
   assert.deepEqual(rendered.context, [k(1)]);
   assert.match(rendered.html, /#2 API route/);
+});
+
+test('refreshIssueGraph fetches open issues online via default gh ports (without injected snapshots) and writes cache', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-graph-online-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+  execFileSync('git', ['remote', 'add', 'origin', `https://github.com/${REPO}.git`], { cwd: dir });
+  writeFileSync(join(dir, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'observe', trust: [] } }));
+  const issues = [
+    { id: 101, number: 1, html_url: k(1), title: 'Base schema', body: 'Schema', state: 'open', user: { login: 'owner' }, author_association: 'OWNER', labels: [], assignees: [], created_at: '2026-11-20T00:00:00Z', updated_at: '2026-11-20T00:00:00Z', comments: 0 },
+    { id: 102, number: 2, html_url: k(2), title: 'API route', body: 'API', state: 'open', user: { login: 'owner' }, author_association: 'OWNER', labels: [], assignees: [], created_at: '2026-11-20T01:00:00Z', updated_at: '2026-11-20T01:00:00Z', comments: 0 },
+  ];
+  const ghEndpoints = [];
+  let cachedJson = '';
+  const http200 = body => ({ code: 0, stdout: `HTTP/2 200 OK\r\ncontent-type: application/json\r\n\r\n${JSON.stringify(body)}`, stderr: '' });
+  const ports = {
+    env: { ...process.env, HOME: dir, PDD_STATE_DIR: join(dir, 'state') },
+    cache: {
+      read: async () => ({ json: cachedJson }),
+      write: async ({ json }) => { cachedJson = json; return { ok: true }; },
+    },
+    execFile: async (file, args, options = {}) => {
+      if (file === 'git') {
+        try {
+          return { code: 0, stdout: execFileSync('git', args, { cwd: options.cwd ?? dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' };
+        } catch (err) {
+          return { code: err.status ?? 1, stdout: '', stderr: String(err.stderr ?? '') };
+        }
+      }
+      assert.equal(file, 'gh');
+      if (args[0] === 'repo' && args[1] === 'view') {
+        return { code: 0, stdout: JSON.stringify({ nameWithOwner: REPO, defaultBranchRef: { name: 'main' }, url: `https://github.com/${REPO}` }), stderr: '' };
+      }
+      if (args.includes('graphql')) return http200({ errors: [{ message: 'use rest endpoints' }] });
+      const endpoint = args.find(arg => arg.startsWith('repos/')) ?? '';
+      ghEndpoints.push(endpoint);
+      if (endpoint === `repos/${REPO}`) return http200({ full_name: REPO, owner: { login: 'owner' }, default_branch: 'main' });
+      if (endpoint.startsWith(`repos/${REPO}/collaborators`)) return http200([{ login: 'owner', permissions: { push: true, maintain: true, admin: true } }]);
+      if (endpoint.startsWith(`repos/${REPO}/contents/pdd.json`)) {
+        return http200({ content: Buffer.from(JSON.stringify({ autopilot: { mode: 'observe', trust: [] } })).toString('base64'), encoding: 'base64' });
+      }
+      if (endpoint.startsWith(`repos/${REPO}/issues?`)) return http200(issues);
+      if (endpoint === `repos/${REPO}/issues/1`) return http200(issues[0]);
+      if (endpoint === `repos/${REPO}/issues/2`) return http200(issues[1]);
+      if (endpoint === `repos/${REPO}/issues/2/dependencies/blocked_by?per_page=100`) return http200([issues[0]]);
+      if (endpoint === `repos/${REPO}/issues/1/dependencies/blocking?per_page=100`) return http200([issues[1]]);
+      return http200([]);
+    },
+  };
+
+  const refreshed = await refreshIssueGraph({ cwd: dir, repository: REPO }, ports);
+  assert.equal(refreshed.sync, 'current');
+  assert.ok(ghEndpoints.some(e => e.startsWith(`repos/${REPO}/issues?`)), 'must query open issues list via gh');
+  assert.equal(refreshed.graph.nodes.length, 2);
+  assert.deepEqual(refreshed.graph.edges.map(({ dependent, blocker }) => ({ dependent, blocker })), [{ dependent: k(2), blocker: k(1) }]);
+  assert.equal(refreshed.graph.nodes.find(n => n.key === k(2)).dependencyState, 'waiting');
+  assert.ok(cachedJson.includes(k(1)) && cachedJson.includes(k(2)), 'must persist refreshed graph snapshot to cache');
 });

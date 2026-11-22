@@ -32,8 +32,7 @@ is uncertain; those records let a later tick retry without a live controller.
     (non-interactive print mode reading plain text on stdin and streaming events;
     `--print` takes a prompt string argument rather than stdin)
 
-  All four read the prompt on stdin and have full access, like the post-merge auditor
-  launch in [the audit owner](autopilot-audit.prompt.md). Another kind throws
+  All four read the prompt on stdin and have full access. Another kind throws
   `Error("Autopilot core jobs need codex, claude, gemini or agy")`.
 - `jobEnvironment(env, {stripGithubTokens = false} = {})` returns a copy of `env` without keys that would join the
   caller's own agent, Herdr or coordinator session: `ANTIGRAVITY_*` (except

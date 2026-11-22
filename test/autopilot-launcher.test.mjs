@@ -1158,3 +1158,27 @@ test('3389: release serializes on STATE.lock with concurrent ticks and refuses c
   assert.ok(!existsSync(jobFile));
   assert.ok(!w.labels(17).includes('pdd:working'));
 });
+
+test('resolveSavedRun rejects path traversal and resolves #N, owner/repo#N, and GitHub issue URLs', async t => {
+  const { parseSavedRunRef, resolveSavedRun } = await import('../src/autopilot-launcher.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-saved-run-ref-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const gitDir = join(dir, '.git');
+  mkdirSync(join(gitDir, 'pdd', 'runs', '42'), { recursive: true });
+  mkdirSync(join(gitDir, 'pdd', 'escape'), { recursive: true });
+  writeFileSync(join(gitDir, 'pdd', 'escape', 'status.json'), JSON.stringify({ number: 99, repo: 'example/repo', runId: 'escape' }));
+  writeFileSync(join(gitDir, 'pdd', 'runs', '42', 'status.json'), JSON.stringify({ number: 42, repo: 'example/repo', runId: 'run-42-abc' }));
+  const p = { checked: async () => `${gitDir}\n` };
+
+  for (const bad of ['', '../escape', '../../etc/passwd', '42/../escape', 'sub/dir', 'a\\b']) {
+    assert.equal(parseSavedRunRef(bad), null, `should reject ${bad}`);
+    const res = await resolveSavedRun(bad, dir, p);
+    assert.ok(res.error && !res.run, `resolveSavedRun must refuse ${bad}`);
+  }
+  for (const valid of ['42', '#42', 'example/repo#42', 'https://github.com/example/repo/issues/42', 'run-42-abc']) {
+    const res = await resolveSavedRun(valid, dir, p);
+    assert.equal(res.run?.number, 42, `expected #42 for ${valid}, got ${JSON.stringify(res)}`);
+  }
+  const foreign = await resolveSavedRun('other/repo#42', dir, p);
+  assert.ok(foreign.error && !foreign.run, 'foreign repo ref must not match example/repo');
+});
