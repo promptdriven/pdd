@@ -1,6 +1,6 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 0a324dfcbe01868e4efcd6ab10cd5bdd3448dd70d3b2c76aea32f9b41833d075).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: c21f2aa1c7c74040e153f53509529f0a4a8d35b0c3d30036f30f68d3a8ea1b30).
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import fs, { realpathSync } from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
@@ -92,6 +92,7 @@ import {
   progressText,
   progressTicker,
   projectAnswer,
+  projectCheckReconciliation as rawProjectCheckReconciliation,
   promptMarkdownTargets,
   promptRefusal,
   promptSchemaRefusals,
@@ -100,6 +101,7 @@ import {
   readContractHistory as runtimeReadContractHistory,
   readPrompt,
   readTryOwner as runtimeReadTryOwner,
+  reconcileCheckReceipt as rawReconcileCheckReceipt,
   refusalView as rawRefusalView,
   renderJson as rawRenderJson,
   renderText as rawRenderText,
@@ -154,7 +156,6 @@ import {
   withExactIntegers,
   workspace,
 } from '@promptdriven/runtime-client';
-import * as runtimeClientPkg from '@promptdriven/runtime-client';
 
 const req = createRequire(import.meta.url);
 const initialReadFileSync = fs.readFileSync;
@@ -211,6 +212,26 @@ function hostExit() {
 let cachedScenarioCompiler = null;
 function hostScenarioCompiler() {
   return (cachedScenarioCompiler ??= req('./scenario-compile.mjs'));
+}
+
+let cachedFileOwner = null;
+function hostFileOwner() {
+  return (cachedFileOwner ??= req('./file-owner.mjs'));
+}
+
+let cachedWorkflowEligibility = null;
+function lazyEvidenceEligibility(...args) {
+  return (cachedWorkflowEligibility ??= req('./workflow-eligibility.mjs')).readEvidenceEligibility(...args);
+}
+
+let cachedWorkflowRuns = null;
+function lazyAllRuns(...args) {
+  return (cachedWorkflowRuns ??= req('./workflow-runs.mjs')).allRuns(...args);
+}
+
+let cachedProductDocuments = null;
+function hostProductDocuments() {
+  return (cachedProductDocuments ??= req('./product-documents.mjs'));
 }
 
 const scenarioOverlayStorage = new AsyncLocalStorage();
@@ -681,12 +702,6 @@ function wrapFetchForLegacyCriteriaDiagnostic(baseFetch, cwd, ports) {
   return wrapped;
 }
 
-const ADAPTIVE_POLL_CAP_MS = 1000;
-const ADAPTIVE_POLL_FAST_MS = 250;
-const ADAPTIVE_POLL_MID_MS = 500;
-const ADAPTIVE_POLL_FAST_TICKS = 8;
-const ADAPTIVE_POLL_MID_TICKS = 16;
-
 function sleepWithSignal(ms, signal) {
   return new Promise(done => {
     if (signal?.aborted || ms <= 0) {
@@ -703,73 +718,38 @@ function sleepWithSignal(ms, signal) {
   });
 }
 
-/** Attach runCheck-only adaptive polling without shortening Retry-After/429/5xx or non-poll sleeps. */
-function attachRunCheckAdaptivePolling(merged, rawPorts) {
-  // Preserve explicit caller/test timing controls untouched.
-  if (rawPorts?.pollMs !== undefined || rawPorts?.sleep !== undefined) return;
-  let pollTicks = 0;
-  let lastPollable = false;
-  let throttled = false;
-  merged.pollMs = ADAPTIVE_POLL_CAP_MS;
+/** Honor 429/5xx/Retry-After floor without setting pollMs (preserving 1.1.1 native SSE, Prefer: wait, and adaptivePollMs). */
+function attachRunCheckThrottleBackoff(merged, rawPorts) {
+  if (rawPorts?.pollMs !== undefined || rawPorts?.sleep !== undefined || typeof merged.fetch !== 'function') return;
+  let backoffFloorMs = 0;
   merged.sleep = (ms, signal) => {
-    const canShorten =
-      lastPollable &&
-      !throttled &&
-      typeof ms === 'number' &&
-      ms >= ADAPTIVE_POLL_FAST_MS &&
-      ms <= ADAPTIVE_POLL_CAP_MS;
-    lastPollable = false;
-    if (canShorten) {
-      pollTicks += 1;
-      const cap =
-        pollTicks <= ADAPTIVE_POLL_FAST_TICKS
-          ? ADAPTIVE_POLL_FAST_MS
-          : pollTicks <= ADAPTIVE_POLL_MID_TICKS
-            ? ADAPTIVE_POLL_MID_MS
-            : ADAPTIVE_POLL_CAP_MS;
-      return sleepWithSignal(Math.min(ms, cap), signal);
-    }
-    return sleepWithSignal(ms, signal);
+    const waitMs = backoffFloorMs > 0 ? Math.max(Number(ms) || 0, backoffFloorMs) : Number(ms) || 0;
+    backoffFloorMs = 0;
+    return sleepWithSignal(waitMs, signal);
   };
-  if (typeof merged.fetch === 'function') {
-    const wrappedFetch = merged.fetch;
-    const observedFetch = async (url, init) => {
-      const method = String(init?.method ?? 'GET').toUpperCase();
-      let res;
-      try {
-        res = await wrappedFetch(url, init);
-      } catch (err) {
-        throttled = true;
-        lastPollable = false;
-        pollTicks = Math.max(pollTicks, ADAPTIVE_POLL_MID_TICKS);
-        throw err;
-      }
-      const status = Number(res?.status ?? 0);
-      const hasRetryAfter = Boolean(res?.headers?.get?.('retry-after'));
-      if (status === 429 || status >= 500 || hasRetryAfter) {
-        throttled = true;
-        lastPollable = false;
-        pollTicks = Math.max(pollTicks, ADAPTIVE_POLL_MID_TICKS);
-      } else if (method === 'POST' && status >= 200 && status < 300) {
-        throttled = false;
-        pollTicks = 0;
-        lastPollable = true;
-      } else if (method === 'GET' && status === 200) {
-        throttled = false;
-        lastPollable = true;
-      } else {
-        lastPollable = false;
-      }
-      return res;
-    };
-    if (wrappedFetch.__pddLegacyCriteriaWrapped) {
-      Object.defineProperty(observedFetch, '__pddLegacyCriteriaWrapped', { value: true });
+  const wrappedFetch = merged.fetch;
+  const observedFetch = async (url, init) => {
+    let res;
+    try {
+      res = await wrappedFetch(url, init);
+    } catch (err) {
+      backoffFloorMs = 1000;
+      throw err;
     }
-    merged.fetch = observedFetch;
+    const status = Number(res?.status ?? 0);
+    const retryAfterSec = Number(res?.headers?.get?.('retry-after'));
+    if (status === 429 || status >= 500 || (Number.isFinite(retryAfterSec) && retryAfterSec > 0)) {
+      backoffFloorMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0 ? Math.min(300_000, Math.round(retryAfterSec * 1000)) : 1000;
+    }
+    return res;
+  };
+  if (wrappedFetch.__pddLegacyCriteriaWrapped) {
+    Object.defineProperty(observedFetch, '__pddLegacyCriteriaWrapped', { value: true });
   }
+  merged.fetch = observedFetch;
 }
 
-function seamRuntimePorts(ports = {}, { cwd = null } = {}) {
+function seamRuntimePorts(ports = {}, { cwd = null, wrapStdout = true } = {}) {
   const exit = hostExit();
   const baseFetch = ports.fetch ?? globalThis.fetch;
   const merged = withPortDefaults(seamSelectionPorts(ports), {
@@ -780,7 +760,7 @@ function seamRuntimePorts(ports = {}, { cwd = null } = {}) {
   if (typeof baseFetch === 'function') {
     merged.fetch = wrapFetchForLegacyCriteriaDiagnostic(baseFetch, cwd, merged);
   }
-  if (merged.stdout) merged.stdout = normalizeHintStream(merged.stdout);
+  if (wrapStdout && merged.stdout) merged.stdout = normalizeHintStream(merged.stdout);
   if (merged.stderr) merged.stderr = normalizeHintStream(merged.stderr);
   return merged;
 }
@@ -796,7 +776,7 @@ function withEligibilityDefault(ports = {}, defaultEligibility) {
 
 function resolveWorkflowBaseSha({ root, env = process.env, allRunsPort } = {}) {
   if (!root) return null;
-  const readAllRuns = allRunsPort ?? req('./workflow-runs.mjs').allRuns;
+  const readAllRuns = allRunsPort ?? lazyAllRuns;
   let realRoot;
   try {
     realRoot = realpathSync(root);
@@ -1348,7 +1328,7 @@ export function createStrictSourceAccess(root, workspace, ports = {}) {
 }
 
 export function sharedSourceFiles(root, visible, options = {}, ports = {}) {
-  const { resolveOwners } = req('./file-owner.mjs');
+  const { resolveOwners } = hostFileOwner();
   return rawSharedSourceFiles(root, visible, options, withPortDefaults(seamSelectionPorts(ports), { resolveOwners }));
 }
 
@@ -2033,7 +2013,7 @@ export function runtimePreflightSlice() {
     hasAcceptance,
     isStoryPath,
     lintLocalHygiene: (input, ports = {}) => {
-      const { isTestOwnedPath, promptClaims, resolveOwners } = req('./file-owner.mjs');
+      const { isTestOwnedPath, promptClaims, resolveOwners } = hostFileOwner();
       const { lintRepoAntiPatterns } = req('./repo-hygiene-lint.mjs');
       const baseWarnings = mod.lintLocalHygiene(
         input,
@@ -2106,7 +2086,7 @@ export function runtimeClientSlice() {
 }
 
 export function buildCheckPlan(input, ports = {}) {
-  const { headerPrompts } = req('./file-owner.mjs');
+  const { headerPrompts } = hostFileOwner();
   return runtimeBuildCheckPlan(input, withPortDefaults(seamSelectionPorts(ports), { headerPrompts }));
 }
 
@@ -2115,7 +2095,7 @@ export function selectJourneys(tests, selector, ports = {}) {
 }
 
 export function composeProductTry(input, ports = {}) {
-  const { parseProductDocuments, parseProductWorldWriters } = req('./product-documents.mjs');
+  const { parseProductDocuments, parseProductWorldWriters } = hostProductDocuments();
   const compiler = hostScenarioCompiler();
   let effectivePorts = withPortDefaults(seamSelectionPorts(ports), { parseProductDocuments, parseProductWorldWriters });
   if (
@@ -2192,36 +2172,32 @@ export function readAgentScenarios(input, ports = {}) {
 
 export function createTryGuide(options = {}) {
   const givenPorts = options.ports ?? {};
-  const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
   return runtimeCreateTryGuide({
     ...options,
-    ports: withPortDefaults(seamSelectionPorts(withEligibilityDefault(givenPorts, lazyEligibility)), {
+    ports: withPortDefaults(seamSelectionPorts(withEligibilityDefault(givenPorts, lazyEvidenceEligibility)), {
       redaction: seamRedaction(givenPorts),
     }),
   });
 }
 
 export function buildProjectCard(input = {}) {
-  const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
-  return runtimeBuildProjectCard(withEligibilityDefault(input, lazyEligibility));
+  return runtimeBuildProjectCard(withEligibilityDefault(input, lazyEvidenceEligibility));
 }
 
 export function readContractHistory(input, ports = {}) {
-  const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
   const cwd = input?.root ?? input?.cwd ?? process.cwd();
   return withScenarioOverlay(
     { cwd, ports, interceptFd: true },
-    () => runtimeReadContractHistory(input, seamSelectionPorts(withEligibilityDefault(ports, lazyEligibility))),
+    () => runtimeReadContractHistory(input, seamSelectionPorts(withEligibilityDefault(ports, lazyEvidenceEligibility))),
   );
 }
 
 export function runContracts(input, ports = {}) {
   runtimeClientSlice();
-  const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
   const cwd = input?.cwd ?? process.cwd();
   return withScenarioOverlay(
     { cwd, ports, interceptFd: true },
-    () => runtimeRunContracts(input, seamSelectionPorts(withEligibilityDefault(ports, lazyEligibility))),
+    () => runtimeRunContracts(input, seamSelectionPorts(withEligibilityDefault(ports, lazyEvidenceEligibility))),
   );
 }
 
@@ -2265,16 +2241,7 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function unsupportedReconciliationError(featureName) {
-  return Object.assign(
-    new Error(
-      `CHECK receipt reconciliation (${featureName}) is not available in this installed @promptdriven/runtime-client version; upgrade to @promptdriven/runtime-client >= 1.2.0.`,
-    ),
-    { code: 'reconciliation-unsupported', exitCode: 5 },
-  );
-}
-
-function wrapFetchForFresh(baseFetch, matchPathname, { onTrySessionId } = {}) {
+function wrapFetchForFresh(baseFetch, matchPathname) {
   if (typeof baseFetch !== 'function') return baseFetch;
   const wrapped = async (url, init) => {
     const method = String(init?.method ?? 'GET').toUpperCase();
@@ -2284,19 +2251,12 @@ function wrapFetchForFresh(baseFetch, matchPathname, { onTrySessionId } = {}) {
     } catch {
       return baseFetch(url, init);
     }
-    if (typeof onTrySessionId === 'function' && method === 'GET') {
-      const modelMatch = /^\/v1\/try\/([^/]+)\/model$/.exec(pathname);
-      if (modelMatch && UUID_RE.test(modelMatch[1])) onTrySessionId(modelMatch[1]);
-    }
     if (method !== 'POST' || !matchPathname(pathname)) return baseFetch(url, init);
     if (init?.body instanceof FormData) {
       const reqPart = init.body.get('request');
       if (reqPart && typeof reqPart.text === 'function') {
         try {
           const parsed = JSON.parse(await reqPart.text());
-          if (typeof onTrySessionId === 'function' && pathname === '/v1/try' && typeof parsed?.requestId === 'string' && UUID_RE.test(parsed.requestId)) {
-            onTrySessionId(parsed.requestId);
-          }
           if (isPlainObject(parsed) && parsed.fresh !== true) {
             const nextForm = new FormData();
             for (const [key, value] of init.body.entries()) {
@@ -2338,41 +2298,13 @@ function wrapFetchForFresh(baseFetch, matchPathname, { onTrySessionId } = {}) {
   return wrapped;
 }
 
-const MAX_DOOR_DESCRIPTOR_BYTES = 1024 * 1024;
-
-function writePrivateFileAtomically(filePath, content) {
-  const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    fs.chmodSync(tmpPath, 0o600);
-    fs.renameSync(tmpPath, filePath);
-  } catch (err) {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch {}
-    throw err;
-  }
-}
-
-function isSafeRegularJsonFile(filePath, maxBytes = MAX_DOOR_DESCRIPTOR_BYTES) {
+function isSafeRegularJsonFile(filePath, maxBytes = 4 * 1024 * 1024) {
   if (typeof filePath !== 'string' || !filePath) return false;
   try {
     const stat = fs.lstatSync(filePath);
     return !stat.isSymbolicLink() && stat.isFile() && stat.nlink === 1 && stat.size <= maxBytes;
   } catch {
     return false;
-  }
-}
-
-function ensureDoorDescriptorFresh(descriptorPath) {
-  try {
-    if (!isSafeRegularJsonFile(descriptorPath, MAX_DOOR_DESCRIPTOR_BYTES)) return;
-    const raw = JSON.parse(initialReadFileSync(descriptorPath, 'utf8'));
-    if (isPlainObject(raw) && raw.fresh !== true) {
-      writePrivateFileAtomically(descriptorPath, `${JSON.stringify({ ...raw, fresh: true }, null, 2)}\n`);
-    }
-  } catch {
-    /* Best-effort compatibility patch for 1.1.0 CLI descriptors. */
   }
 }
 
@@ -2384,33 +2316,6 @@ function safeRequestIdDisplay(value) {
   } catch {
     return `[${typeof value}]`;
   }
-}
-
-function patchTrackedSessionDoor(sessionId, env = process.env) {
-  if (typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) return;
-  const home = env?.HOME || process.env.HOME || homedir();
-  const stateRoot = resolve(env?.PDD_STATE_DIR || join(home, '.pdd', 'runtime'));
-  ensureDoorDescriptorFresh(join(stateRoot, 'tries', `${sessionId}.door.json`));
-}
-
-function wrapShellForFreshDoor(baseShell, beforeLaunch) {
-  const launcher =
-    typeof baseShell === 'function'
-      ? baseShell
-      : (shell, shellEnv, shellRoot) =>
-          new Promise((done, reject) => {
-            const child = spawn(shell, ['-i'], {
-              cwd: shellRoot ?? process.cwd(),
-              env: shellEnv,
-              stdio: 'inherit',
-            });
-            child.on('error', reject);
-            child.on('exit', (code, signal) => done(code ?? (signal ? 128 : 0)));
-          });
-  return (shell, shellEnv, shellRoot) => {
-    beforeLaunch();
-    return launcher(shell, shellEnv, shellRoot);
-  };
 }
 
 function findExistingTryForFresh(cwd, words, rawOptions = {}, env = process.env, ports = {}) {
@@ -2728,45 +2633,26 @@ function computeGraphAwareDefaultMaxCalls(input, ports) {
 }
 
 export async function runCheck(input = {}, ports = {}) {
-  const [
-    ,
-    { headerPrompts, isTestOwnedPath, promptClaims, resolveOwners },
-    { readEvidenceEligibility },
-    { allRuns },
-    { assessNativeEvidence, resultLines, usableResult },
-    { lintSvgLayouts },
-    { lintRepoProject },
-    { compareScreen, formatScreenComparison },
-  ] = await Promise.all([
-    import('./secret-redaction.mjs'),
-    import('./file-owner.mjs'),
-    import('./workflow-eligibility.mjs'),
-    import('./workflow-runs.mjs'),
-    import('./workflow-results.mjs'),
-    import('./svg-layout.mjs'),
-    import('./repo-hygiene-lint.mjs'),
-    import('./screen-compare.mjs'),
-  ]);
-  if (input?.options?.['--emit-v1'] && input?.options?.['--bind-criteria']) {
+  const rawOptions = input?.options ?? {};
+  if (rawOptions['--emit-v1'] && rawOptions['--bind-criteria']) {
     const stderr = ports.stderr ?? process.stderr;
     stderr.write('Use either --emit-v1 or --bind-criteria, not both.\n');
     return 2;
   }
-  if (input?.options?.['--write'] && !input?.options?.['--emit-v1']) {
+  if (rawOptions['--write'] && !rawOptions['--emit-v1']) {
     const stderr = ports.stderr ?? process.stderr;
     stderr.write('--write is only accepted with pdd lint --emit-v1.\n');
     return 2;
   }
-  if (input?.options?.['--emit-v1']) {
+  if (rawOptions['--emit-v1']) {
     return runEmitV1(input, ports);
   }
-  if (input?.options?.['--bind-criteria']) {
+  if (rawOptions['--bind-criteria']) {
     return runBindCriteria(input, ports);
   }
-  if (input?.options?.['--reconcile'] !== undefined) {
+  if (rawOptions['--reconcile'] !== undefined) {
     return runCheckReconcileCommand(input, ports);
   }
-  const rawOptions = input?.options ?? {};
   const freshRequested = rawOptions['--fresh'] !== undefined;
   if (freshRequested) {
     const stderr = ports.stderr ?? process.stderr;
@@ -2779,6 +2665,31 @@ export async function runCheck(input = {}, ports = {}) {
       return 2;
     }
   }
+  const words = commandWords(input);
+  const screenRequested = rawOptions['--screen'] !== undefined;
+  const nativeLintRequested = rawOptions['--lint'] === true && words.length > 0;
+  const skipLintModules =
+    screenRequested ||
+    rawOptions['--read'] !== undefined ||
+    rawOptions['--retry'] !== undefined ||
+    rawOptions['--request'] !== undefined ||
+    rawOptions['--explain-bindings'] !== undefined;
+
+  const [
+    ,
+    { headerPrompts, isTestOwnedPath, promptClaims, resolveOwners },
+    nativeResults,
+    lintMods,
+    screenMod,
+  ] = await Promise.all([
+    import('./secret-redaction.mjs'),
+    import('./file-owner.mjs'),
+    nativeLintRequested ? import('./workflow-results.mjs') : Promise.resolve(null),
+    skipLintModules
+      ? Promise.resolve(null)
+      : Promise.all([import('./svg-layout.mjs'), import('./repo-hygiene-lint.mjs')]),
+    screenRequested ? import('./screen-compare.mjs') : Promise.resolve(null),
+  ]);
   const env = ports.env ?? process.env;
   const client = input?.client
     ? { ...input.client, version: input.client.version ?? clientVersion() }
@@ -2791,10 +2702,6 @@ export async function runCheck(input = {}, ports = {}) {
   if (freshRequested && effectiveOptions['--affected'] === true) {
     delete effectiveOptions['--fresh'];
   }
-  if (effectiveOptions['--read'] === true && effectiveOptions['--details'] === true) {
-    delete effectiveOptions['--details'];
-    Object.defineProperty(effectiveOptions, 'details', { value: true, enumerable: false, configurable: true });
-  }
   const effectiveInput = {
     ...input,
     options: effectiveOptions,
@@ -2804,37 +2711,49 @@ export async function runCheck(input = {}, ports = {}) {
   const lazyOverlay = { cwd, ports, map: undefined };
 
   const { onProjectLintResult, ...forwardPorts } = ports;
+  const defaultLintSvgLayouts = lintMods
+    ? arg => {
+        const [{ lintSvgLayouts }, { lintRepoProject }] = lintMods;
+        const project = lintRepoProject(arg);
+        if (typeof onProjectLintResult === 'function' && arg?.promptPaths === undefined && arg?.tests === undefined) {
+          onProjectLintResult(project);
+        }
+        return [
+          ...lintSvgLayouts(arg),
+          ...project.warnings,
+          ...lintShortScenarioFiles(arg?.root, forwardPorts, {
+            checkCriteriaBindings: rawOptions['--local'] === true,
+            includeRawComplexity: rawOptions['--lint'] === true,
+            words,
+            cwd,
+          }),
+        ];
+      }
+    : undefined;
   return withScenarioOverlay(lazyOverlay, () => {
     const checkPorts = seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(forwardPorts, readEvidenceEligibility), {
+      withPortDefaults(withEligibilityDefault(forwardPorts, lazyEvidenceEligibility), {
         headerPrompts,
         isTestOwnedPath,
         promptClaims,
         resolveOwners,
-        allRuns,
+        allRuns: lazyAllRuns,
         workflowBaseSha: ({ root, env: runEnv }) =>
-          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: forwardPorts.allRuns ?? allRuns }),
-        assessNativeEvidence,
-        usableResult,
-        resultLines,
-        lintSvgLayouts: arg => {
-          const project = lintRepoProject(arg);
-          if (typeof onProjectLintResult === 'function' && arg?.promptPaths === undefined && arg?.tests === undefined) {
-            onProjectLintResult(project);
-          }
-          return [
-            ...lintSvgLayouts(arg),
-            ...project.warnings,
-            ...lintShortScenarioFiles(arg?.root, forwardPorts, {
-              checkCriteriaBindings: input?.options?.['--local'] === true,
-              includeRawComplexity: input?.options?.['--lint'] === true,
-              words: commandWords(input),
-              cwd,
-            }),
-          ];
-        },
-        compareScreen,
-        formatScreenComparison,
+          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: forwardPorts.allRuns ?? lazyAllRuns }),
+        ...(nativeResults
+          ? {
+              assessNativeEvidence: nativeResults.assessNativeEvidence,
+              usableResult: nativeResults.usableResult,
+              resultLines: nativeResults.resultLines,
+            }
+          : {}),
+        ...(defaultLintSvgLayouts ? { lintSvgLayouts: defaultLintSvgLayouts } : {}),
+        ...(screenMod
+          ? {
+              compareScreen: screenMod.compareScreen,
+              formatScreenComparison: screenMod.formatScreenComparison,
+            }
+          : {}),
         redaction: seamRedaction(forwardPorts),
       }),
       { cwd },
@@ -2847,7 +2766,7 @@ export async function runCheck(input = {}, ports = {}) {
         checkPorts.fetch = wrapFetchForFresh(checkPorts.fetch, pathname => pathname === '/v1/check');
       }
     }
-    attachRunCheckAdaptivePolling(checkPorts, forwardPorts);
+    attachRunCheckThrottleBackoff(checkPorts, forwardPorts);
     return runtimeRunCheck(effectiveInput, checkPorts);
   });
 }
@@ -2876,46 +2795,18 @@ function runtimeClientSupportsPlainProseUi() {
   if (cachedNativePlainProseUiSupport !== undefined) return cachedNativePlainProseUiSupport;
   try {
     const info = typeof version === 'function' ? version() : null;
-    if (
+    cachedNativePlainProseUiSupport = Boolean(
       (Array.isArray(info?.features) &&
         info.features.some(f =>
           ['plain-prose-ui', 'plain-prose-ui-screen', 'single-prompt-try', 'single-prompt-simulate', 'hybrid-ui'].includes(f),
         )) ||
-      info?.capabilities?.plainProseUi === true ||
-      info?.capabilities?.plainProseUiScreen === true ||
-      info?.capabilities?.singlePromptTry === true
-    ) {
-      cachedNativePlainProseUiSupport = true;
-      return true;
-    }
-    const clientEntry = req.resolve('@promptdriven/runtime-client');
-    const clientSource = initialReadFileSync(resolve(dirname(clientEntry), 'runtime', 'runtime-client.mjs'), 'utf8');
-    cachedNativePlainProseUiSupport =
-      /\bhandle_event\b/.test(clientSource) && /\brender\b/.test(clientSource) && /\bscreen\b/.test(clientSource);
+        info?.capabilities?.plainProseUi === true ||
+        info?.capabilities?.plainProseUiScreen === true ||
+        info?.capabilities?.singlePromptTry === true,
+    );
     return cachedNativePlainProseUiSupport;
   } catch {
     cachedNativePlainProseUiSupport = false;
-    return false;
-  }
-}
-
-function isRegularInRootPromptFile(cwd, candidate) {
-  if (typeof candidate !== 'string' || !candidate.endsWith('.prompt.md')) return false;
-  const root = repoTopRoot(cwd);
-  if (!root) return false;
-  try {
-    const realRoot = realpathSync(root);
-    const full = resolve(realpathSync(cwd), candidate);
-    const rel = relative(realRoot, full);
-    if (!rel || rel === '..' || rel.startsWith(`..${sep}`)) return false;
-    const parts = rel.split(sep);
-    for (let i = 1; i <= parts.length; i++) {
-      const st = initialLstatSync(resolve(realRoot, ...parts.slice(0, i)));
-      if (st.isSymbolicLink()) return false;
-      if (i === parts.length && !st.isFile()) return false;
-    }
-    return true;
-  } catch {
     return false;
   }
 }
@@ -3163,13 +3054,11 @@ export async function runTry(input = {}, ports = {}) {
   const [
     ,
     { loadAgentDefinitions },
-    { readEvidenceEligibility },
     { parseProductDocuments, parseProductWorldWriters },
     { askApproval, lineReader, promptPath },
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
-    import('./workflow-eligibility.mjs'),
     import('./product-documents.mjs'),
     import('./prompt-approve.mjs'),
   ]);
@@ -3183,26 +3072,15 @@ export async function runTry(input = {}, ports = {}) {
       discoverAgents: forwardPorts.discoverAgents ?? forwardPorts.agents?.list,
       runAgentProcess: forwardPorts.runAgentProcess ?? forwardPorts.agents?.run,
       askAgent: forwardPorts.askAgent ?? forwardPorts.agents?.ask,
-      evidenceEligibility: forwardPorts.evidenceEligibility ?? forwardPorts.readEvidenceEligibility ?? readEvidenceEligibility,
+      evidenceEligibility: forwardPorts.evidenceEligibility ?? forwardPorts.readEvidenceEligibility ?? lazyEvidenceEligibility,
       guidePorts: forwardPorts.guidePorts,
     });
-  const directPromptCandidate =
-    !opts['--stop'] && !opts['--save-last'] && !opts['--product'] && words.length === 1 && isRegularInRootPromptFile(cwd, words[0])
-      ? words[0]
-      : null;
   const invokeRunTry = typeof rawTryOverride === 'function' ? rawTryOverride : runtimeRunTry;
   const lazyOverlay = { cwd, ports: forwardPorts, map: undefined };
-  let activeSessionId = null;
-  const finishTry = exitCode => {
-    if (exitCode === 0 && freshRequested) {
-      patchTrackedSessionDoor(activeSessionId, forwardPorts.env ?? process.env);
-    }
-    return exitCode;
-  };
   const invoke = (tryInput, tryPorts) =>
     withScenarioOverlay(lazyOverlay, () => {
       const boundPorts = seamRuntimePorts(
-        withPortDefaults(withEligibilityDefault(tryPorts, readEvidenceEligibility), {
+        withPortDefaults(withEligibilityDefault(tryPorts, lazyEvidenceEligibility), {
           tryLauncherUrl: TRY_LAUNCHER_URL,
           agentBridge: defaultAgentBridge,
           loadAgentDefinitions: tryPorts.loadAgentDefinitions ?? tryPorts.agents?.loadDefinitions ?? loadAgentDefinitions,
@@ -3218,50 +3096,8 @@ export async function runTry(input = {}, ports = {}) {
         }),
         { cwd },
       );
-      if (freshRequested) {
-        if (typeof boundPorts.fetch === 'function') {
-          boundPorts.fetch = wrapFetchForFresh(
-            boundPorts.fetch,
-            pathname =>
-              pathname === '/v1/try' ||
-              /^\/v1\/try\/[^/]+\/call$/.test(pathname) ||
-              /^\/v1\/try\/[^/]+\/screen\//.test(pathname),
-            {
-              onTrySessionId: id => {
-                activeSessionId = id;
-              },
-            },
-          );
-        }
-        boundPorts.shell = wrapShellForFreshDoor(boundPorts.shell, () => {
-          patchTrackedSessionDoor(activeSessionId, boundPorts.env ?? forwardPorts.env ?? process.env);
-        });
-      }
       return invokeRunTry(tryInput, boundPorts);
     });
-
-  if (directPromptCandidate) {
-    let observedErr = '';
-    const targetStderr = forwardPorts.stderr ?? process.stderr;
-    const watchedStderr = wrapFilteredStream(targetStderr, text => {
-      if (observedErr.length < DIRECT_PROMPT_STDERR_LIMIT) {
-        observedErr += text.slice(0, DIRECT_PROMPT_STDERR_LIMIT - observedErr.length);
-      }
-      return false;
-    });
-    const exitCode = await invoke(input, { ...forwardPorts, stderr: watchedStderr });
-    if (
-      exitCode === 2 &&
-      /No tests found|Unknown story|No Stories are available/i.test(observedErr) &&
-      !observedErr.includes('Direct .prompt.md simulation')
-    ) {
-      const safePrompt = cleanText(directPromptCandidate);
-      targetStderr.write(
-        `Direct .prompt.md simulation (${safePrompt}) requires a newer @promptdriven/runtime-client; upgrade pdd / @promptdriven/runtime-client.\n`,
-      );
-    }
-    return finishTry(exitCode);
-  }
 
   const skipSeamAutoScreenTab = typeof rawTryOverride !== 'function' && runtimeClientSupportsPlainProseUi();
   const screenTabMode = skipSeamAutoScreenTab
@@ -3270,7 +3106,7 @@ export async function runTry(input = {}, ports = {}) {
   if (screenTabMode === 'reopen') {
     const baseStderr = forwardPorts.stderr ?? process.stderr;
     const reopenStderr = wrapFilteredStream(baseStderr, text => text.includes(FORM_TAB_NOTICE));
-    return finishTry(await invoke(input, { ...forwardPorts, stderr: reopenStderr }));
+    return invoke(input, { ...forwardPorts, stderr: reopenStderr });
   }
   const effectiveInput =
     screenTabMode === 'inject'
@@ -3313,19 +3149,18 @@ export async function runTry(input = {}, ports = {}) {
         }
         return text.includes(FORM_TAB_NOTICE);
       });
-      return finishTry(await invoke(input, { ...forwardPorts, stderr: reopenStderr }));
+      return invoke(input, { ...forwardPorts, stderr: reopenStderr });
     }
-    return finishTry(code);
+    return code;
   }
-  return finishTry(await invoke(effectiveInput, forwardPorts));
+  return invoke(effectiveInput, forwardPorts);
 }
 
 export async function createAgentBridge(context, test, tryId, options, link, seamPorts = {}) {
-  const [, { loadAgentDefinitions }, { discoverAgents, runAgentProcess }, { readEvidenceEligibility }] = await Promise.all([
+  const [, { loadAgentDefinitions }, { discoverAgents, runAgentProcess }] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
     import('./agent-adapters.mjs'),
-    import('./workflow-eligibility.mjs'),
   ]);
   const boundRun = seamPorts.runAgentProcess ?? seamPorts.agents?.run ?? runAgentProcess;
   const defaultAsk = turnInput =>
@@ -3337,7 +3172,7 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
     options,
     link,
     seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(seamPorts, readEvidenceEligibility), {
+      withPortDefaults(withEligibilityDefault(seamPorts, lazyEvidenceEligibility), {
         loadAgentDefinitions:
           seamPorts.loadAgentDefinitions ?? seamPorts.agents?.loadDefinitions ?? loadAgentDefinitions,
         discoverAgents: seamPorts.discoverAgents ?? seamPorts.agents?.list ?? discoverAgents,
@@ -3350,61 +3185,18 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
 }
 
 export async function openCli(context, test, sessionId, options) {
-  let nextContext =
+  const nextContext =
     context && typeof context.ports === 'object' && context.ports !== null
       ? { ...context, ports: seamRuntimePorts(withPortDefaults(context.ports, { tryLauncherUrl: TRY_LAUNCHER_URL })) }
       : context;
-  const patchOwnDoor = () => {
-    if (options?.['--fresh'] === true && context?.store && typeof sessionId === 'string' && UUID_RE.test(sessionId)) {
-      ensureDoorDescriptorFresh(join(context.store.folder('tries'), `${sessionId}.door.json`));
-    }
-  };
-  if (options?.['--fresh'] === true && nextContext?.ports) {
-    nextContext = {
-      ...nextContext,
-      ports: {
-        ...nextContext.ports,
-        shell: wrapShellForFreshDoor(nextContext.ports.shell, patchOwnDoor),
-      },
-    };
-  }
-  const result = await runtimeOpenCli(nextContext, test, sessionId, options);
-  if (result === 0) patchOwnDoor();
-  return result;
+  return runtimeOpenCli(nextContext, test, sessionId, options);
 }
 
 export async function openServe(context, test, sessionId, options) {
-  let nextContext =
+  const nextContext =
     context && typeof context.ports === 'object' && context.ports !== null
       ? { ...context, ports: seamRuntimePorts(context.ports) }
       : context;
-  if (options?.['--fresh'] === true && nextContext?.ports && typeof nextContext.ports.fetch === 'function') {
-    const freshFetch = wrapFetchForFresh(
-      nextContext.ports.fetch,
-      pathname => /^\/v1\/try\/[^/]+\/(?:call|screen\/)/.test(pathname),
-    );
-    const wrappedPorts = { ...nextContext.ports, fetch: freshFetch };
-    let nextRuntime = nextContext.runtime;
-    if (nextRuntime && typeof nextRuntime === 'object') {
-      const runtimeFetch =
-        typeof nextRuntime.ports?.fetch === 'function'
-          ? wrapFetchForFresh(
-              nextRuntime.ports.fetch,
-              pathname => /^\/v1\/try\/[^/]+\/(?:call|screen\/)/.test(pathname),
-            )
-          : freshFetch;
-      nextRuntime = Object.assign(
-        Object.create(Object.getPrototypeOf(nextRuntime)),
-        nextRuntime,
-        { ports: { ...(nextRuntime.ports ?? {}), ...wrappedPorts, fetch: runtimeFetch } },
-      );
-    }
-    nextContext = {
-      ...nextContext,
-      ports: wrappedPorts,
-      ...(nextRuntime !== undefined ? { runtime: nextRuntime } : {}),
-    };
-  }
   return runtimeOpenServe(nextContext, test, sessionId, options);
 }
 
@@ -3413,12 +3205,6 @@ export async function runShim(descriptorPath, argv, ports = {}) {
     import('./secret-redaction.mjs'),
     import('./prompt-approve.mjs'),
   ]);
-  let freshDescriptor = false;
-  if (isSafeRegularJsonFile(descriptorPath, MAX_DOOR_DESCRIPTOR_BYTES)) {
-    try {
-      freshDescriptor = JSON.parse(initialReadFileSync(descriptorPath, 'utf8'))?.fresh === true;
-    } catch { /* let runtimeRunShim report invalid/missing descriptors */ }
-  }
   const shimPorts = seamRuntimePorts(
     withPortDefaults(ports, {
       lineReader,
@@ -3426,9 +3212,6 @@ export async function runShim(descriptorPath, argv, ports = {}) {
       files: wrapCaseFilesForShortJson(ports.files, ports),
     }),
   );
-  if (freshDescriptor && typeof shimPorts.fetch === 'function') {
-    shimPorts.fetch = wrapFetchForFresh(shimPorts.fetch, pathname => /^\/v1\/try\/[^/]+\/call$/.test(pathname));
-  }
   return runtimeRunShim(descriptorPath, argv, shimPorts);
 }
 
@@ -3447,22 +3230,18 @@ export async function saveLast(input) {
 export async function runDoorCall(descriptor, input, ports = {}) {
   await import('./secret-redaction.mjs');
   const doorPorts = seamRuntimePorts(withPortDefaults(ports, { redaction: seamRedaction(ports) }));
-  if (descriptor?.fresh === true && typeof doorPorts.fetch === 'function') {
-    doorPorts.fetch = wrapFetchForFresh(doorPorts.fetch, pathname => /^\/v1\/try\/[^/]+\/call$/.test(pathname));
-  }
   return runtimeRunDoorCall(descriptor, input, doorPorts);
 }
 
 export async function readTryOwner(input = {}, ports = {}) {
-  const [, { readEvidenceEligibility }, { parseProductDocuments, parseProductWorldWriters }] = await Promise.all([
+  const [, { parseProductDocuments, parseProductWorldWriters }] = await Promise.all([
     import('./secret-redaction.mjs'),
-    import('./workflow-eligibility.mjs'),
     import('./product-documents.mjs'),
   ]);
   return runtimeReadTryOwner(
     input,
     seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+      withPortDefaults(withEligibilityDefault(ports, lazyEvidenceEligibility), {
         tryLauncherUrl: TRY_LAUNCHER_URL,
         parseProductDocuments,
         parseProductWorldWriters,
@@ -3484,10 +3263,7 @@ export function projectCheckReconciliation(input, ports = {}) {
   const impl =
     typeof ports?.projectCheckReconciliation === 'function'
       ? ports.projectCheckReconciliation
-      : typeof runtimeClientPkg.projectCheckReconciliation === 'function'
-        ? runtimeClientPkg.projectCheckReconciliation
-        : null;
-  if (!impl) throw unsupportedReconciliationError('projectCheckReconciliation');
+      : rawProjectCheckReconciliation;
   return impl(input);
 }
 
@@ -3500,13 +3276,7 @@ export async function reconcileCheckReceipt(input = {}, ports = {}) {
     );
   }
   const { reconcileCheckReceipt: injectedReconcile, ...forwardPorts } = ports ?? {};
-  const impl =
-    typeof injectedReconcile === 'function'
-      ? injectedReconcile
-      : typeof runtimeClientPkg.reconcileCheckReceipt === 'function'
-        ? runtimeClientPkg.reconcileCheckReceipt
-        : null;
-  if (!impl) throw unsupportedReconciliationError('reconcileCheckReceipt');
+  const impl = typeof injectedReconcile === 'function' ? injectedReconcile : rawReconcileCheckReceipt;
   await import('./secret-redaction.mjs');
   return impl(
     input,
@@ -3540,39 +3310,42 @@ export async function run(input = {}, ports = {}) {
 }
 
 export function createTryTools(input, ports = {}) {
-  const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
-  const lazyParseProductDocuments = (...args) => req('./product-documents.mjs').parseProductDocuments(...args);
-  const lazyParseProductWorldWriters = (...args) => req('./product-documents.mjs').parseProductWorldWriters(...args);
+  const lazyParseProductDocuments = (...args) => hostProductDocuments().parseProductDocuments(...args);
+  const lazyParseProductWorldWriters = (...args) => hostProductDocuments().parseProductWorldWriters(...args);
   return runtimeCreateTryTools(
     input,
     seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(ports, lazyEligibility), {
+      withPortDefaults(withEligibilityDefault(ports, lazyEvidenceEligibility), {
         tryLauncherUrl: TRY_LAUNCHER_URL,
         parseProductDocuments: lazyParseProductDocuments,
         parseProductWorldWriters: lazyParseProductWorldWriters,
+        saveDoorCase,
+        applyPendingCaseWithHandoff,
         redaction: seamRedaction(ports),
       }),
+      { wrapStdout: false },
     ),
   );
 }
 
 export async function runMcp(input, ports = {}) {
-  const [, { readEvidenceEligibility }, { parseProductDocuments, parseProductWorldWriters }] = await Promise.all([
+  const [, { parseProductDocuments, parseProductWorldWriters }] = await Promise.all([
     import('./secret-redaction.mjs'),
-    import('./workflow-eligibility.mjs'),
     import('./product-documents.mjs'),
   ]);
   return runtimeRunMcp(
     input,
     seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+      withPortDefaults(withEligibilityDefault(ports, lazyEvidenceEligibility), {
         clientVersion: clientVersion(),
         tryLauncherUrl: TRY_LAUNCHER_URL,
         parseProductDocuments,
         parseProductWorldWriters,
+        saveDoorCase,
         applyPendingCaseWithHandoff,
         redaction: seamRedaction(ports),
       }),
+      { wrapStdout: false },
     ),
   );
 }
@@ -3709,8 +3482,7 @@ function seamCasePorts(ports = {}) {
 }
 
 export async function migrateRuntimeWorkspace(input, ports = {}) {
-  const { readEvidenceEligibility } = await import('./workflow-eligibility.mjs');
-  return runtimeMigrateWorkspace(input, seamCasePorts(withEligibilityDefault(ports, readEvidenceEligibility)));
+  return runtimeMigrateWorkspace(input, seamCasePorts(withEligibilityDefault(ports, lazyEvidenceEligibility)));
 }
 
 export function runtimeWorkspaceMigrationStore(input, given = {}) {

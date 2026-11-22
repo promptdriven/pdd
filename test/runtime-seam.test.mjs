@@ -989,7 +989,7 @@ registerHooks({
   assert.equal(runWithRejectedModule('/runtime-client.mjs', [bin, '--help']).status, 0);
 
   for (const [cmdArgs, suffix] of [
-    [['test', 'a'], '/workflow-eligibility.mjs'],
+    [['test', 'a'], '/file-owner.mjs'],
     [['simulate', '--stop', 'a'], '/prompt-approve.mjs'],
   ]) {
     const checkOrTryFail = runWithRejectedModule(suffix, [bin, ...cmdArgs], repo);
@@ -1000,7 +1000,12 @@ registerHooks({
     );
   }
 
-  for (const suffix of ['/runtime-client.mjs', '/workflow-eligibility.mjs']) {
+  // Lazy-loading proof: rejecting screen-compare.mjs or workflow-eligibility.mjs must not break ordinary lint --local or mcp startup.
+  assert.equal(runWithRejectedModule('/screen-compare.mjs', [bin, 'lint', '--local'], repo).status, 0);
+  assert.equal(runWithRejectedModule('/workflow-eligibility.mjs', [bin, 'lint', '--local'], repo).status, 0);
+  assert.equal(runWithRejectedModule('/workflow-eligibility.mjs', [bin, 'mcp']).status, 0);
+
+  for (const suffix of ['/runtime-client.mjs', '/product-documents.mjs']) {
     const mcpFail = runWithRejectedModule(suffix, [bin, 'mcp']);
     assert.equal(mcpFail.status, 1);
     assert.equal(mcpFail.stderr.trim(), 'pdd mcp could not start. Reason: REVIEW_LOAD_FAILURE');
@@ -4347,4 +4352,74 @@ test('SEAM26 (#3444): every CLI option accepted by @promptdriven/runtime-client 
     1,
     '--no-restart-replacement must prevent automatic replacement check POST on service-restarted',
   );
+});
+
+test('S4 Stage 1: runMcp preserves raw JSON-RPC stdout framing (no hint rewriting) and wires Short JSON saveDoorCase', async () => {
+  const { Readable } = await import('node:stream');
+  const seam = await import('../src/runtime-seam.mjs');
+
+  const lines = [];
+  const rawStdout = {
+    write(chunk) {
+      lines.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+      return true;
+    },
+  };
+  const initReq = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'probe', version: '1.0.0' } },
+  });
+  // Tool failure containing both tokens that normalizeHintStream would otherwise rewrite with unescaped quotes, breaking JSON-RPC!
+  const callReq = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: {
+      name: 'try_observe',
+      arguments: {
+        try_id: '11111111-1111-4111-8111-111111111111',
+        run_id: '22222222-2222-4222-8222-222222222222',
+      },
+    },
+  });
+  const code = await seam.runMcp(
+    { cwd: root, words: [] },
+    {
+      stdin: Readable.from([`${initReq}\n${callReq}\n`]),
+      stdout: rawStdout,
+      stderr: { write() {} },
+      observeTryCall: async () => {
+        throw new Error('impossible-result-value-pointer after pdd test --fill-hash');
+      },
+    },
+  );
+  assert.equal(code, 0);
+  const responses = lines.join('').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(responses.length, 2);
+  assert.equal(responses[0].id, 1);
+  assert.equal(responses[0].result?.serverInfo?.name, 'pdd-try');
+  assert.equal(responses[1].id, 2);
+  assert.equal(responses[1].result?.isError, true);
+  assert.equal(
+    responses[1].result?.content?.[0]?.text,
+    'impossible-result-value-pointer after pdd test --fill-hash',
+    'MCP stdout must never rewrite JSON-RPC payload bytes via normalizeHintStream',
+  );
+  assert.equal(rawStdout.__pddHintNormalized, undefined);
+
+  // Verify createTryTools defaults saveDoorCase to seam.saveDoorCase (not raw runtime-client saveDoorCase)
+  let saveDoorCaseBound = null;
+  const tools = seam.createTryTools(
+    { cwd: root, words: [] },
+    {
+      readTryOwner: async () => {
+        saveDoorCaseBound = 'checked';
+        throw new Error('stop-after-check');
+      },
+    },
+  );
+  await assert.rejects(() => tools.call('try_state', {}), /stop-after-check/);
+  assert.equal(saveDoorCaseBound, 'checked');
 });
