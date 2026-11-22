@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 39c64632cfee9dd0b53ebbe34a676fdb84023e94c6423207497ef136beadd282).
+// Generated from prompts/cli/product.prompt.md (sha256: 988948055b42f5c1738bfef19594a43453cd8afb5abc02e73a7da12a08c266c5).
 import { posix } from 'node:path';
 export const invalid = message => { throw Object.assign(Error(message), { code: 'invalid-product' }); };
 const clean = value => String(value ?? '').trim().replace(/^`([^`]*)`$/, '$1').trim();
@@ -314,7 +314,9 @@ function extractPromptRefsFromLine(line, fallbackFolder) {
       candidate = `${fallbackFolder}/${candidate}`;
     }
     const norm = normalizeRepoPath(candidate);
-    if (norm && norm.endsWith('.prompt.md')) normalized.push(norm);
+    // A bare `.prompt.md` (or `*.prompt.md`) in prose names the file type, not a file: require a stem.
+    const stem = norm ? norm.slice(norm.lastIndexOf('/') + 1, -'.prompt.md'.length) : '';
+    if (norm && norm.endsWith('.prompt.md') && /[^.]/.test(stem)) normalized.push(norm);
   }
   return normalized;
 }

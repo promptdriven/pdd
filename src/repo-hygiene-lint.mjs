@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 2a90027c8af62686f9a63fca1390b7b5814e30bd9f2ba057fa513880d75151c0).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: a9cccaa93b9fb42cecde81b07137e7b790982e1a91e957bb2562e8f541e487dc).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -2641,7 +2641,7 @@ function isTestOrBuiltinSpecifier(spec, testDir) {
   if (clean.startsWith('./') || clean.startsWith('../')) {
     const resolved = posix.normalize(posix.join(testDir, clean));
     if (
-      /^(?:tests?|__tests__|fixtures|helpers)\//i.test(resolved)
+      /^(?:tests?(?:[_-][a-z0-9]+)?|__tests__|fixtures|helpers)\//i.test(resolved)
       || /(?:^|\/)(?:fixtures|helpers|harbor)\//i.test(resolved)
       || isTestOwnedPath(resolved)
     ) {
@@ -2649,7 +2649,8 @@ function isTestOrBuiltinSpecifier(spec, testDir) {
     }
     return false;
   }
-  if (/^(?:tests?|__tests__|fixtures|helpers)(?:\/|\.|$)/i.test(clean)) return true;
+  // Language-suffixed test folders (tests_py/, tests-ts/) hold test helpers too.
+  if (/^(?:tests?(?:[_-][a-z0-9]+)?|__tests__|fixtures|helpers)(?:\/|\.|$)/i.test(clean)) return true;
   return false;
 }
 
