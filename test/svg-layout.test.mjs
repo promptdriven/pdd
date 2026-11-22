@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lintSvgLayouts } from '../src/svg-layout.mjs';
+import { discoverTestAndAppMaps } from '../src/core/ui/app-map-lint.mjs';
+import { workspace } from '../src/shared/workspace-policy.mjs';
 import { fillHashes, format, proseSha256, runCheck } from '../src/runtime-seam.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
@@ -426,4 +428,31 @@ test('multi-drawing prompts scope per-tab list items, subsections and interleave
     'Warning: SVG layout prompts/phone/cart.prompt.md -> views/cart--empty__stacked.ui.svg: region #browse-btn: drawing region layout unspecified in prompt.',
     'Warning: SVG layout prompts/phone/cart.prompt.md -> views/cart--empty__stacked.ui.svg: region #help-btn: drawing region layout unspecified in prompt.',
   ]);
+});
+
+test('discoverTestAndAppMaps parses each test JSON and app-map JSON in a single pass (no triple disk scan)', t => {
+  const root = temp(t);
+  mkdirSync(join(root, 'tests'), { recursive: true });
+  mkdirSync(join(root, 'app'), { recursive: true });
+  writeFileSync(join(root, 'app/app-map.json'), JSON.stringify({
+    schema_version: 'prompt-runtime.app-map.v1',
+    screens: [{ id: 'home', prompt_path: 'prompts/home.prompt.md' }],
+  }));
+  writeFileSync(join(root, 'tests/flow.json'), JSON.stringify({
+    schema_version: 'prompt-runtime.program-scenario.v1',
+    app_maps: ['app/app-map.json'],
+    steps: [],
+  }));
+  const readCounts = new Map();
+  const countingRead = (r, p) => {
+    readCounts.set(p, (readCounts.get(p) ?? 0) + 1);
+    return readFileSync(join(r, p), 'utf8');
+  };
+  const policy = workspace.policy({ root });
+  const files = ['app/app-map.json', 'tests/flow.json'];
+  const discovered = discoverTestAndAppMaps({ root, files, policy, safeRead: countingRead });
+  assert.equal(readCounts.get('tests/flow.json'), 1);
+  assert.equal(readCounts.get('app/app-map.json'), 1);
+  assert.equal(discovered.parsedTests.size, 1);
+  assert.equal(discovered.parsedAppMaps.size, 1);
 });
