@@ -972,4 +972,54 @@ test('3297 schema alignment: newline pdd-boundary, Out-of-scope exclusion, conte
   assert.equal(card.sampleSummary, '3/3 samples agreed');
 });
 
+test('M1 regression: runtime-seam runTry wires formatBoundaryCardLines into Try approvals without creating architecture cycles', async t => {
+  const { runTry } = await import('../src/runtime-seam.mjs');
+  const storyText = [
+    '# Checkout order',
+    '',
+    'As a shopper, I want my order total validated before charging, so that negative amounts fail safely.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '1. Reject negative totals without charging the payment port.',
+    '',
+  ].join('\n');
+  const promptText = runtimePrompt({
+    title: 'Checkout',
+    prose: 'Reject negative totals without calling payment.charge.',
+    operation: 'checkout',
+    inputProps: { total: { type: 'integer' } },
+  });
+  const { root, stateDir } = makeGitRepo(t, {
+    'user_stories/checkout.md': storyText,
+    'prompts/checkout.prompt.md': promptText,
+  });
+
+  let capturedAskApproval = null;
+  const tryExit = await runTry(
+    { cwd: root, words: ['checkout'], options: { '--no-open': true } },
+    {
+      env: { ...process.env, PDD_STATE_DIR: stateDir },
+      runTry: async (_input, boundPorts) => {
+        capturedAskApproval = boundPorts.askApproval;
+        return 0;
+      },
+    },
+  );
+  assert.equal(tryExit, 0);
+  assert.equal(typeof capturedAskApproval, 'function');
+
+  let out = '';
+  const approvalRes = await capturedAskApproval({
+    root,
+    path: 'prompts/checkout.prompt.md',
+    stdout: new Writable({ write(chunk, _enc, done) { out += chunk; done(); } }),
+    answers: { ask: async () => 'n', close() {} },
+  });
+  assert.equal(approvalRes.state, 'declined');
+  const cardLines = extractApproveBoundaryCard(out);
+  assert.ok(cardLines.length >= 2, `Expected rendered Try boundary card lines, got:\n${out}`);
+  assert.ok(cardLines.length <= BOUNDARY_CARD_MAX_LINES);
+});
+
 

@@ -14,6 +14,7 @@ import {
 } from '../file-owner.mjs';
 import { gitFiles } from '../shared/git-context.mjs';
 import { isSecretPath } from '../shared/safe-read.mjs';
+import { resolveDefaultBaseRef } from './lint/diagnostics.mjs';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_BINDINGS_BYTES = 65_536;
@@ -149,6 +150,61 @@ function defaultGitWorkingEntries(root) {
   return [...byPath.values()].sort((a, b) => cmpPath(a.path, b.path));
 }
 
+function resolveBranchBase(root, ports = {}) {
+  if (!hasGitHead(root)) return { baseRef: null, baseSha: null, headSha: null };
+  let headSha = null;
+  try { headSha = gitExec(root, ['rev-parse', '--verify', 'HEAD'], 'utf8').trim() || null; } catch { return { baseRef: null, baseSha: null, headSha: null }; }
+  const baseRef = ports.defaultBaseRef ? ports.defaultBaseRef(root) : resolveDefaultBaseRef(root);
+  if (!baseRef) return { baseRef: null, baseSha: null, headSha };
+  try {
+    const baseSha = gitExec(root, ['merge-base', 'HEAD', baseRef], 'utf8').trim() || null;
+    return { baseRef, baseSha, headSha };
+  } catch {
+    return { baseRef, baseSha: null, headSha };
+  }
+}
+
+function defaultGitBranchEntries(root, baseSha, ports = {}) {
+  const byPath = new Map();
+  const add = e => {
+    const prev = byPath.get(e.path);
+    byPath.set(e.path, prev ? {
+      ...prev,
+      status: e.deleted ? 'D' : (prev.status === 'A' ? 'A' : e.status),
+      renamedFrom: prev.renamedFrom ?? e.renamedFrom,
+      deleted: e.deleted,
+      untracked: prev.untracked || e.untracked,
+    } : e);
+  };
+  if (baseSha) {
+    try {
+      for (const e of parseNameStatusZ(gitExec(root, [...SAFE_GIT_DIFF_PREFIX, 'diff', '--name-status', '-z', '-M', '--no-ext-diff', `${baseSha}..HEAD`, '--']))) add(e);
+    } catch {}
+  }
+  const working = ports.gitWorkingEntries ? ports.gitWorkingEntries(root) : defaultGitWorkingEntries(root);
+  for (const e of working) add(e);
+  return [...byPath.values()].sort((a, b) => cmpPath(a.path, b.path));
+}
+
+function defaultGitAllEntries(root, listFiles, ports = {}) {
+  const byPath = new Map();
+  let tracked = [];
+  if (ports.files) {
+    tracked = listFiles();
+  } else {
+    try { tracked = splitNullTokens(gitExec(root, ['--literal-pathspecs', '-c', 'core.quotepath=false', 'ls-files', '-z'])).filter(p => !isBlockedSecretPath(p)); }
+    catch { tracked = listFiles(); }
+  }
+  for (const p of tracked) {
+    if (!isPddInternalPath(p)) byPath.set(p, { path: p, status: 'M', renamedFrom: null, deleted: false, untracked: false });
+  }
+  const working = ports.gitWorkingEntries ? ports.gitWorkingEntries(root) : defaultGitWorkingEntries(root);
+  for (const e of working) {
+    if (!isPddInternalPath(e.path)) byPath.set(e.path, e);
+  }
+  return [...byPath.values()].sort((a, b) => cmpPath(a.path, b.path));
+}
+
 function defaultGitUntrackedSet(root, paths) {
   const set = new Set();
   if (!paths.length) return set;
@@ -230,14 +286,23 @@ function validateBindings(readBytes) {
 /**
  * Read-only diff -> owner -> changed-symbols analysis. Never mutates files or writes sidecars.
  */
-export function analyzeChangedMap({ cwd = process.cwd(), files = [], from } = {}, ports = {}) {
+export function analyzeChangedMap({ cwd = process.cwd(), files = [], from, all = false, branch = false } = {}, ports = {}) {
   try {
-    if (files.length > 0 && from !== undefined) throw new ChangedMapStop(2, 'Specify either file paths or --from RANGE, not both.');
+    const scopeFlags = [files.length > 0, from !== undefined, Boolean(all), Boolean(branch)].filter(Boolean).length;
+    if (scopeFlags > 1) {
+      if (files.length > 0 && from !== undefined && !all && !branch) {
+        throw new ChangedMapStop(2, 'Specify either file paths or --from RANGE, not both.');
+      }
+      throw new ChangedMapStop(2, 'Specify at most one scope: file paths, --from RANGE, --branch, or --all.');
+    }
     const normalizedRange = from !== undefined ? parseFromRange(from) : null;
     const root = ports.gitRoot ? ports.gitRoot(cwd) : defaultGitRoot(cwd);
     if (!root) throw new ChangedMapStop(2, 'This command works inside a Git repository.');
 
-    const scopeKind = files.length > 0 ? 'files' : normalizedRange ? 'from' : 'working-tree';
+    let scopeKind = files.length > 0 ? 'files' : normalizedRange ? 'from' : all ? 'all' : branch ? 'branch' : 'working-tree';
+    let scopeRange = normalizedRange;
+    let diffTargetRange = normalizedRange;
+    let widenedFrom = null;
     const readBytes = ports.readBytes ?? ((path, limit) => readRegularBytes(root, path, limit));
     const probeBytes = ports.probeBytes ?? ((path, limit) => readRegularBytes(root, path, limit, { truncate: true }));
     const listFiles = () => (ports.files ? ports.files() : gitFiles(root)).filter(p => !isBlockedSecretPath(p));
@@ -268,27 +333,61 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from } = {}
       const untracked = ports.gitUntrackedSet ? ports.gitUntrackedSet(root, resolved) : defaultGitUntrackedSet(root, resolved);
       for (const rel of resolved) touchedMap.set(rel, { path: rel, status: untracked.has(rel) ? 'A' : 'M', renamedFrom: null, deleted: false, untracked: untracked.has(rel) });
     } else {
-      const rawEntries = scopeKind === 'from'
-        ? (ports.gitRangeEntries ? ports.gitRangeEntries(root, normalizedRange) : defaultGitRangeEntries(root, normalizedRange))
-        : (ports.gitWorkingEntries ? ports.gitWorkingEntries(root) : defaultGitWorkingEntries(root));
+      let rawEntries;
+      if (scopeKind === 'from') {
+        rawEntries = ports.gitRangeEntries ? ports.gitRangeEntries(root, normalizedRange) : defaultGitRangeEntries(root, normalizedRange);
+      } else if (scopeKind === 'all') {
+        rawEntries = ports.gitAllEntries ? ports.gitAllEntries(root) : defaultGitAllEntries(root, listFiles, ports);
+      } else if (scopeKind === 'branch') {
+        const { baseSha, headSha } = resolveBranchBase(root, ports);
+        rawEntries = ports.gitBranchEntries ? ports.gitBranchEntries(root, baseSha) : defaultGitBranchEntries(root, baseSha, ports);
+        if (baseSha && headSha && baseSha !== headSha) {
+          scopeRange = `${baseSha}..HEAD`;
+          diffTargetRange = baseSha;
+        }
+      } else {
+        rawEntries = ports.gitWorkingEntries ? ports.gitWorkingEntries(root) : defaultGitWorkingEntries(root);
+        if (!rawEntries.some(e => !isPddInternalPath(e.path))) {
+          const { baseSha, headSha } = resolveBranchBase(root, ports);
+          if (baseSha && headSha && baseSha !== headSha) {
+            const branchEntries = ports.gitBranchEntries ? ports.gitBranchEntries(root, baseSha) : defaultGitBranchEntries(root, baseSha, ports);
+            if (branchEntries.some(e => !isPddInternalPath(e.path))) {
+              rawEntries = branchEntries;
+              scopeKind = 'branch';
+              widenedFrom = 'working-tree';
+              scopeRange = `${baseSha}..HEAD`;
+              diffTargetRange = baseSha;
+            }
+          }
+        }
+      }
       for (const raw of rawEntries) {
         if (isPddInternalPath(raw.path)) continue;
-        if (!canonicalPath(raw.path)) throw new ChangedMapStop(2, `Invalid touched path: ${sanitizeOneLine(raw.path)}.`);
-        if (isBlockedSecretPath(raw.path)) throw new ChangedMapStop(2, `Secret-looking path is not allowed: ${raw.path}.`);
+        if (!canonicalPath(raw.path)) {
+          if (scopeKind === 'all') continue;
+          throw new ChangedMapStop(2, `Invalid touched path: ${sanitizeOneLine(raw.path)}.`);
+        }
+        if (isBlockedSecretPath(raw.path)) {
+          if (scopeKind === 'all') continue;
+          throw new ChangedMapStop(2, `Secret-looking path is not allowed: ${raw.path}.`);
+        }
         if (raw.renamedFrom && (!canonicalPath(raw.renamedFrom) || isBlockedSecretPath(raw.renamedFrom))) {
           throw new ChangedMapStop(2, `Invalid or secret renamed path: ${sanitizeOneLine(raw.renamedFrom)}.`);
         }
         if (raw.deleted) { touchedMap.set(raw.path, { ...raw, deleted: true }); continue; }
         const probe = probeBytes(raw.path, BINARY_PROBE_BYTES);
         if (probe.status === 'missing') { touchedMap.set(raw.path, { ...raw, deleted: true }); continue; }
-        if (probe.status === 'symlink') throw new ChangedMapStop(2, `Symlinks are not allowed: ${raw.path}.`);
+        if (probe.status === 'symlink') {
+          if (scopeKind === 'all') { unownedMap.set(raw.path, { path: raw.path, reason: 'symlink (skipped)' }); continue; }
+          throw new ChangedMapStop(2, `Symlinks are not allowed: ${raw.path}.`);
+        }
         if (probe.status === 'non-file') { unownedMap.set(raw.path, { path: raw.path, reason: 'non-regular entry (skipped)' }); continue; }
         touchedMap.set(raw.path, { ...raw, deleted: false });
       }
     }
 
     const touchedEntries = [...touchedMap.values()].sort((a, b) => cmpPath(a.path, b.path));
-    const scope = { kind: scopeKind, range: normalizedRange, files: touchedEntries.map(e => e.path) };
+    const scope = { kind: scopeKind, range: scopeRange, ...(widenedFrom ? { widened_from: widenedFrom } : {}), files: touchedEntries.map(e => e.path) };
     if (!touchedEntries.length && !unownedMap.size) {
       return { ok: true, exitCode: 0, error: null, root, report: { schema_version: 'pdd.changed-map.v1', ok: true, scope, prompts: [], modules: [], unowned: [] } };
     }
@@ -334,7 +433,7 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from } = {}
       promptTextMap.set(entry.path, readTextOrStop(entry.path, { missingCode: 1, missingMsg: `Owning prompt is missing or unreadable: ${entry.path}.` }));
     }
 
-    if (touchedPromptTargets.size > 0) {
+    if (touchedPromptTargets.size > 0 && scopeKind !== 'all') {
       const candidates = new Set();
       for (const item of bindingsDoc?.modules ?? []) if (touchedPromptTargets.has(item?.prompt) && canonicalPath(item?.module) && !isBlockedSecretPath(item.module)) candidates.add(item.module);
       for (const [p, text] of promptTextMap.entries()) for (const claimed of promptClaims(p, text)) if (canonicalPath(claimed) && !isBlockedSecretPath(claimed) && !claimed.endsWith('.prompt.md')) candidates.add(claimed);
@@ -377,7 +476,7 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from } = {}
     }
 
     const diffPaths = unique(ownedPairs.flatMap(p => [p.entry.path, ...(p.entry.renamedFrom ? [p.entry.renamedFrom] : [])])).sort(cmpPath);
-    const fullDiff = diffPaths.length ? (ports.gitUnifiedDiff ? ports.gitUnifiedDiff(root, normalizedRange, diffPaths) : defaultGitUnifiedDiff(root, normalizedRange, diffPaths)) : '';
+    const fullDiff = diffPaths.length ? (ports.gitUnifiedDiff ? ports.gitUnifiedDiff(root, diffTargetRange, diffPaths) : defaultGitUnifiedDiff(root, diffTargetRange, diffPaths)) : '';
     const diffChunks = splitDiffByFile(fullDiff, new Set(ownedPairs.map(p => p.entry.path)));
     const modules = [], byPrompt = new Map();
 
@@ -388,7 +487,15 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from } = {}
       const diff = chunk ? extractDiffSummary(chunk) : (!entry.deleted && (entry.untracked || entry.status === 'A') ? summarizeWholeFile(codeTextMap.get(entry.path) ?? '') : { added: 0, removed: 0, changed_symbols: [] });
       const headerRow = !entry.deleted ? (headerEntries(codeTextMap.get(entry.path)).find(h => h.prompt === owner) ?? null) : null;
       const headerState = headerRow && promptText !== null ? headerHashState(headerRow.sha256, promptText).state : null;
-      const status = entry.deleted ? 'deleted' : headerState === 'stale' ? 'prompt-stale' : (diff.added > 0 || diff.removed > 0 || entry.renamedFrom) ? 'changed' : 'current';
+      const status = entry.deleted
+        ? 'deleted'
+        : headerState === 'stale'
+          ? 'prompt-stale'
+          : (diff.added > 0 || diff.removed > 0 || entry.renamedFrom)
+            ? 'changed'
+            : (headerState === 'none' || (headerRow === null && promptText !== null))
+              ? 'unpinned'
+              : 'current';
       const row = {
         path: entry.path, owner, owners: ownerRow.owners, source: ownerRow.source, certain: ownerRow.certain, status,
         prompt_sha256, header_state: headerState, diff_stats: { added: diff.added, removed: diff.removed },
@@ -406,7 +513,15 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from } = {}
       const symMap = new Map();
       for (const r of rows) for (const sym of r.changed_symbols) symMap.set(sym.symbol, symMap.has(sym.symbol) && symMap.get(sym.symbol) !== sym.kind ? 'updated' : sym.kind);
       const statuses = new Set(rows.map(r => r.status));
-      const status = statuses.has('prompt-stale') ? 'prompt-stale' : statuses.has('changed') ? 'changed' : statuses.has('deleted') ? 'deleted' : 'current';
+      const status = statuses.has('prompt-stale')
+        ? 'prompt-stale'
+        : statuses.has('changed')
+          ? 'changed'
+          : statuses.has('deleted')
+            ? 'deleted'
+            : statuses.has('unpinned')
+              ? 'unpinned'
+              : 'current';
       return {
         prompt, status, prompt_sha256: rows[0]?.prompt_sha256 ?? null, owner_certain: rows.every(r => r.certain),
         modules: rows.map(r => r.path), diff_stats: { added, removed },

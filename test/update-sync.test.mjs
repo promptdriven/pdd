@@ -263,3 +263,73 @@ test('security and edge guards: secrets, symlinks, option injection, traversal, 
   assert.equal(runUpdate({ cwd: nonGit }, { stdout: out, stderr: err }), 2);
   assert.match(err.text, /works inside a Git repository/);
 });
+
+test('#3630: clean committed branch and single-branch repos with unpinned/drifted modules fail pdd update --check (never false-green) and support --branch / --all', async t => {
+  const { inspectStatus } = await import('../src/core/status.mjs');
+  const promptText = '# Billing\n\nOwn `src/billing.mjs`.\n\n## Domain decisions\n- Integer cents only.\n';
+  const pinnedHash = promptHeaderHash(promptText);
+  const root = makeRepo(t, {
+    'prompts/billing.prompt.md': promptText,
+    'src/billing.mjs': `// Generated from prompts/billing.prompt.md (sha256: ${pinnedHash}).\nexport function cents(n) { return n * 100; }\n`,
+  });
+
+  // 1. Clean pinned default branch -> pdd update --check widens to all and exits 0 (truly current).
+  const pinnedCheck = await cli(['update', '--check', '--json'], root);
+  assert.equal(pinnedCheck.code, 0, pinnedCheck.err || pinnedCheck.out);
+  const pinnedReport = JSON.parse(pinnedCheck.out);
+  assert.equal(pinnedReport.ok, true);
+  assert.equal(pinnedReport.scope.kind, 'all');
+  assert.equal(pinnedReport.scope.widened_from, 'working-tree');
+  assert.deepEqual(pinnedReport.drifted, []);
+
+  // 2. Clean committed feature branch with an UNPINNED prompt-owned module -> NEVER silent false-green!
+  git(root, ['checkout', '-q', '-b', 'feat/unpinned']);
+  writeFileSync(
+    join(root, 'prompts/ledger.prompt.md'),
+    '# Ledger\n\nOwn `src/ledger.mjs`.\n\n## Domain decisions\n- Append-only entries.\n',
+  );
+  writeFileSync(
+    join(root, 'src/ledger.mjs'),
+    '// Prompt: prompts/ledger.prompt.md\nexport function append(entry) { return [entry]; }\n',
+  );
+  git(root, ['add', '.']);
+  git(root, ['commit', '-qm', 'add unpinned ledger module']);
+
+  const branchCheck = await cli(['update', '--check', '--json'], root);
+  assert.equal(branchCheck.code, 1, `clean committed branch with unpinned module must exit 1, got: ${branchCheck.out}`);
+  const branchJson = JSON.parse(branchCheck.out);
+  assert.equal(branchJson.ok, false);
+  assert.equal(branchJson.scope.kind, 'branch');
+  assert.equal(branchJson.scope.widened_from, 'working-tree');
+  assert.ok(branchJson.drifted.some(d => d.path === 'src/ledger.mjs'));
+
+  // status --changed also sees committed branch changes on a clean tree!
+  const statusView = await inspectStatus({ cwd: root, changed: true });
+  assert.ok(statusView.changed.includes('src/ledger.mjs'), `expected src/ledger.mjs in status --changed: ${JSON.stringify(statusView.changed)}`);
+
+  // Explicit branch: true and all: true scopes + mutual-exclusion guard.
+  const explicitBranch = analyzeChangedMap({ cwd: root, branch: true });
+  assert.equal(explicitBranch.ok, true, explicitBranch.error);
+  assert.equal(explicitBranch.report.scope.kind, 'branch');
+  assert.ok(explicitBranch.report.modules.some(m => m.path === 'src/ledger.mjs'));
+
+  const explicitAll = analyzeUpdate({ cwd: root, all: true, check: true });
+  assert.equal(explicitAll.exitCode, 1);
+  assert.equal(explicitAll.report.scope.kind, 'all');
+  assert.ok(explicitAll.report.modules.some(m => m.path === 'src/billing.mjs' && m.status === 'current'));
+  assert.ok(explicitAll.report.modules.some(m => m.path === 'src/ledger.mjs' && m.status === 'unpinned'));
+  assert.equal(analyzeChangedMap({ cwd: root, all: true, branch: true }).exitCode, 2);
+
+  // 3. Clean single-branch repo (main only) with unpinned prompt-owned module -> widens to all and exits 1!
+  const singleBranch = makeRepo(t, {
+    'prompts/tax.prompt.md': '# Tax\n\nOwn `src/tax.mjs`.\n',
+    'src/tax.mjs': '// Prompt: prompts/tax.prompt.md\nexport const tax = n => Math.round(n * 0.1);\n',
+  });
+  const singleCheck = await cli(['update', '--check', '--json'], singleBranch);
+  assert.equal(singleCheck.code, 1, `single-branch repo with unpinned module must exit 1, got: ${singleCheck.out}`);
+  const singleJson = JSON.parse(singleCheck.out);
+  assert.equal(singleJson.ok, false);
+  assert.equal(singleJson.scope.kind, 'all');
+  assert.equal(singleJson.drifted[0].path, 'src/tax.mjs');
+  assert.equal(singleJson.drifted[0].status, 'unpinned');
+});

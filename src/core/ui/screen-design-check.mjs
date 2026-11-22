@@ -51,6 +51,54 @@ export function lintScreenDesign({ appMaps, stylesheets, prompts }) {
   return { warnings: [...new Set(warnings)].sort() };
 }
 
+const ACTIVE_STATE_VALUE_RE = /^(?:active|selected|current|checked|pressed|on)$/i;
+const ACTIVE_CLASS_TOKEN_RE = /^(?:is-)?(?:active|selected|current)$/i;
+const ACTIVE_PSEUDO_RE = /^:?(?:active|selected|current|checked|pressed)$/i;
+
+function isTruthyAttr(value) {
+  return value === true || (typeof value === 'string' && value.trim().toLowerCase() === 'true');
+}
+
+function isAriaCurrentActive(value) {
+  if (value === true) return true;
+  if (typeof value !== 'string') return false;
+  const norm = value.trim().toLowerCase();
+  return norm.length > 0 && norm !== 'false';
+}
+
+function isActiveInteractiveState(hit) {
+  if (!hit || typeof hit !== 'object') return false;
+  if (hit.activeState === true || hit.active === true || hit.selected === true || hit.interactiveState === true) return true;
+  if (typeof hit.state === 'string' && ACTIVE_STATE_VALUE_RE.test(hit.state.trim())) return true;
+  const attrs = hit.attributes && typeof hit.attributes === 'object'
+    ? hit.attributes
+    : (hit.attrs && typeof hit.attrs === 'object' ? hit.attrs : null);
+  for (const bag of [hit, attrs]) {
+    if (!bag) continue;
+    if (isAriaCurrentActive(bag['aria-current']) || isAriaCurrentActive(bag.ariaCurrent)) return true;
+    if (isTruthyAttr(bag['aria-selected']) || isTruthyAttr(bag.ariaSelected)) return true;
+    if (isTruthyAttr(bag['aria-pressed']) || isTruthyAttr(bag.ariaPressed)) return true;
+    if (isTruthyAttr(bag['aria-checked']) || isTruthyAttr(bag.ariaChecked)) return true;
+    if (isTruthyAttr(bag['data-active']) || isTruthyAttr(bag.dataActive)) return true;
+    if (isTruthyAttr(bag['data-selected']) || isTruthyAttr(bag.dataSelected)) return true;
+    const dataState = bag['data-state'] ?? bag.dataState;
+    if (typeof dataState === 'string' && ACTIVE_STATE_VALUE_RE.test(dataState.trim())) return true;
+  }
+  const pseudoList = Array.isArray(hit.pseudoStates) ? hit.pseudoStates : (Array.isArray(hit.states) ? hit.states : []);
+  if (pseudoList.some(item => typeof item === 'string' && ACTIVE_PSEUDO_RE.test(item.trim()))) return true;
+  const rawClasses = Array.isArray(hit.classes)
+    ? hit.classes
+    : Array.isArray(hit.classList)
+      ? hit.classList
+      : typeof hit.className === 'string'
+        ? hit.className.split(/\s+/)
+        : typeof hit.class === 'string'
+          ? hit.class.split(/\s+/)
+          : [];
+  if (rawClasses.some(tok => typeof tok === 'string' && ACTIVE_CLASS_TOKEN_RE.test(tok.trim()))) return true;
+  return false;
+}
+
 export function evaluateScreenLook({ viewport, reference, actual }) {
   void viewport;
   const rows = [];
@@ -97,7 +145,8 @@ export function evaluateScreenLook({ viewport, reference, actual }) {
     }
     const failures = [];
     if (!hit.painted) failures.push('unpainted box');
-    if (ref.fill !== null && (reference.canvasColor === null || rgbDistance(ref.fill, reference.canvasColor) > 12)) {
+    const activeInteractive = Boolean(hit.painted) && isActiveInteractiveState(hit);
+    if (!activeInteractive && ref.fill !== null && (reference.canvasColor === null || rgbDistance(ref.fill, reference.canvasColor) > 12)) {
       if (hit.fill !== null && rgbDistance(ref.fill, hit.fill) > 90) failures.push(`color ${hex(hit.fill)}`);
       else if (hit.fill === null && ref.stroke === null && (reference.canvasColor === null || rgbDistance(ref.fill, reference.canvasColor) > 40)) failures.push('missing fill');
     }

@@ -607,3 +607,102 @@ test('Astra R2 #1-#6 regressions: no HEAD default base, merge-base required on o
   assert.equal(sigExitRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(sigExitRes.receipt));
   assert.equal(sigExitRes.receipt.reason, 'setup-error');
 });
+
+test('#3575 multi-part integration guard: product/plan.md with >=2 parts requires cross-part integration recipe in pdd.json verify.paths (single-part unaffected)', t => {
+  const nodeBin = JSON.stringify(process.execPath);
+  const mapText = [
+    '# Equity Ledger: map',
+    'Size: medium',
+    '',
+    '## Parts',
+    '| Part | Folder | What it is |',
+    '|---|---|---|',
+    '| ledger | prompts/ledger | Core cap table |',
+    '| trust | prompts/trust | Approvals and audit |',
+  ].join('\n') + '\n';
+  const planText = [
+    '# Equity Ledger: plan',
+    '',
+    '## Runs',
+    '| Run | Part | Slice | Stories | Needs |',
+    '|---|---|---|---|---|',
+    '| trust-1 | trust | 1 | T01 | plan PR |',
+    '| ledger-1 | ledger | 1 | L01 | trust-1 |',
+  ].join('\n') + '\n';
+
+  // 1. Multi-part product with ONLY single-part recipes -> Not proved (exit 3) with 4-part Lauren teaching message!
+  const repo = initGitRepo(t, 'pdd-prove-3575-');
+  mkdirSync(join(repo, 'product'), { recursive: true });
+  mkdirSync(join(repo, 'src', 'ledger'), { recursive: true });
+  mkdirSync(join(repo, 'src', 'trust'), { recursive: true });
+  writeFileSync(join(repo, 'product', 'map.md'), mapText);
+  writeFileSync(join(repo, 'product', 'plan.md'), planText);
+  writeFileSync(join(repo, 'src', 'ledger', 'cap.mjs'), 'export const issue = () => 1;\n');
+  writeFileSync(join(repo, 'src', 'trust', 'audit.mjs'), 'export const log = () => true;\n');
+  writeFileSync(
+    join(repo, 'pdd.json'),
+    JSON.stringify({
+      verify: {
+        test: `${nodeBin} -e "process.exit(0)"`,
+        paths: [
+          { id: 'ledger', name: 'Ledger unit', when: ['src/ledger/**'], run: `${nodeBin} -e "process.exit(0)"` },
+          { id: 'trust', name: 'Trust unit', when: ['src/trust/**'], run: `${nodeBin} -e "process.exit(0)"` },
+        ],
+      },
+    }, null, 2) + '\n',
+  );
+  commitAll(repo, 'multi-part base without integration recipe');
+
+  execFileSync('git', ['checkout', '-q', '-b', 'feat-ledger'], { cwd: repo });
+  writeFileSync(join(repo, 'src', 'ledger', 'cap.mjs'), 'export const issue = () => 2;\n');
+
+  const missing = runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  assert.equal(missing.exitCode, EXIT_NOT_PROVED, JSON.stringify(missing.receipt));
+  assert.equal(missing.outcome, OUTCOME_NOT_PROVED);
+  const guardReason = missing.receipt.notProvedReasons.find(r => r.includes('[multi-part-integration-missing]'));
+  assert.ok(guardReason, `expected multi-part-integration-missing in ${JSON.stringify(missing.receipt.notProvedReasons)}`);
+  assert.match(guardReason, /multi-part product has >=2 parts in product\/plan\.md/);
+  assert.match(guardReason, /Fix:.*Rerun: `pdd prove`/);
+
+  // 2. Add base-trusted integration recipe (`scope: "integration"`) -> Proved (exit 0)!
+  execFileSync('git', ['checkout', '-q', 'main'], { cwd: repo });
+  writeFileSync(
+    join(repo, 'pdd.json'),
+    JSON.stringify({
+      verify: {
+        test: `${nodeBin} -e "process.exit(0)"`,
+        paths: [
+          { id: 'ledger', name: 'Ledger unit', when: ['src/ledger/**'], run: `${nodeBin} -e "process.exit(0)"` },
+          { id: 'trust', name: 'Trust unit', when: ['src/trust/**'], run: `${nodeBin} -e "process.exit(0)"` },
+          { id: 'cross-part', scope: 'integration', name: 'Unmocked ledger+trust flow', when: ['src/ledger/**', 'src/trust/**', 'product/plan.md'], run: `${nodeBin} -e "process.exit(0)"` },
+        ],
+      },
+    }, null, 2) + '\n',
+  );
+  commitAll(repo, 'add cross-part integration recipe on base');
+  execFileSync('git', ['checkout', '-q', '-b', 'feat-ledger-2'], { cwd: repo });
+  writeFileSync(join(repo, 'src', 'ledger', 'cap.mjs'), 'export const issue = () => 3;\n');
+
+  const covered = runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  assert.equal(covered.exitCode, EXIT_PROVED, JSON.stringify(covered.receipt));
+  assert.equal(covered.outcome, OUTCOME_PROVED);
+  assert.deepEqual(covered.receipt.notProvedReasons, []);
+
+  // 3. Single-part product -> guard does NOT trigger!
+  const singleRepo = initGitRepo(t, 'pdd-prove-3575-single-');
+  mkdirSync(join(singleRepo, 'product'), { recursive: true });
+  mkdirSync(join(singleRepo, 'src', 'ledger'), { recursive: true });
+  writeFileSync(join(singleRepo, 'product', 'plan.md'), '# Solo: plan\n\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| ledger-1 | ledger | 1 | L01 | plan PR |\n');
+  writeFileSync(join(singleRepo, 'src', 'ledger', 'cap.mjs'), 'export const v = 1;\n');
+  writeFileSync(
+    join(singleRepo, 'pdd.json'),
+    JSON.stringify({ verify: { test: `${nodeBin} -e "process.exit(0)"`, paths: [{ id: 'ledger', when: ['src/ledger/**'], run: `${nodeBin} -e "process.exit(0)"` }] } }) + '\n',
+  );
+  commitAll(singleRepo, 'single-part base');
+  execFileSync('git', ['checkout', '-q', '-b', 'solo-change'], { cwd: singleRepo });
+  writeFileSync(join(singleRepo, 'src', 'ledger', 'cap.mjs'), 'export const v = 2;\n');
+
+  const solo = runProve({ cwd: singleRepo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  assert.equal(solo.exitCode, EXIT_PROVED, JSON.stringify(solo.receipt));
+  assert.equal(solo.outcome, OUTCOME_PROVED);
+});

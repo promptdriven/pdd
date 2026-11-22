@@ -253,14 +253,23 @@ export function matchPartMentionInHeading(text, partsByFolderDesc, folderByPart)
   return null;
 }
 
+export function hasPromptFilenameStem(raw) {
+  if (typeof raw !== 'string' || !raw.endsWith('.prompt.md')) return false;
+  const slash = raw.lastIndexOf('/');
+  const base = slash >= 0 ? raw.slice(slash + 1) : raw;
+  const stem = base.slice(0, -'.prompt.md'.length);
+  return stem.length > 0 && /[A-Za-z0-9]/.test(stem);
+}
+
 export function resolvePlanRelativePrompt(raw, fallbackFolder) {
   let candidate = raw.trim();
   while (candidate.startsWith('./')) candidate = candidate.slice(2);
+  if (!hasPromptFilenameStem(candidate)) return null;
   if (candidate.startsWith('../') && !/[\\\x00-\x1f\x7f]/.test(candidate)) {
     candidate = posix.normalize(posix.join('product', candidate));
   } else if (!candidate.includes('/') && fallbackFolder) {
     candidate = `${fallbackFolder}/${candidate}`;
   }
   const norm = normalizeRepoPath(candidate);
-  return norm && norm.endsWith('.prompt.md') ? norm : null;
+  return norm && hasPromptFilenameStem(norm) ? norm : null;
 }

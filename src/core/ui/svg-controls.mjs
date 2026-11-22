@@ -3,8 +3,9 @@
 
 export const normalize = text => text.replace(/\s+/g, ' ').trim().toLowerCase();
 export const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-export const mentioned = (prose, value) =>
-  new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(normalize(value))}($|[^\\p{L}\\p{N}_])`, 'u').test(normalize(prose));
+export const mentionedNormalized = (normalizedProse, value) =>
+  new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(normalize(value))}($|[^\\p{L}\\p{N}_])`, 'u').test(normalizedProse);
+export const mentioned = (prose, value) => mentionedNormalized(normalize(prose), value);
 
 export function decodeHtml(text) {
   return text.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (raw, entity) => {
@@ -135,8 +136,26 @@ export function extractControls(source, parts) {
   let inHeading = false;
 
   while (pos < source.length) {
-    const rest = source.slice(pos);
+    const ch = source[pos];
     const lineStart = pos === 0 || source[pos - 1] === '\n';
+    if (!lineStart && ch !== '`' && ch !== '!' && ch !== '<' && ch !== '"' && ch !== '“' && ch !== "'" && ch !== '|' && ch !== '\n' && ch !== '.' && ch !== '?') {
+      if (/[a-zA-Z_:]/.test(ch) && (pos === 0 || !/[\p{L}\p{N}_-]/u.test(source[pos - 1]))) {
+        let j = pos + 1;
+        while (j < source.length && /[a-zA-Z0-9_:.-]/.test(source[j])) j++;
+        let k = j;
+        while (k < source.length && (source[k] === ' ' || source[k] === '\t')) k++;
+        if (source[k] !== '=' && source[k] !== ':') {
+          push(source.slice(pos, j));
+          pos = j;
+          continue;
+        }
+      } else {
+        push(ch);
+        pos++;
+        continue;
+      }
+    }
+    const rest = source.slice(pos);
     if (lineStart) {
       const fence = /^ *(`{3,}|~{3,})[^\n]*\n([\s\S]*?)(?:\n *\1[~`]*[ \t]*(?=\n|$)|$)/.exec(rest);
       if (fence) { extractHtmlControls(fence[2], controls); endSentence(); pos += fence[0].length; continue; }

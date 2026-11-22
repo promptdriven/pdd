@@ -29,8 +29,9 @@ const CALL_PAIR_RE = /^([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)\s*\(/;
 const BRACE_PAIR_RE = /^([a-z][a-zA-Z0-9_-]*)\.\{\s*([a-z][a-zA-Z0-9_-]*(?:\s*,\s*[a-z][a-zA-Z0-9_-]*)+)\s*\}$/;
 const PORT_SECTION_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?)\b/i;
 const TABLE_PORT_COL_RE = /\b(?:port|ports|bound\s+port|wired\s+port|injected\s+port|port\s+op(?:eration)?)\b/i;
+const NATIVE_TABLE_ROUTING_COL_RE = /\b(?:prompt|module|handler|target|delegate|dispatch|tool|command|subcommand)\b/i;
 const WIRE_CUE_RE = /\b(?:wire|wires|wired|wiring|ports?)\b/i;
-const NON_PORT_IDIOM_RE = /\b(?:(?:tcp|udp|http|https|grpc|ws|wss|listen(?:ing)?|server|socket|host|local|remote|network|container|service)\s+ports?|(?:on|to|at|from)\s+port(?:\s+`?\d+`?|\s+`?[A-Z0-9_]+`?)?|ports?\s+(?:`?\d+`?|numbers?|env|variables?|range)|wire\s+(?:formats?|protocols?|encodings?|types?|frames?|bytes|payloads?|schemas?|representations?|level|compatib\w+)|(?:on|over)\s+the\s+wire)\b/gi;
+const NON_PORT_IDIOM_RE = /\b(?:(?:tcp|udp|http|https|grpc|ws|wss|stdio|ipc|unix|listen(?:ing)?|server|socket|host|local|remote|network|container|service)\s+ports?|(?:on|to|at|from)\s+port(?:\s+`?\d+`?|\s+`?[A-Z0-9_]+`?)?|ports?\s+(?:`?\d+`?|numbers?|env|variables?|range)|wire\s+(?:formats?|protocols?|encodings?|types?|frames?|bytes|payloads?|schemas?|representations?|level|compatib\w+)|(?:on|over)\s+the\s+wire|bind(?:s|ing)?\s+(?:(?:sql|query|statement|prepared|positional|named|input|output|request|response|form|body|route|routes|endpoint|endpoints|path|header|env|template|data|event|key|signal|mcp|rpc|cli)\s+)*(?:param|params|parameter|parameters|value|values|column|columns|variable|variables|arg|args|argument|arguments|placeholder|placeholders|field|fields|handler|handlers|listener|listeners|event|events|key|keys|route|routes|endpoint|endpoints|tool|tools|command|commands|subcommand|subcommands|method|methods|request|requests)|(?:sql|query|statement|param|parameter|value|column|variable|data|event|key|route|endpoint|tool|command)\s+bindings?)\b/gi;
 
 function isSingleCall(span, openIdx) {
   if (openIdx < 0 || !span.endsWith(')')) return false;
@@ -146,9 +147,11 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
       for (let c = 0; c < headers.length; c++) {
         const h = headers[c];
         if (TABLE_EXCL_COL_RE.test(h)) continue;
-        if (TABLE_PORT_COL_RE.test(h) || (inPorts && /\b(?:operation|operations|binding|bindings)\b/i.test(h))) portCols.push(c);
+        const isExplicitPortCol = TABLE_PORT_COL_RE.test(h);
+        if (!inPorts && !isExplicitPortCol && NATIVE_TABLE_ROUTING_COL_RE.test(h)) continue;
+        if (isExplicitPortCol || (inPorts && /\b(?:operation|operations|binding|bindings)\b/i.test(h))) portCols.push(c);
         if (oCol < 0 && TABLE_OP_COL_RE.test(h) && !TABLE_NAME_COL_RE.test(h)) oCol = c;
-        else if (pCol < 0 && TABLE_NAME_COL_RE.test(h) && !TABLE_OP_COL_RE.test(h)) pCol = c;
+        else if (pCol < 0 && !TABLE_OP_COL_RE.test(h) && (isExplicitPortCol || (inPorts && TABLE_NAME_COL_RE.test(h)))) pCol = c;
       }
       if (pCol >= 0 && oCol >= 0) splitCols = { pCol, oCol };
       continue;
@@ -200,13 +203,18 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
 export function collectNativeOnlyPortParityFindings(text, dependencySources, { path = 'prompts/service.prompt.md', dependencyPaths = [] } = {}) {
   if (!hasNativeOnlyFrontmatter(text)) return [];
   const rawDeps = Array.isArray(dependencySources) ? dependencySources : (dependencySources ? [dependencySources] : []);
-  const deps = rawDeps.map(item => (typeof item === 'string' ? { path: '', text: item, isPrompt: true } : item)).filter(item => item && typeof item.text === 'string');
+  const deps = rawDeps
+    .map((item, idx) => (typeof item === 'string'
+      ? { path: typeof dependencyPaths[idx] === 'string' ? dependencyPaths[idx] : '', text: item, isPrompt: true }
+      : item))
+    .filter(item => item && typeof item.text === 'string');
   if (!deps.length) return [];
 
-  const mentionedInDeps = new Set(), displayPorts = new Set(), declaredPrefixes = new Set();
+  const mentionedInDeps = new Set(), displayPorts = new Set(), declaredPrefixes = new Set(), exportedPeerOps = new Set();
   for (const dep of deps) {
-    const { mentioned, display } = extractDeclaredPorts(dep.text, { isPrompt: dep.isPrompt !== false, path: dep.path });
+    const { mentioned, display, exportedPeerOps: peerOps } = extractDeclaredPorts(dep.text, { isPrompt: dep.isPrompt !== false, path: dep.path ?? '' });
     for (const p of mentioned) mentionedInDeps.add(p);
+    for (const p of peerOps ?? []) exportedPeerOps.add(p);
     for (const p of display) {
       displayPorts.add(p);
       const dot = p.indexOf('.');
@@ -225,11 +233,11 @@ export function collectNativeOnlyPortParityFindings(text, dependencySources, { p
 
   const findings = [];
   for (const { port, line } of refs) {
-    if (mentionedInDeps.has(port)) continue;
+    if (mentionedInDeps.has(port) || exportedPeerOps.has(port)) continue;
     const detail = formatTeachingDetail({
       invariant: `Port "${port}" wired in native-only prompt is not declared by linked checkable dependencies (${depSummary}${declaredHint})`,
       fix: `declare "${port}" in a linked checkable dependency (## Ports or ## Public operations) or fix the port name`,
-      rerun: 'pdd lint --local',
+      rerun: 'pdd lint',
     });
     findings.push({
       filePath: path, line, order: 4, code: 'native-only-unknown-port', category: 'native-only port parity',

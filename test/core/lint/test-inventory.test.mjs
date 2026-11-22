@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  detectTestLanguage,
   extractTestCases,
   findConflictMarkers,
   findExecutableOnlyMarkers,
@@ -214,4 +215,77 @@ test('Astra #1 + #12: invalid base ref fails closed, .only.each & multiline .onl
   assert.equal(dropped.assertionDrops.length, 1);
   assert.equal(dropped.assertionDrops[0].before, 3);
   assert.equal(dropped.assertionDrops[0].after, 1);
+});
+
+test('Rust test detection supports tests/**/*.rs, *_test.rs, inline #[cfg(test)], #[test], #[ignore], #[should_panic], and diff spotlight tracking', t => {
+  assert.equal(detectTestLanguage('tests/integration.rs'), 'rs');
+  assert.equal(detectTestLanguage('src/billing_test.rs'), 'rs');
+  assert.equal(detectTestLanguage('tests/helpers/fixtures.rs'), null);
+  assert.equal(detectTestLanguage('src/lib.rs'), null);
+  assert.equal(detectTestLanguage('src/lib.rs', '#[cfg(test)]\nmod tests {\n  #[test]\n  fn ok() {}\n}\n'), 'rs');
+
+  const rsSrc = [
+    '#[cfg(test)]',
+    'mod tests {',
+    '    #[test]',
+    '    fn adds_correctly() {',
+    '        assert_eq!(1 + 1, 2);',
+    '        assert!(true);',
+    '    }',
+    '',
+    '    #[tokio::test]',
+    '    #[ignore = "waiting on upstream"]',
+    '    async fn skipped_async_case() {',
+    '        assert_ne!(1, 2);',
+    '    }',
+    '',
+    '    #[test]',
+    '    #[should_panic(expected = "boom")]',
+    '    fn panics_on_zero() {',
+    '        panic!("boom");',
+    '    }',
+    '}',
+  ].join('\n');
+
+  const inv = extractTestCases(rsSrc, 'rs');
+  assert.deepEqual(inv.cases.map(c => c.name), ['adds_correctly', 'skipped_async_case', 'panics_on_zero']);
+  assert.equal(inv.cases[0].assertions.length, 2);
+  assert.deepEqual(inv.cases[0].skips, []);
+  assert.equal(inv.cases[1].skips.length, 1);
+  assert.match(inv.cases[1].skips[0], /#\[ignore/);
+  assert.ok(inv.cases[2].assertions.length >= 2, 'counts #[should_panic] and panic!');
+
+  const repo = initGitRepo(t, 'pdd-diff-rust-');
+  mkdirSync(join(repo, 'tests'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'tests', 'ledger.rs'), [
+    '#[test]',
+    'fn keeps_balance() {',
+    '    assert_eq!(10, 10);',
+    '    assert!(10 > 0);',
+    '}',
+    '#[test]',
+    'fn removed_case() {',
+    '    assert!(true);',
+    '}',
+  ].join('\n') + '\n');
+  commitAll(repo, 'rust base');
+
+  execFileSync('git', ['checkout', '-q', '-b', 'rust-changes'], { cwd: repo });
+  writeFileSync(join(repo, 'tests', 'ledger.rs'), [
+    '#[test]',
+    '#[ignore]',
+    'fn keeps_balance() {',
+    '    assert_eq!(10, 10);',
+    '}',
+  ].join('\n') + '\n');
+
+  const diff = runDiffSpotlight({ cwd: repo, baseRef: 'main' });
+  assert.equal(diff.ok, true, JSON.stringify(diff.errors));
+  assert.deepEqual(diff.removedTests.map(r => r.name), ['removed_case']);
+  assert.equal(diff.newSkips.length, 1);
+  assert.equal(diff.newSkips[0].name, 'keeps_balance');
+  assert.equal(diff.assertionDrops.length, 1);
+  assert.equal(diff.assertionDrops[0].before, 2);
+  assert.equal(diff.assertionDrops[0].after, 1);
 });

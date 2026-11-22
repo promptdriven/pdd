@@ -3132,8 +3132,9 @@ export async function runTry(input = {}, ports = {}) {
   });
   const { askApproval, promptPath } = createPromptApproval({
     ...runtimePreflightSlice(),
+    defaultEnv: forwardPorts.env ?? process.env,
     formatBoundaryCardLines: ({ root: cardRoot, focusPrompt, env: cardEnv }) =>
-      formatApproveBoundaryCard(buildHumanBoundaryCard({ root: cardRoot, focusPrompt, env: cardEnv })),
+      formatApproveBoundaryCard(buildHumanBoundaryCard({ root: cardRoot, focusPrompt, env: cardEnv ?? forwardPorts.env ?? process.env })),
   });
   const defaultDiscoverAgents = async (...args) => (await import('./shared/agent-process.mjs')).discoverAgents(...args);
   const defaultAskAgent = async (turnInput, ...rest) => askAgent(turnInput, ...rest);

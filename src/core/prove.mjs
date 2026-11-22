@@ -9,7 +9,7 @@ import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBa
 import { lintRepoProject } from './lint/project-lint.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
 import { runDiffSpotlight } from './lint/test-inventory.mjs';
-import { detectHostCapabilities, loadVerifyConfig, matchCapabilities, matchVerifyPaths } from './verify-paths.mjs';
+import { detectHostCapabilities, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths } from './verify-paths.mjs';
 
 export const OUTCOME_PROVED = 'Proved';
 export const OUTCOME_FAILED = 'Failed';
@@ -342,6 +342,10 @@ export function runProve(
     pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
   }
   if (unmappedSurfaces.length > 0) notProvedReasons.push(`No verify.paths recipe covers changed production surface(s): ${unmappedSurfaces.join(', ')}.`);
+  const multiPartGuard = inspectMultiPartIntegrationGuard(root, baseVerify);
+  if (multiPartGuard.applicable && !multiPartGuard.covered && multiPartGuard.reason) {
+    notProvedReasons.push(multiPartGuard.reason);
+  }
 
   const failedErrors = [
     ...baseVerify.errors.map(e => formatTeachingDetail({ invariant: e, fix: 'Fix the invalid "verify" block in pdd.json', rerun: 'pdd prove' })),

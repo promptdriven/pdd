@@ -2137,9 +2137,9 @@ test('3574 reopened: lintNativeOnlyPortParity recognizes exported <stem>.<op> op
   assert.equal(negErrors.length, 2, negErrors.join('\n'));
   assert.match(negErrors[0], /prompts\/connector\/mcp-server\.prompt\.md:8 \[native-only-unknown-port\].*"access\.invoke_tools"/);
   assert.match(negErrors[0], /access\.invoke_tool/);
-  assert.match(negErrors[0], /Fix: declare "access\.invoke_tools".*pdd lint --local/);
+  assert.match(negErrors[0], /Fix: declare "access\.invoke_tools".*pdd lint/);
   assert.match(negErrors[1], /prompts\/connector\/mcp-server\.prompt\.md:12 \[native-only-unknown-port\].*"phantom_store\.save"/);
-  assert.match(negErrors[1], /Fix: declare "phantom_store\.save".*pdd lint --local/);
+  assert.match(negErrors[1], /Fix: declare "phantom_store\.save".*pdd lint/);
 });
 
 test('3562 polling FP fix: test-fixed-sleep exempts waitFor/until polling helpers, bounded retry loops, and Promise.race watchdogs while still flagging bare unguarded sleeps', () => {

@@ -8,9 +8,11 @@ Map touched repository files (explicit paths, a Git `--from RANGE`, or working-t
 
 - **Strictly read-only offline core.** Inspect local Git metadata and working-tree files only. Spawn zero AI subprocesses, make zero network or interpreter calls, and never write `.pdd/sync/` sidecars, `.prompt.md` files, source headers, or `pdd-bindings.json`.
 - **Scoped target selection (mutually exclusive modes).**
-  - Explicit `files`: scope strictly to those repository-relative regular files. Reject combining `files` with `--from` (`exit 2`). Detect untracked explicit files so newly added files report full line additions and symbols.
+  - Explicit `files`: scope strictly to those repository-relative regular files. Reject combining `files` with `--from`, `--branch`, or `--all` (`exit 2`). Detect untracked explicit files so newly added files report full line additions and symbols.
   - Range `from`: accept `<base>..<head>` or `<base>` (normalized to `<base>..HEAD`). Reject empty strings, length `> 256`, whitespace, ASCII control characters, `...`, multiple `..`, or any segment starting with `-` (`exit 2`) before calling Git. Resolve touched paths with `--literal-pathspecs`, `core.quotepath=false`, and `--no-ext-diff`.
-  - Default working-tree mode: resolve modified, staged, renamed, deleted, and untracked non-ignored files from `git diff --name-status -z -M HEAD` merged with `git status --porcelain=v1 -z -uall` (falling back cleanly on unborn branches), ignoring `.pdd/**`.
+  - Branch mode (`branch: true` / `--branch`): resolve the local default base ref (`origin/HEAD`, `origin/main`, `origin/master`, `main`, or `master`), compute `merge-base(defaultBranch, HEAD)..HEAD` merged with working-tree changes, and compute unified diff stats against that merge base.
+  - Full-repo mode (`all: true` / `--all`): inspect all Git-tracked non-secret regular files (merged with working-tree status) so every prompt-owned module is audited without silent skips.
+  - Default working-tree mode: resolve modified, staged, renamed, deleted, and untracked non-ignored files from `git diff --name-status -z -M HEAD` merged with `git status --porcelain=v1 -z -uall` (falling back cleanly on unborn branches), ignoring `.pdd/**`. When working-tree has 0 touched files on a clean committed branch ahead of the default branch (`merge-base(defaultBranch, HEAD) !== HEAD`), automatically widen to `branch` (`scope.widened_from = "working-tree"`).
   - Outside a Git repository, exit `2`. Empty scope exits `0` with empty arrays and `ok: true`.
 - **Security, secret isolation, binary probing, and fail-closed bindings.**
   - Reject paths starting with `-`, containing control characters or `\`, using `..` traversal, resolving outside the canonical Git root, or traversing symlinks (`lstat` + `O_NOFOLLOW`, `exit 2`).
@@ -21,10 +23,11 @@ Map touched repository files (explicit paths, a Git `--from RANGE`, or working-t
   - Delegate ownership lookup to `findOwners` (`pdd-bindings.json`, `Generated from` / `Prompt:` headers, opening-sentence prose claims, and unique path/stem matches).
   - When a touched path is a `.prompt.md`, refuse active misplaced test prompts (`isTestPromptPath`, `exit 1`) and gather owned modules from bindings, `promptClaims`, and eligible non-secret production code files.
   - Extract `+added`/`-removed` line counts and changed top-level symbols across JS/TS, Python, Go, and Rust (`added`, `removed`, `updated`).
-  - Classify each `(module, owner)` pair as `deleted`, `prompt-stale` (when an existing code header hash lags the prompt), `changed` (when the diff or rename touched the module), or `current`.
+  - Classify each `(module, owner)` pair as `deleted`, `prompt-stale` (when an existing code header hash lags the prompt), `changed` (when the diff or rename touched the module), `unpinned` (when the module is prompt-owned without a pinned `sha256` hash matching the prompt), or `current`.
 - **Read-only compatibility wrapper (`src/update-sync.mjs`).**
+  - Forward `{ cwd, files, from, all, branch, check, write }`.
   - In plan mode (`check: false, write: false`), return `schema_version: "pdd.update-sync.v1"` with `exit 0` and zero writes.
-  - In `--check` mode (`check: true`), return `exit 1` when any owned module has non-`current` status (`drifted.length > 0`), else `exit 0`.
+  - In `--check` mode (`check: true`), when default working-tree scope has 0 touched files and no branch commits ahead of the default branch (e.g. a clean default/single-branch checkout), automatically widen to `all: true` (`scope.widened_from = "working-tree"`) so unpinned or stale prompt-owned modules never silently return false-green `ok: true, drifted: []`. Return `exit 1` when any owned module has non-`current` status (`drifted.length > 0`), else `exit 0`.
   - Refuse `--write` (`write: true`) with `exit 2`, zero writes, and a 4-part diagnostic naming the location, read-only invariant, concrete fix, and rerun command.
 
 ## Dependencies

@@ -100,6 +100,7 @@ async function detectChangedFiles(root, ports = {}) {
           const all = [
             ...(res.report.modules ?? []).map(m => m?.path),
             ...(res.report.unowned ?? []).map(u => u?.path),
+            ...(res.report.scope?.files ?? []),
           ].filter(canonicalPath);
           if (all.length) return [...new Set(all)].sort();
         }

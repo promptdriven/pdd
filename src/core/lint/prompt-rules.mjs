@@ -241,7 +241,7 @@ export function collectPromptDependencyFindings({ targetPrompts, allVisibleFiles
           detail: formatTeachingDetail({
             invariant: `Dependency link "${link.rawTarget}" resolves to "${targetClean}", which is not a Git-visible file or directory in this repository`,
             fix: `Update or remove the link "${link.rawTarget}" under "## Dependencies" in ${promptPath}`,
-            rerun: 'pdd lint --local',
+            rerun: 'pdd lint',
           }),
         });
       } else if (targetClean.endsWith('.prompt.md') && targetClean !== promptPath) {

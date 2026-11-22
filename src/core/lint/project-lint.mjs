@@ -150,7 +150,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
           detail: formatTeachingDetail({
             invariant: `Prompt header in ${codePath} references "${entry.prompt}", which does not exist as a Git-visible file`,
             fix: `Update the \`// Prompt:\` / \`// Generated from\` header in ${codePath}:${line} to an existing .prompt.md path or remove it`,
-            rerun: 'pdd lint --local',
+            rerun: 'pdd lint',
           }),
         });
       }

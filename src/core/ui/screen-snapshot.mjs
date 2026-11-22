@@ -315,6 +315,19 @@ export function snapshot(reference, scope = globalThis.document, referenceViewpo
       if (!stroke && !['none', 'hidden'].includes(st.outlineStyle) && parseFloat(st.outlineWidth) > 0) stroke = parseRgb(st.outlineColor, st.opacity);
       return { fill, stroke, painted: Boolean((fill && rgbDist(fill, canvasColor) > 12) || stroke !== null) };
     };
+    const isActiveElement = target => {
+      if (!target || typeof target.getAttribute !== 'function') return false;
+      const ariaCurrent = (target.getAttribute('aria-current') || '').trim().toLowerCase();
+      if (ariaCurrent && ariaCurrent !== 'false') return true;
+      for (const attr of ['aria-selected', 'aria-pressed', 'aria-checked', 'data-active', 'data-selected']) {
+        if ((target.getAttribute(attr) || '').trim().toLowerCase() === 'true') return true;
+      }
+      const dataState = (target.getAttribute('data-state') || '').trim().toLowerCase();
+      if (['active', 'selected', 'current', 'checked', 'pressed', 'on'].includes(dataState)) return true;
+      if (target.classList && [...target.classList].some(cls => /^(?:is-)?(?:active|selected|current)$/i.test(cls))) return true;
+      try { if (typeof target.matches === 'function' && target.matches(':active, :checked')) return true; } catch {}
+      return false;
+    };
     for (const part of parts) {
       if (part.kind !== 'id') continue;
       const el = elements[part.node];
@@ -323,14 +336,26 @@ export function snapshot(reference, scope = globalThis.document, referenceViewpo
         continue;
       }
       let own = surfacePaint(el);
+      let activeState = isActiveElement(el);
       if (!own.painted && own.fill === null && own.stroke === null) {
         const visChildren = [...el.children].filter(child => !excluded(child) && probeVisible(child, child.getBoundingClientRect(), 'surface'));
         if (visChildren.length === 1) {
           const cb = scaleBox(visChildren[0].getBoundingClientRect());
-          if (cb.width >= 0.8 * part.box.width && cb.height >= 0.8 * part.box.height) own = surfacePaint(visChildren[0]);
+          if (cb.width >= 0.8 * part.box.width && cb.height >= 0.8 * part.box.height) {
+            own = surfacePaint(visChildren[0]);
+            activeState = activeState || isActiveElement(visChildren[0]);
+          }
         }
       }
-      lookBoxes.push({ id: part.value, visible: true, painted: own.painted, box: part.box, fill: own.fill, stroke: own.stroke });
+      lookBoxes.push({
+        id: part.value,
+        visible: true,
+        painted: own.painted,
+        box: part.box,
+        fill: own.fill,
+        stroke: own.stroke,
+        ...(activeState ? { activeState: true } : {}),
+      });
     }
   }
   return {

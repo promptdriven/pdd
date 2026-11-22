@@ -110,8 +110,15 @@ measure color distance with Euclidean RGB distance
      a. **Box paint:** if `!hit.painted`, record `"unpainted box"`.
      b. **Box fill color:** when `ref.fill !== null` and
         (`reference.canvasColor === null` or
-        `rgbDistance(ref.fill, reference.canvasColor) > 12`):
-        if `hit.fill !== null` and `rgbDistance(ref.fill, hit.fill) > 90`,
+        `rgbDistance(ref.fill, reference.canvasColor) > 12`), skip fill-color
+        mismatch checks for intentionally painted active/selected interactive
+        states (marked via `activeState: true`, `active: true`, `selected: true`,
+        `aria-current` other than `"false"`, `aria-selected="true"`,
+        `aria-pressed="true"`, `aria-checked="true"`, `data-active="true"`,
+        `data-selected="true"`, `data-state` in
+        `active|selected|current|checked|on`, `:active`/`:checked` pseudo-states,
+        or active/selected CSS class tokens while `hit.painted` is true).
+        Otherwise, if `hit.fill !== null` and `rgbDistance(ref.fill, hit.fill) > 90`,
         record `"color #<hex(hit.fill)>"`; else if `hit.fill === null`,
         `ref.stroke === null`, and (`reference.canvasColor === null` or
         `rgbDistance(ref.fill, reference.canvasColor) > 40`), record

@@ -1053,3 +1053,36 @@ test('#3573 (13): Round-2 adversarial regressions — linear brace/details scans
   assert.equal(stressAudit.unwiredBoundaries.length, 1);
   assert.ok(elapsedMs < 500, `brace + details scanning must remain strictly linear O(N), took ${elapsedMs.toFixed(1)}ms`);
 });
+
+test('#3631 regression: extractPromptRefsFromLine ignores bare `.prompt.md`, `*.prompt.md`, and stemless prompt paths in prose', () => {
+  const planWithProseExt = [
+    '# Equity Ledger: plan',
+    '',
+    '## Boundaries',
+    '| From | To | What crosses | Contract |',
+    '|---|---|---|---|',
+    '',
+    '## Prompts',
+    'All production contracts use `.prompt.md` files (never `*.prompt.md` globs or [docs](.prompt.md) or `prompts/.prompt.md`).',
+    '',
+    '### ledger (`prompts/ledger`)',
+    '- Keep `.prompt.md` prose crisp; see `cap-table.prompt.md`.',
+    '',
+    '## Runs',
+    '| Run | Part | Slice | Stories | Needs |',
+    '|---|---|---|---|---|',
+    '| ledger-1 | ledger | 1 | L01 | plan PR |',
+  ].join('\n') + '\n';
+
+  const parsed = parseProductDocuments({ mapText: SAMPLE_MAP, planText: planWithProseExt });
+  assert.deepEqual(parsed.product.prompts, [
+    { path: 'prompts/ledger/cap-table.prompt.md', part: 'ledger' },
+  ]);
+
+  const audit = auditProductPlan({
+    mapText: SAMPLE_MAP,
+    planText: planWithProseExt,
+    promptFiles: [{ path: 'prompts/ledger/cap-table.prompt.md', content: '# Cap table\n' }],
+  });
+  assert.deepEqual(audit.drift, []);
+});

@@ -200,6 +200,7 @@ export function createPromptApproval({
   readPrompt,
   proseSha256,
   formatBoundaryCardLines = () => [],
+  defaultEnv = process.env,
 }) {
   function proseOf(text) {
     let out = '';
@@ -279,7 +280,7 @@ export function createPromptApproval({
     } catch { return null; }
   }
 
-  async function askApproval({ root, path, stdout, answers, expectedHash, said, commit, approvals, commonDir, strictApprovals = false, env = process.env }) {
+  async function askApproval({ root, path, stdout, answers, expectedHash, said, commit, approvals, commonDir, strictApprovals = false, env = defaultEnv }) {
     let visible;
     let prompt;
     let problems;

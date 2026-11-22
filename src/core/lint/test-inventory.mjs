@@ -33,12 +33,16 @@ function hasExpectAssertionChain(tail) {
   return segments >= 2 && allPriorModifiers && CHAI_TERMINAL_PROPS.has(lastIdent);
 }
 
-export function detectTestLanguage(path) {
+export function detectTestLanguage(path, source = '') {
   if (!path || UTILITY_TEST_DIR.test(path)) return null;
   const base = path.split('/').at(-1);
   if (/\.(?:[cm]?[jt]s|[jt]sx)$/.test(base) && (/\.(?:test|spec)\./.test(base) || path.split('/').some(p => ['test', 'tests', '__tests__'].includes(p)))) return 'js';
   if (/^(?:test_.*|.*_test)\.py$/.test(base)) return 'py';
   if (/_test\.go$/.test(base)) return 'go';
+  if (/\.rs$/.test(base)) {
+    if (/_test\.rs$/.test(base) || path.split('/').some(p => ['test', 'tests'].includes(p))) return 'rs';
+    if (typeof source === 'string' && /#\[\s*(?:cfg\s*\(\s*test\s*\)|(?:[A-Za-z_]\w*::)*test\b)/.test(source)) return 'rs';
+  }
   return null;
 }
 
@@ -113,6 +117,7 @@ export function findConflictMarkers(source, filePath) {
 
 function countTableRows(source, lang) {
   if (lang === 'go') return [...source.matchAll(/\bt\.Run\s*\(\s*"([^"]+)"/g)].length;
+  if (lang === 'rs') return [...source.matchAll(/#\[\s*(?:(?:[A-Za-z_]\w*::)*case|test_case)\s*\(/g)].length;
   const re = lang === 'js' ? /\b(?:test|it|describe)\.each\s*\(\s*\[([\s\S]*?)\]\s*\)/g : /@pytest\.mark\.parametrize\s*\([^,]+,\s*\[([\s\S]*?)\]\s*\)/g;
   let count = 0;
   for (const m of source.matchAll(re)) if (m[1].trim()) count += m[1].trim().split(/,(?![^[\]{}()]*[\]}])/).filter(x => x.trim()).length;
@@ -214,6 +219,58 @@ export function extractTestCases(source, lang) {
       found.push({ name: m[1], line: at + 1, assertions, skips });
       found.push(...subtests);
     }
+  } else if (lang === 'rs') {
+    const stripRustComments = line => line.replace(/\/\/.*$/, '');
+    const RS_TEST_ATTR_RE = /^#\[\s*(?:(?:[A-Za-z_]\w*::)*test(?:\s*\([^)]*\))?|test_case\s*\(|rstest(?:\s*\([^)]*\))?)\s*\]$/;
+    const RS_IGNORE_ATTR_RE = /^#\[\s*ignore(?:\s*=\s*.*|\s*\([^)]*\))?\s*\]$/;
+    const RS_SHOULD_PANIC_RE = /^#\[\s*should_panic(?:\s*\([^)]*\))?\s*\]$/;
+    const RS_ASSERT_RE = /\b(?:assert|assert_eq|assert_ne|debug_assert|debug_assert_eq|debug_assert_ne|matches|panic|unreachable|unimplemented)!\s*[(\[{]/;
+    const RS_FN_RE = /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(/;
+    let inBlockComment = false;
+    const cleanLines = lines.map(raw => {
+      let out = '', i = 0;
+      while (i < raw.length) {
+        if (inBlockComment) {
+          const close = raw.indexOf('*/', i);
+          if (close < 0) { i = raw.length; break; }
+          inBlockComment = false; i = close + 2; continue;
+        }
+        if (raw[i] === '/' && raw[i + 1] === '/') break;
+        if (raw[i] === '/' && raw[i + 1] === '*') { inBlockComment = true; i += 2; continue; }
+        out += raw[i++];
+      }
+      return out;
+    });
+    for (let at = 0; at < lines.length; at++) {
+      const m = RS_FN_RE.exec(cleanLines[at]);
+      if (!m) continue;
+      const attrs = [];
+      for (let i = at - 1; i >= 0; i--) {
+        const t = cleanLines[i].trim();
+        if (!t) continue;
+        if (t.startsWith('#[')) { attrs.unshift(t); continue; }
+        break;
+      }
+      if (!attrs.some(a => RS_TEST_ATTR_RE.test(a))) continue;
+      const skips = attrs.filter(a => RS_IGNORE_ATTR_RE.test(a));
+      const assertions = attrs.filter(a => RS_SHOULD_PANIC_RE.test(a));
+      let end = lines.length - 1, depth = 0, opened = false;
+      for (let i = at; i < lines.length; i++) {
+        const code = stripRustComments(cleanLines[i]).replace(/"(?:\\.|[^"\\])*"/g, '""');
+        for (const ch of code) {
+          if (ch === '{') { depth++; opened = true; }
+          else if (ch === '}') depth--;
+        }
+        end = i;
+        if (opened && depth <= 0) break;
+      }
+      for (let i = at; i <= end; i++) {
+        const t = cleanLines[i].trim();
+        if (!t) continue;
+        if (RS_ASSERT_RE.test(t)) assertions.push(t);
+      }
+      found.push({ name: m[1], line: at + 1, assertions, skips });
+    }
   }
   return { cases: found, tableCaseCount: countTableRows(source, lang) };
 }
@@ -248,7 +305,7 @@ export function analyzeDiffEntries(entries = []) {
       } else harnessEdits.push(activePath);
     }
 
-    const oldLang = detectTestLanguage(oldPath), newLang = detectTestLanguage(newPath);
+    const oldLang = detectTestLanguage(oldPath, entry.before || ''), newLang = detectTestLanguage(newPath, entry.after || '');
     if (!oldLang && !newLang) continue;
     const prev = extractTestCases(entry.before || '', oldLang), next = extractTestCases(entry.after || '', newLang);
     if (prev.tableCaseCount > next.tableCaseCount) tableDrops.push({ path: activePath, before: prev.tableCaseCount, after: next.tableCaseCount });

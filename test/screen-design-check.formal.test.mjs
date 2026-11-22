@@ -177,3 +177,57 @@ test('FORMAL rule 3: collapsed boxes against a 320x320 reference always fail --l
   }
   assert.equal(checked, 72);
 });
+
+test('active/selected interactive CSS states skip color-fill mismatch against static .ui.svg wireframe fills while still catching unpainted boxes and non-active color mismatches', () => {
+  const viewport = { width: 420, height: 220 };
+  const reference = {
+    canvasColor: [15, 23, 42],
+    boxes: [{ id: 'nav-tab', box: { x: 20, y: 20, width: 120, height: 40 }, fill: [30, 41, 59], stroke: [51, 65, 85] }],
+  };
+  const accentFill = [37, 99, 235]; // bright blue active highlight (distance > 90 from #1e293b)
+  const baseActual = { id: 'nav-tab', visible: true, painted: true, box: { x: 20, y: 20, width: 120, height: 40 }, fill: accentFill, stroke: [51, 65, 85] };
+
+  // Non-active element with mismatched fill STILL fails --look!
+  const inactive = evaluateScreenLook({ viewport, reference, actual: { canvasColor: [15, 23, 42], boxes: [baseActual] } });
+  assert.equal(inactive.passed, false);
+  assert.match(inactive.rows.find(r => r.part === '#nav-tab look')?.actual || '', /color #2563eb/);
+
+  // Every standard active/selected interactive CSS state signal passes when painted!
+  const activeCases = [
+    { activeState: true },
+    { attributes: { 'aria-current': 'true' } },
+    { attributes: { 'aria-current': 'page' } },
+    { attributes: { 'aria-selected': 'true' } },
+    { attributes: { 'data-active': 'true' } },
+    { 'aria-current': 'true' },
+    { 'aria-selected': 'true' },
+    { 'data-active': 'true' },
+    { pseudoStates: [':active'] },
+    { className: 'nav-pill active' },
+  ];
+  for (const extra of activeCases) {
+    const res = evaluateScreenLook({
+      viewport,
+      reference,
+      actual: { canvasColor: [15, 23, 42], boxes: [{ ...baseActual, ...extra }] },
+    });
+    assert.equal(res.passed, true, `active state ${JSON.stringify(extra)} must not be flagged as fill mismatch: ${JSON.stringify(res.rows)}`);
+  }
+
+  // aria-current="false" is NOT active -> still flagged!
+  const ariaFalse = evaluateScreenLook({
+    viewport,
+    reference,
+    actual: { canvasColor: [15, 23, 42], boxes: [{ ...baseActual, attributes: { 'aria-current': 'false' } }] },
+  });
+  assert.equal(ariaFalse.passed, false);
+
+  // Unpainted active box MUST STILL fail (`unpainted box`)!
+  const unpaintedActive = evaluateScreenLook({
+    viewport,
+    reference,
+    actual: { canvasColor: [15, 23, 42], boxes: [{ ...baseActual, painted: false, fill: null, attributes: { 'aria-current': 'true' } }] },
+  });
+  assert.equal(unpaintedActive.passed, false);
+  assert.match(unpaintedActive.rows.find(r => r.part === '#nav-tab look')?.actual || '', /unpainted box/);
+});

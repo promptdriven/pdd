@@ -129,10 +129,10 @@ export function lineNumberAt(lineStarts, index) {
  * Format a 4-part agent-teaching diagnostic (Lauren Tan / OpenAI Harness Engineering pattern):
  * 1) location (`path:line [code]`), 2) invariant violated, 3) concrete 1-line fix, 4) rerun command.
  */
-export function formatTeachingDetail({ invariant, fix, rerun = 'pdd lint --local' }) {
+export function formatTeachingDetail({ invariant, fix, rerun = 'pdd lint' }) {
   const inv = String(invariant ?? '').trim().replace(/\.+$/, '');
   const fx = String(fix ?? '').trim().replace(/\.+$/, '');
-  const rr = String(rerun ?? 'pdd lint --local').trim();
+  const rr = String(rerun ?? 'pdd lint').trim();
   const parts = [];
   if (inv) parts.push(`${inv}.`);
   if (fx) parts.push(`Fix: ${fx}.`);
@@ -143,13 +143,13 @@ export function formatTeachingDetail({ invariant, fix, rerun = 'pdd lint --local
 export function formatDiagnosticLine(item, severity) {
   const prefix = severity === 'error' ? 'Error' : 'Warning';
   let detail = item.detail;
-  if (severity === 'error' && item.fix && !/\bFix:\s/i.test(detail)) {
-    detail = formatTeachingDetail({ invariant: detail, fix: item.fix, rerun: item.rerun ?? 'pdd lint --local' });
+  if (item.fix && !/\bFix:\s/i.test(detail)) {
+    detail = formatTeachingDetail({ invariant: detail, fix: item.fix, rerun: item.rerun ?? 'pdd lint' });
   } else if (severity === 'error' && !/\bFix:\s/i.test(detail)) {
     const fallbackFix = item.category === 'custom rule'
       ? `Update ${item.filePath}:${item.line} to satisfy custom rule "${item.code}"`
       : `Resolve [${item.code}] at ${item.filePath}:${item.line}`;
-    detail = formatTeachingDetail({ invariant: detail, fix: fallbackFix, rerun: item.rerun ?? 'pdd lint --local' });
+    detail = formatTeachingDetail({ invariant: detail, fix: fallbackFix, rerun: item.rerun ?? 'pdd lint' });
   }
   return `${prefix}: ${item.category}: ${item.filePath}:${item.line} [${item.code}] ${detail}`;
 }

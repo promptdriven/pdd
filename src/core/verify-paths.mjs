@@ -4,8 +4,9 @@ import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isTestOwnedPath } from '../file-owner.mjs';
-import { canonicalRepoPath, readSafeUtf8 } from './lint/diagnostics.mjs';
+import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8 } from './lint/diagnostics.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
+import { SHARED_SURFACE_COLS, csv, rowsWithMeta } from './product/markdown-utils.mjs';
 
 const MAX_VERIFY_PATHS = 100;
 const PATH_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
@@ -61,6 +62,14 @@ export function parseVerifyConfig(raw, { sourcePath = 'pdd.json' } = {}) {
         const run = typeof item.run === 'string' ? item.run.trim() : '';
         if (!run) { errors.push(`${sourcePath}: verify.paths["${id}"].run must be a nonblank command string.`); continue; }
 
+        let scope = null;
+        if (item.scope !== undefined) {
+          if (typeof item.scope !== 'string' || !PATH_ID_RE.test(item.scope.trim())) {
+            errors.push(`${sourcePath}: verify.paths["${id}"].scope must be a valid identifier.`);
+            continue;
+          }
+          scope = item.scope.trim().toLowerCase();
+        }
         let needs = [];
         if (item.needs !== undefined) {
           const rawNeeds = typeof item.needs === 'string' ? [item.needs] : item.needs;
@@ -70,7 +79,7 @@ export function parseVerifyConfig(raw, { sourcePath = 'pdd.json' } = {}) {
           }
           needs = [...new Set(rawNeeds.map(c => c.trim()))];
         }
-        paths.push({ id, name, when: rawWhen, matchers, run, needs });
+        paths.push({ id, name, ...(scope ? { scope } : {}), when: rawWhen, matchers, run, needs });
       }
     }
   }
@@ -186,4 +195,88 @@ export function matchCapabilities(needs = [], capabilityState) {
   const avail = capabilityState?.available instanceof Set ? capabilityState.available : new Set(capabilityState ?? []);
   const missing = needs.filter(cap => !avail.has(cap));
   return { satisfied: missing.length === 0, missing };
+}
+
+const INTEGRATION_SCOPE_RE = /^(?:integration|cross[-_]?part|journey|e2e|end[-_]?to[-_]?end)$/i;
+const INTEGRATION_LABEL_RE = /\b(?:integration|cross[-_\s]?part|journey|end[-_\s]?to[-_\s]?end|e2e)\b/i;
+const IGNORED_PART_NAMES = new Set(['', '-', '*', 'all']);
+const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function extractProductPartsFromPlan(planText, mapText = '') {
+  const partSet = new Set();
+  const folderByPart = new Map();
+  const addPart = (raw, folder = '') => {
+    const name = String(raw ?? '').trim();
+    if (!name || IGNORED_PART_NAMES.has(name.toLowerCase())) return;
+    partSet.add(name);
+    const cleanFolder = String(folder ?? '').trim().replace(/^\.\//, '').replace(/\/+$/, '');
+    if (cleanFolder && !folderByPart.has(name)) folderByPart.set(name, cleanFolder);
+  };
+
+  for (const [text, file] of [[mapText, 'product/map.md'], [planText, 'product/plan.md']]) {
+    if (!text) continue;
+    const partsMeta = rowsWithMeta(text, 'Parts', file, { required: false });
+    for (const row of partsMeta.rows) addPart(row.values.Part, row.values.Folder);
+  }
+  const runsMeta = rowsWithMeta(planText, 'Runs', 'product/plan.md', { required: false });
+  const sharedCol = (runsMeta.heading ?? []).find(col => SHARED_SURFACE_COLS.has(col.toLowerCase()));
+  for (const row of runsMeta.rows) {
+    for (const token of csv(row.values.Part)) addPart(token);
+    if (sharedCol) for (const token of csv(row.values[sharedCol])) addPart(token);
+  }
+  const promptsMeta = rowsWithMeta(planText, 'Prompts', 'product/plan.md', { required: false });
+  for (const row of promptsMeta.rows) addPart(row.values.Part);
+
+  return { parts: [...partSet].sort(), folderByPart };
+}
+
+function recipeCoversCrossPartIntegration(recipe, parts, folderByPart) {
+  if (!recipe || typeof recipe !== 'object') return false;
+  if (typeof recipe.scope === 'string' && INTEGRATION_SCOPE_RE.test(recipe.scope.trim())) return true;
+  if (INTEGRATION_LABEL_RE.test(`${recipe.id ?? ''} ${recipe.name ?? ''}`)) return true;
+  const globs = Array.isArray(recipe.when) ? recipe.when : [];
+  if (globs.some(g => /(?:^|\/)product\/(?:plan\.md|\*+)/i.test(String(g ?? '').trim()))) return true;
+  const coveredParts = new Set();
+  for (const part of parts) {
+    const folder = folderByPart.get(part) || '';
+    const partSegRe = new RegExp(`(?:^|/)${escapeRegex(part)}(?:/|$)`, 'i');
+    const folderRe = folder ? new RegExp(`(?:^|/)${escapeRegex(folder)}(?:/|$)`, 'i') : null;
+    if (globs.some(g => {
+      const cleanGlob = String(g ?? '').trim().replace(/^\.\//, '');
+      return partSegRe.test(cleanGlob) || (folderRe && folderRe.test(cleanGlob));
+    })) {
+      coveredParts.add(part);
+    }
+  }
+  return coveredParts.size >= 2;
+}
+
+/**
+ * #3575 Multi-part integration guard: when product/plan.md defines >=2 distinct product parts
+ * and pdd.json verify.paths declares no unmocked cross-part integration recipe, emit a 4-part Not proved reason.
+ */
+export function inspectMultiPartIntegrationGuard(root, verifyConfig) {
+  const clean = { applicable: false, parts: [], covered: true, reason: null };
+  if (!root || typeof root !== 'string') return clean;
+  let realRoot;
+  try { realRoot = realpathSync(root); } catch { return clean; }
+  const planText = readSafeUtf8(realRoot, 'product/plan.md');
+  if (!planText || !planText.trim()) return clean;
+  const mapText = readSafeUtf8(realRoot, 'product/map.md') ?? '';
+  const { parts, folderByPart } = extractProductPartsFromPlan(planText, mapText);
+  if (parts.length < 2) return { applicable: false, parts, covered: true, reason: null };
+  const recipes = Array.isArray(verifyConfig?.paths) ? verifyConfig.paths : [];
+  const covered = recipes.some(recipe => recipeCoversCrossPartIntegration(recipe, parts, folderByPart));
+  if (covered) return { applicable: true, parts, covered: true, reason: null };
+  const detail = formatTeachingDetail({
+    invariant: `multi-part product has >=2 parts in product/plan.md (${parts.join(', ')}) but no unmocked cross-part integration recipe in pdd.json verify.paths`,
+    fix: `Add a verify.paths recipe in pdd.json with "scope": "integration" (covering ${parts.slice(0, 2).join(' and ')} or product/plan.md) that runs an unmocked cross-part integration test`,
+    rerun: 'pdd prove',
+  });
+  return {
+    applicable: true,
+    parts,
+    covered: false,
+    reason: `pdd.json:1 [multi-part-integration-missing] ${detail}`,
+  };
 }

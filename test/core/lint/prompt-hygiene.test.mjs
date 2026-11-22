@@ -206,7 +206,13 @@ test('Astra #13: custom-rule glob pre-filter, lintRepoAntiPatterns compat export
     { filePath: 'src/billing/tax.mjs', line: 9, code: 'only-billing', category: 'custom rule', detail: 'No BAD token' },
     'error',
   );
-  assert.match(line, /^Error: custom rule: src\/billing\/tax\.mjs:9 \[only-billing\] No BAD token\. Fix: Update src\/billing\/tax\.mjs:9 to satisfy custom rule "only-billing"\. Rerun: `pdd lint --local`\.$/);
+  assert.match(line, /^Error: custom rule: src\/billing\/tax\.mjs:9 \[only-billing\] No BAD token\. Fix: Update src\/billing\/tax\.mjs:9 to satisfy custom rule "only-billing"\. Rerun: `pdd lint`\.$/);
+
+  const warnWithFix = formatDiagnosticLine(
+    { filePath: 'prompts/billing.prompt.md', line: 4, code: 'prompt-missing-diagram', category: 'prompt structure', detail: 'Missing diagram', fix: 'Add a mermaid flowchart near prompts/billing.prompt.md:4' },
+    'warn',
+  );
+  assert.match(warnWithFix, /^Warning: prompt structure: prompts\/billing\.prompt\.md:4 \[prompt-missing-diagram\] Missing diagram\. Fix: Add a mermaid flowchart near prompts\/billing\.prompt\.md:4\. Rerun: `pdd lint`\.$/);
 
   const repo = initGitRepo(t, 'pdd-compat-export-');
   mkdirSync(join(repo, 'prompts'), { recursive: true });

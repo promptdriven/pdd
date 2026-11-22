@@ -19,7 +19,7 @@ Parse Markdown tables by heading and column name, trimming cells, handling escap
 - Optional sections:
   - `product/map.md` `## Rules to check`: structured table(s) (`Id`, `Owner`, `Rule`, `Verified By`) or bullet/prose fallback, exposed as `product.rulesToCheck`.
   - `product/plan.md` `## Runs` shared surfaces: optional `Shared surfaces` / `Updates` / `Also updates` column, secondary comma parts in `Part`, or per-run `Shared surfaces (RUN): ...` / `### RUN` lines; deduplicated, validated against `## Parts`, exposed as `run.sharedSurfaces`.
-  - `product/plan.md` `## Prompts`: table, bullet, or `### <part>` prompt inventory, exposed as `product.prompts`.
+  - `product/plan.md` `## Prompts`: table, bullet, or `### <part>` prompt inventory, exposed as `product.prompts`. Require a non-empty filename stem containing at least one alphanumeric character before `.prompt.md` so bare prose tokens like `` `.prompt.md` `` or `` `*.prompt.md` `` are never extracted as declared prompts.
   - `product/plan.md` `## Boundaries` operations: dotted `<part>/<prompt>.<op>` or `<prompt>.<op>` tokens in `What crosses` / `Operations` (skipping file extensions, versions, and `Never crosses` blocks).
 - `computeProductWaves(runs)` groups runs into deterministic topological waves (`Wave 1`, `Wave 2`, ...), ignoring the special `plan PR` need and appending any cyclic tail with `cyclic: true`.
 - `parseProductWorldWriters({ worldText })` selects the single non-fenced table containing `Key` and `Writer`, rejects duplicate tables or conflicting writers (`world-writer-conflict`), and returns ordered `{ key, writer }` records.

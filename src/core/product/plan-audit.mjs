@@ -2,9 +2,9 @@
 // Pure product plan prompt-inventory & boundary-wiring auditor (Layer 1 core).
 import {
   EXAMPLE_DIR_RE, PROMPT_PATH_COLS, SIMPLE_ID_RE, VERSION_RE, buildPartLookups, clean, csv,
-  findSectionLines, isIdentChar, isSeparatorRow, matchPartMentionInHeading, normalizeRepoPath,
-  resolvePlanRelativePrompt, rowsWithMeta, scanMarkdownLinksLinear, stripMarkdownLinkTargetsLinear,
-  stripUrlsLinear, tableCells,
+  findSectionLines, hasPromptFilenameStem, isIdentChar, isSeparatorRow, matchPartMentionInHeading,
+  normalizeRepoPath, resolvePlanRelativePrompt, rowsWithMeta, scanMarkdownLinksLinear,
+  stripMarkdownLinkTargetsLinear, stripUrlsLinear, tableCells,
 } from './markdown-utils.mjs';
 
 const NON_OP_EXTENSIONS = new Set([
@@ -32,7 +32,7 @@ function extractPromptRefsFromLine(line, fallbackFolder) {
     if (target.includes('://') || /^mailto:/i.test(target)) return;
     const hash = target.indexOf('#');
     if (hash >= 0) target = target.slice(0, hash);
-    if (target.endsWith('.prompt.md')) rawRefs.push(target);
+    if (hasPromptFilenameStem(target)) rawRefs.push(target);
   });
   nonLinkChunks.push(source.slice(cursor));
 
@@ -50,7 +50,7 @@ function extractPromptRefsFromLine(line, fallbackFolder) {
     while (tok.length && tok.startsWith('*')) tok = tok.slice(1);
     const hash = tok.indexOf('#');
     if (hash >= 0) tok = tok.slice(0, hash);
-    if (tok.endsWith('.prompt.md')) rawRefs.push(tok);
+    if (hasPromptFilenameStem(tok)) rawRefs.push(tok);
   };
   for (let i = 0; i < text.length; i++) {
     if (isDelim(text[i])) flushToken(i);

@@ -4,7 +4,7 @@ import { dirname, relative, resolve, sep } from 'node:path';
 import { workspace } from '../../shared/workspace-policy.mjs';
 import { discoverTestAndAppMaps, lintAppMaps } from './app-map-lint.mjs';
 import { lintScenarioFiles } from './scenario-lint.mjs';
-import { decodeHtml, escaped, extractControls, mentioned, normalize } from './svg-controls.mjs';
+import { decodeHtml, escaped, extractControls, mentioned, mentionedNormalized, normalize } from './svg-controls.mjs';
 import { markupTokens, partsOf, safeRead } from './svg-xml.mjs';
 
 const ROOT_PLACEHOLDER = '/__pdd_root__';
@@ -225,6 +225,14 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     if (!rawPromptCache.has(p)) rawPromptCache.set(p, readRepoFile(root, p));
     return rawPromptCache.get(p);
   };
+  const drawingPartsCache = new Map();
+  const getDrawingParts = drawing => {
+    if (!drawingPartsCache.has(drawing)) {
+      try { drawingPartsCache.set(drawing, { ok: true, parts: partsOf(readRepoFile(root, drawing)) }); }
+      catch (error) { drawingPartsCache.set(drawing, { ok: false, message: error.message }); }
+    }
+    return drawingPartsCache.get(drawing);
+  };
 
   for (const prompt of [...new Set(promptPaths ?? allowedFiles.filter(path => path.endsWith('.prompt.md')))].sort()) {
     let source;
@@ -244,12 +252,15 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
       }
     }
     const scopedSources = drawings.length > 1 ? scopedSourcesByDrawing(source, root, prompt, drawings) : null;
+    const normSource = resolvedLinks.length ? normalize(source) : '';
+    const normDecoded = resolvedLinks.length ? normalize(decodedSource) : '';
+    const appearance = resolvedLinks.length ? (source.match(/^##+ Appearance\b[^\n]*\n([\s\S]*?)(?=^##? |$(?![\s\S]))/m)?.[1] || '') : '';
     for (const drawing of resolvedLinks) {
-      let parts;
-      try { parts = partsOf(readRepoFile(root, drawing)); } catch (error) { add(prompt, drawing, 'drawing', error.message); continue; }
-      const appearance = source.match(/^##+ Appearance\b[^\n]*\n([\s\S]*?)(?=^##? |$(?![\s\S]))/m)?.[1] || '';
+      const cached = getDrawingParts(drawing);
+      if (!cached.ok) { add(prompt, drawing, 'drawing', cached.message); continue; }
+      const parts = cached.parts;
       for (const { kind, value } of parts) {
-        if (kind === 'text' && !/^[\d\s.,+%-]+$/.test(value) && !mentioned(source, value) && !mentioned(decodedSource, value)) add(prompt, drawing, `label "${value}"`, 'drawing label absent from prompt');
+        if (kind === 'text' && !/^[\d\s.,+%-]+$/.test(value) && !mentionedNormalized(normSource, value) && !mentionedNormalized(normDecoded, value)) add(prompt, drawing, `label "${value}"`, 'drawing label absent from prompt');
         if (kind === 'id') {
           const name = escaped(value), words = escaped(value.replace(/[-_]/g, ' '));
           const declaration = new RegExp(`(?:\\b(?:region|id|part|container|bar|box)\\s*(?:=|:)?\\s*["'\x60]?${name}(?![\\w-])|(?<![\\w-])${name}["'\x60]?\\s+(?:region|box|bar|container|button|grid|heading|label)|(?<![\\w-])${words}\\s+(?:region|box|bar|container|button|grid|heading|label))`, 'i');

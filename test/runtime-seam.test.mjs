@@ -2235,7 +2235,7 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   const { tmpdir } = await import('node:os');
   const { pathToFileURL } = await import('node:url');
 
-  const pkgRoot = join(root, 'node_modules/@promptdriven/runtime-client');
+  const pkgRoot = realpathSync(join(root, 'node_modules/@promptdriven/runtime-client'));
   const indexSource = readFileSync(join(pkgRoot, 'src/runtime/index.mjs'), 'utf8');
   const staticImports = [...indexSource.matchAll(/^\s*(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]/gm)].map(m => m[1]);
   assert.ok(staticImports.length > 0);
