@@ -1462,8 +1462,8 @@ test('E74 (T10 narrowed, Serhan and the audit) the briefs: Autopilot decides whe
 });
 
 test('E75 (#3177, #3227 fix 5) every agent brief names the short job rules file from "$PDD_SKILLS", and pdd runs as "$PDD_CLI"', async t => {
-  assert.ok(existsSync(fileURLToPath(new URL('../skills/pdd-prompting/autopilot-job-rules.md', import.meta.url))), 'the package has the file');
-  const rules = '"$PDD_SKILLS/pdd-prompting/autopilot-job-rules.md"';
+  assert.ok(existsSync(fileURLToPath(new URL('../skills/pdd/references/autopilot-job-rules.md', import.meta.url))), 'the package has the file');
+  const rules = '"$PDD_SKILLS/pdd/references/autopilot-job-rules.md"';
   const { w, head } = await t10World(t, {});
   const build = w.started.find(job => job.role === 'build').input, review = w.job(17, 'review').input;
   assert.ok(build.includes(`Read ${rules} in full before you write the PR body.`), 'build');

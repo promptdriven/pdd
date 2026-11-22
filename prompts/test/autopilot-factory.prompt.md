@@ -50,4 +50,4 @@ are fake. The tick calls no Herdr, launchctl or systemctl. Cases:
 
 - [Launcher](../cli/autopilot-launcher.prompt.md) and [core engine](../cli/autopilot-core.prompt.md): the core factory.
 
-- [Workflow runner](../cli/workflow-runner.prompt.md): workflow and gates.
+- Workflow runner: workflow and gates.

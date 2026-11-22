@@ -973,11 +973,6 @@ const REGISTERED_E2E_ROUTES = Object.freeze([
   'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log',
   // Product
   'product.status', 'product.next', 'product.start', 'product.contracts',
-  // Workflows
-  'workflow.list', 'workflow.run', 'workflow.status', 'workflow.view', 'workflow.card', 'workflow.approve',
-  'workflow.changes', 'workflow.open', 'workflow.prove', 'workflow.suite', 'workflow.done', 'workflow.publish',
-  'workflow.ask', 'workflow.request-uptake', 'workflow.resend', 'workflow.park', 'workflow.yield',
-  'workflow.tidy', 'workflow.cancel', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate',
   // Graph
   'graph',
   // Autopilot
@@ -1034,9 +1029,9 @@ test('discovery, help, version, and shell completion commands work end-to-end', 
   const promptingHelp = await fx.cli(['help', 'prompting']);
   assert.equal(promptingHelp.code, 0, promptingHelp.stderr);
   assert.match(promptingHelp.stdout, /In PDD, prompts are the source/);
-  const workflowGroupHelp = await fx.cli(['workflow', '--help']);
-  assert.equal(workflowGroupHelp.code, 0, workflowGroupHelp.stderr);
-  assert.match(workflowGroupHelp.stdout, /pdd workflow list \[--json\]/);
+  const productGroupHelp = await fx.cli(['product', '--help']);
+  assert.equal(productGroupHelp.code, 0, productGroupHelp.stderr);
+  assert.match(productGroupHelp.stdout, /pdd product status/);
   markExecuted('help');
 
   // version: --version and quiet -V
@@ -1068,7 +1063,7 @@ test('discovery, help, version, and shell completion commands work end-to-end', 
     const res = await fx.cli(['completion', shell]);
     assert.equal(res.code, 0, `completion ${shell}: ${res.stderr}`);
     assert.match(res.stdout, /setup/);
-    assert.match(res.stdout, /workflow/);
+    assert.match(res.stdout, /product/);
     assert.match(res.stdout, /autopilot/);
   }
   markExecuted('completion');
@@ -1080,7 +1075,7 @@ test('core local authoring commands: setup, init, status, files, owner, contract
   // setup --yes: laptop-only — installs global skills to temp HOME without touching repo files
   const setup1 = await fx.cli(['setup', '--yes']);
   assert.equal(setup1.code, 0, setup1.stderr);
-  assert.match(setup1.stdout, /Installed 7 PDD skills/);
+  assert.match(setup1.stdout, /Installed 1 PDD skill\b/);
   assert.ok(existsSync(join(fx.home, '.agents', 'skills', 'pdd', 'SKILL.md')));
   assert.ok(existsSync(join(fx.home, '.agents', 'skills', 'pdd', '.pdd-skill.json')));
   assert.ok(existsSync(join(fx.home, '.claude', 'skills', 'pdd', 'SKILL.md')));
@@ -1588,222 +1583,6 @@ test('all 3 product commands work end-to-end on real coffee-pickup product fixtu
   assert.match(simProduct.stderr, /No tests found/);
 });
 
-test('all 22 workflow commands execute end-to-end on isolated fixture repo and run worktree', async () => {
-  const fx = makeIsolatedFixture('workflow');
-  const remoteBare = join(fx.dir, 'origin.git');
-  runGit(fx.dir, ['init', '--bare', '-q', remoteBare]);
-  runGit(fx.repo, ['remote', 'set-url', 'origin', `file://${remoteBare}`]);
-  runGit(fx.repo, ['push', '-q', 'origin', 'main']);
-  // Restore canonical GitHub URL; the git wrapper shim redirects only fetch/push to the local bare repo.
-  runGit(fx.repo, ['remote', 'set-url', 'origin', 'https://github.com/example/cli-fixture.git']);
-  const herdrState = join(fx.dir, 'herdr-state.json');
-  const wfEnv = {
-    PDD_E2E_FAKE_GH: 'ok',
-    PDD_E2E_REPO: 'example/cli-fixture',
-    PDD_E2E_HERDR_STATE: herdrState,
-    PDD_E2E_GIT_FETCH_BARE: remoteBare,
-  };
-
-  // 1. workflow list [--json] (100% offline)
-  const listJson = await fx.cli(['workflow', 'list', '--json']);
-  assert.equal(listJson.code, 0, listJson.stderr);
-  const workflowList = JSON.parse(listJson.stdout);
-  assert.deepEqual(workflowList.workflows.map(w => w.name), ['bug', 'feature', 'product', 'small-change']);
-  const listText = await fx.cli(['workflow', 'list']);
-  assert.equal(listText.code, 0, listText.stderr);
-  assert.match(listText.stdout, /small-change/);
-  markExecuted('workflow.list');
-
-  // 2. workflow suite (100% local execution through isolated PDD_SUITE_QUEUE with deterministic non-busy capacity)
-  const suiteQueueRoot = join(fx.home, '.local', 'state', 'pdd-suite-queue');
-  await configureCheckCapacity({
-    env: { PDD_SUITE_QUEUE: suiteQueueRoot },
-    checks: 1,
-    runs: 2,
-    resources: {
-      memory: { available: 16 * 1024 ** 3 },
-      load: 0,
-      check: { cpuIds: [0, 1, 2, 3], platform: 'other', battery: false, virtualized: true, taskset: null },
-    },
-  });
-  const suiteRes = await fx.cli(['workflow', 'suite', '--command', "node -e 'console.log(\"suite-ok\")'", '--timeout', '1']);
-  assert.equal(suiteRes.code, 0, suiteRes.stderr);
-  assert.match(suiteRes.stdout, /suite-ok|passed|completed|finished/i);
-  markExecuted('workflow.suite');
-
-  // 3. workflow run (creates real worktree + .git/pdd/runs/42/status.json)
-  const runRes = await fx.cli(['workflow', 'run', 'small-change', '42', '--agent', 'codex', '--draft'], {
-    extraEnv: wfEnv,
-  });
-  assert.equal(runRes.code, 0, `workflow run failed: ${runRes.stderr}\n${runRes.stdout}`);
-  const statusFile = join(fx.repo, '.git', 'pdd', 'runs', '42', 'status.json');
-  assert.ok(existsSync(statusFile), 'workflow run must create run status.json');
-  const runRecord = JSON.parse(readFileSync(statusFile, 'utf8'));
-  const worktree = runRecord.root;
-  assert.ok(existsSync(worktree), 'workflow run must create run worktree');
-  markExecuted('workflow.run');
-
-  // 4. workflow status (plain, single issue, --all, --json)
-  const stJson = await fx.cli(['workflow', 'status', '42', '--json'], { extraEnv: wfEnv });
-  assert.equal(stJson.code, 0, stJson.stderr);
-  const stPayload = JSON.parse(stJson.stdout);
-  assert.equal(stPayload.issue ?? stPayload.number ?? stPayload.run?.number ?? 42, 42);
-  const stAll = await fx.cli(['workflow', 'status', '--all'], { extraEnv: wfEnv });
-  assert.equal(stAll.code, 0, stAll.stderr);
-  assert.match(stAll.stdout, /#?42/);
-  markExecuted('workflow.status');
-
-  // 5. workflow view
-  const viewRes = await fx.cli(['workflow', 'view', '42'], { extraEnv: wfEnv });
-  assert.equal(viewRes.code, 0, viewRes.stderr);
-  assert.match(viewRes.stdout, /small-change|42/i);
-  markExecuted('workflow.view');
-
-  // 6. workflow ask (inside run worktree)
-  const askRes = await fx.cli(['workflow', 'ask', 'Should default sorting stay ascending?'], {
-    cwd: worktree,
-    extraEnv: wfEnv,
-  });
-  assert.equal(askRes.code, 0, askRes.stderr);
-  markExecuted('workflow.ask');
-
-  // 7. workflow changes (answer open ask -> done scope -> request changes at gate -> workflow ack)
-  const answerRes = await fx.cli(['workflow', 'changes', '42', 'Keep default sorting ascending'], {
-    extraEnv: wfEnv,
-  });
-  assert.equal(answerRes.code, 0, `workflow changes (answer) failed: ${answerRes.stderr}\n${answerRes.stdout}`);
-  assert.match(answerRes.stdout, /Sent your answer/);
-
-  const doneInitial = await fx.cli(['workflow', 'done', 'scope', '--summary', 'Initial README scope'], {
-    cwd: worktree,
-    extraEnv: wfEnv,
-  });
-  assert.equal(doneInitial.code, 0, `workflow done (initial) failed: ${doneInitial.stderr}\n${doneInitial.stdout}`);
-  markExecuted('workflow.done');
-
-  const changesRes = await fx.cli(['workflow', 'changes', '42', 'Please include exit code notes'], {
-    extraEnv: wfEnv,
-  });
-  assert.equal(changesRes.code, 0, `workflow changes failed: ${changesRes.stderr}\n${changesRes.stdout}`);
-  markExecuted('workflow.changes');
-
-  const journalFile = join(dirname(statusFile), 'delivery-journal.json');
-  const journal = existsSync(journalFile) ? JSON.parse(readFileSync(journalFile, 'utf8')) : { requests: [] };
-  const reqId = journal.requests?.findLast(entry => entry.kind === 'change')?.id;
-  assert.ok(reqId, `workflow changes should record a change request id in delivery-journal.json; stdout=${changesRes.stdout}`);
-  const ackRes = await fx.cli(['workflow', 'ack', reqId, '--summary', 'Added exit code notes to scope'], {
-    cwd: worktree,
-    extraEnv: wfEnv,
-  });
-  assert.equal(ackRes.code, 0, `workflow ack failed: ${ackRes.stderr}\n${ackRes.stdout}`);
-  markExecuted('workflow.request-uptake');
-
-  // 8. workflow done scope again -> ready gate -> workflow approve
-  const doneRes = await fx.cli(['workflow', 'done', 'scope', '--summary', 'Scoped README-only change with exit notes'], {
-    cwd: worktree,
-    extraEnv: wfEnv,
-  });
-  assert.equal(doneRes.code, 0, `workflow done failed: ${doneRes.stderr}\n${doneRes.stdout}`);
-
-  const approveRunRes = await fx.cli(['workflow', 'approve', '42', '--said', 'Approved scope for E2E'], {
-    extraEnv: wfEnv,
-  });
-  assert.equal(approveRunRes.code, 0, `workflow approve failed: ${approveRunRes.stderr}\n${approveRunRes.stdout}`);
-  markExecuted('workflow.approve');
-
-  // 9. workflow open
-  const openRes = await fx.cli(['workflow', 'open', '42'], { extraEnv: wfEnv });
-  assert.equal(openRes.code, 0, `workflow open failed: ${openRes.stderr}\n${openRes.stdout}`);
-  markExecuted('workflow.open');
-
-  // 10. workflow cost (record via stdin JSON + read)
-  const costWrite = await fx.cli(['workflow', 'cost', '42', '--input', '-'], {
-    stdin: JSON.stringify({ id: 'e2e-m1', personMinutes: 3 }),
-    extraEnv: wfEnv,
-  });
-  assert.equal(costWrite.code, 0, `workflow cost --input - failed: ${costWrite.stderr}\n${costWrite.stdout}`);
-  const costRead = await fx.cli(['workflow', 'cost', '42'], { extraEnv: wfEnv });
-  assert.equal(costRead.code, 0, costRead.stderr);
-  assert.match(costRead.stdout, /42|minute|cost/i);
-  markExecuted('workflow.cost');
-
-  // 11. workflow evidence-associate & workflow evidence
-  const evAssoc = await fx.cli(
-    ['workflow', 'evidence-associate', '42', '--workspace', worktree, '--stage', 'current', '--test', 'tests/demo.json'],
-    { cwd: worktree, extraEnv: wfEnv },
-  );
-  assert.equal(evAssoc.code, 0, `workflow evidence-associate failed: ${evAssoc.stderr}\n${evAssoc.stdout}`);
-  markExecuted('workflow.evidence-associate');
-
-  const badSummaryFile = join(fx.dir, 'empty-summary.json');
-  writeFileSync(badSummaryFile, JSON.stringify({ rows: [] }));
-  const evRes = await fx.cli(['workflow', 'evidence', '42', '--summary', badSummaryFile], { extraEnv: wfEnv });
-  // Empty summary has no source-verified check rows, so CLI cleanly refuses without crashing.
-  assert.notEqual(evRes.code, 0);
-  assert.notEqual(evRes.code, 2, evRes.stderr);
-  assert.doesNotMatch(evRes.stderr, /ReferenceError|TypeError|SyntaxError/);
-  markExecuted('workflow.evidence');
-
-  // 12. workflow prove (commit a real test change in the worktree and run base/head proof)
-  writeText(worktree, 'test/e2e-proof.test.mjs', 'if (!process.env.PROOF_OK) process.exit(0);\n');
-  runGit(worktree, ['add', 'test/e2e-proof.test.mjs']);
-  runGit(worktree, ['commit', '-qm', 'Add proof test']);
-  const proveRes = await fx.cli(
-    ['workflow', 'prove', '42', '--test', 'node test/e2e-proof.test.mjs', '--expect', 'ok', '--timeout', '1'],
-    { cwd: worktree, extraEnv: wfEnv },
-  );
-  assert.notEqual(proveRes.code, 2, `workflow prove rejected valid args: ${proveRes.stderr}`);
-  assert.doesNotMatch(proveRes.stderr, /ReferenceError|TypeError|SyntaxError/);
-  markExecuted('workflow.prove');
-
-  // 13. workflow card (start a feature run #43 via quiet alias `workflow start` to verify both)
-  const featRun = await fx.cli(['workflow', 'start', 'feature', '43', '--agent', 'codex'], { extraEnv: wfEnv });
-  assert.equal(featRun.code, 0, `feature workflow start failed: ${featRun.stderr}\n${featRun.stdout}`);
-  const cardRes = await fx.cli(['workflow', 'card', '43'], { extraEnv: wfEnv });
-  assert.equal(cardRes.code, 0, `workflow card failed: ${cardRes.stderr}\n${cardRes.stdout}`);
-  assert.match(cardRes.stdout, /43|Story|Request|Next/i);
-  markExecuted('workflow.card');
-
-  // 14. workflow resend (cleanly reports no lost checks to resend)
-  const resendRes = await fx.cli(['workflow', 'resend', '43', '--said', 'Resend lost checks'], { extraEnv: wfEnv });
-  assert.notEqual(resendRes.code, 2, resendRes.stderr);
-  assert.doesNotMatch(resendRes.stderr, /ReferenceError|TypeError|SyntaxError/);
-  markExecuted('workflow.resend');
-
-  // 15. workflow publish (cleanly reports area not finished / cannot publish yet)
-  const pubRes = await fx.cli(['workflow', 'publish', '42'], { extraEnv: wfEnv });
-  assert.notEqual(pubRes.code, 2, pubRes.stderr);
-  assert.doesNotMatch(pubRes.stderr, /ReferenceError|TypeError|SyntaxError/);
-  markExecuted('workflow.publish');
-
-  // 16. workflow park & workflow yield (park inside run worktree, then yield)
-  const parkRes = await fx.cli(['workflow', 'park', '--reason', 'Waiting on external fixture'], {
-    cwd: worktree,
-    extraEnv: wfEnv,
-  });
-  assert.notEqual(parkRes.code, 2, parkRes.stderr);
-  assert.doesNotMatch(parkRes.stderr, /ReferenceError|TypeError|SyntaxError/);
-  markExecuted('workflow.park');
-
-  const yieldRes = await fx.cli(['workflow', 'yield', '42'], { extraEnv: wfEnv });
-  assert.notEqual(yieldRes.code, 2, yieldRes.stderr);
-  assert.doesNotMatch(yieldRes.stderr, /ReferenceError|TypeError|SyntaxError/);
-  markExecuted('workflow.yield');
-
-  // 17. workflow tidy --dry-run
-  const tidyRes = await fx.cli(['workflow', 'tidy', '--dry-run'], { extraEnv: wfEnv });
-  assert.equal(tidyRes.code, 0, `workflow tidy --dry-run failed: ${tidyRes.stderr}\n${tidyRes.stdout}`);
-  markExecuted('workflow.tidy');
-
-  // 18. workflow cancel + verify --cancelled in status
-  const cancelRes = await fx.cli(['workflow', 'cancel', '42'], { extraEnv: wfEnv });
-  assert.equal(cancelRes.code, 0, `workflow cancel failed: ${cancelRes.stderr}\n${cancelRes.stdout}`);
-  const cancelledStatus = await fx.cli(['workflow', 'status', '--cancelled'], { extraEnv: wfEnv });
-  assert.equal(cancelledStatus.code, 0, cancelledStatus.stderr);
-  assert.match(cancelledStatus.stdout, /42/);
-  markExecuted('workflow.cancel');
-});
-
 test('graph and dependencies commands execute end-to-end safely offline', async () => {
   const fx = makeIsolatedFixture('graph-deps');
 
@@ -2106,9 +1885,9 @@ test('removed commands, quiet aliases, and invalid flag/operand errors return ex
     { args: ['test', '--timeout', '999'], match: /Unsupported command or options/ },
     { args: ['test', '--target', 'bogus'], match: /Unsupported command or options/ },
     { args: ['completion', 'fish'], match: /Unsupported command or options/ },
-    // Missing operands & guidance
+    // Missing operands & retired workflow command
     { args: ['owner'], match: /Unsupported command or options/ },
-    { args: ['workflow', 'run', '42'], match: /Name the workflow: pdd workflow run small-change 42/ },
+    { args: ['workflow', 'list'], match: /Unknown command "workflow"/ },
     // Cross-flag semantic validation (exit 2)
     { args: ['test', '--target', 'code', '--timeout', '5'], match: /accepts only --json/ },
     { args: ['metrics', '--json', '--html'], match: /either --json or --html/ },
@@ -2119,12 +1898,6 @@ test('removed commands, quiet aliases, and invalid flag/operand errors return ex
     { args: ['autopilot', 'alert', '--issue', '42', '--kind', 'stuck'], match: /--input -/ },
     { args: ['autopilot', 'alerts', 'clear', '--discord-channel', '123456789012345678'], match: /only with pdd autopilot alerts set/ },
     { args: ['lint', '--local', '--remote'], match: /either --local or --remote/ },
-    { args: ['workflow', 'suite'], match: /--command COMMAND/ },
-    { args: ['workflow', 'prove', '42', '--test', 'npm test'], match: /requires nonblank --test and --expect/ },
-    { args: ['workflow', 'cost', '42', '--input', 'file.json'], match: /Use --input -/ },
-    { args: ['workflow', 'evidence', '42'], match: /--summary FILE/ },
-    { args: ['workflow', 'evidence-associate', '42'], match: /--workspace PATH/ },
-    { args: ['workflow', 'ack', 'req-1'], match: /--summary TEXT/ },
     { args: ['accounts', 'share', 'e2e-primary', '--all', '--with', 'alice'], match: /either LABEL or --all/ },
     { args: ['accounts', 'add', '--provider', 'claude', '--device-auth'], match: /only supported for Codex/ },
     { args: ['accounts', 'add', '--loop'], match: /interactive terminal/ },
@@ -2137,9 +1910,6 @@ test('removed commands, quiet aliases, and invalid flag/operand errors return ex
   }
 
   // Quiet aliases parse and run like their canonical prefixes
-  const quietWorkflowHelp = await fx.cli(['workflow', 'start', '--help']);
-  assert.equal(quietWorkflowHelp.code, 0, quietWorkflowHelp.stderr);
-  assert.match(quietWorkflowHelp.stdout, /pdd workflow run NAME ISSUE/);
   const quietSimHelp = await fx.cli(['sim', '--help']);
   assert.equal(quietSimHelp.code, 0, quietSimHelp.stderr);
   assert.match(quietSimHelp.stdout, /pdd simulate/);

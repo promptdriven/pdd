@@ -5,7 +5,6 @@ import {join,resolve} from 'node:path';
 import {spawn,spawnSync} from 'node:child_process';
 import {harbor,fakeRuntime,portsFor,root as packageRoot} from './runtime-fake.mjs';
 import {runCheck} from '../../src/runtime-seam.mjs';
-import {associateEvidenceWorkspace} from '../../src/workflow-runner.mjs';
 import {interfaceBlocks,proseSha256} from '../../src/runtime-seam.mjs';
 export const disclaimer='Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.';
 export const vectors=name=>JSON.parse(readFileSync(new URL(`../affected-checks/${name}-cases.json`,import.meta.url),'utf8'));
@@ -77,24 +76,3 @@ export function installGh(setup) {
   return `${directory}:${process.env.PATH}`;
 }
 export const hasState=setup=>existsSync(setup.state);
-
-// Register a real isolated historical association using the production owner and retained source.
-export async function historicalAssociation(setup,stage) {
-  git(setup.repo,'remote','add','origin','https://github.com/example/affected-fixture.git');
-  const head=git(setup.repo,'rev-parse','HEAD'),commonDir=join(setup.repo,'.git'),runDir=join(commonDir,'pdd/runs/17');
-  const run={v:1,number:17,repo:'example/affected-fixture',runId:'synthetic-affected-history',root:setup.repo,sourceRoot:setup.repo,commonDir,runDir,
-    issue:{number:17,title:'Synthetic historical receipt',url:'https://github.com/example/affected-fixture/issues/17'},workflow:'bug',agent:'codex',branch:git(setup.repo,'branch','--show-current'),baseBranch:'main',baseSha:head,state:'waiting',area:0,
-    areas:[{name:'prompt-pr',steps:['check'],optional:[],gate:'pr',then:'ask-code'},{name:'code',steps:['build','verify'],optional:[],gate:'pr'}],
-    done:{},gate:null,question:null,decisions:[],chats:[],pr:stage==='pr1'?[{stage:'prompt-pr',number:23,url:'https://github.com/example/affected-fixture/pull/23',branch:git(setup.repo,'branch','--show-current'),publishedHeadSha:head,state:'open'}]:[],startedAt:1,updatedAt:2};
-  put(setup.repo,'.git/pdd/runs/17/status.json',run);
-  const ports={env:{HOME:setup.home},now:()=>1000,readPrStatus:async()=>({}),
-    herdr:async()=>assert.fail('No chats for fixture association'),confirm:async()=>assert.fail('No approval for fixture association'),
-    execFile:async(program,args,options)=>{
-      assert.equal(program,'git');assert.ok(['rev-parse','ls-files','ls-tree','cat-file','init','update-index'].includes(args[0]));
-      const result=spawnSync(program,args,{...options,encoding:options.encoding==='buffer'?null:options.encoding??'utf8'});if(result.status!==0)throw Error(String(result.stderr));return {stdout:result.stdout,stderr:result.stderr};
-    }};
-  const result=await associateEvidenceWorkspace({ref:'17',workspace:setup.repo,stage,tests:['test/runtime/C.json'],...(stage==='before'?{commit:head}:{}),cwd:setup.repo},ports);
-  assert.equal(result.exitCode,0,result.message);
-  const saved=JSON.parse(readFileSync(join(runDir,'status.json'),'utf8'));
-  return {run:saved,association:saved.evidenceAssociations.at(-1),runDir};
-}

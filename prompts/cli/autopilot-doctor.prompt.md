@@ -159,8 +159,8 @@ Check these boundaries in order and continue after failures:
 
 - [Agent adapters](agent-adapters.prompt.md): sign-in parsers and non-model process port.
 - [Agent config](agent-config.prompt.md): provider definitions and profile environment.
-- [Workflow worktree](workflow-worktree.prompt.md): canonical GitHub origin normalization.
-- [Workflow agents](workflow-agents.prompt.md): read-only agy readiness.
+- Workflow worktree: canonical GitHub origin normalization.
+- Workflow agents: read-only agy readiness.
 - [Codex limits](codex-limits.prompt.md): read-only account usage states.
 - [Multi-harness login pool](login-pool.prompt.md): `isCloudAccountsActive`, `pddManagedCodexHome`, `managedCodexAuthPath` and `managedClaudeSettingsPath` for isolated Cloud Codex and Cloud Claude sign-in detection.
 - [PDD to Runtime seam](runtime-seam.prompt.md#public-contract): required `health` (`checkRuntimeHealth`) classification and `runtimeOrigin` address rules.

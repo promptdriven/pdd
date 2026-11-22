@@ -77,7 +77,7 @@ The seam holds no mutable request state and loads zero additional pdd or Runtime
 - [Shared secret redaction](secret-redaction.prompt.md): required generation context for the shared host `redaction` port (`remember`, `redact`, `known`).
 - [Agent configuration](agent-config.prompt.md) and [Agent adapters](agent-adapters.prompt.md): required generation context for `loadAgentDefinitions`, `discoverAgents`, and `runAgentProcess`.
 - [Prompt approval](prompt-approve.prompt.md): required generation context for Try approval ports.
-- [Workflow runner](workflow-runner.prompt.md), [Workflow runs](workflow-runs.prompt.md), and [Workflow results](workflow-results.prompt.md): required generation context for evidence eligibility, workflow base SHA, and native Story lint assessment ports.
+- Workflow runner, Workflow runs, and Workflow results: required generation context for evidence eligibility, workflow base SHA, and native Story lint assessment ports.
 - [Product workflow](product.prompt.md): required generation context for `parseProductDocuments` and `parseProductWorldWriters` ports.
 - [Test selection](test-selection.prompt.md), [PDD exit codes](runtime-exit.prompt.md), and [Prompt tests PR words](prompt-tests-words.prompt.md): required generation context for selection, exit-code, and PR-word ports and compatibility exports.
 - [SVG layout lint](svg-layout.prompt.md), [Repo hygiene lint](repo-hygiene-lint.prompt.md), [Short scenario compiler](scenario-compile.prompt.md), and [Screen comparison](screen-compare.prompt.md): required generation context for local drawing, repository hygiene, Short JSON scenario compilation, and screen check ports.
@@ -85,6 +85,6 @@ The seam holds no mutable request state and loads zero additional pdd or Runtime
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "0363f190e1eefd7f0f19243c7d6682b435a06d185a711f095cf5f66e7f137917","reason":"Re-exports live JavaScript ESM module bindings from @promptdriven/runtime-client as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "060a1e889a771c2f07a8564d01e0ab82e3e8ad413ab8e768ade15d27ef10a736","reason":"Re-exports live JavaScript ESM module bindings from @promptdriven/runtime-client as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>

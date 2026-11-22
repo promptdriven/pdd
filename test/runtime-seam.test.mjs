@@ -860,12 +860,6 @@ registerHooks({
   }
 
   const bin = join(root, 'bin/pdd.mjs');
-  const replayChildExpr = 'source.identity({root:process.argv[1],tests:JSON.parse(process.argv[2])}).files';
-  assert.ok(
-    readFileSync(join(root, 'src/workflow-replay.mjs'), 'utf8').includes(replayChildExpr),
-    'SEAM5 replayScript must match src/workflow-replay.mjs selectedFiles child expression',
-  );
-  const replayScript = `import {source} from ${JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href)};process.stdout.write(JSON.stringify(${replayChildExpr}));`;
   const launcherScript = 'import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.exitCode = 125; });';
   const probes = [
     ['cli:--help', [bin, '--help'], repo],
@@ -892,22 +886,12 @@ registerHooks({
     ['cli:product-status', [bin, 'product', 'status'], repo],
     ['cli:product-next', [bin, 'product', 'next'], repo],
     ['cli:product-start', [bin, 'product', 'start', 'r1', '--no-run'], repo],
-    ['cli:workflow-list', [bin, 'workflow', 'list'], repo],
-    ['cli:workflow-status', [bin, 'workflow', 'status'], repo],
-    ['cli:workflow-run', [bin, 'workflow', 'run', 'feature', '1'], nonGit],
-    ['cli:workflow-done', [bin, 'workflow', 'done', 'story'], nonGit],
-    ['cli:workflow-publish', [bin, 'workflow', 'publish', '1'], nonGit],
-    ['cli:workflow-view', [bin, 'workflow', 'view', '1'], nonGit],
-    ['cli:workflow-cost', [bin, 'workflow', 'cost', '1'], nonGit],
-    ['cli:workflow-prove', [bin, 'workflow', 'prove', '1', '--test', 'true', '--expect', 'ok'], nonGit],
     ['cli:autopilot-status', [bin, 'autopilot', 'status'], nonGit],
     ['cli:autopilot-logs', [bin, 'autopilot', 'logs'], nonGit],
     ['cli:autopilot-doctor', [bin, 'autopilot', 'doctor'], repo],
     ['cli:autopilot-regressions', [bin, 'autopilot', 'regressions'], nonGit],
     ['cli:autopilot-alerts', [bin, 'autopilot', 'alerts', 'clear'], nonGit],
     ['cli:autopilot-off', [bin, 'autopilot', 'off'], nonGit],
-    ['child:workflow-worker-completion', [join(root, 'src/workflow-worker-completion.mjs'), '{}'], nonGit],
-    ['child:workflow-replay-selector', ['--input-type=module', '-e', replayScript, repo, JSON.stringify(['tests/a.json'])], nonGit],
     ['child:try-doors-launcher', ['--input-type=commonjs', '-e', launcherScript, '--', pathToFileURL(join(root, 'src/try-doors.mjs')).href, join(scratch, 'missing.door.json')], nonGit],
     ['child:scripts/autopilot-smoke.mjs', [join(root, 'scripts/autopilot-smoke.mjs')], nonGit],
     ['tick:autopilot-launcher', [join(root, 'src/autopilot-launcher.mjs'), join(scratch, 'missing-state.json')], nonGit],
@@ -922,7 +906,7 @@ registerHooks({
 
   const ACYCLIC_ENTRIES = new Set([
     'cli:--help', 'cli:owner', 'cli:update', 'cli:files', 'cli:approve',
-    'child:workflow-replay-selector', 'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
+    'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
     'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
   const ZERO_SRC_ENTRIES = new Set([
@@ -930,13 +914,12 @@ registerHooks({
   ]);
   const LIGHT_ENTRIES = new Set([
     'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion',
-    'cli:files', 'cli:owner', 'cli:update', 'cli:approve', 'cli:workflow-list',
+    'cli:files', 'cli:owner', 'cli:update', 'cli:approve',
     'cli:jobs', 'cli:contracts', 'cli:contracts-sync', 'cli:simulate', 'cli:mcp',
-    'child:workflow-replay-selector', 'child:try-doors-launcher',
+    'child:try-doors-launcher',
     'lib:svg-layout.mjs', 'lib:prompt-approve.mjs', 'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
   const HEAVY_ORCHESTRATORS = new Set([
-    'src/workflow-runner.mjs',
     'src/autopilot-core.mjs',
     'src/product.mjs',
   ]);
@@ -987,7 +970,7 @@ registerHooks({
 
   for (const [cmdArgs, suffix] of [
     [['test', 'a'], '/file-owner.mjs'],
-    [['simulate', '--stop', 'a'], '/prompt-approve.mjs'],
+    [['simulate', '--stop', 'a'], '/approve-prompt.mjs'],
   ]) {
     const checkOrTryFail = runWithRejectedModule(suffix, [bin, ...cmdArgs], repo);
     assert.equal(checkOrTryFail.status, 3);
@@ -997,10 +980,9 @@ registerHooks({
     );
   }
 
-  // Lazy-loading proof: rejecting screen-compare.mjs or workflow-eligibility.mjs must not break ordinary lint --local or mcp startup.
+  // Lazy-loading proof: rejecting screen-compare.mjs must not break ordinary lint --local or mcp startup.
   assert.equal(runWithRejectedModule('/screen-compare.mjs', [bin, 'lint', '--local'], repo).status, 0);
-  assert.equal(runWithRejectedModule('/workflow-eligibility.mjs', [bin, 'lint', '--local'], repo).status, 0);
-  assert.equal(runWithRejectedModule('/workflow-eligibility.mjs', [bin, 'mcp']).status, 0);
+  assert.equal(runWithRejectedModule('/screen-compare.mjs', [bin, 'mcp']).status, 0);
 
   for (const suffix of ['/runtime-client.mjs', '/product-documents.mjs']) {
     const mcpFail = runWithRejectedModule(suffix, [bin, 'mcp']);
@@ -1018,7 +1000,7 @@ registerHooks({
 
   const launcherFailScript = 'import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.stderr.write("pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\\n"); process.exitCode = 125; });';
   const launcherFail = runWithRejectedModule(
-    '/prompt-approve.mjs',
+    '/line-reader.mjs',
     ['--input-type=commonjs', '-e', launcherFailScript, '--', pathToFileURL(join(root, 'src/try-doors.mjs')).href, join(scratch, 'missing.door.json')],
   );
   assert.equal(launcherFail.status, 125);
@@ -1028,7 +1010,6 @@ registerHooks({
     runWithRejectedModule('/runtime-output.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`]).status,
     0,
   );
-  assert.equal(runWithRejectedModule('/runtime-output.mjs', [join(root, 'src/workflow-worker-completion.mjs'), '{}']).status, 0);
 });
 
 test('SEAM6: installed @promptdriven/runtime-client modules do not import or address host pdd paths', () => {
@@ -2089,45 +2070,11 @@ test('SEAM15 (R2b-2): src/runtime-seam.mjs supports base standalone call forms w
   assert.equal(report.passed, true);
 });
 
-test('SEAM16 (S2): workflow-worker-completion keeps top-level await (exit 13 on unsettled drain) and no createRequire graph reaches top-level await', async t => {
+test('SEAM16 (S2): no createRequire graph reaches top-level await', async () => {
   const { spawnSync } = await import('node:child_process');
-  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
   const { dirname, resolve } = await import('node:path');
-  const { pathToFileURL } = await import('node:url');
 
-  // 1. workflow-worker-completion.mjs retains its top-level await and exits 13 when waitForWorkerCompletion stays unsettled at drain.
-  const workerSrc = readFileSync(join(root, 'src/workflow-worker-completion.mjs'), 'utf8');
-  assert.match(workerSrc, /\bawait\s+waitForWorkerCompletion\s*\(\s*identity\s*\)\s*;/);
-
-  const tmp = mkdtempSync(join(tmpdir(), 'pdd-s2-'));
-  t.after(() => rmSync(tmp, { recursive: true, force: true }));
-  const unsettledHook = join(tmp, 'unsettled-exec.mjs');
-  writeFileSync(
-    unsettledHook,
-    "import { registerHooks } from 'node:module';\n" +
-      "registerHooks({ load(url, ctx, next) {\n" +
-      "  if (url.endsWith('/src/workflow-worker-completion.mjs')) {\n" +
-      "    const res = next(url, ctx);\n" +
-      "    const src = String(res.source).replace('const exec = promisify(execFile);', 'const exec = () => new Promise(() => {});');\n" +
-      "    return { ...res, source: src };\n" +
-      "  }\n" +
-      "  return next(url, ctx);\n" +
-      "} });\n",
-  );
-  const workerRun = spawnSync(
-    process.execPath,
-    [
-      '--import',
-      pathToFileURL(unsettledHook).href,
-      join(root, 'src/workflow-worker-completion.mjs'),
-      JSON.stringify({ runId: 'r1', number: 1, sourceRoot: tmp, runDir: tmp, area: 'plan', paneId: '%1', startAnchor: 0, coordinatorPaneId: '%2' }),
-    ],
-    { cwd: root, encoding: 'utf8', timeout: 8000 },
-  );
-  assert.equal(workerRun.status, 13, `expected unsettled top-level await exit 13, got ${workerRun.status} (${workerRun.stderr})`);
-
-  // 2. Every module that uses createRequire in src/ has zero top-level await anywhere in its reachable require() graphs.
+  // Every module that uses createRequire in src/ has zero top-level await anywhere in its reachable require() graphs.
   const requireHosts = walk('src').filter(rel => readFileSync(join(root, rel), 'utf8').includes('createRequire'));
   assert.ok(requireHosts.length > 0, 'expected at least one createRequire host in src/');
 

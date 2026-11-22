@@ -3,15 +3,25 @@
 import {rememberSecrets} from './secret-redaction.mjs';
 import * as fs from 'node:fs';
 import {randomUUID} from 'node:crypto';
+import {resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {serializeValidationReceipt, redactingLines, validationLog, safeEvidenceText} from './validation-evidence.mjs';
-import {executeSuite} from './test-suite-queue.mjs';
+import {executeSuite} from './autopilot/suite-executor.mjs';
 import {parseTestSummaryOutput} from './autopilot/core/test-runners.mjs';
+
+export const RECORDER_ENTRY_PATH = fileURLToPath(import.meta.url);
+const isDirectEntry = () => {
+  if (!process.argv[1]) return false;
+  try { return fs.realpathSync(process.argv[1]) === fs.realpathSync(RECORDER_ENTRY_PATH); }
+  catch { return resolve(process.argv[1]) === RECORDER_ENTRY_PATH; }
+};
 
 let started = false;
 const send = (message, done = () => {}) => {
   if (process.connected) try { process.send(message, done); return; } catch {}
   done();
 };
+if (isDirectEntry() || (!process.argv[1] && typeof process.send === 'function')) {
 // Losing the caller is not a request to cancel an already admitted command.
 process.on('disconnect', () => { if (!started) process.exitCode = 1; });
 process.on('message', async message => {
@@ -159,3 +169,4 @@ process.on('message', async message => {
     if (process.connected) process.disconnect();
   }
 });
+}

@@ -80,7 +80,7 @@ const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
 const BLOCK_MARKER = /<!-- pdd:core-blocked-by:([\w.-]+\/[\w.-]+)?#(\d+)(?::([a-z0-9.-]+))? -->/;
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // #3227 fix 5: the short job rules file of this package (RUNBOOK §15 and the rules that a job needs, in one read).
-const JOB_RULES = '"$PDD_SKILLS/pdd-prompting/autopilot-job-rules.md"';
+const JOB_RULES = '"$PDD_SKILLS/pdd/references/autopilot-job-rules.md"';
 const RULES_LINE = `Read ${JOB_RULES} in full before you write the PR body.`;
 // A job that needs a person's decision posts one question and adds this label; the person answers in a comment and
 // removes the label, and then the issue is ready again.
@@ -2140,7 +2140,7 @@ const engineVersion = ctx => ctx.ports.version ?? readJson(ctx.fs, join(PACKAGE_
 // Claude $CLAUDE_CONFIG_DIR/skills (absolute) else ~/.claude/skills; and the engine's own skills version.
 function skillsCheck(ctx, agent = ctx.state.agent, baseEnv = ctx.ports.env ?? process.env) {
   const home = baseEnv.HOME, dir = join(PACKAGE_ROOT, 'skills');
-  const version = /^\s*pdd-skills:\s*(\d+\.\d+\.\d+)\s*$/m.exec(readText(ctx.fs, join(dir, 'pdd-feature', 'SKILL.md')) ?? '')?.[1] ?? null;
+  const version = /^\s*pdd-skills:\s*(\d+\.\d+\.\d+)\s*$/m.exec(readText(ctx.fs, join(dir, 'pdd', 'SKILL.md')) ?? '')?.[1] ?? null;
   const claude = typeof baseEnv.CLAUDE_CONFIG_DIR === 'string' && baseEnv.CLAUDE_CONFIG_DIR.startsWith('/') ? join(baseEnv.CLAUDE_CONFIG_DIR, 'skills') : home ? join(home, '.claude', 'skills') : null;
   const read = (agent?.kind === 'claude' ? [claude] : [home ? join(home, '.agents', 'skills') : null]).filter(Boolean);
   return { dir, version, read };
@@ -3517,7 +3517,7 @@ async function prepareReviewContext(ctx, job, cwd, scoped = null) {
   ctx.fs.writeFileSync(diffFile, boundedFullDiff, { mode: 0o600 });
 
   let rulesFile = null;
-  const rulesSrc = readText(ctx.fs, join(PACKAGE_ROOT, 'skills', 'pdd-prompting', 'autopilot-job-rules.md'));
+  const rulesSrc = readText(ctx.fs, join(PACKAGE_ROOT, 'skills', 'pdd', 'references', 'autopilot-job-rules.md'));
   if (rulesSrc !== null) {
     rulesFile = join(dir, 'autopilot-job-rules.md');
     ctx.fs.writeFileSync(rulesFile, rulesSrc, { mode: 0o600 });

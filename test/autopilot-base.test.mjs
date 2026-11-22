@@ -1,20 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { checkAutopilotBase } from '../src/autopilot-base.mjs';
 import { githubListItems } from '../src/github-calls.mjs';
-import { fixture } from './helpers/workflow-runner-fixture.mjs';
 
 const capture = () => ({ text: '', write(value) { this.text += value; } });
 async function baseWorld(t, changes = {}) {
-  const f = await fixture(t);
-  assert.equal((await f.run()).exitCode, 0);
-  const run = f.record();
-  run.baseBranch = 'integration/topic';
-  run.pr = [{ number: 23, url: 'https://github.com/example/project/pull/23', base: run.baseBranch, stage: 'change' }];
-  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
+  const base = mkdtempSync(join(tmpdir(), 'pdd-autopilot-base-'));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const source = join(base, 'repo'), home = join(base, 'home');
+  mkdirSync(source); mkdirSync(home);
+  execFileSync('git', ['init', '-q'], { cwd: source });
+  const commonDir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: source, encoding: 'utf8' }).trim();
+  const runDir = join(commonDir, 'pdd', 'runs', '17');
+  mkdirSync(runDir, { recursive: true });
+  const run = {
+    v: 1, number: 17, repo: 'example/project', root: source, sourceRoot: source, commonDir, runDir,
+    baseBranch: 'integration/topic',
+    pr: [{ number: 23, url: 'https://github.com/example/project/pull/23', base: 'integration/topic', stage: 'change' }],
+  };
+  writeFileSync(join(runDir, 'status.json'), JSON.stringify(run));
+  const f = {
+    base, source,
+    ports: {
+      env: { HOME: home, PATH: process.env.PATH },
+      execFile: async (file, args, opts = {}) => ({
+        code: 0,
+        stdout: execFileSync(file, args, { cwd: opts.cwd ?? source, encoding: 'utf8' }),
+        stderr: '',
+      }),
+    },
+  };
   const calls = [], world = {
     pull: { number:23, state:'open', base:{ref:run.baseBranch, repo:{full_name:run.repo}} },
     metadata: {default_branch:'trunk'},

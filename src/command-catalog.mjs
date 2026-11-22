@@ -1,9 +1,9 @@
 // Generated from prompts/cli/command-catalog.prompt.md (sha256: cecf3cbea83fe385a315d58d34958791c9e414f366ca3ad625eb232e5ffb4b5e).
 import { NAMES } from './shared/command-names.mjs';
 const form = (form, description) => Object.freeze({ form, description });
-// The one place for the words of five commands; a later rename changes only NAMES.
+// The one place for the words of core commands; a later rename changes only NAMES.
 export { NAMES };
-const { test, lint, simulate, run, requestUptake = 'ack' } = NAMES;
+const { test, lint, simulate } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const group = (title, lines) => Object.freeze({ title, lines: Object.freeze(lines) });
 export const PUBLIC_HELP_TEXT = Object.freeze({
@@ -43,19 +43,9 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
       "  pdd accounts use|next|sync   Pin, rotate or refresh managed logins.",
       "  pdd accounts share|auto|...  Share accounts or manage shell auto-switch.",
     ]),
-    group("Workflows & product (pdd workflow --help, pdd product --help)", [
+    group("Product & dependency graph (pdd product --help)", [
       "  pdd product status|next|start  Inspect or launch planned product runs.",
-      "  pdd workflow list [--json]     List bundled workflows, areas and gates.",
-      `  pdd workflow ${run} NAME ISSUE    Start an issue workflow chat in Herdr.`,
-      "  pdd workflow status [ISSUE]    Show active runs, waiting gates and PRs.",
-      "  pdd workflow view|card [ISSUE] Review run gates, files or Story card.",
-      "  pdd workflow approve [ISSUE]   Approve a ready gate and draft prompts.",
-      "  pdd workflow changes|open ...  Send a change request or reopen a chat.",
-      "  pdd workflow prove|suite ...   Run base/head proof or queued test suite.",
-      "  pdd workflow done STEP         Record step completion in a run worktree.",
-      "  pdd workflow publish ISSUE     Publish a completed code PR area.",
-      "  pdd workflow ask QUESTION      Mark a run chat waiting on a person.",
-      `  pdd workflow ${requestUptake} REQUEST_ID --summary TEXT  Acknowledge a change request.`,
+      "  pdd product contracts          List shared product records and stale Stories.",
       "  pdd graph [--open] [--issue N] Inspect or open issue dependency graph.",
     ]),
     group("Autopilot (pdd autopilot --help)", [
@@ -79,13 +69,12 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
   ]),
   focusedHelpLines: Object.freeze([
     `Focused help: run pdd <command> --help (for example, pdd ${test} --help,`,
-    "pdd approve --help, pdd workflow --help, or pdd autopilot --help) for",
+    "pdd approve --help, pdd product --help, or pdd autopilot --help) for",
     "all options, defaults, approval heredocs, and execution details.",
   ]),
   closingLines: Object.freeze([
     "Open Codex or Claude as usual and invoke the PDD skill: $pdd in Codex,",
     "/pdd in Claude Code (covers product, bug, feature, and small-change).",
-    `workflow ${run} opens the first area chat in Herdr session pdd and exits.`,
     "The CLI has no merge command. In auto mode, Autopilot merges its own pull",
     "request after CI, a fresh review and the full test suite pass; required",
     "human approvals still apply.",
@@ -221,63 +210,6 @@ const routes = [
     forms: [form('pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy|ENTRY] [--through prompt-pr|code] [--base BRANCH]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue; --through prompt-pr|code sets the completion target and forwards it; --base selects an existing origin branch; ENTRY is a name from ~/.config/pdd/agents.json. No interpreter calls.')] },
   { id: 'product.contracts', prefix: ['product', 'contracts'], local: 'contracts', operands: [], options: [],
     forms: [form('pdd product contracts', 'List shared product records, their users and Stories stale since their last check (alias: pdd contracts); local working files only.')] },
-  { id: 'workflow.list', prefix: ['workflow', 'list'], local: 'workflow-list', operands: [], options: [{ name: '--json', kind: 'flag' }],
-    forms: [form('pdd workflow list [--json]', 'List the bundled workflows with their areas and gates.')] },
-  // `workflow start` is a quiet word for now; a later change moves it to `removed`: one data edit.
-  { id: 'workflow.run', prefix: ['workflow', run], local: 'workflow-run', quiet: ['workflow', 'start'],
-    operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--model',kind:'text'},{name:'--herdr-agent-name',kind:'text'},{name:'--codex-threads',kind:'text'},{name:'--agent',kind:'text',choices:['codex','claude','gemini','agy']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'},{name:'--draft',kind:'flag'},{name:'--through',kind:'value',choices:['prompt-pr','code']},{name:'--origin',kind:'value',choices:['manual','autopilot','unknown']},{name:'--decision-id',kind:'text'},{name:'--outcome',kind:'value',choices:['code','prompt-only']}],
-    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini|agy|ENTRY] [--base BRANCH] [--draft] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]`, 'Start the first area chat for a GitHub issue in Herdr and exit; ENTRY is a name from ~/.config/pdd/agents.json; --base selects an existing origin branch (default: repository default); --draft requests draft PRs for this run; --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; --origin, --decision-id and --outcome record optional metrics metadata; --through prompt-pr stops after PR 1 (normal, automatic or strict runs) and --through code goes on to the code PR in a normal run; pdd later pushes the issue branch and opens a real PR.')] },
-  { id: 'workflow.status', prefix: ['workflow', 'status'], local: 'workflow-status',
-    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--all',kind:'flag'},{name:'--cancelled',kind:'flag'},{name:'--local',kind:'flag'},{name:'--json',kind:'flag'}],
-    forms: [form('pdd workflow status [ISSUE] [--all] [--cancelled] [--local] [--json]', 'Show this repo\'s runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first. --local reads saved local state only (no GitHub or Herdr calls).')] },
-  { id: 'workflow.view', prefix: ['workflow', 'view'], local: 'workflow-view',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow view ISSUE', 'Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.')] },
-  { id: 'workflow.card', prefix: ['workflow', 'card'], local: 'workflow-card',
-    operands: [{name:'issue',type:'issue',optional:true}], options: [],
-    forms: [form('pdd workflow card [ISSUE]', "Print the run's Story card from its real files: the request, the Story, the test cases, the prompts that change and the next step. Read-only; no GitHub, Herdr or interpreter call.")] },
-  { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
-    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--said',kind:'text'},{name:'--draft',kind:'flag'},{name:'--through',kind:'value',choices:['prompt-pr','code']}],
-    forms: [form('pdd workflow approve [ISSUE] [--said WORDS] [--draft]', 'Approve the gate and all its selected draft prompts in one step; --draft requests draft PRs at the current unpublished gate; --through prompt-pr stops after PR 1 (normal, automatic or strict runs) and --through code records the person\'s code choice from the Story card of a normal run. ' + approvalHelp('pdd workflow approve N'))] },
-  { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
-    operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [],
-    forms: [form('pdd workflow changes ISSUE TEXT', 'Send a change request to the same area chat; the gate stays open.')] },
-  { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
-    operands: [{name:'issue',type:'issue'}, {name:'area',type:'workflow-name',optional:true}], options: [{name:'--new',kind:'flag'},{name:'--model',kind:'text'},{name:'--herdr-agent-name',kind:'text'},{name:'--codex-threads',kind:'text'}],
-    forms: [form('pdd workflow open ISSUE [AREA] [--new] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]', 'Focus or resume a saved area chat; --new replaces the current session while keeping the run and approvals.')] },
-  { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
-    operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'},{name:'--timeout',kind:'integer',min:1,max:120}],
-    forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]', 'Run committed changed tests on the fetched base branch merge-base and committed head with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd\'s own result.')] },
-  { id: 'workflow.suite', prefix: ['workflow', 'suite'], local: 'workflow-suite', operands: [], options: [{name:'--command',kind:'text'},{name:'--timeout',kind:'integer',min:0,max:120}], forms: [form('pdd workflow suite --command COMMAND [--timeout MIN]', 'Run a full suite through the shared machine queue (machine-sized check slots, 30-minute execution timeout; --timeout 0 runs it with no time limit, for a caller that watches it).')] },
-  { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
-    operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'},{name:'--skipped',kind:'text'},{name:'--no-publish',kind:'flag'}],
-    forms: [form('pdd workflow done STEP [--summary TEXT] [--skipped REASON] [--no-publish]', `For the agent in a run worktree: record a step with pdd's own latest pdd ${test}, pdd ${lint} and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why; --no-publish records code-area completion locally before publishing.`)] },
-  { id: 'workflow.publish', prefix: ['workflow', 'publish'], local: 'workflow-publish', operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow publish ISSUE', 'Publish a finished code PR area without recording its steps again.')] },
-  { id: 'workflow.ask', prefix: ['workflow', 'ask'], local: 'workflow-ask',
-    operands: [{name:'question',type:'text',repeat:true}], options: [],
-    forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },
-  { id: 'workflow.request-uptake', prefix: ['workflow', requestUptake], local: 'workflow-request-uptake',
-    operands: [{name:'request-id',type:'text'}], options: [{name:'--summary',kind:'text'}],
-    forms: [form(`pdd workflow ${requestUptake} REQUEST_ID --summary TEXT`, 'For the agent in a run worktree: acknowledge a delivered change request with a short note.')] },
-  { id: 'workflow.resend', prefix: ['workflow','resend'], local: 'workflow-resend',
-    operands: [{name:'issue',type:'issue',repeat:true}], options: [{name:'--said',kind:'text'}],
-    forms: [form('pdd workflow resend ISSUE... [--said WORDS]', 'Record one person decision and resend each lost check once; --said - reads exact words from stdin; strict mode requires a person terminal.')] },
-  { id: 'workflow.park', prefix: ['workflow','park'], local: 'workflow-park', operands: [], options: [{name:'--reason',kind:'text'},{name:'--step',kind:'text'},{name:'--interpreter',kind:'flag'},{name:'--blocker',kind:'text'},{name:'--until',kind:'text'},{name:'--route',kind:'text'}], forms: [form('pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]', 'Record and park a missing supported PDD route.'), form('pdd workflow park --reason TEXT --blocker KIND [--until VALUE]', 'Wait for a named external blocker.'), form('pdd workflow park --reason TEXT --step STEP', 'Record an environment failure of a named validation step.'), form('pdd workflow park --reason TEXT', 'Record an automatic stop from its run worktree.'), form('pdd workflow park --interpreter --reason TEXT', 'Wait for the interpreter after an AI-service, busy or network result of its interpreter check: no question to a person, the worker slot can be yielded, and Autopilot wakes the run when the interpreter is back.')] },
-  { id: 'workflow.yield', prefix: ['workflow','yield'], local: 'workflow-yield', operands: [{name:'ref',type:'text'}], options: [], forms: [form('pdd workflow yield N', 'Hand off automatic capacity after the worker has stopped.')] },
-  { id: 'workflow.tidy', prefix: ['workflow','tidy'], local: 'workflow-tidy', operands: [], options: [{name:'--dry-run',kind:'flag'}], forms: [form('pdd workflow tidy [--dry-run]', 'Close safely finished chat tabs on this machine; dry-run reports without changes.')] },
-  { id: 'workflow.cancel', prefix: ['workflow', 'cancel'], local: 'workflow-cancel',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow cancel ISSUE', 'Cancel the run and close its Herdr tabs; keep the worktree and branch.')] },
-  { id: 'workflow.cost', prefix: ['workflow', 'cost'], local: 'workflow-cost', operands: [{name:'issue',type:'issue'}], options: [{name:'--input',kind:'text'}],
-    forms: [form('pdd workflow cost ISSUE [--input -]', 'Read local issue costs or record measured suite/person minutes and outcome from JSON stdin.')] },
-  { id: 'workflow.evidence', prefix: ['workflow', 'evidence'], local: 'workflow-evidence',
-    operands: [{name:'issue',type:'issue'}], options: [{name:'--summary',kind:'text'}],
-    forms: [form('pdd workflow evidence ISSUE --summary FILE', 'Record source-verified saved check JSON without rerunning steps, gates or publication.')] },
-  { id: 'workflow.evidence-associate', prefix: ['workflow', 'evidence-associate'], local: 'workflow-evidence-associate',
-    operands: [{name:'issue',type:'issue'}], options: [{name:'--workspace',kind:'text'},{name:'--stage',kind:'value',choices:['current','pr1','before']},{name:'--commit',kind:'text'},{name:'--test',kind:'text-list'}],
-    forms: [form('pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1|before [--commit SHA] --test PATH...', "Register this run's evidence workspace, stage and selected tests; before needs the commit of an earlier checked source; no checks or workflow progress.")] },
   { id: 'graph', prefix: ['graph'], local: 'issue-dependency-graph', operands: [], options: [{name:'--open',kind:'flag'},{name:'--issue',kind:'text'},{name:'--repo',kind:'text'}],
     forms: [form('pdd graph', 'Read native dependencies and saved reviews without AI.'), form('pdd graph --open', 'Open the local viewer.'), form('pdd graph --issue N', 'Select a root issue.'), form('pdd graph --open --issue N --repo OWNER/REPO', 'Open a selected issue in an explicit repository, including outside a checkout.')] },
   // Autopilot

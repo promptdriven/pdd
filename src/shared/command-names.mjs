@@ -1,2 +1,2 @@
 // Layer-0 canonical public CLI command names shared by CLI catalog and core runtime seam.
-export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
+export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run' });

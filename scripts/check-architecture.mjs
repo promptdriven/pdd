@@ -18,7 +18,7 @@ export { buildRatchetEntries, formatFailureDiagnostic, parseJsModuleEdges, resol
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ROOT = resolve(SCRIPT_DIR, '..');
 export const DEFAULT_RATCHET_PATH = join(SCRIPT_DIR, 'architecture-ratchet.json');
-export const LAYERS = ['cli', 'setup', 'core', 'accounts', 'autopilot', 'shared', 'legacy-workflow', 'vendor'];
+export const LAYERS = ['cli', 'setup', 'core', 'accounts', 'autopilot', 'shared'];
 const RULE_ORDER = ['circular-import', 'layer-boundary', 'legacy-workflow-import', 'path-string-spawn', 'unresolved-local-import', 'disallowed-npm-import', 'unmapped-layer'];
 
 const ALLOWED_IMPORTS = {
@@ -28,8 +28,6 @@ const ALLOWED_IMPORTS = {
   setup: new Set(['setup', 'shared']),
   accounts: new Set(['accounts', 'shared']),
   shared: new Set(['shared']),
-  'legacy-workflow': new Set(['legacy-workflow', 'shared', 'core', 'setup', 'accounts', 'autopilot', 'cli', 'vendor']),
-  vendor: new Set(['vendor']),
 };
 
 const FLAT_LAYER_MAP = new Map([
@@ -58,12 +56,9 @@ export function classifyLayer(relPath) {
   if (p.startsWith('src/core/')) return 'core';
   if (p.startsWith('src/autopilot/')) return 'autopilot';
   if (p.startsWith('src/shared/')) return 'shared';
-  if (p.startsWith('src/legacy-workflow/')) return 'legacy-workflow';
-  if (p.startsWith('src/vendor/')) return 'vendor';
   if (p.startsWith('src/') && !p.slice(4).includes('/')) {
     const base = p.slice(4);
     if (FLAT_LAYER_MAP.has(base)) return FLAT_LAYER_MAP.get(base);
-    if (base.startsWith('workflow-')) return 'legacy-workflow';
     if (base.startsWith('autopilot-') || base.startsWith('issue-') || base.startsWith('metrics-') || base.startsWith('test-suite-')) return 'autopilot';
     if (base.startsWith('product') || base.startsWith('screen-')) return 'core';
   }

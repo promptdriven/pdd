@@ -162,7 +162,7 @@ test('3596 CLI & runtime-seam forward prompts/app.prompt.md, --stop prompts/app.
     hasRunTryPort: false,
   });
 
-  // With @promptdriven/runtime-client@1.1.1, `pdd simulate prompts/app.prompt.md` is accepted natively
+  // With runtime-client@1.1.1, `pdd simulate prompts/app.prompt.md` is accepted natively
   // and proceeds past Story discovery to runtime authentication (exit 5 without gh sign-in, no old-client refusal).
   const cliStreams = captureStreams();
   const env = { HOME: home, PDD_RUNTIME_URL: 'https://runtime.example', PDD_STATE_DIR: state };
@@ -852,16 +852,14 @@ test('3595/3596 R1-5/6: malformed non-object state_schema warns, screens[] keeps
   assert.ok(idxWarnings.some(line => /screen-2/.test(line)), `expected screen-2 in stylesheet warning, got:\n${idxWarnings.join('\n')}`);
   assert.ok(!idxWarnings.some(line => /\bscreen "main"\b/.test(line)), idxWarnings.join('\n'));
 
-  // R1-6: docs document 4 top-level check targets and input as ref_target only
-  for (const rel of [
-    '../skills/pdd-prompting/RUNBOOK.md',
-    '../skills/pdd-prompting/guide.md',
-    '../skills/pdd-prompting/story-guide.md',
-    '../skills/pdd-prompting/runbook/checks-and-budgets.md',
-  ]) {
+  // R1-6: skill references document 4 top-level check targets and input as ref_target only
+  const storiesRef = readFileSync(new URL('../skills/pdd/references/stories.md', import.meta.url), 'utf8');
+  assert.doesNotMatch(storiesRef, /5-target|5 targets|five core check targets/i, 'skills/pdd/references/stories.md must not advertise 5 top-level targets');
+  assert.match(storiesRef, /\*\*4 targets:\*\*/, 'skills/pdd/references/stories.md must document 4 top-level targets');
+  assert.match(storiesRef, /ref_target/, 'skills/pdd/references/stories.md must clarify input as ref_target');
+  for (const rel of ['../skills/pdd/SKILL.md', '../skills/pdd/references/prompting.md']) {
     const content = readFileSync(new URL(rel, import.meta.url), 'utf8');
     assert.doesNotMatch(content, /5-target|5 targets|five core check targets/i, `${rel} must not advertise 5 top-level targets`);
-    assert.match(content, /ref_target/, `${rel} must clarify input as ref_target`);
   }
 });
 

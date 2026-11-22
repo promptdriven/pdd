@@ -40,4 +40,4 @@ Each problem is `{path, line, code, message, excerpt}`, where `excerpt` is the t
 ## Callers and context
 
 - [Story guide](../../skills/pdd/references/stories.md): authoring rules that this check enforces locally.
-- [Prompt approve](prompt-approve.prompt.md) and [workflow runner](workflow-runner.prompt.md): run `lintStories` on changed Story files at approval and pre-PR gates.
+- [Prompt approve](prompt-approve.prompt.md) and workflow runner: run `lintStories` on changed Story files at approval and pre-PR gates.

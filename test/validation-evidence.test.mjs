@@ -191,7 +191,7 @@ test('P0-8 review fix: test-suite-recorder flushes buffered post-overflow tail o
     import { registerHooks } from 'node:module';
     registerHooks({
       load(url, context, nextLoad) {
-        if (url.endsWith('/src/test-suite-queue.mjs')) {
+        if (url.endsWith('/src/autopilot/suite-executor.mjs')) {
           return {
             format: 'module',
             shortCircuit: true,

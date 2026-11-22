@@ -1,5 +1,5 @@
 // Generated from prompts/cli/completion.prompt.md (sha256: 6cf21ebda8c11a0eb521f53e1f32f111ccda79a8d6e46e30eeb5ded301e9350a).
-import { NAMES, PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
+import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 function add(map, key, value) {
   if (!map.has(key)) map.set(key, new Set());
@@ -39,9 +39,6 @@ function candidateMaps() {
 
 const quoteWords = (values) => [...values].sort().join(' ');
 
-// Read only the authoritative local catalog; names remain data, never shell source.
-const definitionNames = `pdd workflow list --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{try{const d=JSON.parse(s);process.stdout.write(d.workflows.map(x=>x.name).filter(n=>typeof n==="string"&&n.length<=64&&/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(n)).join(" "));}catch{}})'`;
-
 
 export function renderCompletion(shell) {
   if (shell !== 'bash' && shell !== 'zsh') throw new TypeError('Choose bash or zsh.');
@@ -59,10 +56,6 @@ export function renderCompletion(shell) {
       '_pdd_complete() {',
       '  local current="${COMP_WORDS[COMP_CWORD]}" choices',
       '  case "${COMP_WORDS[1]}:${COMP_WORDS[COMP_CWORD-1]}" in', bashValues, '  esac',
-      `  if [[ $COMP_CWORD == 3 && \${COMP_WORDS[1]} == workflow && \${COMP_WORDS[2]} == ${NAMES.run} ]]; then`,
-      `    choices="$(${definitionNames})"`,
-      '    COMPREPLY=( $(compgen -W "$choices" -- "$current") ); return',
-      '  fi',
       '  case "$COMP_CWORD" in',
       `    1) choices='${quoteWords(maps.first)}' ;;`,
       '    2) case "${COMP_WORDS[1]}" in', secondCases, '      *) choices="" ;;', '    esac ;;',
@@ -84,10 +77,6 @@ export function renderCompletion(shell) {
     '_pdd() {',
     '  local -a choices',
     '  case "${words[2]}:${words[CURRENT-1]}" in', zshValues, '  esac',
-    `  if [[ $CURRENT == 4 && $words[2] == workflow && $words[3] == ${NAMES.run} ]]; then`,
-    `    local names="$(${definitionNames})"`,
-    '    choices=(${=names}); _describe "PDD workflow" choices; return',
-    '  fi',
     '  case $CURRENT in',
     `    2) choices=(${quoteWords(maps.first)}) ;;`,
     '    3) case $words[2] in', secondZshCases, '      *) choices=() ;;', '    esac ;;',

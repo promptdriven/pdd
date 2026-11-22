@@ -18,8 +18,6 @@ import {
 import * as seam from '../src/runtime-seam.mjs';
 import { lintSvgLayouts } from '../src/svg-layout.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { associateEvidenceWorkspace } from '../src/workflow-runner.mjs';
-import { evidenceFixture } from './helpers/workspace-evidence-fixture.mjs';
 import { PLACE, fakeRuntime, harbor, portsFor, sink } from './helpers/runtime-fake.mjs';
 
 const SAMPLE_STORY = `# Finish a task
@@ -782,44 +780,8 @@ test('End-to-end seam integration: Short JSON works across findTests, preflight,
   assert.equal(JSON.parse(codeOut.text).stories[0].status, 'passed');
 });
 
-test('Audit fixes: workflow-runner before-the-fix association, composeProductTry (--product), and Simulator case import handle Short JSON omitting story_path', async t => {
-  // 1. workflow-runner associateEvidenceWorkspace (--stage before) with Short JSON omitting story_path
-  const f = await evidenceFixture(t);
-  writeFileSync(
-    join(f.root, 'tests/place-order.json'),
-    JSON.stringify({
-      entry_path: 'prompts/place_order.prompt.md',
-      steps: [
-        {
-          id: 's1',
-          op: 'place_order',
-          input: { customerName: 'Sam', pickupAt: '08:30', items: [{ itemId: 'espresso', size: 'S', quantity: 2 }] },
-          checks: { 1: [['result', '/totalCents', '=', 550]] },
-        },
-      ],
-    }, null, 2) + '\n',
-  );
-  f.git(f.root, 'add', 'tests/place-order.json');
-  f.git(f.root, 'commit', '-qm', 'Use Short JSON without story_path');
-  const shortBeforeHead = f.git(f.root, 'rev-parse', 'HEAD').trim();
-  const beforeSha = seam.captureSource(f.root, {
-    tests: ['tests/place-order.json'],
-    appMap: null,
-    allowMissingInterfaces: true,
-  }).sha256;
-
-  // Edit prompt on HEAD so current != before
-  writeFileSync(join(f.root, 'prompts/place_order.prompt.md'), readFileSync(join(f.root, 'prompts/place_order.prompt.md'), 'utf8') + '\nUpdated rule.\n');
-  f.git(f.root, 'commit', '-qam', 'Fix prompt');
-
-  const assoc = await associateEvidenceWorkspace(
-    { ref: '17', cwd: f.root, workspace: f.root, stage: 'before', commit: shortBeforeHead, tests: ['tests/place-order.json'] },
-    f.ports,
-  );
-  assert.equal(assoc.exitCode, 0, assoc.message);
-  assert.equal(f.read().evidenceAssociations.at(-1).source_sha256, beforeSha);
-
-  // 2. composeProductTry (pdd simulate --product --journey) compiles Short JSON journey omitting story_path & initial_world
+test('Audit fixes: composeProductTry (--product) and Simulator case import handle Short JSON omitting story_path', async t => {
+  // 1. composeProductTry (pdd simulate --product --journey) compiles Short JSON journey omitting story_path & initial_world
   const memFiles = new Map();
   const put = (p, v) => memFiles.set(`/project/${p}`, typeof v === 'string' ? v : JSON.stringify(v));
   const emptySchema = { type: 'object', properties: {}, required: [], additionalProperties: false };

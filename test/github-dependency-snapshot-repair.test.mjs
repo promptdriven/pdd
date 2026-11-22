@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { autopilotGithubWorld, analysisFor } from './helpers/autopilot-github-world.mjs';
 import { createDependencyReadPorts, readDependencySnapshot, dependencySnapshotStore } from '../src/issue-dependencies-github.mjs';
-import { runDependencyIntake } from '../src/issue-dependencies-intake.mjs';
 
 const minute = 60000;
 const key = (w, n) => `https://github.com/${w.repository}/issues/${n}`;

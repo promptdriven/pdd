@@ -595,7 +595,7 @@ Export `releaseParkedClaim({cwd,repository,claim,coordinatorId,machine,runId,bra
 
 ## Dependencies
 
-- [Parking policy](autopilot-parking.prompt.md): required native generation and verification context for shared owner-row working classification and retained check custody.
+- Parking policy: required native generation and verification context for shared owner-row working classification and retained check custody.
 - [Suite queue](test-suite-queue.prompt.md): required generation/testing context for native worktree progress observations and unavailable custody.
 - [GitHub calls](github-calls.prompt.md): required native generation and verification context for the call ledger and the ETag cache.
 - [Pure dependency model](issue-dependencies.prompt.md): required for authoring,

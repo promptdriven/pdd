@@ -1,5 +1,4 @@
 // Generated from prompts/test/autopilot-factory.prompt.md.
-import '../test-home.mjs';
 import assert from 'node:assert/strict';
 import {cpSync,mkdtempSync,mkdirSync,readFileSync,realpathSync,writeFileSync,rmSync,existsSync,readdirSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -7,13 +6,15 @@ import {join,resolve,dirname} from 'node:path';
 import {fork,execFileSync,execFile} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
-import {fakeHerdr} from '../fake-herdr.mjs';
 import {gitTemplateDir,rewriteGitConfigUrl} from '../git-template.mjs';
 import {proseSha256} from '../../../src/runtime-seam.mjs';
 import {analysisFor} from '../autopilot-github-world.mjs';
 import {runAutopilotAlerts} from '../../../src/autopilot-alerts.mjs';
 import {factoryGithub} from './github.mjs';
 import {factoryInterpreter} from './interpreter.mjs';
+
+if(!process.env.PDD_FACTORY_WORKER)await import('../test-home.mjs');
+const fakeHerdr=()=>({calls:[],panes:[],sessions:[],next:1,idle(){},herdr:async()=>({}),findNativeSessions:async()=>[]});
 
 export const packageRoot=resolve(import.meta.dirname,'../../..');
 export const readJson=path=>JSON.parse(readFileSync(path,'utf8'));
@@ -140,7 +141,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
     });
   };
   w.command=async(argv,{cwd=w.cwd,actor='agent',env={},stdin,allowFailure=false,operation,onSpawn,expectInterrupted=false}={})=>{
-    const child=fork(fileURLToPath(new URL('./worker.mjs',import.meta.url)),[],{cwd:base,env:{...w.env,...env,GIT_CONFIG_COUNT:'1',GIT_CONFIG_KEY_0:`url.${w.remote}.insteadOf`,GIT_CONFIG_VALUE_0:`https://github.com/${repository}.git`},execArgv:[],stdio:['ignore','pipe','pipe','ipc'],serialization:'advanced'});
+    const child=fork(fileURLToPath(import.meta.url),[],{cwd:base,env:{...w.env,...env,PDD_FACTORY_WORKER:'1',GIT_CONFIG_COUNT:'1',GIT_CONFIG_KEY_0:`url.${w.remote}.insteadOf`,GIT_CONFIG_VALUE_0:`https://github.com/${repository}.git`},execArgv:[],stdio:['ignore','pipe','pipe','ipc'],serialization:'advanced'});
     w.children.add(child);
     let processOut='',processErr='';child.stdout.on('data',s=>{processOut+=s;});child.stderr.on('data',s=>{processErr+=s;});
     const request={base,cwd,packageRoot,stateRoot:w.stateRoot,stateDir:w.stateDir,layoutDirectory:w.layoutDirectory,env:{...w.env,PDD_RUNTIME_URL:w.interpreter.origin,...env},argv,stdin,operation,stateFile:w.stateFile,now:w.time};
@@ -239,4 +240,53 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   };
   t.after(()=>{for(const child of w.children)child.kill('SIGTERM');rmSync(base,{recursive:true,force:true});});
   return w;
+}
+
+if(process.env.PDD_FACTORY_WORKER==='1') {
+  const [doctorFiles,net,tls,http,https,{runPdd},{tickAutopilot},{healthyMachine},{isolatedCheckCapacity}]=await Promise.all([
+    import('node:fs'),import('node:net'),import('node:tls'),import('node:http'),import('node:https'),
+    import('../../../src/pdd-cli.mjs'),import('../../../src/autopilot-launcher.mjs'),
+    import('../healthy-machine.mjs'),import('../check-machine.mjs'),
+  ]);
+  const denyNetwork=()=>{throw Error('factory-network-denied');};
+  net.default.Socket.prototype.connect=denyNetwork;tls.default.connect=denyNetwork;http.default.request=denyNetwork;https.default.request=denyNetwork;
+  globalThis.fetch=denyNetwork;
+  let serial=0;
+  const pending=new Map();
+  const rpc=(method,...args)=>new Promise((resolve,reject)=>{const id=++serial;pending.set(id,{resolve,reject});process.send({id,method,args});});
+  process.on('message',async m=>{
+    if(m.reply){const p=pending.get(m.reply);pending.delete(m.reply);if(m.error)p.reject(Object.assign(Error(m.error.message),m.error));else p.resolve(m.value);return;}
+    if(!m.start)return;
+    try {
+      const {base,cwd,packageRoot:pkgRoot,stateRoot,stateDir,layoutDirectory,env,argv,stdin,operation,stateFile,now}=m.start;
+      let time=now,stdout='',stderr='';const epoch=performance.now();
+      Date.now=()=>time+Math.floor(performance.now()-epoch);
+      globalThis.fetch=async(url,opts={})=>{
+        const payload=opts.body?{request:await opts.body.get('request').text(),tar:Buffer.from(await opts.body.get('source').arrayBuffer())}:null;
+        const r=await rpc('fetch',String(url),{method:opts.method,payload});return new Response(r.body,{status:r.status,headers:r.headers});
+      };
+      const out={write:s=>{stdout+=s;return true;}},err={write:s=>{stderr+=s;return true;}};
+      const ports={...healthyMachine,...isolatedCheckCapacity(base,{taskset:null}),queueRoot:env.PDD_SUITE_QUEUE,env,stateRoot,autopilotStateRoot:stateRoot,stateDir,layoutDirectory,now:()=>time,
+        sleep:async ms=>{time+=ms;await rpc('sleep',ms);},
+        execFile:(...a)=>rpc('exec',...a),run:(...a)=>rpc('exec',...a),
+        herdr:args=>rpc('herdr',['--session','pdd-autopilot',...args]),
+        findNativeSessions:(...a)=>rpc('sessions',...a),
+        checkCapacityPorts:{...isolatedCheckCapacity(base,{taskset:null}),queueRoot:env.PDD_SUITE_QUEUE,now:()=>time},
+        codexLimits:async()=>({state:'healthy'}),agentDefinitions:()=>[{kind:'codex',name:'codex',command:'codex',env:{}}],
+        selectAgent:async()=>({id:'codex',kind:'codex',command:'codex',env:{}}),pathDiagnostic:()=>[],timer:async()=>true,
+        allocationCheck:async()=>({state:'ready'}),isTTY:false,skipMetricsDelivery:true,stdin:(async function*(){if(stdin!==undefined)yield stdin;})(),
+        armCoordinatorIdle:()=>{},wait:async()=>{},
+        warn:s=>rpc('warning',s),sendAlert:input=>rpc('alert',input),sendDigest:async()=>({exitCode:0}),
+        runtimeHealth:()=>rpc('runtimeHealth'),
+        doctorPorts:{files:doctorFiles,run:(...a)=>rpc('doctorExec',...a),
+          codexLimits:async()=>({state:'healthy'}),runtimeHealth:()=>rpc('runtimeHealth')},
+      };
+      let code;
+      if(operation==='tick'){const result=await tickAutopilot(stateFile,ports);code=result.exitCode;stdout=result.message;}
+      else code=await runPdd(argv,{cwd,packageRoot:pkgRoot,env,stdout:out,stderr:err,
+        stdin:(async function*(){if(stdin!==undefined)yield stdin;})(),
+        autopilotLauncherPorts:ports,autopilotGithubPorts:ports,autopilotPorts:{...ports,cwd},pathDiagnostic:()=>[]});
+      process.send({done:{code,stdout,stderr,time}});
+    } catch(error){process.send({failed:{message:error.message,stack:error.stack}});}
+  });
 }

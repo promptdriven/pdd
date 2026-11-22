@@ -36,15 +36,15 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   assert.equal(allLines[4], 'Quick start:');
   assert.match(baseline, /Quick start:\n  pdd setup\b[\s\S]*?\n  pdd init\b[\s\S]*?\n  pdd status\b[\s\S]*?\n  pdd test\b[\s\S]*?\n  pdd simulate\b/);
 
-  // Human-first group ordering: Core PDD workflow before Cloud accounts, Workflows, Autopilot, Metrics
+  // Human-first group ordering: Core PDD workflow before Cloud accounts, Product & dependency graph, Autopilot, Metrics
   const coreIdx = baseline.indexOf('Core PDD workflow:');
   const accountsIdx = baseline.indexOf('Cloud accounts (pdd accounts --help):');
-  const workflowsIdx = baseline.indexOf('Workflows & product (pdd workflow --help, pdd product --help):');
+  const productIdx = baseline.indexOf('Product & dependency graph (pdd product --help):');
   const autopilotIdx = baseline.indexOf('Autopilot (pdd autopilot --help):');
   const metricsIdx = baseline.indexOf('Metrics, shell & help (pdd metrics --help):');
   assert.ok(coreIdx > 0 && coreIdx < accountsIdx, 'Core PDD workflow comes before Cloud accounts');
-  assert.ok(accountsIdx < workflowsIdx, 'Cloud accounts comes before Workflows & product');
-  assert.ok(workflowsIdx < autopilotIdx, 'Workflows & product comes before Autopilot');
+  assert.ok(accountsIdx < productIdx, 'Cloud accounts comes before Product & dependency graph');
+  assert.ok(productIdx < autopilotIdx, 'Product & dependency graph comes before Autopilot');
   assert.ok(autopilotIdx < metricsIdx, 'Autopilot comes before Metrics, shell & help');
 
   // Core commands come right at the top, not buried behind metrics/internals
@@ -75,7 +75,7 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
 });
 
 test('3496: focused family and command help exposes complete options, defaults, constraints and approval heredocs', async () => {
-  const families = ['test', 'lint', 'simulate', 'approve', 'accounts', 'product', 'workflow', 'autopilot', 'metrics'];
+  const families = ['test', 'lint', 'simulate', 'approve', 'accounts', 'product', 'autopilot', 'metrics'];
   for (const family of families) {
     const res = await runHelp([family, '--help']);
     assert.equal(res.exit, 0, `${family} --help`);

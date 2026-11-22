@@ -11,7 +11,7 @@ import { fakeRuntime, harbor, root, sink } from './helpers/runtime-fake.mjs';
 
 // Rules of user_stories/new-command-names.md that the runPdd vectors cannot see: a removed name runs
 // nothing, quiet forms give the same result with no extra line, completion, and the words of printed lines.
-const { test: TEST, lint: LINT, simulate: SIMULATE, run: RUN } = NAMES;
+const { test: TEST, lint: LINT, simulate: SIMULATE } = NAMES;
 const names = (line, before, after) => line.includes(`pdd ${before}`) && line.includes(`pdd ${after}`);
 const effect = plan => ({ local: plan.local, operands: plan.operands, options: plan.options, helpPrefix: plan.helpPrefix });
 const forbidden = new Proxy({}, { get(_, name) { return typeof name === 'string' ? () => assert.fail(`A removed name must not run ${name}`) : undefined; } });
@@ -78,15 +78,12 @@ test('quiet forms give the plan, help and usage error of the main name, and no p
     return { plan: plan.error ? plan : effect(plan), code, stdout: stdout.text, stderr: stderr.text };
   };
   const pairs = [[['sim'], [SIMULATE], [[], ['place-order', '--max-calls', '5', '--tab', 'world', '--new', '--no-open', '--no-wait', '--agent', 'Codex (work5)'],
-      ['place-order', '--cli', '--shell'], ['--serve', '8123'], ['--save-last'], ['--stop', 'place-order'], ['--help'], ['-h'], ['--tab', 'phone'], ['a', 'b'], ['--serve', '70000']]],
-    [['workflow', 'start'], ['workflow', RUN], [['feature', 'owner/repo#42', '--agent', 'claude', '--base', 'main'], ['bug', '7'], ['--help'], ['-h'], [], ['81'],
-      ['feature', '0'], ['feature', '42', '--agent', 'other']]]];
+      ['place-order', '--cli', '--shell'], ['--serve', '8123'], ['--save-last'], ['--stop', 'place-order'], ['--help'], ['-h'], ['--tab', 'phone'], ['a', 'b'], ['--serve', '70000']]]];
   for (const [quiet, main, tails] of pairs) for (const tail of tails) {
     for (const head of [[], ['help']]) {
       if (head.length && tail.length) continue;
       const result = await outcome([...head, ...quiet, ...tail]);
       assert.deepEqual(result, await outcome([...head, ...main, ...tail]), [...head, ...quiet, ...tail].join(' '));
-      assert.ok(!(result.stdout + result.stderr).includes('workflow start'), [...head, ...quiet, ...tail].join(' '));
     }
   }
   // `pdd test --lint` works like `pdd lint`: no new refusal.
@@ -104,14 +101,6 @@ async function sameRun(argvs, options) {
   }
   return runs;
 }
-
-test('workflow start reaches the same runner export as workflow run, with no extra line', async () => {
-  const calls = [];
-  const runs = await sameRun([['workflow', RUN, 'feature', 'o/r#42', '--agent', 'claude'], ['workflow', 'start', 'feature', 'o/r#42', '--agent', 'claude']], () => ({
-    cwd: '/chosen', packageRoot: '/bundle', workflowAgents: { checkWorkflowAgents: async ({ requested }) => ({ ok: true, agent: requested ?? 'codex', message: '' }) }, workflowRunner: { startRun: async input => { calls.push(input); return { exitCode: 0, message: 'started' }; } } }));
-  assert.equal(calls.length, 2); assert.deepEqual(calls[0], calls[1]);
-  assert.deepEqual(runs[0], runs[1]); assert.equal(runs[0].stdout, 'started\n');
-});
 
 test('sim runs like simulate and test --lint like lint, in local modes', async t => {
   const setup = harbor(t);
@@ -167,18 +156,16 @@ test('shell completion offers only the main names', t => {
   for (const shell of ['bash', 'zsh']) {
     for (const words of [[], ['help']]) {
       const first = choices(shell, words);
-      for (const word of [TEST, LINT, SIMULATE, 'workflow']) assert.ok(first.includes(word), `${shell} ${words} ${word}`);
-      for (const word of ['check', 'try', 'sim']) assert.ok(!first.includes(word), `${shell} ${words} ${word}`);
+      for (const word of [TEST, LINT, SIMULATE]) assert.ok(first.includes(word), `${shell} ${words} ${word}`);
+      for (const word of ['check', 'try', 'sim', 'workflow']) assert.ok(!first.includes(word), `${shell} ${words} ${word}`);
     }
-    const workflow = choices(shell, ['workflow']);
-    assert.ok(workflow.includes(RUN)); assert.ok(!workflow.includes('start'));
     const testOptions = choices(shell, [TEST]);
     assert.ok(testOptions.includes('--read') && testOptions.includes('--files'));
     for (const hidden of ['--lint', '--local', '--request', '--fill-hash', '--compact']) assert.ok(!testOptions.includes(hidden), `${shell} ${TEST} ${hidden}`);
     assert.ok(choices(shell, [LINT]).includes('--local'));
     assert.ok(choices(shell, [SIMULATE]).includes('--stop'));
     assert.deepEqual(choices(shell, [SIMULATE, '--tab']).sort(), ['call', 'screen', 'terminal', 'world']);
-    assert.deepEqual(choices(shell, ['workflow', RUN, 'bug', '7', '--agent']).sort(), ['agy', 'claude', 'codex', 'gemini']);
+    assert.deepEqual(choices(shell, ['product', 'start', 'r1', '--agent']).sort(), ['agy', 'claude', 'codex', 'gemini']);
   }
 });
 

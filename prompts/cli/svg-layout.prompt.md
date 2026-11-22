@@ -41,7 +41,7 @@ Screen drawing and stylesheet warnings start `Warning: SVG layout` (ordered by p
 - [Screen design check](screen-design-check.prompt.md): required generation/runtime/verification context for HTML screen stylesheet and CSS-class warnings.
 - [Short scenario compiler](scenario-compile.prompt.md): required generation/runtime/verification context for compiling Short JSON scenario files in-memory before scenario schema, `app_maps`, `simulation`, and `simulation_overrides` checks.
 
-- [Screen rules](../../skills/pdd-prompting/runbook/screens-and-svg.md#13-give-your-app-a-screen-app-map): authoring and verification context.
+- [Screen rules](../../skills/pdd/references/ui-and-screens.md): authoring and verification context.
 
 ## Local app-map timer, scenario schema_version, native-only dependency, and simulation override advisories
 

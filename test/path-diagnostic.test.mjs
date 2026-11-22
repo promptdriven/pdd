@@ -5,7 +5,6 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { runPdd } from '../src/pdd-cli.mjs';
 
 const bin = resolve(import.meta.dirname, '../bin/pdd.mjs');
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version;
@@ -62,21 +61,6 @@ test('PATH3: an unreportable version stays visible and help makes no version pro
   assert.equal(readFileSync(mark, 'utf8'), 'probed\n');
 });
 
-test('PATH4: workflow startup gives a one-line shadow warning before normal dispatch', async t => {
-  const f = fixture(t), stdout = { text: '', write(s) { this.text += s; } }, stderr = { text: '', write(s) { this.text += s; } };
-  let called = false;
-  assert.equal(await runPdd(['workflow', 'run', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout, stderr,
-    workflowRunner: { startRun: async () => { called = true; return { exitCode: 0, message: 'Local dispatch proof' }; } } }), 0);
-  assert.equal(called, true); assert.equal(stdout.text, 'Local dispatch proof\n');
-  assert.equal(stderr.text.trim().split('\n').length, 1);
-  assert.match(stderr.text, /PATH selects:.*0\.0\.305\.dev214/); assert.ok(stderr.text.includes(bin));
-  // The quiet `workflow start` prints the same PATH line and dispatches the same way, with no extra line.
-  const quiet = { text: '', write(s) { this.text += s; } };
-  assert.equal(await runPdd(['workflow', 'start', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout: { write() {} }, stderr: quiet,
-    workflowRunner: { startRun: async () => ({ exitCode: 0, message: 'Local dispatch proof' }) } }), 0);
-  assert.equal(quiet.text, stderr.text);
-});
-
 test('PATH5: without which, relative PATH entries and symlinked Alpha still resolve correctly', t => {
   const f = fixture(t);
   f.env.PATH = '../conda-bin:../alpha-bin';
@@ -105,16 +89,6 @@ test('PATH7: a hanging external version probe is bounded and leaves the installa
   assert.equal(readFileSync(join(f.old, 'pdd'), 'utf8'), hanging);
 });
 
-
-test('workflow warning gives a short executable chat hint that survives PATH shadowing', async t => {
- const f=fixture(t), stdout={write(){}}, stderr={text:'',write(s){this.text+=s;}};
- f.env.PDD_AGENT_SESSION='1'; f.env.PDD_BIN=bin;
- await runPdd(['workflow','run','small-change','17'],{cwd:f.cwd,env:f.env,stdout,stderr,workflowRunner:{startRun:async()=>({exitCode:0,message:'ok'})}});
- assert.match(stderr.text,/use "\$PDD_BIN"/);
- assert.doesNotMatch(stderr.text,/Use '[^']+' '[^']+'/);
- const result=spawnSync('/bin/sh',['-c','"$PDD_BIN" --version'],{cwd:f.cwd,env:f.env,encoding:'utf8'});
- assert.equal(result.status,0);assert.equal(result.stdout,`${version}\n`);
-});
 
 test('PATH8: #2715 package uses @promptdriven/pdd and pathDiagnostic flags an unrelated unscoped npm "pdd" package', t => {
   const pkgMeta = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));

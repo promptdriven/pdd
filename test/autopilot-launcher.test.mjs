@@ -15,7 +15,6 @@ import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { loadAgentDefinitions } from '../src/agent-config.mjs';
 import { codexConfigs, tomlBasicString } from './helpers/codex-config-args.mjs';
-import { automaticFixture } from './helpers/autopilot-run-base-fixture.mjs';
 
 const root = resolve('.');
 const capture = () => ({ text: '', write(s) { this.text += s; } });

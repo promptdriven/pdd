@@ -886,7 +886,7 @@ export function checkShellPdd(spec, out, ports = {}) {
 // engine's own skills: another version gives one line in the job log and ID.skills-check.json; the agent reads
 // "$PDD_SKILLS" either way. Missing or unreadable folders write nothing.
 export const skillsCheckFile = log => String(log).replace(/\.log$/, '') + '.skills-check.json';
-const skillVersion = folder => { try { return /^\s*pdd-skills:\s*(\d+\.\d+\.\d+)\s*$/m.exec(readFileSync(join(folder, 'pdd-feature', 'SKILL.md'), 'utf8'))?.[1] ?? null; } catch { return null; } };
+const skillVersion = folder => { try { return /^\s*pdd-skills:\s*(\d+\.\d+\.\d+)\s*$/m.exec(readFileSync(join(folder, 'pdd', 'SKILL.md'), 'utf8'))?.[1] ?? null; } catch { return null; } };
 export function checkSkills(spec, out) {
   const skills = spec.pddCheck?.skills;
   if (!skills?.version || !Array.isArray(skills.read)) return null;

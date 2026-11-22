@@ -10,5 +10,5 @@ All program calls use injected `execFile(file,args,{cwd})`; all config reads use
 
 ## Dependencies
 
-- [Workflow runs](workflow-runs.prompt.md): required native generation context for the saved run repository, PR records and baseBranch supplied by the launcher.
+- Workflow runs: required native generation context for the saved run repository, PR records and baseBranch supplied by the launcher.
 - [GitHub calls](github-calls.prompt.md): required native generation context for the default counted process adapter.

@@ -609,36 +609,29 @@ test('3574 Part 4 integration: Layer-2 validator flags mock-only tests on kind: 
   assert.ok(bigMs < 300, `expected linear O(N) probe scan on 100KB input, got ${bigMs.toFixed(1)}ms`);
 });
 
-test('3574 docs & skills: pdd-product contract and RUNBOOK §17 checklist define native-only contract and all 4 real-host classes without history words', () => {
-  const filesDoc = readFileSync(join(process.cwd(), 'skills/pdd-product/references/files.md'), 'utf8');
-  const planDoc = readFileSync(join(process.cwd(), 'skills/pdd-product/steps/plan.md'), 'utf8');
-  const replaysDoc = readFileSync(join(process.cwd(), 'skills/pdd-prompting/runbook/replays-and-formal.md'), 'utf8');
+test('3574 docs & skills: product and verification references define native-only contract and all 4 real-host classes without history words', () => {
+  const productDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/product.md'), 'utf8');
+  const verificationDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/verification.md'), 'utf8');
 
-  assert.match(filesDoc, /## Native-only prompt contract/);
-  assert.match(filesDoc, /Boundary & runtime contract/);
-  assert.match(filesDoc, /Error mapping & failure behavior/);
-  assert.match(filesDoc, /Real-host \/ native verification cases/);
-  assert.doesNotMatch(filesDoc, /thin `kind: native-only`/i);
-
-  assert.match(planDoc, /specification contract/i);
-  assert.doesNotMatch(planDoc, /thin\s+`kind: native-only`/i);
+  assert.match(productDoc, /## 5\. `kind: native-only` boundary prompt contract/);
+  assert.match(productDoc, /Boundary & runtime contract/);
+  assert.match(productDoc, /Error mapping & failure behavior/);
+  assert.match(productDoc, /Real-host verification cases/);
+  assert.match(productDoc, /complete executable specification/i);
+  assert.doesNotMatch(productDoc, /thin\s+`kind: native-only`/i);
 
   for (const needle of [
-    'needs-real-host-smoke',
-    'Nested OS sandbox execution',
-    'Real host device/TTY ownership',
+    'nested OS sandbox',
     '/dev/tty',
-    'Multi-turn real CLI state side effects',
-    'Full-size realistic payload handling',
+    'multi-turn Turn 1 → Turn 2 CLI state',
     '4 KiB',
   ]) {
-    assert.ok(replaysDoc.includes(needle), `replays-and-formal.md missing: ${needle}`);
+    assert.ok(verificationDoc.includes(needle), `skills/pdd/references/verification.md missing: ${needle}`);
   }
 
   for (const [name, content] of [
-    ['skills/pdd-product/references/files.md', filesDoc],
-    ['skills/pdd-product/steps/plan.md', planDoc],
-    ['skills/pdd-prompting/runbook/replays-and-formal.md', replaysDoc],
+    ['skills/pdd/references/product.md', productDoc],
+    ['skills/pdd/references/verification.md', verificationDoc],
   ]) {
     assert.doesNotMatch(content, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i, `${name} must use timeless current wording`);
   }
@@ -926,11 +919,11 @@ test('3574 R1 regressions (#1, #3-#10): ReDoS safety, mocked primitives, 4-class
   assert.ok(batchProbe.classes.includes('multi-turn-cli-state'));
   assert.ok(ms9 < 250, `batch helper scan took ${ms9.toFixed(1)}ms on 8000 single-line calls`);
 
-  // Finding #10 [P2]: skills/pdd-product/steps/parts.md no longer says "Thin kind: native-only".
-  const partsDoc = readFileSync(join(process.cwd(), 'skills/pdd-product/steps/parts.md'), 'utf8');
-  assert.doesNotMatch(partsDoc, /thin\s+`kind: native-only`/i);
-  assert.match(partsDoc, /specification prompts/i);
-  assert.doesNotMatch(partsDoc, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i);
+  // Finding #10 [P2]: skills/pdd/references/product.md defines complete executable native-only specification prompts (not thin stubs).
+  const productDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/product.md'), 'utf8');
+  assert.doesNotMatch(productDoc, /thin\s+`kind: native-only`/i);
+  assert.match(productDoc, /complete executable specification/i);
+  assert.doesNotMatch(productDoc, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i);
 });
 
 test('R2 adversarial regression suite: R2-1 through R2-5', () => {

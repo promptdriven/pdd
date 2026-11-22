@@ -13,8 +13,6 @@ import {
   formatApproveBoundaryCard,
 } from '../src/human-boundary-card.mjs';
 import { runApprove } from '../src/prompt-approve.mjs';
-import { DETAILS_OPEN, readablePrTop } from '../src/workflow-pr-body.mjs';
-import { stepDone } from '../src/workflow-runner.mjs';
 
 function makeGitRepo(t, files = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-boundary-card-')));
@@ -82,59 +80,6 @@ function extractApproveBoundaryCard(out) {
   let end = start + 1;
   while (end < lines.length && lines[end].startsWith('  ')) end += 1;
   return lines.slice(start, end);
-}
-
-function extractPrBoundarySection(prText) {
-  const lines = prText.split('\n');
-  const start = lines.indexOf('## Boundary');
-  assert.ok(start >= 0, `Expected ## Boundary section in PR top:\n${prText}`);
-  let end = start + 1;
-  while (end < lines.length && !lines[end].startsWith('## ')) end += 1;
-  while (end > start && lines[end - 1] === '') end -= 1;
-  return lines.slice(start, end);
-}
-
-function specFactsWithBoundary(boundary) {
-  return {
-    layout: 'spec',
-    single: false,
-    workflow: 'feature',
-    number: 3297,
-    baseBranch: 'main',
-    mode: 'manual',
-    pending: false,
-    draft: false,
-    issueReference: 'Part of #3297',
-    stories: ['As an operator, I want outage alerts held during maintenance windows, so that on-call engineers are not paged for planned work.'],
-    storyPaths: ['user_stories/link-outage.md'],
-    boundary,
-    fields: { problem: 'Duplicate failover pages fire during maintenance windows.' },
-    thisPr: 'no code change. It holds 3 prompts, the Story and 1 test file.',
-    diff: {
-      added: 48,
-      removed: 2,
-      count: 5,
-      files: [
-        { path: 'prompts/impl.prompt.md', added: 18, removed: 1 },
-        { path: 'prompts/guide.prompt.md', added: 10, removed: 1 },
-        { path: 'prompts/simulator.prompt.md', added: 12, removed: 0 },
-      ],
-    },
-    records: {
-      promptTests: { result: '✓ 1 of 1 criterion · 1/1 checks · 1 AI call', pass: true, report: 'https://rt.example.test/r/outage-1', current: true },
-      lint: { result: '1 of 1 tests pass', pass: true },
-      ci: 'passing',
-      checker: null,
-      drafts: [],
-    },
-    approval: { kind: 'words', items: [{ route: 'terminal', at: Date.UTC(2026, 10, 18), words: null }] },
-    pr1: null,
-    pr2: null,
-    stacked: false,
-    carriesPr1: false,
-    notFixed: false,
-    updatedAt: Date.UTC(2026, 10, 18, 6, 0),
-  };
 }
 
 test('3297 link-outage simulator case: flags model-returned effects needing port/native observation and unloaded changed prompts as missing owner connection', async t => {
@@ -234,23 +179,20 @@ test('3297 link-outage simulator case: flags model-returned effects needing port
   assert.match(simCardText, /prompts\/guide\.prompt\.md/);
   assert.match(simCardText, /model-returned value.*port spy or native observation still needed/);
 
-  // 3) PR 1 readable top renders ## Boundary in <= 25 lines with zero forbidden PR-top jargon or extra links.
+  // 3) Multi-prompt buildHumanBoundaryCard renders in <= 25 lines and flags unloaded sibling prompts & model-returned effects.
   const boundary = buildHumanBoundaryCard({
     root,
     promptPaths: ['prompts/simulator.prompt.md', 'prompts/impl.prompt.md', 'prompts/guide.prompt.md'],
     storyPaths: ['user_stories/link-outage.md'],
     env: { PDD_STATE_DIR: stateDir },
   });
-  const prTop = readablePrTop(specFactsWithBoundary(boundary));
-  const prBoundaryLines = extractPrBoundarySection(prTop.text);
-  assert.ok(prBoundaryLines.length <= BOUNDARY_CARD_MAX_LINES, `PR Boundary exceeded 25 lines: ${prBoundaryLines.length}`);
-  const prBoundaryText = prBoundaryLines.join('\n');
-  assert.match(prBoundaryText, /missing owner connection/);
-  assert.match(prBoundaryText, /prompts\/impl\.prompt\.md/);
-  assert.match(prBoundaryText, /prompts\/guide\.prompt\.md/);
-  assert.match(prBoundaryText, /model-returned value.*port spy or native observation still needed/);
-  assert.equal(prTop.text.match(/https:\/\//g)?.length ?? 0, 1, 'PR readable top keeps exactly one report link.');
-  assert.doesNotMatch(prTop.text, /Acceptance criteria|<details|Agent note|\bbatch\b|\brequest\b/i);
+  const cardLines = formatApproveBoundaryCard(boundary);
+  assert.ok(cardLines.length <= BOUNDARY_CARD_MAX_LINES, `Boundary card exceeded 25 lines: ${cardLines.length}`);
+  const cardText = cardLines.join('\n');
+  assert.match(cardText, /missing owner connection/);
+  assert.match(cardText, /prompts\/impl\.prompt\.md/);
+  assert.match(cardText, /prompts\/guide\.prompt\.md/);
+  assert.match(cardText, /model-returned value.*port spy or native observation still needed/);
 });
 
 test('3297 focused acceptance control: removing owning rule or dependency link while synthetic scenario still passes flips card to missing owner connection', async t => {
@@ -349,9 +291,6 @@ test('3297 focused acceptance control: removing owning rule or dependency link w
   const approveOut = await approveInteractive(root, 'prompts/dispatcher.prompt.md', 'y\n', { PDD_STATE_DIR: stateDir });
   assert.equal(approveOut.exitCode, 0, 'Advisory card still allows person approval.');
   assert.match(extractApproveBoundaryCard(approveOut.out).join('\n'), /missing owner connection/);
-
-  const prText = readablePrTop(specFactsWithBoundary(afterCard)).text;
-  assert.match(extractPrBoundarySection(prText).join('\n'), /missing owner connection/);
 });
 
 test('3297 observation provenance: classifies supplied fact, model-returned value, 0 observed port calls, and preserves native-only route', async t => {
@@ -559,18 +498,9 @@ test('3297 complexity budget, multi-sample divergences, hostile-text sanitizatio
   assert.match(approveText, /advisory divergence: step-1 varied across 3 samples/);
   assert.match(approveText, /Verification split:/);
   assert.match(approveText, /Budget & samples:/);
-
-  const prTop = readablePrTop(specFactsWithBoundary(card));
-  const prBoundaryLines = extractPrBoundarySection(prTop.text);
-  assert.ok(prBoundaryLines.length <= BOUNDARY_CARD_MAX_LINES, `PR Boundary section must be <= 25 lines, got ${prBoundaryLines.length}`);
-  const prBoundaryText = prBoundaryLines.join('\n');
-  assert.match(prBoundaryText, /over 500 budget/);
-  assert.match(prBoundaryText, /advisory divergence: step-1 varied across 3 samples/);
-  assert.doesNotMatch(prTop.text, /<details|Acceptance criteria|\bbatch\b|\brequest\b|Fixes #999|@oncall/i);
-  assert.equal(prTop.text.match(/https:\/\//g)?.length ?? 0, 1, 'Hostile URLs inside Story rules must stay neutralized.');
 });
 
-test('3297 single-prompt rule-removal acceptance control and real workflow-runner PR 1 publication wiring', async t => {
+test('3297 single-prompt rule-removal acceptance control flags missing owner connection and unloaded changed prompts', async t => {
   const storyText = [
     '# Failover drain guard',
     '',
@@ -641,107 +571,25 @@ test('3297 single-prompt rule-removal acceptance control and real workflow-runne
     },
   });
   writeFileSync(join(root, 'prompts/failover.prompt.md'), withoutRule);
-  // Also add an unloaded changed implementation prompt and commit on topic branch to verify real workflow-runner PR 1 publication!
+  // Also add an unloaded changed implementation prompt and commit on topic branch to verify unloaded owner flagging!
   writeFileSync(join(root, 'prompts/session-drainer.prompt.md'), '# Session drainer\n\nDrain active customer sessions gracefully.\n');
   git('add', '.');
   git('commit', '-qm', 'prompt slice');
 
-  const bare = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-boundary-bare-')));
-  t.after(() => rmSync(bare, { recursive: true, force: true }));
-  execFileSync('git', ['init', '--bare', '-q', bare]);
-  const route = `url.file://${bare}.insteadOf=https://github.com/example/project.git`;
-  git('remote', 'add', 'origin', 'https://github.com/example/project.git');
-  execFileSync('git', ['-c', route, 'push', '-q', 'origin', 'main'], { cwd: root });
-  const baseSha = git('rev-parse', 'main').trim();
-
-  const runDir = join(root, '.git', 'pdd', 'runs', '3297');
-  mkdirSync(runDir, { recursive: true });
-  const run = {
-    v: 1,
-    runId: 'boundary-3297',
-    number: 3297,
-    repo: 'example/project',
-    issue: { title: 'Failover drain guard', number: 3297, url: 'https://github.com/example/project/issues/3297' },
+  const disconnected = buildHumanBoundaryCard({
     root,
-    sourceRoot: root,
-    runDir,
-    branch: 'feat/slice',
-    baseBranch: 'main',
-    baseSha,
-    workflow: 'feature',
-    agent: 'codex',
-    areas: [
-      { name: 'prompt-pr', steps: ['scope', 'check'], optional: [], gate: 'pr', then: 'ask-code' },
-      { name: 'code', steps: ['build', 'verify'], optional: [], gate: 'pr' },
-    ],
-    area: 0,
-    state: 'running',
-    done: { scope: { summary: 'Problem: tunnel failover drops sessions.', at: 1 } },
-    decisions: [],
-    changes: [],
-    chats: [],
-    pr: [],
-  };
-  writeFileSync(join(runDir, 'status.json'), JSON.stringify(run));
-
-  const createdPrBodies = [];
-  const doneRes = await stepDone(
-    { ref: '3297', step: 'check', summary: 'Title: Enforce session drain before failover', cwd: root },
-    {
-      stateDir,
-      isTTY: true,
-      env: { ...process.env, PDD_STATE_DIR: stateDir },
-      confirm: async () => false,
-      now: () => Date.UTC(2026, 10, 18, 7, 0),
-      execFile: async (file, args, opts = {}) => {
-        if (file === 'git') {
-          const gitArgs = args[0] === 'remote' && args[1] === 'get-url' ? args : ['-c', route, ...args];
-          try {
-            const stdout = execFileSync('git', gitArgs, { cwd: opts.cwd ?? root, encoding: 'utf8', env: { ...process.env, GIT_ALLOW_PROTOCOL: 'file' }, stdio: ['ignore', 'pipe', 'pipe'] });
-            return { code: 0, stdout, stderr: '' };
-          } catch (err) {
-            return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
-          }
-        }
-        if (file === 'gh') {
-          const headOid = git('rev-parse', 'HEAD').trim();
-          const prObj = {
-            number: 42,
-            url: 'https://github.com/example/project/pull/42',
-            state: 'OPEN',
-            isDraft: false,
-            headRefName: 'feat/slice',
-            baseRefName: 'main',
-            headRefOid: headOid,
-            body: createdPrBodies.at(-1) ?? '',
-            headRepository: { name: 'project' },
-            headRepositoryOwner: { login: 'example' },
-            isCrossRepository: false,
-            mergeCommit: null,
-          };
-          if (args[0] === 'pr' && args[1] === 'create') {
-            createdPrBodies.push(String(opts.input ?? ''));
-            return { code: 0, stdout: `${prObj.url}\n`, stderr: '' };
-          }
-          if (args[0] === 'pr' && args[1] === 'view') return { code: 0, stdout: JSON.stringify({ ...prObj, body: createdPrBodies.at(-1) ?? '' }), stderr: '' };
-          if (args[0] === 'pr' && args[1] === 'list') return { code: 0, stdout: JSON.stringify(createdPrBodies.length ? [prObj] : []), stderr: '' };
-          if (args[0] === 'label' && args[1] === 'list') return { code: 0, stdout: '[{"name":"pdd:no-verdict"}]', stderr: '' };
-          if (args[0] === 'pr' && args[1] === 'edit') return { code: 0, stdout: '', stderr: '' };
-          if (args[0] === 'repo') return { code: 0, stdout: '{"nameWithOwner":"example/project","defaultBranchRef":{"name":"main"},"url":"https://github.com/example/project"}', stderr: '' };
-        }
-        return { code: 0, stdout: '', stderr: '' };
-      },
-    },
-  );
-  assert.equal(doneRes.exitCode, 0, doneRes.message);
-  assert.equal(createdPrBodies.length, 1);
-  const [visiblePrTop] = createdPrBodies[0].split(DETAILS_OPEN);
-  const prBoundaryLines = extractPrBoundarySection(visiblePrTop);
-  assert.ok(prBoundaryLines.length <= BOUNDARY_CARD_MAX_LINES);
-  const prBoundaryText = prBoundaryLines.join('\n');
-  assert.match(prBoundaryText, /missing owner connection/);
-  assert.match(prBoundaryText, /prompts\/session-drainer\.prompt\.md/);
-  assert.match(prBoundaryText, /model-returned value.*port spy or native observation still needed/);
+    promptPaths: ['prompts/failover.prompt.md', 'prompts/session-drainer.prompt.md'],
+    storyPaths: ['user_stories/drain.md'],
+    env: { PDD_STATE_DIR: stateDir },
+  });
+  assert.equal(disconnected.provenanceRows[0].missingConnection, true);
+  assert.ok(disconnected.unloadedOwners.includes('prompts/session-drainer.prompt.md'));
+  const formattedLines = formatApproveBoundaryCard(disconnected);
+  assert.ok(formattedLines.length <= BOUNDARY_CARD_MAX_LINES);
+  const formattedText = formattedLines.join('\n');
+  assert.match(formattedText, /missing owner connection/);
+  assert.match(formattedText, /prompts\/session-drainer\.prompt\.md/);
+  assert.match(formattedText, /model-returned value.*port spy or native observation still needed/);
 });
 
 test('3297 J1-coffee-pickup & step-index fallback: no false 0 observed port calls without saved step, loaded-prompt prose budget fallback, and step_id-less zero-call evidence', t => {

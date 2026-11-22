@@ -1,4 +1,3 @@
-import {parkingSummary} from './autopilot-parking.mjs';
 import {readSuiteProgress} from './test-suite-queue.mjs';
 // Prompt: prompts/cli/issue-dependencies-github.prompt.md
 import { execFile as execCallback } from 'node:child_process';
@@ -9,9 +8,10 @@ import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { runAutopilot } from './autopilot.mjs';
 import { githubOriginRepository } from './shared/github-repo.mjs';
-import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
-import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
+import { gitContext } from './shared/git-context.mjs';
+import { resolvePddStateBase } from './shared/state-dir.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
+const stateDirFor = (ports = {}) => ports.stateDir ?? resolvePddStateBase(ports.env ?? process.env);
 import { githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, nativeGithubCounter } from './github-calls.mjs';
 import {
   CLAIM_EXPIRES_AFTER,
@@ -981,32 +981,14 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
     if (['completed', 'cancelled'].includes(run.state)) continue;
     const held = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
     const checkHeld = held((ports.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: ports.env}, ports));
-    const working = parkingSummary([{...run, checkHeld}], 1).working > 0;
-    if (run.parking?.phase === 'parked' && run.layout?.phase === 'closed'
-      && run.chats.every(chat => Number.isFinite(chat.closed?.confirmedAt))) {
-      runs.push({issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId,
-        state: 'paused', occupied: checkHeld, parked: !checkHeld, working});
-      continue;
-    }
-    const chat = currentChat(run), state = chatLifecycle(chat); let finishedTurn = false;
-    const live = ['paused', 'stuck', 'question', 'waiting'].includes(run.state) && chat
-      ? await chatSession(chat, {...ports, run}) : null;
-    const agentHeld = live?.alive && !['idle','done'].includes(live.status);
-    if (live && !chat.startUnconfirmed && !run.chatFailure
-      && !(run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))) {
-      const now = (ports.now ?? Date.now)();
-      const own = sessionEvidenceDue(chat, live, now) && !observedSession(chat, chat.agent ?? run.agent)
-        ? await ownSession({ run, chat, since: launchAnchor(chat), ports }) : null;
-      const observed = observeLifecycle(chat, live, now, chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
-      finishedTurn = live.alive && live.status === 'done' && validSessionId(chat.session?.id) && validSessionId(live.sessionId) && chat.session.id === live.sessionId && observed.exact;
-      // A saved end alone cannot establish current custody; Herdr must also confirm absence.
-      if (!run.parking && !live.alive && ['agent_not_found', 'server_not_running'].includes(live.code)
-        && ['ended', 'failed'].includes(observed.state)) continue;
-      if (run.parking) finishedTurn = false;
-    }
-    runs.push({ issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`, runId, working: checkHeld || Boolean(agentHeld) || working && !finishedTurn,
-      state: chat?.startUnconfirmed || (state === 'starting' && !finishedTurn) ? 'starting' : ['running', 'waiting', 'paused', 'stuck', 'question'].includes(run.state) ? run.state : 'unknown', ...(finishedTurn ? { occupied: false } : {}),
-      ...(run.state === 'paused' && run.runtimeWait ? { waiting: 'runtime' } : {}) });
+    const working = checkHeld || run.state === 'running';
+    runs.push({
+      issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`,
+      runId,
+      working,
+      state: ['running', 'waiting', 'paused', 'stuck', 'question'].includes(run.state) ? run.state : 'unknown',
+      ...(run.state === 'paused' && run.runtimeWait ? { waiting: 'runtime' } : {}),
+    });
   }
   const index = join(context.commonDir, 'pdd', 'worktree-assignments');
   let indexExists = false;

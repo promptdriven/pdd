@@ -147,7 +147,7 @@ test('#3177 every job gets PDD_CLI and PDD_SKILLS; agent roles get the pdd and s
   assert.equal(build.env.PDD_CLI, cli); assert.equal(build.env.PATH.split(':')[0], join(w.root, 'bin'));
   const skillsDir = join(fileURLToPath(new URL('..', import.meta.url)), 'skills');
   assert.equal(build.env.PDD_SKILLS, skillsDir, 'the skills of the engine\'s own package');
-  const engineSkills = /pdd-skills:\s*(\S+)/.exec(readFileSync(join(skillsDir, 'pdd-feature', 'SKILL.md'), 'utf8'))[1];
+  const engineSkills = /pdd-skills:\s*(\S+)/.exec(readFileSync(join(skillsDir, 'pdd', 'SKILL.md'), 'utf8'))[1];
   assert.deepEqual(build.pddCheck, { version: '0.1.27', cli, skills: { dir: skillsDir, version: engineSkills, read: [join(process.env.HOME, '.agents', 'skills')] } }, 'a Codex job checks ~/.agents/skills');
   const line = `pdd path check: the agent shell finds pdd 0.1.15 at /home/u/.local/bin/pdd; the engine is 0.1.27; using PDD_CLI (${cli})`;
   writeFileSync(build.log.replace(/\.log$/, '.pdd-check.json'), JSON.stringify({ found: true, version: '0.1.15', line }));

@@ -280,7 +280,6 @@ test('G7 + corpus-check cross-family review regressions (Astra #5-#8): semicolon
 
   writeRepoFile(dir, 'package.json', JSON.stringify({ name: 'fixture', dependencies: {} }));
   writeRepoFile(dir, 'src/shared/util.mjs', 'export const ok = 1;\n');
-  writeRepoFile(dir, 'src/vendor/index.js', 'export const v = 1;\n');
   writeRepoFile(dir, 'src/core/a.mjs', "import { b } from './b.mjs?v=1';\nimport { c } from './c.mjs';\nexport const a = b + c;\n");
   writeRepoFile(dir, 'src/core/b.mjs', "import { c } from './c.mjs#hash';\nexport const b = c;\n");
   writeRepoFile(dir, 'src/core/c.mjs', "import { a } from './a.mjs';\nexport const c = a;\n");

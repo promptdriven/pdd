@@ -82,7 +82,7 @@ Do not import operational captures as fixtures.
 
 ## Dependencies
 
-- [Workflow state](../cli/workflow-runs.prompt.md), [Runtime seam](../cli/runtime-seam.prompt.md#public-contract), [skills](../cli/skills-install.prompt.md) and [Herdr layout](../cli/workflow-herdr-layout.prompt.md): required path-selection context for authoring and native verification.
+- Workflow state, [Runtime seam](../cli/runtime-seam.prompt.md#public-contract), [skills](../cli/skills-install.prompt.md) and Herdr layout: required path-selection context for authoring and native verification.
 - [Prompting guide](../../skills/pdd/references/prompting.md): required authoring context.
 
 ## Native boundary

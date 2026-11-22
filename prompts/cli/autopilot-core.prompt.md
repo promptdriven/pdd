@@ -2165,7 +2165,7 @@ with the native defaults named above.
 
 - [Autopilot universal validator](autopilot-validator.prompt.md): required for `MAX_VALIDATION_REPAIRS`, `canonicalTargetPath`, `detectChangedSurfaces`, `detectNativeOnlyModules`, `detectRealE2eKindsInTest`, `detectRealHostProbesInTest`, `evaluateValidationOutcome`, `formatHumanVerificationCard`, `inspectTestBoundaryTargets`, `shouldClaimWithCooldowns`, and `planValidationResume`.
 - [Repo hygiene and extensible project lint](repo-hygiene-lint.prompt.md): required for `lintRepoProject` and `loadProjectLintConfig` (pre-review changed-file hygiene gate, `silent-validation-skip`, `boundary-mock-only-test`, and workspace-local `rules/lint/*.json` loading).
-- [Workflow test inventory](workflow-inventory.prompt.md): required for `collectTestInventory` (static base-vs-head test inventory summary, new-skip detection, and dynamic-inventory disclosure).
+- Workflow test inventory: required for `collectTestInventory` (static base-vs-head test inventory summary, new-skip detection, and dynamic-inventory disclosure).
 - [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries`, `isTestOwnedPath` and `resolveOwners`.
 - [Autopilot intake cards](autopilot-intake.prompt.md): required for active and shadow intake passes, pre-claim pre-flight enforcement (`preflightCoreIssue`) and wrong-repository routing, trusted person-comment filtering, and forensics fixed-card sync.

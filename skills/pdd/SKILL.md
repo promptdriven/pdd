@@ -68,3 +68,4 @@ Read [references/verification.md](references/verification.md) before finalizing 
 | External fakes, DB/HTTP/CLI, 3-Port Rule, telemetry & `pdd mcp` | [references/ports-and-cli.md](references/ports-and-cli.md) |
 | Single-file plain-prose UI, optional `app-map.json`, `.ui.svg` & `pdd sim` | [references/ui-and-screens.md](references/ui-and-screens.md) |
 | Native testing, bug TDD, 1-to-3 line mutation checks, PBT, Feature Map & `pdd prove` | [references/verification.md](references/verification.md) |
+| Headless Autopilot worker rules & single-PR execution boundaries | [references/autopilot-job-rules.md](references/autopilot-job-rules.md) |

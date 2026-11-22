@@ -4,8 +4,13 @@ import { accessSync, constants, cpSync, existsSync, lstatSync, mkdirSync, readFi
 import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 import { resolvePddStateBase } from './state-dir.mjs';
 
-export const PDD_SKILL_NAMES = Object.freeze([
-  'pdd',
+export const PDD_SKILL_NAMES = Object.freeze(['pdd']);
+// Skills that the package no longer ships. Setup and sync remove only their pdd-owned copies in user folders.
+export const RETIRED_SKILL_NAMES = Object.freeze([
+  'pdd-autopilot',
+  'pdd-check',
+  'pdd-merge',
+  'pdd-setup',
   'pdd-prompting',
   'pdd-small-change',
   'pdd-bug',
@@ -13,8 +18,6 @@ export const PDD_SKILL_NAMES = Object.freeze([
   'pdd-product',
   'pdd-graph',
 ]);
-// Skills that the package no longer ships. Setup and sync remove only their pdd-owned copies in user folders.
-export const RETIRED_SKILL_NAMES = Object.freeze(['pdd-autopilot', 'pdd-check', 'pdd-merge', 'pdd-setup']);
 const MARKER = '.pdd-skill.json';
 
 const relativeFiles = (dir, prefix = '') => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>

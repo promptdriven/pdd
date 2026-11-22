@@ -15,7 +15,7 @@ const {runtimeOrigin} = runtimeClientSlice();
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
-const skills = ['pdd','pdd-prompting','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph'];
+const skills = ['pdd'];
 const retiredSkills = ['pdd-autopilot','pdd-check','pdd-merge','pdd-setup'];
 const ready = value => value?.code === 0;
 

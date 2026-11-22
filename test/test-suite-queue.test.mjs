@@ -1,5 +1,5 @@
 import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
-import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
+import { calculateCheckCapacity, executeSuite, readSuiteProgress, runTestSuite, suiteQueueRoot, suiteStatusWords } from '../src/test-suite-queue.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -7,8 +7,6 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { fixture as workflowFixture } from './helpers/workflow-runner-fixture.mjs';
-import { runStatus } from '../src/workflow-runner.mjs';
 
 const capture = () => ({text:'', write(text) { this.text += text; }});
 const until = async (predicate, explanation) => {
@@ -30,14 +28,14 @@ function fixture(t) {
     } };
   f.run = (index, extra = {}) => {
     const cwd = join(root, `repository-${index}`); mkdirSync(cwd, {recursive:true});
-    const stdout = capture(), stderr = capture(); f.outputs.push(stdout);
-    const promise = runPdd(['workflow','suite','--command',`check-${index}`, ...(extra.timeout ? ['--timeout',String(extra.timeout)] : [])], {
-      cwd, env:{...f.env, HOME:join(root,`profile-${index}`)}, stdout, stderr,
-      workflowRunner:{runSuite:async (input, ports) => (await import('../src/test-suite-queue.mjs')).runTestSuite(input, {...ports, ...f.ports})},
-    });
+    const stdout = capture(); f.outputs.push(stdout);
+    const promise = runTestSuite(
+      { cwd, env: { ...f.env, HOME: join(root, `profile-${index}`) }, command: `check-${index}`, ...(extra.timeout !== undefined ? { timeout: Number(extra.timeout) } : {}) },
+      { ...f.ports, say: text => stdout.write(`${text}\n`) },
+    ).then(res => res.exitCode);
     f.promises.push(promise); return promise;
   };
-  f.status = async (index, since = 0) => (await import('../src/test-suite-queue.mjs')).readSuiteProgress({cwd:join(root,`repository-${index}`), since, env:f.env}, f.ports);
+  f.status = async (index, since = 0) => readSuiteProgress({cwd:join(root,`repository-${index}`), since, env:f.env}, f.ports);
   t.after(async () => { f.finished = true; f.isAlive = pid => pid === process.pid; for (const call of f.started) call.finish?.(); await Promise.all(f.promises); rmSync(root, {recursive:true, force:true}); });
   return f;
 }
@@ -115,27 +113,11 @@ test('dead waiter is removed from position while an orphan with a live child ret
   await until(() => f.started.length === 1, 'dead child can release its slot');
 });
 
-test('workflow JSON status reads queue position even while the run has ordinary ownership', async t => {
-  const f = await workflowFixture(t); const result = await f.run(); assert.equal(result.exitCode, 0, result.message);
-  const run = f.record(), queue = join(f.base,'suite-queue'); mkdirSync(queue);
-  const row = {ticket:1,pid:process.pid,childPid:null,cwd:run.root,state:'waiting',queuedAt:f.clock,startedAt:null,finishedAt:null,reason:null};
-  writeFileSync(join(queue,'ticket-1.json'), JSON.stringify(row));
-  const owner = join(run.runDir,'.ordinary-owner'); mkdirSync(owner, {recursive:true});
-  writeFileSync(join(owner,'owner-suite-test.json'), JSON.stringify({pid:process.pid,hostname:'suite-test',token:'suite-test'}));
-  const before = readFileSync(join(run.runDir,'status.json'));
-  const status = await runStatus({cwd:run.root,json:true}, {...f.ports, env:{...f.ports.env,PDD_SUITE_QUEUE:queue}});
-  assert.equal(status.exitCode, 0, status.message);
-  const item = JSON.parse(status.message).runs[0];
-  assert.equal(item.suite?.state, 'waiting'); assert.equal(item.suite?.position, 1);
-  assert.match(item.words, /position 1/);
-  assert.deepEqual(readFileSync(join(run.runDir,'status.json')), before, 'queue status does not mutate workflow state');
-});
-
 test('CLI rejects absent commands and invalid timeouts before execution', async () => {
   for (const args of [[], ['--command','x','--timeout','-1'], ['--command','x','--timeout','121'], ['--command','x','--timeout','1.5']]) {
-    const stderr = capture(); let calls = 0;
-    const code = await runPdd(['workflow','suite',...args], {stderr, stdout:capture(), workflowRunner:{runSuite:() => { calls++; }}});
-    assert.equal(code, 2); assert.equal(calls, 0);
+    const stderr = capture();
+    const code = await runPdd(['autopilot','suite',...args], {stderr, stdout:capture()});
+    assert.equal(code, 2);
   }
 });
 
@@ -146,7 +128,6 @@ test('--timeout 0 runs a suite with no time limit (a caller that watches it, suc
   assert.equal(f.started[0].options.timeoutMs, 0);
   f.started[0].finish(0);
   assert.equal(await run, 0);
-  const {executeSuite} = await import('../src/test-suite-queue.mjs');
   const native = await executeSuite('sleep 0.3; exit 3', {cwd:f.root, env:{PATH:process.env.PATH}, timeoutMs:0, onChild:() => {}});
   assert.equal(native.exitCode, 3, 'no timer stops it');
 });
@@ -156,7 +137,7 @@ test('native CLI preserves cwd, explicit command variables, closed stdin, stdout
   const program = join(f.root,'fake-suite.cjs'), output = join(f.root,'native.json');
   writeFileSync(program, `const fs=require('node:fs'); fs.writeFileSync(process.env.SUITE_OBSERVATION, JSON.stringify({cwd:process.cwd(),value:process.env.SUITE_VALUE,stdin:fs.readFileSync(0,'utf8')})); console.log('suite-out'); console.error('suite-err'); process.exitCode=7;`);
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
-  const child = spawn(process.execPath, [resolve('bin/pdd.mjs'),'workflow','suite','--command',`SUITE_VALUE=${quote('literal $() value')} SUITE_OBSERVATION=${quote(output)} ${quote(process.execPath)} ${quote(program)}`], {cwd, env:f.env});
+  const child = spawn(process.execPath, [resolve('bin/pdd.mjs'),'autopilot','suite','--command',`SUITE_VALUE=${quote('literal $() value')} SUITE_OBSERVATION=${quote(output)} ${quote(process.execPath)} ${quote(program)}`], {cwd, env:f.env});
   let stdout = '', stderr = ''; child.stdout.on('data', value => stdout += value); child.stderr.on('data', value => stderr += value);
   const code = await new Promise(done => child.on('close', done));
   assert.equal(code, 7, stderr);
@@ -168,14 +149,13 @@ test('native timeout stops a suite process group before its descendant can act',
   const f = fixture(t), marker = join(f.root,'escaped-child'), started = join(f.root,'child-started');
   // Admission and CLI timeout units are tested above. This injected native port
   // shortens only the execution clock, so the real signal path runs in milliseconds.
-  f.ports.execute = async (command, options) => (await import('../src/test-suite-queue.mjs')).executeSuite(command, {...options, timeoutMs:1000});
+  f.ports.execute = async (command, options) => executeSuite(command, {...options, timeoutMs:1000});
   const program = join(f.root,'slow-suite.cjs');
   writeFileSync(program, `const {spawn}=require('node:child_process'); spawn(process.execPath,['-e',${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(started)},'started'); setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'escaped'),1500)`)}],{stdio:'ignore'}); setInterval(()=>{},1000);`);
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
-  const stdout = capture(), stderr = capture();
-  const code = await runPdd(['workflow','suite','--command',`${quote(process.execPath)} ${quote(program)}`], {cwd:f.root, env:f.env, stdout, stderr,
-    workflowRunner:{runSuite:async (input, ports) => (await import('../src/test-suite-queue.mjs')).runTestSuite(input,{...ports,...f.ports})}});
-  assert.equal(code, 124); assert.match(stderr.text, /timeout/);
+  const stdout = capture();
+  const result = await runTestSuite({cwd:f.root, env:f.env, command:`${quote(process.execPath)} ${quote(program)}`}, {...f.ports, say: text => stdout.write(`${text}\n`)});
+  assert.equal(result.exitCode, 124); assert.match(result.message, /timeout/);
   assert.equal(existsSync(started), true, 'the descendant reached its action before timeout');
   await new Promise(done => setTimeout(done, 1600));
   assert.equal(existsSync(marker), false, 'timeout stops descendants before they can act');
@@ -202,7 +182,7 @@ test('separate CLI processes and the compatibility script share the same three n
     const cwd=join(root,`repo-${index}`), home=join(root,`profile-${index}`); mkdirSync(cwd); mkdirSync(home);
     const env={...process.env, HOME:home, PDD_SUITE_QUEUE:queue, PDD_VM_SUITE_LOCK:undefined, SUITE:command};
     const child=index===5 ? spawn('/bin/bash',[resolve('scripts/vm-suite-lock.sh')],{cwd,env})
-      : spawn(process.execPath,[resolve('bin/pdd.mjs'),'workflow','suite','--command',command],{cwd,env});
+      : spawn(process.execPath,[resolve('bin/pdd.mjs'),'autopilot','suite','--command',command],{cwd,env});
     const item={child,cwd,output:'',ended:false}; child.stdout.on('data',value=>item.output+=value); child.stderr.on('data',value=>item.output+=value);
     item.done=new Promise(done=>child.once('close',code=>{item.ended=true;done(code);})); children.push(item);
     await until(()=>existsSync(queue) && readdirSync(queue).filter(name=>/^ticket-.*\.json$/.test(name)).length===index,'native invocation registers a suite ticket');
@@ -222,27 +202,23 @@ test('separate CLI processes and the compatibility script share the same three n
 
 
 test('default queue identity is independent of repository homes and agent profiles', async () => {
-  const {suiteQueueRoot} = await import('../src/test-suite-queue.mjs');
   assert.equal(suiteQueueRoot({HOME:'/profile/one',CODEX_HOME:'/agent/one'}),suiteQueueRoot({HOME:'/profile/two',CODEX_HOME:'/agent/two'}));
   assert.equal(suiteQueueRoot({PDD_VM_SUITE_LOCK:'/shared/lock'}),'/shared/lock.queue');
   assert.equal(suiteQueueRoot({PDD_SUITE_QUEUE:'/explicit/queue',PDD_VM_SUITE_LOCK:'/shared/lock'}),'/explicit/queue');
   assert.throws(()=>suiteQueueRoot({PDD_SUITE_QUEUE:'relative'}));
 });
 
-for (const damage of ['malformed','unreadable']) test(`workflow JSON status exposes unavailable suite ownership (${damage}) without changing progress`, async t => {
-  const f=await workflowFixture(t); assert.equal((await f.run()).exitCode,0);
-  const run=f.record(),queue=join(f.base,'suite-queue'); mkdirSync(queue);
-  const ticket=join(queue,'ticket-other-repository.json');
-  if(damage==='malformed') writeFileSync(ticket,'{'); else mkdirSync(ticket);
-  const owner=join(run.runDir,'.ordinary-owner'); mkdirSync(owner,{recursive:true});
-  writeFileSync(join(owner,'owner-suite-test.json'),JSON.stringify({pid:process.pid,hostname:'suite-test',token:'suite-test'}));
-  const before=readFileSync(join(run.runDir,'status.json'));
-  let status;
-  await assert.doesNotReject(async()=>{status=await runStatus({cwd:run.root,json:true},{...f.ports,env:{...f.ports.env,PDD_SUITE_QUEUE:queue}});},'status must return explicit queue uncertainty');
-  assert.equal(status.exitCode,0,status.message);
-  const item=JSON.parse(status.message).runs[0];
-  assert.equal(item.suite?.state,'unavailable'); assert.equal(item.suite?.pausedMs,0);
-  assert.ok(item.suite.reason.length>0); assert.match(item.words,/queue.*unavailable/i);
-  assert.ok(item.words.includes(item.suite.reason),'status retains the queue read cause');
-  assert.deepEqual(readFileSync(join(run.runDir,'status.json')),before);
+for (const damage of ['malformed','unreadable']) test(`readSuiteProgress exposes unavailable suite ownership (${damage}) and formats words with cause`, t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-suite-damage-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const queue = join(root, 'suite-queue'); mkdirSync(queue);
+  const ticket = join(queue, 'ticket-other-repository.json');
+  if (damage === 'malformed') writeFileSync(ticket, '{'); else mkdirSync(ticket);
+  const suite = readSuiteProgress({ cwd: root, env: { ...process.env, PDD_SUITE_QUEUE: queue } });
+  assert.equal(suite?.state, 'unavailable');
+  assert.equal(suite?.pausedMs, 0);
+  assert.ok(suite.reason.length > 0);
+  const words = suiteStatusWords(suite);
+  assert.match(words, /queue.*unavailable/i);
+  assert.ok(words.includes(suite.reason), 'status retains the queue read cause');
 });

@@ -5,7 +5,8 @@ import { parseArgv } from '../src/argument-parser.mjs';
 
 test('-help works like --help', () => {
   assert.equal(parseArgv(['-help']).local, 'help');
-  assert.deepEqual(parseArgv(['workflow', '-help']).helpPrefix, ['workflow']);
+  assert.deepEqual(parseArgv(['autopilot', '-help']).helpPrefix, ['autopilot']);
+  assert.deepEqual(parseArgv(['product', '-help']).helpPrefix, ['product']);
 });
 
 test('an unknown command is named in the error', () => {

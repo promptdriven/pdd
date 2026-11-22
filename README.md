@@ -178,10 +178,7 @@ The agent writes these files before implementation:
 
 You read the Stories and approve them in the chat. The expected values come from you and the Stories, not from a run.
 
-In a chat, the agent opens a pull request only when you say yes. For a full run with pull requests, start from a GitHub issue: `pdd workflow run feature 42`, where 42 is the issue number. A run needs [Herdr](https://herdr.dev). pdd opens the agent chats in Herdr, and you follow the same steps.
-
-> [!WARNING]
-> In a workflow run, the agents run with full access. They do not stop to ask for approval. They can change files and run commands as your user.
+In a chat, the agent opens a pull request only when you say yes. For autonomous unattended issue runs with headless workers, use `pdd autopilot start`.
 
 ### 2. Test
 
@@ -268,7 +265,7 @@ See [Record a chat approval](docs/cli.md#record-a-chat-approval) for safe comman
 Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code. A `small-change` or `product` workflow opens one PR. A `feature` or `bug` workflow can open two:
 
 1. **Prompt space.** The prompts, the Stories and the tests. The pull request starts with a readable summary and checks; its Details section includes `Prompt tests` lines and report links.
-2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
+2. **Code space.** The code. After you approve the prompts, the agent writes the code, runs the unchanged tests from prompt space plus native tests, and verifies the branch with `pdd prove`.
 
 The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [Prompting guide §5](skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
 
@@ -291,11 +288,8 @@ The pdd CLI has no merge command. In manual workflows, ask your agent to merge u
 | `pdd simulate STORY --new --max-calls N` | Start a new simulation with a limit of N AI calls. |
 | `pdd simulate --stop STORY` | Stop the Simulator link of a Story. |
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
-| `pdd workflow run NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug`, `small-change`, `product` or your own workflow name. |
-| `pdd workflow status [ISSUE]` | Show where each run is and what it waits for. |
-| `pdd workflow view ISSUE` | Show the gates, approvals, pull requests and Simulator links of a run. Changes nothing. |
-| `pdd workflow open ISSUE` | Open the chat of a run. |
-| `pdd workflow approve [ISSUE] [--said WORDS]` | Approve the ready gate and its draft prompts together with your chat words. Without ISSUE, select the current worktree or sole waiting run. Without --said use person terminal y/N; agent callers must ask then use --said. Strict mode requires a person terminal. |
+| `pdd prove [--base REF]` | Run offline lint, diff checks, repository tests, and `verify.paths` recipes against REF (or `--test`/`--expect` bug contrast). |
+| `pdd autopilot start\|status\|logs` | Start, inspect, and follow headless Autopilot workers for opt-in GitHub issues. |
 | `pdd accounts` | Manage enrolled and shared Codex and Claude accounts in PDD Cloud, inspect 5-hour and weekly usage windows, and configure opt-in terminal auto-switch. |
 | `pdd help` | Show all commands. |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, and where the skill and Prompting guide are. |

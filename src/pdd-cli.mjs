@@ -105,27 +105,6 @@ const staleLine = ({ found, stale, staleSkills = [] }, version, cwd) => {
     ? `${name} is ${version ?? 'unknown'}` : `${name} differs (version ${version ?? 'unknown'})`).join(', ');
   return `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}.${details ? ` ${details}.` : ''} For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.codex/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
 };
-const profileOptions = plan => Object.fromEntries([['--model','model'],['--herdr-agent-name','herdrAgentName'],['--codex-threads','codexThreads']].filter(([flag]) => plan.options[flag] !== undefined).map(([flag,key]) => [key,plan.options[flag]]));
-const RUNNER_ROUTES = {
-  'workflow-suite': plan => ['runSuite', {command:plan.options['--command'], ...(plan.options['--timeout'] !== undefined ? {timeout:Number(plan.options['--timeout'])} : {})}],
-  'workflow-request-uptake': plan => ['acknowledgeRequest', { requestId: plan.operands[0], summary: plan.options['--summary'] }],
-  'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], ...profileOptions(plan), agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}), ...(plan.options['--through'] !== undefined ? {through:plan.options['--through']} : {}) }],
-  'workflow-evidence-associate': plan => ['associateEvidenceWorkspace', { ref: plan.operands[0], workspace: plan.options['--workspace'], stage: plan.options['--stage'], ...(plan.options['--commit'] !== undefined ? { commit: plan.options['--commit'] } : {}), tests: plan.options['--test'] }],
-  'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
-  'workflow-park': plan => ['parkAutomaticRun', { reason: plan.options['--reason'], ...(plan.options['--route'] === undefined ? {} : {route: plan.options['--route']}), step: plan.options['--step'], runtime: plan.options['--interpreter'] === true, ...(plan.options['--blocker'] === undefined ? {} : {blocker: plan.options['--blocker']}), ...(plan.options['--until'] === undefined ? {} : {until: plan.options['--until']}) }],
-  'workflow-yield': plan => ['yieldAutomaticCapacity', { ref: plan.operands[0] }],
-  'workflow-publish': plan => ['publishRun', { ref: plan.operands[0] }],
-  'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}), ...(plan.options['--skipped'] !== undefined ? { skipped: plan.options['--skipped'] } : {}), ...(plan.options['--no-publish'] ? { noPublish: true } : {}) }],
-  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--through'] !== undefined ? { through: plan.options['--through'] } : {}) }],
-  'workflow-resend': plan => ['resendChecks', { refs: plan.operands, ...(plan.options['--said'] !== undefined ? {said:plan.options['--said']} : {}) }],
-  'workflow-card': plan => ['showStoryCard', { ref: plan.operands[0] }],
-  'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
-  'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
-  'workflow-tidy': plan => ['tidyRuns', { dryRun: Boolean(plan.options['--dry-run']) }],
-  'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
-  'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json', 'local'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
-  'workflow-open': plan => ['openRun', { ...profileOptions(plan), ref: plan.operands[0], ...(plan.operands[1] !== undefined ? { area: plan.operands[1] } : {}), ...(plan.options['--new'] ? { newSession: true } : {}) }],
-};
 const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));
 const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '', ...PUBLIC_HELP_TEXT.promptingLines, '', ...packageLines(packageRoot).slice(1)].join('\n');
 export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
@@ -153,8 +132,8 @@ const LINT_FORBIDDEN_TEST_FLAGS = [
 const SCENARIO_JSON_RE = /(?:^|\/)(?:tests?|__tests__)\/(?:runtime\/)?[^/]+\.json$/i;
 const NATIVE_STORY_MARKER_RE = /^(?:##\s+Native\s+validation\b|kind:\s*native\b)/im;
 const SKIP_SKILL_SYNC_ROUTES = new Set([
-  'help', 'version', 'version-detailed', 'completion', 'workflow-list', 'workflow-view',
-  'workflow-card', 'workflow-status', 'autopilot-alerts', 'autopilot-alert',
+  'help', 'version', 'version-detailed', 'completion',
+  'autopilot-alerts', 'autopilot-alert',
   'project-files', 'file-owner', 'status', 'init', 'lint', 'prove', 'update-sync',
   'mcp', 'setup', 'upgrade', 'autopilot-logs',
 ]);
@@ -215,11 +194,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
-  if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
+  if (['setup', 'version'].includes(plan.local)) {
     try {
-      const mode = plan.local === 'workflow-run' ? 'workflow' : plan.local;
       const diagFn = pathDiagnostic ?? (await import('./path-diagnostic.mjs')).pathDiagnostic;
-      for (const message of diagFn({ packageRoot, cwd, env, mode })) line(stderr, message);
+      for (const message of diagFn({ packageRoot, cwd, env, mode: plan.local })) line(stderr, message);
     } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
   const code = await (async () => { switch (plan.local) {
@@ -411,76 +389,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(result.exitCode === 0 ? stdout : stderr, result.message.replace(/\n$/, ''));
         return result.exitCode;
       } catch (error) { line(stderr, `The product command failed.${reason(error)}`); return 1; }
-    }
-    case 'workflow-resend': case 'workflow-suite': case 'workflow-park': case 'workflow-yield': case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-publish': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
-    case 'workflow-tidy': case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': case 'workflow-evidence-associate': case 'workflow-card': {
-      if (plan.local === 'workflow-suite' && !plan.options['--command']?.trim()) { line(stderr, 'Use pdd workflow suite --command COMMAND [--timeout MIN].'); return 2; }
-      if (plan.local === 'workflow-evidence-associate' && (!plan.options['--workspace']?.trim() || !plan.options['--stage'] || !plan.options['--test']?.length)) {
-        line(stderr, 'Use pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1|before [--commit SHA] --test PATH... .'); return 2;
-      }
-      if (plan.local === 'workflow-evidence' && !plan.options['--summary']) { line(stderr, 'Use pdd workflow evidence ISSUE --summary FILE.'); return 2; }
-      if (plan.local === 'workflow-request-uptake' && !plan.options['--summary']?.trim()) {
-        const route = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'workflow.request-uptake');
-        line(stderr, `Use pdd ${route.prefix.join(' ')} REQUEST_ID --summary TEXT.`); return 2;
-      }
-      const [name, input] = RUNNER_ROUTES[plan.local](plan);
-      if (plan.local === 'workflow-run') {
-        let selected;
-        try {
-          const agentsMod = workflowAgents ?? await import('./workflow-agents.mjs');
-          selected = await agentsMod.checkWorkflowAgents({ cwd, env, ...(plan.options['--agent'] !== undefined ? { requested: plan.options['--agent'] } : {}) }, workflowAgentPorts);
-        }
-        catch { line(stderr, 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
-        if (!selected?.ok) { line(stderr, selected?.message || 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
-        if (typeof selected.hint === 'string' && selected.hint) line(stderr, selected.hint);
-        // A named agents.json entry goes to the runner by name; the runner resolves it again and saves it.
-        input.agent = typeof selected.name === 'string' ? selected.name : selected.agent;
-      }
-      try {
-        const runner = workflowRunner ?? await import('./workflow-runner.mjs');
-        if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot, ...(plan.local === 'workflow-suite' ? {env} : {}) }, { say: text => line(plan.local === 'workflow-suite' ? stdout : stderr, text), ...(['workflow-run', 'workflow-open', 'workflow-yield','workflow-tidy','workflow-resend'].includes(plan.local) ? { env } : {}), ...(plan.local === 'workflow-resend' ? {stdin} : {}) });
-        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
-          || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
-        line(result.exitCode === 0 ? stdout : stderr, result.message);
-        return result.exitCode;
-      } catch (error) {
-        line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`);
-        return 1;
-      }
-    }
-    case 'workflow-cost': {
-      let input;
-      if (plan.options['--input'] !== undefined) {
-        if (plan.options['--input'] !== '-') { line(stderr, 'Use --input - for cost JSON on stdin.'); return 2; }
-        try { input = JSON.parse(await readText(stdin)); } catch { line(stderr, 'Invalid cost JSON.'); return 2; }
-      }
-      try {
-        const runner = workflowRunner ?? await import('./workflow-runner.mjs');
-        const result = await runner.runCosts({ ref: plan.operands[0], cwd, input }, { env });
-        line(result.exitCode ? stderr : stdout, result.message); return result.exitCode;
-      } catch { line(stderr, 'Local issue costs are unavailable.'); return 1; }
-    }
-    case 'workflow-prove': {
-      if (!plan.options['--test'] || !plan.options['--expect']) {
-        line(stderr, 'pdd workflow prove requires nonblank --test and --expect.'); return 2;
-      }
-      try {
-        const module = workflowProve ?? await import('./workflow-prove.mjs');
-        const result = await module.proveRun({ ref: plan.operands[0], test: plan.options['--test'], expect: plan.options['--expect'], cwd, ...(plan.options['--timeout'] !== undefined ? { timeoutMinutes: Number(plan.options['--timeout']) } : {}) }, provePorts);
-        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid proof reply');
-        line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
-      } catch (error) {
-        line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`); return 1;
-      }
-    }
-    case 'workflow-view': {
-      try {
-        const { viewRun } = await import('./workflow-view.mjs');
-        const result = await viewRun({ ref: plan.operands[0], cwd });
-        line(result.exitCode === 0 ? stdout : stderr, result.message);
-        return result.exitCode;
-      } catch (error) { line(stderr, `The saved run could not be read. Check pdd workflow status.${reason(error)}`); return 1; }
     }
     case 'mcp': {
       try {
@@ -813,13 +721,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       stdout.write(renderCompletion(plan.operands[0]));
       return 0;
     }
-    case 'workflow-list':
-      try {
-        const areas = workflowAreas ?? await import('./workflow-areas.mjs');
-        const workflows = await areas.listWorkflowAreas({ packageRoot, cwd, home: env.HOME });
-        if (!Array.isArray(workflows)) throw Error('Invalid workflow listing');
-        line(stdout, areas.formatWorkflowList(workflows, { json: plan.options['--json'] === true }));return 0;
-      } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
   const hasSafeHome = env.HOME === undefined || (typeof env.HOME === 'string' && env.HOME.trim().length > 0 && isAbsolute(env.HOME));

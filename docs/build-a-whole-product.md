@@ -26,7 +26,7 @@ more than 12 Stories receive an advisory warning.
 The files live in your repository so any session can continue. Follow the
 [complete coffee example](../examples/coffee-pickup/README.md):
 
-Read the [file formats](../skills/pdd-product/references/files.md) for the map,
+Read the [product guide](../skills/pdd/references/product.md) for the map,
 plan tables and contract records. `product/map.md` lists parts, Stories,
 journeys, `## Rules to check`, and open questions. `product/plan.md` lists
 boundaries, optional `Through:` / `Base:` / `Issue:` preamble settings,

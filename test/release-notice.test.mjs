@@ -128,9 +128,9 @@ test('#2710 runPdd prints cached release notice on --version stderr while keepin
   assert.equal(upgCode, 0);
   assert.equal(upgErr.text, '');
 
-  // workflow list --json never receives a stderr notice even on a TTY.
+  // --json routes never receive a stderr notice even on a TTY.
   const jsonOut = capture(true), jsonErr = capture(true);
-  const jsonCode = await runPdd(['workflow', 'list', '--json'], {
+  const jsonCode = await runPdd(['accounts', 'status', '--json'], {
     cwd: home,
     packageRoot: root,
     env: { HOME: home, PATH: '' },

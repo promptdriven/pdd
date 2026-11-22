@@ -966,7 +966,7 @@ test('two native processes share incident custody and post the same alert once',
   const script = join(f.dir, 'synthetic-alert-worker.mjs');
   writeFileSync(script, `
     import { runAutopilotAlerts } from ${JSON.stringify(new URL('../src/autopilot-alerts.mjs', import.meta.url).href)};
-    import { acquireRunLock } from ${JSON.stringify(new URL('../src/workflow-runner.mjs', import.meta.url).href)};
+    import { acquireRunLock } from ${JSON.stringify(new URL('../src/shared/file-lock.mjs', import.meta.url).href)};
     const result = await runAutopilotAlerts({ action: 'alert', cwd: ${JSON.stringify(f.cwd)}, env: process.env,
       issue: '41', kind: 'stuck', text: JSON.stringify({ cause: 'Required check unavailable', tried: 'Read checks', need: 'Restore check' }) }, {
       stateRoot: ${JSON.stringify(f.ports.stateRoot)}, hostname: () => 'test-host', repository: async () => ({ nameWithOwner: 'owner/repo' }),

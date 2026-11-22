@@ -219,14 +219,70 @@ function hostFileOwner() {
   return (cachedFileOwner ??= req('./file-owner.mjs'));
 }
 
-let cachedWorkflowEligibility = null;
-function lazyEvidenceEligibility(...args) {
-  return (cachedWorkflowEligibility ??= req('./workflow-eligibility.mjs')).readEvidenceEligibility(...args);
+function lazyEvidenceEligibility({ root, producerRoot, tests, source_sha256, runId = null, stage = null } = {}, ports = {}) {
+  const canonicalPath = ports.realpath ?? realpathSync;
+  const runCapture = ports.captureSource ?? ((dir, options) => captureSource(dir, { ...options, allowMissingInterfaces: true }));
+  const listGitFiles = ports.gitFiles ?? (dir => gitFiles(dir));
+  let result = {
+    state: 'unavailable',
+    reason: 'source or ownership unavailable',
+    runId: null,
+    repo: null,
+    producerRoot: null,
+    tests: [],
+    stage: null,
+    sourceAnchor: null,
+    source_sha256: source_sha256 ?? null,
+  };
+  try {
+    const realRoot = canonicalPath(root);
+    const realProducer = canonicalPath(producerRoot);
+    if (
+      !Array.isArray(tests)
+      || !tests.length
+      || tests.some(p => typeof p !== 'string' || !p || /[\\\x00-\x1f\x7f]/.test(p)
+        || p.startsWith('/') || /^[A-Za-z]:/.test(p)
+        || p.split('/').some(seg => !seg || seg === '.' || seg === '..' || seg.toLowerCase() === '.git'))
+      || new Set(tests).size !== tests.length
+    ) {
+      return { ...result, producerRoot: realProducer, state: 'ineligible', reason: 'invalid selected test paths' };
+    }
+    const sortedTests = [...tests].sort();
+    result = { ...result, producerRoot: realProducer, tests: sortedTests };
+    if (!/^[a-f0-9]{64}$/.test(source_sha256 ?? '')) {
+      return { ...result, state: 'ineligible', reason: 'original selected source identity is missing' };
+    }
+    if (runId !== null || (stage !== null && stage !== 'current')) {
+      return { ...result, state: 'ineligible', reason: 'saved run/stage has no matching owned association' };
+    }
+    if (realRoot !== realProducer) {
+      return { ...result, state: 'ineligible', reason: 'alternate producer has no owned workspace association' };
+    }
+    const visible = new Set(listGitFiles(realRoot));
+    if (sortedTests.some(p => !visible.has(p))) {
+      return { ...result, state: 'unavailable', reason: 'A selected authored source is missing or unavailable.' };
+    }
+    if (runCapture(realRoot, { tests: sortedTests, appMap: null }).sha256 !== source_sha256) {
+      return { ...result, state: 'ineligible', reason: 'the exact selected source has changed' };
+    }
+    return {
+      state: 'eligible',
+      reason: null,
+      runId: null,
+      repo: null,
+      producerRoot: realProducer,
+      tests: sortedTests,
+      stage: 'current',
+      sourceAnchor: { root: realRoot, head: null },
+      source_sha256,
+    };
+  } catch (error) {
+    return { ...result, reason: String(error?.message ?? error).replace(/\s+/g, ' ').trim() };
+  }
 }
 
-let cachedWorkflowRuns = null;
-function lazyAllRuns(...args) {
-  return (cachedWorkflowRuns ??= req('./workflow-runs.mjs')).allRuns(...args);
+function lazyAllRuns() {
+  return [];
 }
 
 let cachedProductDocuments = null;
@@ -2678,13 +2734,11 @@ export async function runCheck(input = {}, ports = {}) {
   const [
     ,
     { headerPrompts, isTestOwnedPath, promptClaims, resolveOwners },
-    nativeResults,
     lintMods,
     screenMod,
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./file-owner.mjs'),
-    nativeLintRequested ? import('./workflow-results.mjs') : Promise.resolve(null),
     skipLintModules
       ? Promise.resolve(null)
       : Promise.all([import('./svg-layout.mjs'), import('./repo-hygiene-lint.mjs')]),
@@ -2740,13 +2794,6 @@ export async function runCheck(input = {}, ports = {}) {
         allRuns: lazyAllRuns,
         workflowBaseSha: ({ root, env: runEnv }) =>
           resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: forwardPorts.allRuns ?? lazyAllRuns }),
-        ...(nativeResults
-          ? {
-              assessNativeEvidence: nativeResults.assessNativeEvidence,
-              usableResult: nativeResults.usableResult,
-              resultLines: nativeResults.resultLines,
-            }
-          : {}),
         ...(defaultLintSvgLayouts ? { lintSvgLayouts: defaultLintSvgLayouts } : {}),
         ...(screenMod
           ? {

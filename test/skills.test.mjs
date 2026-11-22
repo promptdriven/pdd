@@ -9,9 +9,9 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const skills = join(root, 'skills');
 const read = rel => readFileSync(join(skills, rel), 'utf8');
 
-const TRANSITION_SKILLS = ['pdd-bug', 'pdd-feature', 'pdd-graph', 'pdd-product', 'pdd-prompting', 'pdd-small-change'];
-const ALL_SKILLS = ['pdd', ...TRANSITION_SKILLS];
+const RETIRED_SKILLS = ['pdd-setup', 'pdd-bug', 'pdd-feature', 'pdd-graph', 'pdd-product', 'pdd-prompting', 'pdd-small-change'];
 const EXPECTED_REFERENCES = [
+  'autopilot-job-rules.md',
   'ports-and-cli.md',
   'product.md',
   'prompting.md',
@@ -19,11 +19,6 @@ const EXPECTED_REFERENCES = [
   'ui-and-screens.md',
   'verification.md',
 ];
-const WORKFLOW_AREAS = {
-  'pdd-small-change': ['change.md', 'formal.md', 'scope.md', 'verify.md'],
-  'pdd-bug': ['build.md', 'check.md', 'formal.md', 'prompt-story.md', 'reproduce.md', 'review.md', 'try.md', 'verify.md'],
-  'pdd-feature': ['build.md', 'check.md', 'formal.md', 'prompt-story.md', 'review.md', 'try.md', 'understand.md', 'verify.md', 'visual.md'],
-};
 
 const filesUnder = dir => readdirSync(dir, { withFileTypes: true })
   .flatMap(entry => entry.isDirectory() ? filesUnder(join(dir, entry.name)) : [join(dir, entry.name)]);
@@ -35,20 +30,17 @@ const slugify = heading => heading
   .trim()
   .replace(/\s+/g, '-');
 
-test('SKILLS1: literally one visible /pdd skill plus hidden transition folders, with pdd-setup retired', () => {
-  assert.deepEqual(readdirSync(skills).sort(), [...ALL_SKILLS].sort());
-  assert.equal(existsSync(join(skills, 'pdd-setup')), false, 'pdd-setup is retired');
+test('SKILLS1: literally one visible /pdd skill, with legacy split skill folders retired', () => {
+  assert.deepEqual(readdirSync(skills).sort(), ['pdd']);
+  for (const name of RETIRED_SKILLS) {
+    assert.equal(existsSync(join(skills, name)), false, `${name} is retired`);
+  }
 
   const pddSkill = read('pdd/SKILL.md');
   assert.match(pddSkill, /^---\n[\s\S]*?name: pdd\n[\s\S]*?\n---\n/);
   assert.doesNotMatch(pddSkill, /^disable-model-invocation:\s*true$/m);
   const pddLines = pddSkill.trimEnd().split('\n').length;
   assert.ok(pddLines <= 140, `skills/pdd/SKILL.md should stay concise (${pddLines} lines)`);
-
-  for (const name of TRANSITION_SKILLS) {
-    const text = read(`${name}/SKILL.md`);
-    assert.match(text, /^disable-model-invocation:\s*true$/m, `${name} must stay hidden from model invocation`);
-  }
 });
 
 test('SKILLS2: skills/pdd co-located references exist, stay bounded, and contain zero dead commands', () => {
@@ -97,20 +89,9 @@ test('SKILLS3: zero broken local markdown links or heading anchors inside skills
   }
 });
 
-test('SKILLS4: transition workflow areas, 30 staged workflow/step files, and autopilot-job-rules stay intact', () => {
-  assert.equal(existsSync(join(skills, 'pdd-prompting/autopilot-job-rules.md')), true);
+test('SKILLS4: root guide mirrors stay removed and autopilot-job-rules lives in skills/pdd/references', () => {
+  assert.equal(existsSync(join(skills, 'pdd/references/autopilot-job-rules.md')), true);
   assert.equal(existsSync(join(root, 'RUNBOOK.md')), false, 'root RUNBOOK.md mirror removed');
   assert.equal(existsSync(join(root, 'docs/prompting-guide.md')), false, 'docs/prompting-guide.md mirror removed');
   assert.equal(existsSync(join(root, 'docs/story-guide.md')), false, 'docs/story-guide.md mirror removed');
-
-  for (const [name, expectedSteps] of Object.entries(WORKFLOW_AREAS)) {
-    const def = JSON.parse(read(`${name}/workflow.json`));
-    assert.equal(def.version, 2, `${name}/workflow.json version`);
-    assert.ok(Array.isArray(def.areas) && def.areas.length >= 2, `${name}/workflow.json areas`);
-    assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), expectedSteps, `${name}/steps`);
-  }
-
-  const router = read('pdd-prompting/RUNBOOK.md');
-  const topics = [...new Set([...router.matchAll(/`runbook\/([a-z0-9-]+\.md)`/g)].map(m => m[1]))].sort();
-  assert.deepEqual(readdirSync(join(skills, 'pdd-prompting/runbook')).sort(), topics);
 });

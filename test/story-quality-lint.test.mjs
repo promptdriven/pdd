@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { findTestPromptViolations, isTestPromptPath, runOwner } from '../src/file-owner.mjs';
 import { formatStoryLint, isLintableStoryPath, lintStories, lintStory } from '../src/story-lint.mjs';
-import { packageRoot } from './helpers/workflow-runner-fixture.mjs';
+
+const packageRoot = resolve(import.meta.dirname, '..');
 
 const harborDir = join(packageRoot, 'test', 'fixtures', 'harbor');
 

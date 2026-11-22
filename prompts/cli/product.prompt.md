@@ -56,4 +56,4 @@ Resolve repository identity from `git remote get-url origin` (via Layer-0 `src/s
 
 - Layer-0 `src/shared/git-context.mjs`, `src/shared/github-repo.mjs`, `src/shared/safe-read.mjs`, `src/github-calls.mjs`, `src/agent-config.mjs`.
 - Layer-1 `src/prompt-tests-words.mjs`, `src/runtime-seam.mjs` (read-only `savedStoryEvidence` and `captureSource`).
-- [Product file formats](../../skills/pdd-product/references/files.md) and [command catalog](command-catalog.prompt.md).
+- [Product guide](../../skills/pdd/references/product.md) and [command catalog](command-catalog.prompt.md).
