@@ -40,30 +40,30 @@ process.on('message', async message => {
     send({stream,bytes:Buffer.from(text).toString('base64')});
   };
   let pending = '', summary = {}, complete = null, tap = false, plan = false;
-  let polyPending = '', polyOverflow = false, polyBytes = 0;
-  const polyLines = [];
-  const MAX_POLY_BYTES = 262_144, MAX_POLY_LINE = 1024;
+  let polyPending = '', polyOverflow = false, structuredBytes = 0, structuredTruncated = false, tailBytes = 0;
+  let sawGoJson = false, sawNonGoLine = false, sawCargoHeader = false;
+  const structuredLines = [], tailLines = [];
+  const MAX_STRUCTURED_BYTES = 262_144, MAX_TAIL_BYTES = 16_384, MAX_POLY_LINE = 1024;
   const keys = ['tests','suites','pass','fail','cancelled','skipped','todo'];
   const pushPolyLine = line => {
-    polyLines.push(line); polyBytes += line.length;
-    if (polyBytes <= MAX_POLY_BYTES) return;
-    let keptBytes = 0;
-    const tail = [];
-    for (let i = polyLines.length - 1; i >= 0 && keptBytes < 65_536; i -= 1) {
-      tail.push(polyLines[i]); keptBytes += polyLines[i].length;
-    }
-    tail.reverse();
-    const tailStart = polyLines.length - tail.length;
-    const anchors = [];
-    for (let i = 0; i < tailStart && keptBytes < MAX_POLY_BYTES - 16_384; i += 1) {
-      const l = polyLines[i];
-      if (/^(?:running \d+ tests?|test result:)|\s*"Action"\s*:\s*"(?:run|pass|fail|skip|build-fail)"/.test(l)) {
-        anchors.push(l); keptBytes += l.length;
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    if (trimmed.startsWith('{') && /"Action"\s*:/.test(trimmed)) {
+      sawGoJson = true;
+      if (!/"Action"\s*:\s*"output"/.test(trimmed)) {
+        if (structuredBytes + line.length > MAX_STRUCTURED_BYTES) structuredTruncated = true;
+        else if (!structuredTruncated) { structuredLines.push(line); structuredBytes += line.length; }
       }
+      return;
     }
-    polyLines.length = 0;
-    polyLines.push(...anchors, ...tail);
-    polyBytes = keptBytes;
+    sawNonGoLine = true;
+    if (/^(?:running \d+ tests?$|test result:)/.test(trimmed)) {
+      if (trimmed.startsWith('running ')) sawCargoHeader = true;
+      if (structuredBytes + line.length > MAX_STRUCTURED_BYTES) structuredTruncated = true;
+      else if (!structuredTruncated) { structuredLines.push(line); structuredBytes += line.length; }
+    }
+    tailLines.push(line); tailBytes += line.length;
+    while (tailBytes > MAX_TAIL_BYTES && tailLines.length > 1) tailBytes -= tailLines.shift().length;
   };
   const output = (stream, bytes) => {
     log.evidence.outputBytes += bytes.length;
@@ -76,7 +76,10 @@ process.on('message', async message => {
         } else {
           polyPending += part;
           if (polyPending.endsWith('\n')) { pushPolyLine(polyPending); polyPending = ''; }
-          else if (polyPending.length > MAX_POLY_LINE) { polyPending = ''; polyOverflow = true; }
+          else if (polyPending.length > MAX_POLY_LINE) {
+            if (!/"Action"\s*:\s*"output"/.test(polyPending)) sawNonGoLine = true;
+            polyPending = ''; polyOverflow = true;
+          }
         }
         pending += part;
         if (pending.endsWith('\n')) {
@@ -115,12 +118,19 @@ process.on('message', async message => {
     let counts = null;
     if (record.outcome === 'completed' && !pending) {
       if (complete) counts = complete;
-      else if (!tap && polyLines.length) {
-        const parsed = parseTestSummaryOutput(polyLines.join(''));
+      else if (!tap) {
+        let parsed = null;
+        if (sawGoJson && !sawNonGoLine) {
+          parsed = structuredTruncated ? null : parseTestSummaryOutput(structuredLines.join(''), 'go');
+        } else if (sawCargoHeader) {
+          parsed = structuredTruncated ? null : parseTestSummaryOutput(structuredLines.join(''));
+        } else if (tailLines.length) {
+          parsed = parseTestSummaryOutput(tailLines.join(''));
+        }
         if (parsed && parsed.format !== 'tap') {
           counts = {
-            tests: parsed.total, pass: parsed.passed, fail: parsed.failed, skipped: parsed.skipped,
-            total: parsed.total, passed: parsed.passed, failed: parsed.failed, format: parsed.format,
+            tests: parsed.total, suites: 0, pass: parsed.passed, fail: parsed.failed,
+            cancelled: 0, skipped: parsed.skipped, todo: 0, format: parsed.format,
           };
         }
       }

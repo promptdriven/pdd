@@ -1,4 +1,5 @@
-// Backwards-compatible facade for `src/autopilot/ai-lint.mjs` (zero runtime-seam imports).
+// Generated from prompts/cli/codex-lint.prompt.md (sha256: 1ed2152f269526ebfe6b4c44eb13c324706fdf8b37b4711dd95c18019237db5a).
+// Backwards-compatible facade over `src/autopilot/ai-lint.mjs` (zero runtime-seam imports).
 export {
   buildAiLintPrompt,
   buildCodexLintPrompt,

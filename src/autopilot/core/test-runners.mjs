@@ -61,10 +61,19 @@ export function parseJunitXml(xmlText) {
   const stack = [], cases = [];
   const skipDelims = [['<!--', '-->', 'unclosed_comment'], ['<![CDATA[', ']]>', 'unclosed_cdata'], ['<?', '?>', 'unclosed_pi']];
   let i = 0, seenRoot = false, activeCase = null;
+  const currentSuitePrefix = () => stack.filter(n => n.tag === 'testsuite' && n.name).map(n => n.name).join('::');
+  const nearestSuite = () => { for (let k = stack.length - 1; k >= 0; k -= 1) if (stack[k].tag === 'testsuite' || stack[k].tag === 'testsuites') return stack[k]; return null; };
+  const recordStatusOnSuite = status => { const s = nearestSuite(); if (s) { if (status === 'error') s.seenErrors += 1; else if (status === 'fail') s.seenFailures += 1; } };
   const pushCase = c => {
-    const suitePrefix = stack.filter(n => n.tag === 'testsuite' && n.name).map(n => n.name).join('::');
-    const prefix = c.classname || suitePrefix;
+    const prefix = c.classname || currentSuitePrefix();
     cases.push({ id: prefix ? `${prefix}::${c.name}` : c.name, status: c.status, durationMs: c.durationMs });
+    recordStatusOnSuite(c.status);
+  };
+  const checkSuiteClosure = (top, suitePrefix) => {
+    if (top.attrErrors > top.seenErrors) { cases.push({ id: `${suitePrefix || top.tag}::<suite-error-count>`, status: 'error', durationMs: null }); top.seenErrors = top.attrErrors; }
+    if (top.attrFailures > top.seenFailures) { cases.push({ id: `${suitePrefix || top.tag}::<suite-failure-count>`, status: 'fail', durationMs: null }); top.seenFailures = top.attrFailures; }
+    const parent = nearestSuite();
+    if (parent) { parent.seenErrors += top.seenErrors; parent.seenFailures += top.seenFailures; }
   };
 
   while (i < src.length) {
@@ -74,15 +83,13 @@ export function parseJunitXml(xmlText) {
     if (special) {
       const end = src.indexOf(special[1], lt + special[0].length);
       if (end < 0) return bad(special[2]);
-      i = end + special[1].length;
-      continue;
+      i = end + special[1].length; continue;
     }
     if (src.startsWith('<!DOCTYPE', lt)) {
       const end = src.indexOf('>', lt + 9);
       if (end < 0) return bad('unclosed_doctype');
       if (src.slice(lt, end).includes('[') || /<!ENTITY\b/i.test(src.slice(lt, end))) return bad('unsafe_xml_doctype');
-      i = end + 1;
-      continue;
+      i = end + 1; continue;
     }
     let j = lt + 1, quote = null;
     while (j < src.length && (quote || src[j] !== '>')) {
@@ -96,37 +103,41 @@ export function parseJunitXml(xmlText) {
     if (!rawTag) return bad('empty_tag');
     if (rawTag.startsWith('/')) {
       const closeName = rawTag.slice(1).trim().toLowerCase();
+      const prefixBeforePop = currentSuitePrefix();
       const top = stack.pop();
       if (!top || top.tag !== closeName) return bad('mismatched_closing_tag');
       if (closeName === 'testcase' && activeCase) { pushCase(activeCase); activeCase = null; }
+      else if (closeName === 'testsuite' || closeName === 'testsuites') checkSuiteClosure(top, prefixBeforePop);
       continue;
     }
     const selfClosing = rawTag.endsWith('/');
     const body = selfClosing ? rawTag.slice(0, -1).trim() : rawTag;
-    const sp = body.search(/\s/);
-    const tag = (sp < 0 ? body : body.slice(0, sp)).toLowerCase();
+    const sp = body.search(/\s/), tag = (sp < 0 ? body : body.slice(0, sp)).toLowerCase();
     if (!/^[a-z_][a-z0-9_.:-]*$/.test(tag)) return bad('invalid_tag_name');
     const attrs = sp < 0 ? {} : parseXmlAttrs(body.slice(sp + 1));
     if (!attrs) return bad('malformed_attributes');
     if (tag === 'testsuites' || tag === 'testsuite') seenRoot = true;
     if (tag === 'testcase') {
       const t = attrs.time !== undefined && attrs.time !== '' ? Number(attrs.time) : NaN;
-      const entry = {
-        classname: String(attrs.classname ?? '').trim(),
-        name: String(attrs.name ?? '').trim() || `testcase_${cases.length + 1}`,
-        status: 'pass',
-        durationMs: Number.isFinite(t) && t >= 0 ? Math.round(t * 1000) : null,
-      };
-      if (selfClosing) pushCase(entry);
-      else { activeCase = entry; stack.push({ tag, name: entry.name }); }
+      const entry = { classname: String(attrs.classname ?? '').trim(), name: String(attrs.name ?? '').trim() || `testcase_${cases.length + 1}`, status: 'pass', durationMs: Number.isFinite(t) && t >= 0 ? Math.round(t * 1000) : null };
+      if (selfClosing) pushCase(entry); else { activeCase = entry; stack.push({ tag, name: entry.name }); }
       continue;
     }
     if (activeCase) {
       if (tag === 'error') activeCase.status = 'error';
       else if (tag === 'failure' && activeCase.status !== 'error') activeCase.status = 'fail';
       else if (tag === 'skipped' && activeCase.status === 'pass') activeCase.status = 'skip';
+    } else if ((tag === 'error' || tag === 'failure') && (stack.at(-1)?.tag === 'testsuite' || stack.at(-1)?.tag === 'testsuites')) {
+      const status = tag === 'error' ? 'error' : 'fail';
+      cases.push({ id: `${currentSuitePrefix() || stack.at(-1).tag}::<suite-${tag}>`, status, durationMs: null });
+      recordStatusOnSuite(status);
     }
-    if (!selfClosing) stack.push({ tag, name: String(attrs.name ?? '').trim() });
+    const isSuiteTag = tag === 'testsuite' || tag === 'testsuites';
+    const frame = isSuiteTag
+      ? { tag, name: String(attrs.name ?? '').trim(), attrErrors: Math.max(0, Number(attrs.errors ?? 0) || 0), attrFailures: Math.max(0, Number(attrs.failures ?? 0) || 0), seenErrors: 0, seenFailures: 0 }
+      : { tag, name: String(attrs.name ?? '').trim() };
+    if (selfClosing) { if (isSuiteTag) checkSuiteClosure(frame, [currentSuitePrefix(), frame.name].filter(Boolean).join('::')); }
+    else stack.push(frame);
   }
   if (stack.length > 0 || !seenRoot) return bad(stack.length > 0 ? 'unclosed_element' : 'missing_junit_root');
   const passed = cases.filter(c => c.status === 'pass').length;
@@ -152,8 +163,7 @@ export function parseTapReport(rawText) {
     if (subM) {
       const indent = subM[1].length;
       while (subtestStack.length && subtestStack.at(-1).indent >= indent) subtestStack.pop();
-      subtestStack.push({ indent, name: subM[2] });
-      continue;
+      subtestStack.push({ indent, name: subM[2] }); continue;
     }
     const testM = /^(\s*)(not )?ok(?:\s+(\d+))?(?:\s+-\s+|\s+)?(.*)$/.exec(line);
     if (testM) {
@@ -186,15 +196,29 @@ export function parseTapReport(rawText) {
     if (!/^# duration_ms \d+(?:\.\d+)?\s*$/.test(line) && !/^\s*1\.\.\d+/.test(line) && line.trim()) { summary = {}; completeSummary = null; }
   }
   if (bailout) return bad('tap_bailout');
-  const leafCases = events
-    .filter((ev, k) => !ev.isSuite && !(k > 0 && events[k - 1].indent > ev.indent))
-    .map(ev => ({ id: ev.ancestors.length ? `${ev.ancestors.join(' > ')} > ${ev.name}` : ev.name, status: ev.status, durationMs: ev.durationMs }));
+  const leafCases = [];
+  for (let k = 0; k < events.length; k += 1) {
+    const ev = events[k];
+    const hasChildren = k > 0 && events[k - 1].indent > ev.indent;
+    const id = ev.ancestors.length ? `${ev.ancestors.join(' > ')} > ${ev.name}` : ev.name;
+    if (ev.isSuite || hasChildren) {
+      if (ev.status === 'fail') {
+        let childFailed = false;
+        for (let p = k - 1; p >= 0 && events[p].indent > ev.indent; p -= 1) if (events[p].status === 'fail') { childFailed = true; break; }
+        if (!childFailed) leafCases.push({ id: `${id}::<suite-hook>`, status: 'fail', durationMs: ev.durationMs });
+      }
+      continue;
+    }
+    leafCases.push({ id, status: ev.status, durationMs: ev.durationMs });
+  }
   const topCount = events.filter(e => e.indent === 0).length;
   const complete = Boolean(tap && planCount !== null && (completeSummary !== null || (planCount > 0 && topCount === planCount)));
   if (!complete || (topCount > 0 && topCount !== planCount)) return bad('incomplete_tap');
   const counts = completeSummary
     ? { total: completeSummary.tests, passed: completeSummary.pass, failed: completeSummary.fail + completeSummary.cancelled, skipped: completeSummary.skipped + completeSummary.todo, format: 'tap' }
     : { total: leafCases.length, passed: leafCases.filter(c => c.status === 'pass').length, failed: leafCases.filter(c => c.status === 'fail').length, skipped: leafCases.filter(c => c.status === 'skip').length, format: 'tap' };
+  const parsedFailCount = leafCases.filter(c => c.status === 'fail' || c.status === 'error').length;
+  if (counts.failed > parsedFailCount) leafCases.push({ id: '<tap-summary-failure>', status: 'fail', durationMs: null });
   return { ok: true, complete: true, format: 'tap', cases: leafCases, counts, reason: null };
 }
 
@@ -203,6 +227,7 @@ export function parseGoJsonReport(rawText) {
   const bad = reason => ({ ok: false, complete: false, format: 'go-json', cases: [], counts: null, reason });
   if (!lines.length) return bad('empty_go_json');
   const running = new Set(), finished = new Map(), pkgEvents = new Map(), pkgHasFailedTest = new Set();
+  const startedPackages = new Set(), finishedPackages = new Set();
   for (const line of lines) {
     if (!line.startsWith('{')) return bad('malformed_go_json');
     let ev;
@@ -210,6 +235,7 @@ export function parseGoJsonReport(rawText) {
     if (!ev || typeof ev !== 'object' || typeof ev.Action !== 'string') return bad('malformed_go_json');
     const pkg = String(ev.Package ?? ''), testName = typeof ev.Test === 'string' && ev.Test ? ev.Test : null;
     const durationMs = typeof ev.Elapsed === 'number' && Number.isFinite(ev.Elapsed) ? Math.round(ev.Elapsed * 1000) : null;
+    if (pkg) startedPackages.add(pkg);
     if (testName) {
       const id = pkg ? `${pkg}::${testName}` : testName;
       if (ev.Action === 'run') running.add(id);
@@ -219,9 +245,11 @@ export function parseGoJsonReport(rawText) {
       }
     } else if (['pass', 'fail', 'skip', 'build-fail'].includes(ev.Action)) {
       pkgEvents.set(pkg, { action: ev.Action, durationMs });
+      if (pkg) finishedPackages.add(pkg);
     }
   }
   if (running.size > 0) return bad('incomplete_go_test_run');
+  for (const pkg of startedPackages) if (!finishedPackages.has(pkg)) return bad('incomplete_go_package_run');
   const cases = [...finished.values()];
   for (const [pkg, info] of pkgEvents.entries()) {
     if (info.action === 'build-fail') cases.push({ id: `${pkg || 'package'}::<build>`, status: 'error', durationMs: info.durationMs });
@@ -233,16 +261,16 @@ export function parseGoJsonReport(rawText) {
   return { ok: true, complete: true, format: 'go-json', cases, counts: { total: cases.length, passed, failed, skipped, format: 'go-json' }, reason: null };
 }
 
-export function parseCargoReport(rawText) {
+export function parseCargoReport(rawText, { requireRunningHeader = false } = {}) {
   const clean = stripAnsi(rawText);
   const bad = reason => ({ ok: false, complete: false, format: 'cargo', cases: [], counts: null, reason });
   const runningCount = [...clean.matchAll(/^running\s+(\d+)\s+tests?\s*$/gm)].length;
   const results = [...clean.matchAll(/^test result:\s+(ok|FAILED)\.\s+(\d+)\s+passed;\s+(\d+)\s+failed;\s+(\d+)\s+ignored;\s+(\d+)\s+measured;\s+(\d+)\s+filtered out/gm)];
-  if (!results.length) return bad('missing_cargo_summary');
+  if (!results.length || (requireRunningHeader && runningCount !== results.length)) return bad('missing_cargo_summary');
   if (runningCount > results.length) return bad('incomplete_cargo_run');
   let passed = 0, failed = 0, skipped = 0;
   for (const m of results) { passed += Number(m[2]); failed += Number(m[3]); skipped += Number(m[4]); }
-  const cases = [...clean.matchAll(/^test\s+(.+?)\s+\.\.\.\s+(ok|FAILED|ignored)(?:\s|$)/gm)].map(m => ({
+  const cases = [...clean.matchAll(/^test\s+(.+?)\s+\.\.\.\s+(ok|FAILED|ignored)(?:,|\s|$)/gm)].map(m => ({
     id: m[1].trim(), status: m[2] === 'ok' ? 'pass' : (m[2] === 'FAILED' ? 'fail' : 'skip'), durationMs: null,
   }));
   return { ok: true, complete: true, format: 'cargo', cases, counts: { total: passed + failed + skipped, passed, failed, skipped, format: 'cargo' }, reason: null };
@@ -263,8 +291,8 @@ function parseVitestSummary(rawText, explicit = false) {
 function parsePytestSummary(rawText, explicit = false) {
   const clean = stripAnsi(rawText);
   const pat = explicit
-    ? /(?:^|={2,}\s*)((?:\d+\s+(?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|warnings?)(?:,\s*)?)+|no tests ran)\s+in\s+[0-9.]+s(?:\s*={2,}|\s*$)/gim
-    : /^={2,}\s*((?:\d+\s+(?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|warnings?)(?:,\s*)?)+|no tests ran)\s+in\s+[0-9.]+s\s*={2,}\s*$/gim;
+    ? /(?:^|={2,}\s*)((?:\d+\s+(?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|warnings?)(?:,\s*)?)+|no tests ran)\s+in\s+[0-9.]+s(?:\s*\([^)\r\n]+\))?(?:\s*={2,}|\s*$)/gim
+    : /^={2,}\s*((?:\d+\s+(?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|warnings?)(?:,\s*)?)+|no tests ran)\s+in\s+[0-9.]+s(?:\s*\([^)\r\n]+\))?\s*={2,}\s*$/gim;
   const matches = [...clean.matchAll(pat)];
   if (!matches.length) return null;
   const body = matches.at(-1)[1].toLowerCase();
@@ -282,30 +310,19 @@ export function detectTestRunner(root = null, packageJsonOrFiles = null) {
   else if (packageJsonOrFiles && typeof packageJsonOrFiles === 'object') {
     if (Array.isArray(packageJsonOrFiles.files) || packageJsonOrFiles.packageJson || packageJsonOrFiles.pyprojectText) {
       files = packageJsonOrFiles.files ? packageJsonOrFiles.files.map(String) : null;
-      pkg = packageJsonOrFiles.packageJson ?? null;
-      pyprojectText = packageJsonOrFiles.pyprojectText ?? null;
+      pkg = packageJsonOrFiles.packageJson ?? null; pyprojectText = packageJsonOrFiles.pyprojectText ?? null;
     } else pkg = packageJsonOrFiles;
   }
   const hasFile = name => (files ? files.includes(name) : (root ? existsSync(join(root, name)) : false));
   const anyFile = re => (files ? files.some(f => re.test(f)) : (root && existsSync(root) ? readdirSync(root).some(f => re.test(f)) : false));
-  if (!pkg && root && existsSync(join(root, 'package.json'))) {
-    try { pkg = JSON.parse(readBoundedUtf8(join(root, 'package.json'), { maxBytes: 262_144, noFollow: true })); } catch {}
-  }
-  if (pyprojectText === null && root && existsSync(join(root, 'pyproject.toml'))) {
-    try { pyprojectText = readBoundedUtf8(join(root, 'pyproject.toml'), { maxBytes: 262_144, noFollow: true }); } catch {}
-  }
-  const testScript = String(pkg?.scripts?.test ?? '');
-  const allDeps = { ...(pkg?.dependencies ?? {}), ...(pkg?.devDependencies ?? {}) };
-  if (/\bvitest\b/i.test(testScript) || Object.hasOwn(allDeps, 'vitest') || anyFile(/^vitest\.config\.(?:[cm]?[jt]s)$/i)) {
-    return { kind: 'vitest', command: 'npx vitest run', reportFormat: 'junit', detectedBy: 'vitest' };
-  }
+  if (!pkg && root && existsSync(join(root, 'package.json'))) { try { pkg = JSON.parse(readBoundedUtf8(join(root, 'package.json'), { maxBytes: 262_144, noFollow: true })); } catch {} }
+  if (pyprojectText === null && root && existsSync(join(root, 'pyproject.toml'))) { try { pyprojectText = readBoundedUtf8(join(root, 'pyproject.toml'), { maxBytes: 262_144, noFollow: true }); } catch {} }
+  const testScript = String(pkg?.scripts?.test ?? ''), allDeps = { ...(pkg?.dependencies ?? {}), ...(pkg?.devDependencies ?? {}) };
+  if (/\bvitest\b/i.test(testScript) || Object.hasOwn(allDeps, 'vitest') || anyFile(/^vitest\.config\.(?:[cm]?[jt]s)$/i)) return { kind: 'vitest', command: 'npx vitest run', reportFormat: 'junit', detectedBy: 'vitest' };
   if (/\bnode\b.*--test\b/.test(testScript)) return { kind: 'node:test', command: 'node --test', reportFormat: 'tap', detectedBy: 'package.json:scripts.test' };
   if (hasFile('Cargo.toml')) return { kind: 'cargo', command: 'cargo test', reportFormat: 'cargo', detectedBy: 'Cargo.toml' };
   if (hasFile('go.mod')) return { kind: 'go', command: 'go test -json ./...', reportFormat: 'go-json', detectedBy: 'go.mod' };
-  if (hasFile('pytest.ini') || hasFile('conftest.py') || (typeof pyprojectText === 'string' && /\bpytest\b/i.test(pyprojectText))
-    || anyFile(/(?:^|\/)(?:test_[^/]+\.py|[^/]+_test\.py)$/i)) {
-    return { kind: 'pytest', command: 'pytest', reportFormat: 'junit', detectedBy: 'pytest' };
-  }
+  if (hasFile('pytest.ini') || hasFile('conftest.py') || (typeof pyprojectText === 'string' && /\bpytest\b/i.test(pyprojectText)) || anyFile(/(?:^|\/)(?:test_[^/]+\.py|[^/]+_test\.py)$/i)) return { kind: 'pytest', command: 'pytest', reportFormat: 'junit', detectedBy: 'pytest' };
   if (pkg || hasFile('package.json') || anyFile(/\.test\.[cm]?js$/i)) return { kind: 'node:test', command: 'node --test', reportFormat: 'tap', detectedBy: 'package.json' };
   return null;
 }
@@ -322,7 +339,7 @@ export function parseTestSummaryOutput(output, runnerKind = null) {
   if (kind === 'pytest') return parsePytestSummary(raw, true);
   if (/^TAP version 13\b/m.test(raw)) { const r = parseTapReport(raw); return r.ok ? r.counts : null; }
   if (/^\s*\{.*"Action"\s*:/.test(raw)) { const r = parseGoJsonReport(raw); return r.ok ? r.counts : null; }
-  const cargo = parseCargoReport(raw);
+  const cargo = parseCargoReport(raw, { requireRunningHeader: true });
   if (cargo.ok) return cargo.counts;
   return parseVitestSummary(raw, false) ?? parsePytestSummary(raw, false);
 }
@@ -331,7 +348,7 @@ export function extractTestCases(rawOutputOrReport, format = 'auto') {
   const raw = String(rawOutputOrReport ?? '');
   if (!raw.trim()) return [];
   const kind = format === 'auto' ? null : normalizeRunnerKind(format);
-  if (kind === 'junit' || (!kind && /^\s*<(?:\?xml|testsuites?|testsuite)\b/.test(raw))) return parseJunitXml(raw).cases;
+  if (kind === 'junit' || (!kind && /^\s*<(?:\?xml|testsuites?|testsuite)\b/.test(raw)) || ((kind === 'vitest' || kind === 'pytest') && /^\s*<(?:\?xml|testsuites?|testsuite)\b/.test(raw))) return parseJunitXml(raw).cases;
   if (kind === 'node:test' || (!kind && /^TAP version 13\b/m.test(raw))) return parseTapReport(raw).cases;
   if (kind === 'go' || (!kind && /^\s*\{.*"Action"\s*:/.test(raw))) return parseGoJsonReport(raw).cases;
   if (kind === 'cargo' || (!kind && /^test result:/m.test(raw))) return parseCargoReport(raw).cases;
