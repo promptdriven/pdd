@@ -42,6 +42,7 @@ import {
   materializeLocalCodexAuth,
   normalizeCodexConfigWriteback,
   REQUIRED_CODEX_SUBSHELL_EXCLUDES,
+  resolveCodexGatewayEndpoints,
   resolveEffectiveSqliteHome,
   stopCodexAppServerDaemon,
   writeCloudAccountsState,
@@ -1275,6 +1276,176 @@ test('SEC-2, REL-3, REL-4 & currentAccountId: dash --account= guard, ENOENT->127
   assert.equal(pinnedCurrentId, null, 'pinned session must pass currentAccountId: null');
   rmSync(pinnedSess.runtimeDir, { recursive: true, force: true });
 });
+
+test('PDD_CODEX_AUTO_FAIL_OPEN=1 matches pdd-claude fail-open contract, strips PDD_* in child env, and consolidates #3531 gateway endpoints', async t => {
+  const sb = makeSandbox(t);
+  const stateDir = join(sb.root, 'state');
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const autoEnv = {
+    ...sb.env,
+    PDD_STATE_DIR: stateDir,
+    PDD_CODEX_AUTO_FAIL_OPEN: '1',
+    PDD_TOKEN: 'pdd_secret_token_should_strip',
+    PDD_CUSTOM_VAR: 'custom_secret_should_strip',
+  };
+
+  const calls = [];
+  const captureSpawn = async (bin, args, opts) => {
+    calls.push({ bin, args, env: opts.env });
+    return { exitCode: 0 };
+  };
+  const quietStreams = { stdout: { write() {} }, stderr: { write() {} } };
+
+  // 1. Unenrolled/inactive pool -> passes straight to stock codex with ALL PDD_* vars stripped.
+  const rUnenrolled = await runPddCodexCli(['exec', 'hello'], { cwd: sb.root, env: autoEnv, ...quietStreams }, {
+    spawnCodex: captureSpawn,
+  });
+  assert.equal(rUnenrolled.exitCode, 0);
+  assert.deepEqual(calls.at(-1).args, ['exec', 'hello']);
+  assert.deepEqual(Object.keys(calls.at(-1).env).filter(k => k.startsWith('PDD_')), [], 'unenrolled fail-open must strip ALL PDD_* vars');
+
+  // 1b. Pass-through commands (--version) also strip ALL PDD_* vars even when autoFailOpen is false!
+  const rVersion = await runPddCodexCli(['--version'], { cwd: sb.root, env: { ...autoEnv, PDD_CODEX_AUTO_FAIL_OPEN: '0' }, ...quietStreams }, {
+    spawnCodex: captureSpawn,
+  });
+  assert.equal(rVersion.exitCode, 0);
+  assert.deepEqual(Object.keys(calls.at(-1).env).filter(k => k.startsWith('PDD_')), [], 'pass-through must strip ALL PDD_* vars');
+
+  // 2. logout / login (without status) under auto-wrapper -> passes straight to stock codex with ALL PDD_* stripped.
+  const rLogout = await runPddCodexCli(['logout'], { cwd: sb.root, env: autoEnv, ...quietStreams }, {
+    spawnCodex: captureSpawn,
+  });
+  assert.equal(rLogout.exitCode, 0);
+  assert.deepEqual(calls.at(-1).args, ['logout']);
+  assert.deepEqual(Object.keys(calls.at(-1).env).filter(k => k.startsWith('PDD_')), []);
+
+  const rLogin = await runPddCodexCli(['login', '--device-auth'], { cwd: sb.root, env: autoEnv, ...quietStreams }, {
+    spawnCodex: captureSpawn,
+  });
+  assert.equal(rLogin.exitCode, 0);
+  assert.deepEqual(calls.at(-1).args, ['login', '--device-auth']);
+  assert.deepEqual(Object.keys(calls.at(-1).env).filter(k => k.startsWith('PDD_')), []);
+
+  // 3. Transient / 401 / 503 / all_cooling / network fetch errors under auto-wrapper -> fail open cleanly,
+  //    strip ALL PDD_* vars, AND never touch/create ~/.codex baseline on a fresh HOME!
+  const freshFailOpenHome = join(sb.root, 'fresh-fo-home');
+  mkdirSync(freshFailOpenHome, { recursive: true, mode: 0o700 });
+  const freshAutoEnv = { ...autoEnv, HOME: freshFailOpenHome };
+  const fetchErr = new TypeError('fetch failed');
+  fetchErr.cause = { code: 'ECONNREFUSED' };
+  for (const err of [
+    new CloudAccountsError('network down', { code: 'network_error', status: 0 }),
+    new CloudAccountsError('expired gh auth', { code: 'unauthorized', status: 401 }),
+    new CloudAccountsError('gateway 503', { code: 'service_unavailable', status: 503 }),
+    new CloudAccountsError('all cooling', { code: 'all_cooling', status: 429 }),
+    fetchErr,
+  ]) {
+    const rErr = await runPddCodexCli(['exec', 'fallback'], { cwd: sb.root, env: freshAutoEnv, ...quietStreams }, {
+      tmpRoot: sb.tmpRoot,
+      uid: 793,
+      spawnCodex: captureSpawn,
+      leaseCloudAccount: async () => { throw err; },
+    });
+    assert.equal(rErr.exitCode, 0);
+    assert.deepEqual(calls.at(-1).args, ['exec', 'fallback']);
+    assert.deepEqual(Object.keys(calls.at(-1).env).filter(k => k.startsWith('PDD_')), [], 'fail-open spawn must strip ALL PDD_* vars');
+  }
+  assert.equal(existsSync(join(freshFailOpenHome, '.codex')), false, 'fail-open lease failure must never create or mutate ~/.codex baseline');
+
+  // 4. Explicit --account <label> disables auto fail-open; real production security/config codes,
+  //    reauth_required Cloud replies, AND plain uncoded Error ALWAYS fail closed!
+  let errOut = '';
+  const rPinnedErr = await runPddCodexCli(
+    ['--account', 'work', 'exec', 'strict'],
+    { cwd: sb.root, env: autoEnv, stdout: { write() {} }, stderr: { write: s => { errOut += s; } } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 793,
+      spawnCodex: captureSpawn,
+      leaseCloudAccount: async () => { throw new CloudAccountsError('offline', { code: 'network_error', status: 0 }); },
+    },
+  );
+  assert.equal(rPinnedErr.exitCode, 1);
+  assert.match(errOut, /offline/);
+
+  const callsBeforeClosed = calls.length;
+  for (const closedErr of [
+    new CloudAccountsError('unsafe runtime dir', { code: 'unsafe_runtime_dir' }),
+    new CloudAccountsError('symlink refused', { code: 'symlink_refused' }),
+    new CloudAccountsError('invalid settings', { code: 'invalid_settings' }),
+    new CloudAccountsError('invalid lease', { code: 'invalid_lease' }),
+    new CloudAccountsError('reauth required', { code: 'reauth_required' }),
+    new Error('uncoded state-dir error'),
+  ]) {
+    const rClosed = await runPddCodexCli(['exec', 'must-fail-closed'], { cwd: sb.root, env: autoEnv, ...quietStreams }, {
+      tmpRoot: sb.tmpRoot,
+      uid: 793,
+      spawnCodex: captureSpawn,
+      leaseCloudAccount: async () => { throw closedErr; },
+    });
+    assert.equal(rClosed.exitCode, 1, `fail-closed error (${closedErr.code || closedErr.message}) must NEVER fail open`);
+  }
+
+  // Cloud lease reply reporting state: 'reauth_required' (or reauth_required account) fails closed and is NOT collapsed into no_account_available!
+  let reauthErrText = '';
+  const rReauthReply = await runPddCodexCli(
+    ['exec', 'reauth-reply'],
+    { cwd: sb.root, env: autoEnv, stdout: { write() {} }, stderr: { write: s => { reauthErrText += s; } } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 793,
+      spawnCodex: captureSpawn,
+      leaseCloudAccount: async () => ({ state: 'reauth_required', account: { label: 'work-codex', state: 'reauth_required' } }),
+    },
+  );
+  assert.equal(rReauthReply.exitCode, 1);
+  assert.match(reauthErrText, /requires re-authentication/i);
+  assert.equal(calls.length, callsBeforeClosed, 'fail-closed cases must never spawn stock codex');
+
+  // 5. Normal leased child env strips ALL PDD_* variables!
+  const rLeased = await runPddCodexCli(['exec', 'clean-env'], { cwd: sb.root, env: autoEnv, ...quietStreams }, {
+    tmpRoot: sb.tmpRoot,
+    uid: 793,
+    pid: 45101,
+    isPidAlive: p => p === 45101,
+    heartbeatIntervalMs: 0,
+    spawnSync: () => ({ status: 0 }),
+    spawnCodex: captureSpawn,
+    leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_clean_env' }),
+    releaseCloudLease: async () => ({ revoked: true }),
+  });
+  assert.equal(rLeased.exitCode, 0);
+  const childEnvKeys = Object.keys(calls.at(-1).env);
+  assert.deepEqual(childEnvKeys.filter(k => k.startsWith('PDD_')), [], 'child env must contain zero PDD_* vars');
+
+  // 6. Consolidated #3531 endpoint builder handles native /backend-api and legacy fallback identically.
+  const nativeEp = resolveCodexGatewayEndpoints({
+    codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_abc',
+    codex_backend_api_url: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api/',
+    codex_gateway_token: 'pddg_lse_abc_secret',
+  });
+  assert.equal(nativeEp.nativeBackendApi, true);
+  assert.equal(nativeEp.backendApiUrl, 'https://api.promptdriven.ai/v1/codex-gateway/backend-api');
+  assert.equal(nativeEp.codexApiUrl, 'https://api.promptdriven.ai/v1/codex-gateway/backend-api/codex');
+  assert.equal(nativeEp.embeddedLeaseGrant, true);
+
+  const legacyEp = resolveCodexGatewayEndpoints({
+    codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_abc/',
+    codex_gateway_token: 'pddg_lse_abc_secret',
+  });
+  assert.equal(legacyEp.nativeBackendApi, false);
+  assert.equal(legacyEp.backendApiUrl, 'https://api.promptdriven.ai/v1/codex-gateway');
+  assert.equal(legacyEp.codexApiUrl, 'https://api.promptdriven.ai/v1/codex-gateway');
+
+  // 7. Direct import of src/accounts/toml-codec.mjs without parser registration throws loudly (never swallows as null).
+  const unreg = spawnSync(process.execPath, [
+    '--input-type=module',
+    '-e',
+    "import { parseCodexTomlQuiet } from './src/accounts/toml-codec.mjs'; try { parseCodexTomlQuiet('model = \"x\"'); process.exit(1); } catch (e) { process.exit(e?.code === 'toml_parser_unregistered' ? 0 : 2); }",
+  ], { cwd: process.cwd(), encoding: 'utf8' });
+  assert.equal(unreg.status, 0, `expected toml_parser_unregistered throw, got status=${unreg.status} stderr=${unreg.stderr}`);
+});
+
 
 
 

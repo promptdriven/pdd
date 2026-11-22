@@ -761,6 +761,40 @@ test('SEC-7 & REL-4: releaseSharedClaudeRuntimeSession unlinks settingsPath firs
     );
     assert.equal(enoentRes.exitCode, 127);
     assert.match(errText, /Failed to launch "claude".*ENOENT/i);
+
+    // 3. Pass-through & fail-open spawns strip ALL PDD_* vars, and security/uncoded errors fail closed.
+    const captured = [];
+    const capSpawn = (bin, args, opts) => {
+      captured.push({ bin, args, env: opts.env });
+      const child = new EventEmitter();
+      process.nextTick(() => child.emit('close', 0, null));
+      return child;
+    };
+    const dirtyEnv = { ...sb.env, PDD_CLAUDE_AUTO_FAIL_OPEN: '1', PDD_TOKEN: 'tok-secret', PDD_ACCOUNTS_TOKEN: 'acct-secret' };
+    assert.equal((await runPddClaudeCli(['--version'], { cwd: sb.root, env: dirtyEnv, stdout: { write() {} }, stderr: { write() {} } }, { spawn: capSpawn })).exitCode, 0);
+    assert.deepEqual(Object.keys(captured.at(-1).env).filter(k => k.startsWith('PDD_')), [], 'pass-through must strip ALL PDD_* vars');
+    assert.equal((await runPddClaudeCli(['-p', 'hi'], { cwd: sb.root, env: dirtyEnv, stdout: { write() {} }, stderr: { write() {} } }, {
+      spawn: capSpawn,
+      leaseCloudAccount: async () => { throw new CloudAccountsError('503 down', { code: 'service_unavailable', status: 503 }); },
+    })).exitCode, 0);
+    assert.deepEqual(Object.keys(captured.at(-1).env).filter(k => k.startsWith('PDD_')), [], 'fail-open must strip ALL PDD_* vars');
+
+    const beforeClosed = captured.length;
+    for (const closedErr of [
+      new CloudAccountsError('unsafe dir', { code: 'unsafe_runtime_dir' }),
+      new CloudAccountsError('symlink', { code: 'symlink_refused' }),
+      new CloudAccountsError('bad settings', { code: 'invalid_settings' }),
+      new CloudAccountsError('bad lease', { code: 'invalid_lease' }),
+      new CloudAccountsError('reauth', { code: 'reauth_required' }),
+      new Error('uncoded state-dir error'),
+    ]) {
+      const rClosed = await runPddClaudeCli(['-p', 'hi'], { cwd: sb.root, env: dirtyEnv, stdout: { write() {} }, stderr: { write() {} } }, {
+        spawn: capSpawn,
+        leaseCloudAccount: async () => { throw closedErr; },
+      });
+      assert.equal(rClosed.exitCode, 1, `pdd-claude must fail closed on ${closedErr.code || closedErr.message}`);
+    }
+    assert.equal(captured.length, beforeClosed, 'fail-closed cases must never spawn stock claude');
   } finally {
     sb.cleanup();
   }

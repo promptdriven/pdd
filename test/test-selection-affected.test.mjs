@@ -759,3 +759,55 @@ test('3065 real repository prompt sync and affected selection remain aligned', (
   assert.ok(realSelection.selectedTests.includes('test/tests-found-by-name.test.mjs'));
   assert.ok(realSelection.selectedTests.includes('test/workflow-prove.test.mjs'));
 });
+
+test('S4 Stage 1: matchTests excludes brownfield fixtures/mocks/snapshots/tsconfig JSONs while keeping real orphans and nested fixture projects', async () => {
+  const { matchTests } = await import('../src/test-selection.mjs');
+  const stories = ['user_stories/place-order.md', 'test/fixtures/demo/user_stories/x.md'];
+  const files = [
+    'user_stories/place-order.md',
+    'tests/place-order.json',
+    'tests/fixtures/seed.json',
+    'test/fixtures/data.json',
+    'tests/__fixtures__/nested/sample.json',
+    'tests/mocks/api.json',
+    'test/__mocks__/client.json',
+    'tests/snapshots/render.json',
+    'tests/__snapshots__/card.json',
+    'tests/data/sample.json',
+    'tests/testdata/fixture.json',
+    'test/golden/expected.json',
+    'tests/cassettes/vcr.json',
+    'tests/tsconfig.json',
+    'test/tsconfig.test.json',
+    'tests/package.json',
+    'tests/real-orphan.json',
+    'test/fixtures/demo/user_stories/x.md',
+    'test/fixtures/demo/tests/x.json',
+  ];
+  const matched = matchTests(stories, files);
+  assert.deepEqual(matched.tests.map(t => t.path), ['test/fixtures/demo/tests/x.json', 'tests/place-order.json']);
+  assert.deepEqual(matched.orphans.map(o => o.path), ['tests/real-orphan.json']);
+});
+
+test('S4 Stage 1: selectAffectedTests matches contract tests under test/core/lint/', () => {
+  const memFiles = {
+    'prompts/cli/sample.prompt.md': '# Sample\n',
+    'user_stories/sample.md': '# Sample\n\n## Acceptance criteria\n\n1. Works.\n',
+    'test/core/lint/repo-hygiene-lint.test.mjs': 'import test from "node:test";\n',
+    'test/core/lint/story-quality-lint.test.mjs': 'import test from "node:test";\n',
+    'test/core/lint/authoring-lint-parity.test.mjs': 'import test from "node:test";\n',
+  };
+  const ports = {
+    listFiles: () => Object.keys(memFiles),
+    readFile: p => memFiles[p] ?? null,
+  };
+  const promptPlan = selectAffectedTests({ root: '/repo', changedFiles: ['prompts/cli/sample.prompt.md'] }, ports);
+  assert.equal(promptPlan.mode, 'affected');
+  assert.ok(promptPlan.selectedTests.includes('test/core/lint/repo-hygiene-lint.test.mjs'));
+  assert.ok(promptPlan.selectedTests.includes('test/core/lint/story-quality-lint.test.mjs'));
+  assert.ok(promptPlan.selectedTests.includes('test/core/lint/authoring-lint-parity.test.mjs'));
+
+  const storyPlan = selectAffectedTests({ root: '/repo', changedFiles: ['user_stories/sample.md'] }, ports);
+  assert.equal(storyPlan.mode, 'affected');
+  assert.ok(storyPlan.selectedTests.includes('test/core/lint/story-quality-lint.test.mjs'));
+});

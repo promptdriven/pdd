@@ -27,13 +27,15 @@ import {
   CloudAccountsError,
   ensureUserCodexHomeBaseline,
   heartbeatCloudLease,
+  isCloudAccountsActive,
+  isReauthRequiredAccount,
   leaseCloudAccount,
   localCodexHome,
   needsCodexConfigWritebackNormalization,
   normalizeCodexConfigWriteback,
   readCloudAccountsState,
   releaseCloudLease,
-  resolveCodexBackendApiUrl,
+  resolveCodexGatewayEndpoints,
   resolveEffectiveSqliteHome,
   resolvePddStateBase,
   stopCodexAppServerDaemon,
@@ -256,10 +258,7 @@ function ensureConfigSymlinkAtomic(fs, userConfigPath, runtimeConfigPath) {
   fs.symlinkSync(userConfigPath, runtimeConfigPath);
 }
 
-/**
- * Ensure `~/.codex/` baseline exists and symlink all user entries + `config.toml` into `runtimeDir`.
- */
-export function prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir) {
+function assertCodexHomeNotInsideRuntimeDir(fs, userCodexHome, runtimeDir) {
   const resolvedUserHome = resolve(userCodexHome);
   const resolvedRuntimeDir = resolve(runtimeDir);
   const realFn = fs?.realpathSync?.native ?? fs?.realpathSync ?? (fs === nativeFs ? nativeFs.realpathSync : null);
@@ -280,6 +279,14 @@ export function prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir) {
       { code: 'unsafe_runtime_dir' },
     );
   }
+  return { resolvedUserHome, resolvedRuntimeDir };
+}
+
+/**
+ * Ensure `~/.codex/` baseline exists and symlink all user entries + `config.toml` into `runtimeDir`.
+ */
+export function prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir) {
+  const { resolvedUserHome, resolvedRuntimeDir } = assertCodexHomeNotInsideRuntimeDir(fs, userCodexHome, runtimeDir);
   const userConfigPath = ensureUserCodexHomeBaseline(fs, resolvedUserHome);
 
   syncManagedCodexHomeLinks(fs, resolvedUserHome, resolvedRuntimeDir, [], {
@@ -328,13 +335,7 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
       { code: 'invalid_lease' },
     );
   }
-  const grantToken = String(lease.codex_gateway_token || lease.gateway_bearer_token || '').trim();
-  if (!grantToken.startsWith('pddg_')) {
-    throw new CloudAccountsError('PDD Cloud returned an invalid Codex gateway grant token.', { code: 'invalid_lease' });
-  }
-  rememberSecrets(grantToken);
-  const hasExplicitBackendApi = typeof lease.codex_backend_api_url === 'string' && Boolean(lease.codex_backend_api_url.trim());
-  const backendApiUrl = resolveCodexBackendApiUrl(lease, null, { preserveLegacyBase: !hasExplicitBackendApi });
+  const { grantToken, backendApiUrl, nativeBackendApi } = resolveCodexGatewayEndpoints(lease);
   if (!backendApiUrl) {
     throw new CloudAccountsError('PDD Cloud lease did not include a Codex gateway URL.', { code: 'invalid_lease' });
   }
@@ -346,7 +347,7 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
     account_id: account.account_id ?? null,
     label: account.label ?? null,
     backend_api_url: backendApiUrl,
-    native_backend_api: hasExplicitBackendApi,
+    native_backend_api: nativeBackendApi,
     expires_at: lease.expires_at ?? null,
     delivery_mode: lease.delivery_mode,
     plan_type: planType,
@@ -361,10 +362,20 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
     accountId: metaPayload.account_id,
     label: metaPayload.label,
     backendApiUrl,
-    nativeBackendApi: hasExplicitBackendApi,
+    nativeBackendApi,
     expiresAt: metaPayload.expires_at,
     grantToken,
   };
+}
+
+function assertCodexAccountNotReauthRequired(reply, fallbackLabel = null) {
+  const account = reply?.account;
+  if (reply?.state !== 'reauth_required' && !isReauthRequiredAccount(account)) return;
+  const label = account?.label || fallbackLabel || 'your Codex account';
+  throw new CloudAccountsError(
+    `PDD Cloud Codex account "${label}" requires re-authentication. Run \`pdd accounts add --provider codex --label ${label}\` or pick another account.`,
+    { code: 'reauth_required', exitCode: 1 },
+  );
 }
 
 /**
@@ -383,6 +394,7 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
 
   assertSafeRuntimeDir(fs, dirname(runtimeDir), { expectedUid, label: 'PDD Codex runtime root' });
   assertSafeRuntimeDir(fs, runtimeDir, { expectedUid, label: 'PDD Codex runtime' });
+  assertCodexHomeNotInsideRuntimeDir(fs, userCodexHome, runtimeDir);
 
   return withCodexRuntimeLock(fs, runtimeDir, async () => {
     const pidsDir = join(runtimeDir, 'pids');
@@ -391,7 +403,6 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
     writeAtomicPrivate(fs, myPidFile, JSON.stringify({ pid: myPid, started_at: new Date(nowFn()).toISOString() }));
 
     try {
-      const homeInfo = prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir);
       const savedActiveCodex = readCloudAccountsState({ env }, { fs })?.active?.codex;
       const savedActiveId = typeof savedActiveCodex?.account_id === 'string' && savedActiveCodex.account_id
         && savedActiveCodex.state !== 'reauth_required'
@@ -403,6 +414,7 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
         || !existing?.accountId
         || existing.accountId === savedActiveId;
       if (existing && seatMatchesOrShared) {
+        const homeInfo = prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir);
         return {
           reused: true,
           pinned: false,
@@ -425,6 +437,7 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
         const wakeAt = leaseReply.wake_at ? ` until ${leaseReply.wake_at}` : '';
         throw new CloudAccountsError(`All shared Codex accounts are cooling${wakeAt}.`, { code: 'all_cooling' });
       }
+      assertCodexAccountNotReauthRequired(leaseReply);
       if (!leaseReply || leaseReply.state !== 'leased') {
         throw new CloudAccountsError(
           'No ready Codex account is available in PDD Cloud. Run `gh auth login`, `pdd accounts add --provider codex`, or run stock `codex` for your personal account.',
@@ -433,6 +446,7 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
       }
 
       const leaseInfo = writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate: true, now: nowFn });
+      const homeInfo = prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir);
       stopCodexAppServerDaemon(runtimeDir, { env, fs, spawnSync: ports.spawnSync, codexBin: ports.codexBin });
       return {
         reused: false,
@@ -501,8 +515,9 @@ export async function acquirePinnedRuntimeSession(preferredLabel, { cwd = proces
   const pinDir = fs.mkdtempSync(join(resolve(root), 'pdd-codex-pin-'));
   try { fs.chmodSync?.(pinDir, 0o700); } catch {}
 
+  const userCodexHome = localCodexHome(env);
   try {
-    const homeInfo = prepareRuntimeCodexHome(fs, localCodexHome(env), pinDir);
+    assertCodexHomeNotInsideRuntimeDir(fs, userCodexHome, pinDir);
     const leaseReply = await (ports.leaseCloudAccount ?? leaseCloudAccount)({
       provider: 'codex',
       preferredLabel,
@@ -516,11 +531,13 @@ export async function acquirePinnedRuntimeSession(preferredLabel, { cwd = proces
       const wakeAt = leaseReply.wake_at ? ` until ${leaseReply.wake_at}` : '';
       throw new CloudAccountsError(`Pinned Codex account "${preferredLabel}" is cooling${wakeAt}.`, { code: 'all_cooling' });
     }
+    assertCodexAccountNotReauthRequired(leaseReply, preferredLabel);
     if (!leaseReply || leaseReply.state !== 'leased') {
       throw new CloudAccountsError(`Codex account "${preferredLabel}" is not available in PDD Cloud.`, { code: 'no_account_available' });
     }
 
     const leaseInfo = writeLeaseFiles(fs, pinDir, leaseReply, { autoRotate: false, now: nowFn });
+    const homeInfo = prepareRuntimeCodexHome(fs, userCodexHome, pinDir);
     return {
       reused: false,
       pinned: true,
@@ -550,7 +567,9 @@ async function releasePinnedRuntimeSession(session, { cwd = process.cwd(), env =
 function buildCleanChildEnv(baseEnv, runtimeDir, { grantToken = null } = {}) {
   const next = {};
   for (const [key, val] of Object.entries(baseEnv ?? {})) {
-    if (typeof val === 'string') next[key] = val;
+    if (typeof val !== 'string') continue;
+    if (key.startsWith('PDD_')) continue;
+    next[key] = val;
   }
   for (const key of STRIPPED_PROVIDER_ENV_VARS) {
     delete next[key];
@@ -560,6 +579,62 @@ function buildCleanChildEnv(baseEnv, runtimeDir, { grantToken = null } = {}) {
     next.CODEX_CONNECTORS_TOKEN = grantToken;
   }
   return next;
+}
+
+function stripPddEnv(env) {
+  if (!env || typeof env !== 'object') return env;
+  const next = {};
+  for (const [key, val] of Object.entries(env)) {
+    if (typeof val !== 'string') continue;
+    if (key.startsWith('PDD_')) continue;
+    next[key] = val;
+  }
+  return next;
+}
+
+const AUTO_FAIL_CLOSED_CODES = new Set([
+  'unsafe_runtime_dir',
+  'symlink_refused',
+  'invalid_settings',
+  'invalid_lease',
+  'invalid_codex_config',
+  'reauth_required',
+  'unsafe_path',
+  'invalid_args',
+  'unsupported_delivery_mode',
+  'lock_timeout',
+  'toml_parser_unregistered',
+]);
+
+const AUTO_FAIL_OPEN_CODES = new Set([
+  'timeout',
+  'network_error',
+  'missing_auth_token',
+  'no_ready_account',
+  'no_account_available',
+  'all_cooling',
+  'not_enrolled',
+  'offline',
+  'service_unavailable',
+  'rate_limited',
+  'lease_unavailable',
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'ECONNRESET',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+function isAutoFailOpenLeaseError(err) {
+  if (!err || typeof err !== 'object') return false;
+  const code = String(err.code ?? '');
+  const causeCode = String(err.cause?.code ?? '');
+  if (AUTO_FAIL_CLOSED_CODES.has(code) || AUTO_FAIL_CLOSED_CODES.has(causeCode)) return false;
+  if (AUTO_FAIL_OPEN_CODES.has(code) || AUTO_FAIL_OPEN_CODES.has(causeCode)) return true;
+  const status = Number(err.status ?? 0);
+  if (status === 401 || status === 403 || status >= 500) return true;
+  return false;
 }
 
 function spawnCodexProcess(command, args, { cwd, env, onChild = null }, ports = {}) {
@@ -677,13 +752,24 @@ export async function runPddCodexCli(
   }
 
   const codexArgs = parsed.codexArgs;
+  const autoFailOpen = env?.PDD_CODEX_AUTO_FAIL_OPEN === '1' && !parsed.preferredAccount;
+  const passthroughEnv = stripPddEnv(env);
   const invocation = inspectCodexInvocation(codexArgs);
   const { subcommand, subArgs, hasHelpOrVersion } = invocation;
   const mcpSubcommand = subcommand === 'mcp' ? inspectCodexInvocation(subArgs).subcommand : '';
+  const loginSubcommand = subcommand === 'login' ? inspectCodexInvocation(subArgs).subcommand : '';
 
   const isMcpHelp = subcommand === 'mcp' && (!mcpSubcommand || mcpSubcommand === 'help');
   if (hasHelpOrVersion || NO_LEASE_SUBCOMMANDS.has(subcommand) || isMcpHelp) {
-    const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env }, ports);
+    const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env: passthroughEnv }, ports);
+    if (res?.error) {
+      stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
+    }
+    return { exitCode: res?.exitCode ?? res?.code ?? 1 };
+  }
+
+  if (autoFailOpen && (subcommand === 'logout' || (subcommand === 'login' && loginSubcommand !== 'status'))) {
+    const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env: passthroughEnv }, ports);
     if (res?.error) {
       stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
     }
@@ -698,12 +784,20 @@ export async function runPddCodexCli(
       return { exitCode: 1 };
     }
   }
-  if (subcommand === 'login') {
+  if (subcommand === 'login' && loginSubcommand !== 'status') {
     stdout?.write?.(
       'pdd-codex uses PDD Cloud shared accounts and never touches your personal ~/.codex/auth.json.\n'
       + 'Run `pdd accounts add --provider codex` to enroll an account, or run `codex login` for your personal account.\n',
     );
     return { exitCode: 0 };
+  }
+
+  if (autoFailOpen && !ports.leaseCloudAccount && !isCloudAccountsActive({ env, provider: 'codex' }, ports)) {
+    const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env: passthroughEnv }, ports);
+    if (res?.error) {
+      stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
+    }
+    return { exitCode: res?.exitCode ?? res?.code ?? 1 };
   }
 
   const normalizeWritebackUnderLock = async writebackOpts => {
@@ -807,6 +901,18 @@ export async function runPddCodexCli(
         : await acquireSharedRuntimeSession({ cwd, env }, { ...ports, codexBin });
     } catch (err) {
       if (receivedSignal) return { exitCode: signalToExitCode(receivedSignal) };
+      if (autoFailOpen && isAutoFailOpenLeaseError(err)) {
+        const res = await spawnCodexProcess(
+          codexBin,
+          codexArgs,
+          { cwd, env: passthroughEnv, onChild: child => { activeChild = child; } },
+          ports,
+        );
+        if (res?.error) {
+          stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
+        }
+        return { exitCode: res?.exitCode ?? res?.code ?? 1 };
+      }
       stderr?.write?.(`pdd-codex: ${redactSecrets(err?.message ?? String(err))}\n`);
       return { exitCode: 1 };
     }

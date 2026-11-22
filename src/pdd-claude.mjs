@@ -373,6 +373,9 @@ export async function acquireSharedClaudeRuntimeSession({
         autoRotate: true,
         updateState: false,
       }, { cwd, env }, ports);
+      if (reply?.state === 'reauth_required' || isReauthRequiredAccount(reply?.account)) {
+        assertAccountNotReauthRequired(reply?.account ?? { state: 'reauth_required', label: reply?.label });
+      }
       if (reply?.state !== 'leased' || !reply?.lease) {
         const wake = reply?.wake_at ? ` Next ready at ${reply.wake_at}.` : '';
         throw new CloudAccountsError(
@@ -472,6 +475,9 @@ export async function acquirePinnedClaudeRuntimeSession({
       autoRotate: false,
       updateState: false,
     }, { cwd, env }, ports);
+    if (reply?.state === 'reauth_required' || isReauthRequiredAccount(reply?.account)) {
+      assertAccountNotReauthRequired(reply?.account ?? { state: 'reauth_required', label: preferredAccount }, preferredAccount);
+    }
     if (reply?.state !== 'leased' || !reply?.lease) {
       const wake = reply?.wake_at ? ` Next ready at ${reply.wake_at}.` : '';
       throw new CloudAccountsError(
@@ -608,20 +614,59 @@ function spawnClaudePassthrough(claudeBin, args, { cwd, env, onChild } = {}, por
   return spawnWrappedBinary(claudeBin, args, { cwd, env, onChild }, ports);
 }
 
-function stripAutoFailOpenEnv(env) {
-  if (!env || typeof env !== 'object' || !('PDD_CLAUDE_AUTO_FAIL_OPEN' in env)) return env;
-  const next = { ...env };
-  delete next.PDD_CLAUDE_AUTO_FAIL_OPEN;
+function stripPddEnv(env) {
+  if (!env || typeof env !== 'object') return env;
+  const next = {};
+  for (const [key, val] of Object.entries(env)) {
+    if (typeof val !== 'string') continue;
+    if (key.startsWith('PDD_')) continue;
+    next[key] = val;
+  }
   return next;
 }
 
+const AUTO_FAIL_CLOSED_CODES = new Set([
+  'unsafe_runtime_dir',
+  'symlink_refused',
+  'invalid_settings',
+  'invalid_lease',
+  'invalid_codex_config',
+  'reauth_required',
+  'unsafe_path',
+  'invalid_args',
+  'unsupported_delivery_mode',
+  'lock_timeout',
+  'toml_parser_unregistered',
+]);
+
+const AUTO_FAIL_OPEN_CODES = new Set([
+  'timeout',
+  'network_error',
+  'missing_auth_token',
+  'no_ready_account',
+  'no_account_available',
+  'all_cooling',
+  'not_enrolled',
+  'offline',
+  'service_unavailable',
+  'rate_limited',
+  'lease_unavailable',
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'ECONNRESET',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
 function isAutoFailOpenLeaseError(err) {
-  const code = String(err?.code ?? '');
-  if (['timeout', 'network_error', 'missing_auth_token', 'no_ready_account', 'all_cooling'].includes(code)) {
-    return true;
-  }
-  const status = Number(err?.status ?? 0);
-  if (status === 0 || status === 401 || status === 403 || status >= 500) return true;
+  if (!err || typeof err !== 'object') return false;
+  const code = String(err.code ?? '');
+  const causeCode = String(err.cause?.code ?? '');
+  if (AUTO_FAIL_CLOSED_CODES.has(code) || AUTO_FAIL_CLOSED_CODES.has(causeCode)) return false;
+  if (AUTO_FAIL_OPEN_CODES.has(code) || AUTO_FAIL_OPEN_CODES.has(causeCode)) return true;
+  const status = Number(err.status ?? 0);
+  if (status === 401 || status === 403 || status >= 500) return true;
   return false;
 }
 
@@ -648,7 +693,7 @@ export async function runPddClaudeCli(argv = [], {
   }
 
   const autoFailOpen = env?.PDD_CLAUDE_AUTO_FAIL_OPEN === '1' && !parsed.preferredAccount;
-  const passthroughEnv = autoFailOpen ? stripAutoFailOpenEnv(env) : env;
+  const passthroughEnv = stripPddEnv(env);
   const inspection = inspectClaudeInvocation(parsed.claudeArgs);
 
   if (autoFailOpen && (inspection.mode === 'logout' || inspection.mode === 'login_hint')) {
