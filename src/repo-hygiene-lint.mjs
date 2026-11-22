@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 2a90027c8af62686f9a63fca1390b7b5814e30bd9f2ba057fa513880d75151c0).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 070e0bec0d3449c7965c0da6bd79dd332c1dc27e92e08c9b1d0adac029ad66ce).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -792,18 +792,44 @@ function extractSqlSchemaColumns(fences) {
   return cols;
 }
 
-function extractDependencyLinkTargets(raw, promptPath) {
+function normalizeRepoRefPath(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed || /^[a-z][a-z0-9+.-]*:/i.test(trimmed) || isAbsolute(trimmed) || /[\\\x00-\x1f\x7f]/.test(trimmed)) {
+    return null;
+  }
+  const normalized = posix.normalize(trimmed).replace(/^\.\//, '');
+  return canonicalRepoPath(normalized) ? normalized : null;
+}
+
+function resolveScopedRepoPath(raw, fromPath, scopedSet) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed || /^[a-z][a-z0-9+.-]*:/i.test(trimmed) || isAbsolute(trimmed) || /[\\\x00-\x1f\x7f]/.test(trimmed)) {
+    return null;
+  }
+  if (fromPath) {
+    const baseDir = posix.dirname(fromPath);
+    const rel = posix.normalize(baseDir === '.' ? trimmed : posix.join(baseDir, trimmed)).replace(/^\.\//, '');
+    if (canonicalRepoPath(rel) && scopedSet.has(rel)) return rel;
+    if (trimmed.startsWith('./') || trimmed.startsWith('../')) return null;
+  }
+  const direct = normalizeRepoRefPath(trimmed);
+  return direct && scopedSet.has(direct) ? direct : null;
+}
+
+function extractDependencyLinkTargets(raw, promptPath, scopedSet = null) {
   const cleaned = stripPromptMetadataPreservingLines(raw);
   const { proseLines } = scanMarkdownLinesAndFences(cleaned);
   let inDeps = false;
   const targets = new Set();
   const baseDir = posix.dirname(promptPath);
-  const linkRe = /\[[^\[\]\r\n]*\]\(\s*<?([^()\s<>#\r\n]+)(?:#[^()\s<>#\r\n]*)?>?\s*\)/g;
+  const linkRe = /\[[^\[\]\r\n]*\]\([ \t]*<?([^()\s<>#\r\n]+)(?:#[^()\s<>#\r\n]*)?>?(?:[ \t]+"[^"\r\n]*"|[ \t]+'[^'\r\n]*')?[ \t]*\)/g;
 
   for (const { text: line } of proseLines) {
-    const h2 = /^ {0,3}##\s+(.+)$/.exec(line);
-    if (h2) {
-      inDeps = /^dependencies\b/i.test(h2[1].trim());
+    const heading = /^ {0,3}(#{1,2})\s+(.+)$/.exec(line);
+    if (heading) {
+      inDeps = heading[1].length === 2 && /^dependencies\b/i.test(heading[2].trim());
       continue;
     }
     if (!inDeps) continue;
@@ -811,8 +837,13 @@ function extractDependencyLinkTargets(raw, promptPath) {
     while ((m = linkRe.exec(line)) !== null) {
       const rawTarget = m[1].trim();
       if (!rawTarget || /^[a-z][a-z0-9+.-]*:/i.test(rawTarget)) continue;
-      const resolved = posix.normalize(baseDir === '.' ? rawTarget : posix.join(baseDir, rawTarget));
-      if (canonicalRepoPath(resolved) && resolved !== promptPath) targets.add(resolved);
+      if (scopedSet) {
+        const resolved = resolveScopedRepoPath(rawTarget, promptPath, scopedSet);
+        if (resolved && resolved !== promptPath) targets.add(resolved);
+      } else {
+        const resolved = posix.normalize(baseDir === '.' ? rawTarget : posix.join(baseDir, rawTarget));
+        if (canonicalRepoPath(resolved) && resolved !== promptPath) targets.add(resolved);
+      }
     }
   }
   return [...targets].sort();
@@ -4362,25 +4393,187 @@ function isEligibleProductionCodeFile(path) {
     && !NON_CODE_DIR.test(path);
 }
 
+function isScenarioJsonPath(path) {
+  if (typeof path !== 'string' || !path.endsWith('.json')) return false;
+  const dirs = path.split('/').slice(0, -1);
+  return dirs.some(part => /^(?:tests?|__tests__)$/i.test(part));
+}
+
+function isValidScenarioDoc(doc) {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return false;
+  if (doc.schema_version === 'prompt-runtime.program-scenario.v1' || doc.schema_version === 'pdd.scenario.short.v1') {
+    return true;
+  }
+  if (typeof doc.schema_version === 'string' && doc.schema_version.trim() !== '') {
+    return false;
+  }
+  if (!Array.isArray(doc.steps) || doc.steps.length === 0) return false;
+  return (typeof doc.entry_path === 'string' && doc.entry_path.trim().endsWith('.prompt.md'))
+    || (Array.isArray(doc.entry_paths) && doc.entry_paths.some(p => typeof p === 'string' && p.trim().endsWith('.prompt.md')))
+    || doc.steps.some(step => typeof step?.entry_path === 'string' && step.entry_path.trim().endsWith('.prompt.md'))
+    || (typeof doc.story_path === 'string' && doc.story_path.trim().endsWith('.md'))
+    || (Array.isArray(doc.app_maps) && doc.app_maps.some(p => typeof p === 'string' && p.trim().endsWith('.json')));
+}
+
 function scenarioPromptRefs(doc) {
-  if (!doc || typeof doc !== 'object') return [];
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return [];
   const refs = [];
-  if (typeof doc.entry_path === 'string') refs.push(doc.entry_path.replace(/^\.\//, ''));
+  const pushRef = value => {
+    const normalized = normalizeRepoRefPath(value);
+    if (normalized) refs.push(normalized);
+  };
+  pushRef(doc.entry_path);
   if (Array.isArray(doc.entry_paths)) {
-    for (const p of doc.entry_paths) if (typeof p === 'string') refs.push(p.replace(/^\.\//, ''));
+    for (const p of doc.entry_paths) pushRef(p);
   }
   if (Array.isArray(doc.steps)) {
-    for (const step of doc.steps) {
-      if (typeof step?.entry_path === 'string') refs.push(step.entry_path.replace(/^\.\//, ''));
-    }
+    for (const step of doc.steps) pushRef(step?.entry_path);
   }
   if (Array.isArray(doc.context)) {
     for (const item of doc.context) {
-      if (typeof item === 'string') refs.push(item.replace(/^\.\//, ''));
-      else if (typeof item?.prompt_path === 'string') refs.push(item.prompt_path.replace(/^\.\//, ''));
+      if (typeof item === 'string') {
+        pushRef(item);
+      } else if (item && typeof item === 'object') {
+        pushRef(item.prompt_path);
+        if (Array.isArray(item.paths)) {
+          for (const cp of item.paths) pushRef(cp);
+        }
+      }
     }
   }
   return refs;
+}
+
+const APP_MAP_WALK_FIELDS = ['screens', 'router', 'routes', 'handlers', 'handler', 'after', 'timers', 'host_regions', 'helpers'];
+
+function collectAppMapPromptRefs(mapDoc, onRef) {
+  const seen = new Set();
+  const walk = (value, depth) => {
+    if (depth > 16 || !value || typeof value !== 'object' || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item, depth + 1);
+      return;
+    }
+    if (typeof value.prompt_path === 'string') onRef(value.prompt_path);
+    if (typeof value.owner_prompt === 'string') onRef(value.owner_prompt);
+    for (const field of APP_MAP_WALK_FIELDS) {
+      if (value[field] !== undefined) walk(value[field], depth + 1);
+    }
+  };
+  walk(mapDoc, 0);
+}
+
+function collectUntestedCheckablePromptFindings({
+  realRoot,
+  scopedFiles,
+  scopedSet,
+  targetPrompts,
+  promptPaths,
+  allowFixtures,
+  allowExamples,
+  getPromptText,
+  lintConfig,
+}) {
+  if (lintConfig.disabledRules.has('untested-checkable-prompt')) return [];
+  if (lintConfig.ruleSeverities.get('untested-checkable-prompt') === 'off') return [];
+  const explicitlyConfigured = lintConfig.ruleSeverities.has('untested-checkable-prompt');
+
+  const scenarioCandidates = scopedFiles.filter(
+    p => isScenarioJsonPath(p) && (allowExamples || !EXAMPLE_DIR.test(p)),
+  );
+  let validScenarioCount = 0;
+  const reachable = new Set();
+  const queue = [];
+  const appMapCache = new Map();
+
+  const enqueueCheckable = rawRef => {
+    const resolved = resolveScopedRepoPath(rawRef, null, scopedSet);
+    if (!resolved || !resolved.endsWith('.prompt.md') || reachable.has(resolved)) return;
+    const text = getPromptText(resolved);
+    if (typeof text !== 'string' || isNativeOnlyPrompt(text)) return;
+    reachable.add(resolved);
+    queue.push(resolved);
+  };
+
+  for (const scenarioPath of scenarioCandidates) {
+    const raw = readSafeUtf8(realRoot, scenarioPath);
+    if (typeof raw !== 'string') continue;
+    let doc;
+    try {
+      doc = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (!isValidScenarioDoc(doc)) continue;
+    validScenarioCount++;
+    for (const ref of scenarioPromptRefs(doc)) enqueueCheckable(ref);
+    if (Array.isArray(doc.app_maps)) {
+      for (const rawMap of doc.app_maps) {
+        const mapPath = resolveScopedRepoPath(rawMap, null, scopedSet);
+        if (!mapPath || !mapPath.endsWith('.json')) continue;
+        if (!appMapCache.has(mapPath)) {
+          const mapRaw = readSafeUtf8(realRoot, mapPath);
+          let parsedMap = null;
+          if (typeof mapRaw === 'string') {
+            try {
+              const candidate = JSON.parse(mapRaw);
+              if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) parsedMap = candidate;
+            } catch {}
+          }
+          appMapCache.set(mapPath, parsedMap);
+        }
+        const mapDoc = appMapCache.get(mapPath);
+        if (mapDoc) collectAppMapPromptRefs(mapDoc, enqueueCheckable);
+      }
+    }
+  }
+
+  if (validScenarioCount === 0 && !explicitlyConfigured) return [];
+
+  for (let qi = 0; qi < queue.length; qi++) {
+    const curPath = queue[qi];
+    const curText = getPromptText(curPath);
+    if (typeof curText !== 'string' || isNativeOnlyPrompt(curText)) continue;
+
+    const depTargets = extractDependencyLinkTargets(curText, curPath, scopedSet);
+    for (const obj of extractRuntimeInterfaceObjects(curText)) {
+      if (!Array.isArray(obj.calls)) continue;
+      for (const call of obj.calls) {
+        if (typeof call?.target !== 'string') continue;
+        const resolved = resolveScopedRepoPath(call.target, curPath, scopedSet);
+        if (resolved && resolved !== curPath) depTargets.push(resolved);
+      }
+    }
+
+    for (const target of depTargets) {
+      if (!target.endsWith('.prompt.md') || reachable.has(target)) continue;
+      const depText = getPromptText(target);
+      if (typeof depText !== 'string' || isNativeOnlyPrompt(depText)) continue;
+      reachable.add(target);
+      queue.push(target);
+    }
+  }
+
+  const explicitPromptSet = Array.isArray(promptPaths) ? new Set(targetPrompts) : null;
+  const findings = [];
+  for (const promptPath of targetPrompts) {
+    if (!allowFixtures && FIXTURE_DIR.test(promptPath)) continue;
+    if (EXAMPLE_DIR.test(promptPath) && !(explicitPromptSet?.has(promptPath))) continue;
+    const content = getPromptText(promptPath);
+    if (typeof content !== 'string' || isNativeOnlyPrompt(content)) continue;
+    if (reachable.has(promptPath)) continue;
+    findings.push({
+      filePath: promptPath,
+      line: 1,
+      order: 5,
+      code: 'untested-checkable-prompt',
+      category: 'prompt test coverage',
+      defaultSeverity: 'warn',
+      detail: 'Checkable prompt is not reached by any scenario test (directly or via ## Dependencies). Add a Story scenario test or mark kind: native-only if not runtime-checkable.',
+    });
+  }
+  return findings;
 }
 
 function buildStoriesByStem(scopedFiles) {
@@ -4445,6 +4638,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
     ...(Array.isArray(tests) ? tests : []).map(t => (typeof t === 'string' ? t : t?.path)).filter(p => typeof p === 'string').map(p => p.replace(/^\.\//, '')),
   ];
   const allowFixtures = selectedInputs.some(p => FIXTURE_DIR.test(p));
+  const allowExamples = selectedInputs.some(p => EXAMPLE_DIR.test(p));
   const scopedFiles = allowFixtures ? allowedFiles : allowedFiles.filter(p => !FIXTURE_DIR.test(p));
   const scopedSet = new Set(scopedFiles);
 
@@ -4560,6 +4754,20 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
         rawText: content,
       }));
     }
+  }
+
+  if (tests === undefined) {
+    rawFindings.push(...collectUntestedCheckablePromptFindings({
+      realRoot,
+      scopedFiles,
+      scopedSet,
+      targetPrompts,
+      promptPaths,
+      allowFixtures,
+      allowExamples,
+      getPromptText,
+      lintConfig,
+    }));
   }
 
   // 2. Stories: criteria/quality hygiene and custom Story rules
