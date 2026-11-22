@@ -1239,9 +1239,9 @@ function readSavedRunsIn(commonDir) {
   return out.sort((a, b) => a.number - b.number);
 }
 
-async function readLocalCostRuns({ cwd, all = false, env = process.env }) {
+async function readLocalCostRuns({ cwd, all = false, env = process.env, stateDir } = {}) {
   if (all) {
-    const indexPath = join(resolvePddStateBase(env), 'runs.json');
+    const indexPath = join(stateDir ?? resolvePddStateBase(env), 'runs.json');
     let entries = [];
     try {
       const idx = read(indexPath);
@@ -1262,7 +1262,7 @@ async function readLocalCostRuns({ cwd, all = false, env = process.env }) {
 
 async function localCosts(input, ports, state = {}) {
   const options = { ...ports, env: input.env ?? ports.env };
-  const runs = await (ports.costRuns ?? (() => readLocalCostRuns({ cwd: state.cwd ?? input.cwd, all: Boolean(input.all), env: options.env })))();
+  const runs = await (ports.costRuns ?? (() => readLocalCostRuns({ cwd: state.cwd ?? input.cwd, all: Boolean(input.all), env: options.env, stateDir: ports.stateDir })))();
   const measured = runs.map(run => {
     try {
       const observed = structuredClone(run);
@@ -1580,7 +1580,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return ok(`Marked ${issues.length} issue(s) with pdd:autopilot.`);
     }
     if (command === 'release') {
-      return releaseCoreJob(stateFile, issues[0], {
+      const releaseResult = await releaseCoreJob(stateFile, issues[0], {
         state, root: coreRoot(stateFile), now: p.now, env: p.env, warn: p.warn,
         ...(ports.authority ? { authority: ports.authority } : {}),
         ...(p.elapsedNow ? { elapsedNow: p.elapsedNow } : {}),
@@ -1589,6 +1589,31 @@ export async function runAutopilotLauncher(input, ports = {}) {
         git: (args, options = {}) => p.execute('git', args, { timeoutMs: 300000, ...options }),
         ...p.corePorts,
       });
+      if (releaseResult?.exitCode === 0) {
+        try {
+          const parsedRef = parseSavedRunRef(issues[0]);
+          if (parsedRef?.number !== undefined) {
+            const commonDir = resolve(state.cwd, (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
+            const runsDir = join(commonDir, 'pdd', 'runs');
+            const prefix = `${parsedRef.number}-cancelled-`;
+            for (const entry of existsSync(runsDir) ? readdirSync(runsDir) : []) {
+              if (!entry.startsWith(prefix)) continue;
+              const statusPath = join(runsDir, entry, 'status.json');
+              const saved = read(statusPath);
+              if (!saved || saved.claimRelease?.state !== 'pending' || !Object.hasOwn(saved, 'automaticOrigin')) continue;
+              if (state.coordinatorId && saved.automaticOrigin?.coordinatorId && saved.automaticOrigin.coordinatorId !== state.coordinatorId) continue;
+              delete saved.claimRelease;
+              writeFileSync(statusPath, JSON.stringify(saved, null, 2));
+              const allocPath = join(commonDir, 'pdd', 'worktree-assignments', 'issues', `${parsedRef.number}.json`);
+              const alloc = read(allocPath);
+              if (alloc && (!alloc.runId || !saved.runId || alloc.runId === saved.runId)) {
+                try { unlinkSync(allocPath); } catch {}
+              }
+            }
+          }
+        } catch { /* Archived workflow cleanup is best-effort after core claim release. */ }
+      }
+      return releaseResult;
     }
     if (command !== 'start') return { exitCode: 2, message: 'Use pdd autopilot start, stop, status, add or release.' };
     // The no-progress period must be at least 2 ticks of the core timer, or a working job could look quiet.

@@ -2,10 +2,10 @@
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, join } from 'node:path';
+import { basename, delimiter, isAbsolute, join } from 'node:path';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
-import { gitContext as defaultGitContext } from './shared/git-context.mjs';
+import { gitContext as defaultGitContext, gitFiles } from './shared/git-context.mjs';
 import { PACKAGE_ROOT } from './shared/package-root.mjs';
 import { causeText } from './shared/safe-read.mjs';
 import { resolvePddStateBase } from './shared/state-dir.mjs';
@@ -145,6 +145,64 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
     ...PUBLIC_HELP_TEXT.closingLines,
   ].join('\n');
 }
+const LINT_FORBIDDEN_TEST_FLAGS = [
+  '--affected', '--journeys', '--lf', '--cache-clear', '--fresh', '--read', '--retry',
+  '--reconcile', '--explain-bindings', '--files', '--screen', '--drawing', '--look',
+  '--target', '--max-total-calls', '--no-restart-replacement', '--app-map', '--request',
+];
+const SCENARIO_JSON_RE = /(?:^|\/)(?:tests?|__tests__)\/(?:runtime\/)?[^/]+\.json$/i;
+const NATIVE_STORY_MARKER_RE = /^(?:##\s+Native\s+validation\b|kind:\s*native\b)/im;
+const SKIP_SKILL_SYNC_ROUTES = new Set([
+  'help', 'version', 'version-detailed', 'completion', 'workflow-list', 'workflow-view',
+  'workflow-card', 'workflow-status', 'autopilot-alerts', 'autopilot-alert',
+  'project-files', 'file-owner', 'status', 'init', 'lint', 'prove', 'update-sync',
+  'mcp', 'setup', 'upgrade', 'autopilot-logs',
+]);
+
+function resolveLintRoot(cwd) {
+  try {
+    const out = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+    if (out.status === 0 && out.stdout?.trim()) return out.stdout.trim();
+  } catch {}
+  return cwd;
+}
+
+async function collectProjectLintErrors(runtime, root, words, options) {
+  try {
+    const { lintRepoProject } = await import('./repo-hygiene-lint.mjs');
+    if (!words.length) return lintRepoProject({ root }).errors;
+    const found = runtime.findTests({ root });
+    const { selected, unknown } = runtime.selectTests(found, words, options);
+    if (unknown?.length || !selected?.length) return [];
+    const { rows } = runtime.preflight({ root, found, selected, allowMissingInterfaces: true });
+    const promptSet = new Set();
+    for (const row of rows) {
+      for (const step of row.steps ?? []) if (typeof step?.entry_path === 'string') promptSet.add(step.entry_path);
+      for (const p of row.prompts ?? []) if (typeof p === 'string') promptSet.add(p);
+    }
+    return lintRepoProject({ root, promptPaths: [...promptSet], tests: selected }).errors;
+  } catch { return []; }
+}
+
+function inspectLocalLintRepoFeatures(cwd) {
+  let hasNativeStory = false;
+  let hasScenarioJson = false;
+  const root = resolveLintRoot(cwd);
+  let files = [];
+  try { files = gitFiles(root); } catch { files = []; }
+  for (const rel of files) {
+    if (!hasScenarioJson && SCENARIO_JSON_RE.test(rel)) hasScenarioJson = true;
+    if (!hasNativeStory && /^(?:user_stories|stories)\/.*\.md$/i.test(rel)) {
+      try {
+        const text = readFileSync(join(root, rel), 'utf8');
+        if (NATIVE_STORY_MARKER_RE.test(text)) hasNativeStory = true;
+      } catch {}
+    }
+    if (hasNativeStory && hasScenarioJson) break;
+  }
+  return { hasNativeStory, hasScenarioJson };
+}
+
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
@@ -156,27 +214,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   catch (error) {
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
-  }
-  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'status', 'init', 'lint', 'prove', 'update-sync', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
-    && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
-    && plan.options['--json'] !== true
-    && !argv.includes('--json')) {
-    try {
-      const syncFn = syncOwnedUserSkills ?? (await import('./skills-install.mjs')).syncOwnedUserSkills;
-      const { updated } = syncFn({
-        packageRoot,
-        home: env.HOME || homedir(),
-        claudeConfigDir: env.CLAUDE_CONFIG_DIR,
-        ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
-        ...(env.PDD_STATE_DIR ? { stateRoot: env.PDD_STATE_DIR } : {}),
-        env,
-      });
-      if (updated?.length > 0 && stderr?.isTTY === true) {
-        const metadata = await readPackageVersion({ packageRoot });
-        if (metadata?.ok && typeof metadata.version === 'string' && metadata.version)
-          line(stderr, `Updated PDD skills to ${metadata.version} (${updated.join(', ')}).`);
-      }
-    } catch { /* Post-upgrade skill sync never blocks or fails a CLI command. */ }
   }
   if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
     try {
@@ -559,6 +596,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return await run(input, ports);
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'lint': {
+      if (LINT_FORBIDDEN_TEST_FLAGS.some(flag => plan.options[flag] !== undefined)) {
+        line(stderr, `This mix of options does not work together. Run pdd ${NAMES.lint} --help.`);
+        return 2;
+      }
       if (plan.options['--issue'] !== undefined && plan.options['--codex'] !== true) {
         line(stderr, `Use --issue only with pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`);
         return 2;
@@ -582,24 +623,67 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           return 1;
         }
       }
+      if (plan.options['--remote'] === true && plan.options['--local'] === true) {
+        line(stderr, `Use either --local or --remote with pdd ${NAMES.lint}, not both.`);
+        return 2;
+      }
       const needsRemoteOrCompiler = Boolean(
         plan.options['--remote'] === true
         || plan.options['--emit-v1'] === true
         || plan.options['--write'] === true
         || plan.options['--bind-criteria'] === true,
       );
-      if (needsRemoteOrCompiler) {
-        if (plan.options['--remote'] === true && plan.options['--local'] === true) {
-          line(stderr, `Use either --local or --remote with pdd ${NAMES.lint}, not both.`);
-          return 2;
-        }
+      const repoFeatures = (!needsRemoteOrCompiler && !localLint && plan.options['--diff'] === undefined && plan.options['--base'] === undefined)
+        ? inspectLocalLintRepoFeatures(cwd)
+        : { hasNativeStory: false, hasScenarioJson: false };
+      const needsRuntimeLocalAssessment = repoFeatures.hasNativeStory
+        || (plan.options['--local'] === true && repoFeatures.hasScenarioJson);
+      if (needsRemoteOrCompiler || needsRuntimeLocalAssessment) {
         try {
           const runtime = await import('./runtime-seam.mjs');
           const { '--remote': _remote, '--diff': _diff, '--base': _base, ...forwardOptions } = plan.options;
           const opts = { ...forwardOptions, '--lint': true };
           const inverted = findInvertedNativeOnlyStory(runtime, cwd, [...plan.operands], opts);
           if (inverted) line(stderr, `Advisory [inverted-native-only-dependency]: Story test ${inverted.test} enters checkable prompt ${inverted.entry_path}, which links kind: native-only prompt ${inverted.native_only_path} under ## Dependencies. Invert the dependency so ${inverted.native_only_path} depends on ${inverted.entry_path} and inject a <port>.<op> port.`);
-          return await runtime.lint({ words: [...plan.operands], options: opts, cwd }, { stdout, stderr, env });
+          const isLintCheckMode = !['--emit-v1', '--write', '--bind-criteria'].some(flag => opts[flag]);
+          const lintRoot = isLintCheckMode ? resolveLintRoot(cwd) : null;
+          let seamProjectErrors = null;
+          const onProjectLintResult = lintRoot && !plan.operands.length && opts['--local'] === true
+            ? result => {
+                if (!result || !Array.isArray(result.errors)) return;
+                if (!seamProjectErrors) seamProjectErrors = [];
+                for (const err of result.errors) if (!seamProjectErrors.includes(err)) seamProjectErrors.push(err);
+              }
+            : undefined;
+          if (lintRoot && opts['--json'] === true) {
+            let captured = '';
+            const bufferedStdout = { write: chunk => { captured += String(chunk); return true; } };
+            const runtimeCode = await runtime.lint({ words: [...plan.operands], options: opts, cwd }, { stdout: bufferedStdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
+            if (runtimeCode === 0 || runtimeCode === 1) {
+              const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], opts);
+              if (projectErrors.length > 0) {
+                try {
+                  const parsed = JSON.parse(captured.trim());
+                  parsed.problems = [...(Array.isArray(parsed.problems) ? parsed.problems : []), ...projectErrors];
+                  parsed.ok = false;
+                  parsed.exit_code = 1;
+                  stdout.write(`${JSON.stringify(parsed)}\n`);
+                  return 1;
+                } catch {}
+              }
+            }
+            if (captured) stdout.write(captured);
+            return runtimeCode;
+          }
+          const runtimeCode = await runtime.lint({ words: [...plan.operands], options: opts, cwd }, { stdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
+          if (lintRoot && (runtimeCode === 0 || runtimeCode === 1)) {
+            const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], opts);
+            if (projectErrors.length > 0) {
+              for (const errLine of projectErrors) line(stderr, errLine);
+              return 1;
+            }
+          }
+          return runtimeCode;
         } catch (error) {
           line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
           return 3;
@@ -643,6 +727,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'runtime-check':
     case 'runtime-try':
+      if (plan.local === 'runtime-check' && (plan.options['--issue'] !== undefined || plan.options['--codex'] === true)) {
+        line(stderr, `Use pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`);
+        return 2;
+      }
       if (plan.local === 'runtime-check' && plan.options['--reconcile'] !== undefined) {
         if (plan.operands.length > 0 || Object.keys(plan.options).some(key => !['--reconcile', '--json'].includes(key))) {
           line(stderr, `Use pdd ${NAMES.test} --reconcile REQUEST_ID [--json] without other options or Stories.`);
@@ -729,6 +817,30 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
+  const hasSafeHome = env.HOME === undefined || (typeof env.HOME === 'string' && env.HOME.trim().length > 0 && isAbsolute(env.HOME));
+  if (code === 0
+    && hasSafeHome
+    && !SKIP_SKILL_SYNC_ROUTES.has(plan.local)
+    && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
+    && plan.options['--json'] !== true
+    && !argv.includes('--json')) {
+    try {
+      const syncFn = syncOwnedUserSkills ?? (await import('./skills-install.mjs')).syncOwnedUserSkills;
+      const { updated } = syncFn({
+        packageRoot,
+        home: env.HOME || homedir(),
+        claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+        ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
+        ...(env.PDD_STATE_DIR ? { stateRoot: env.PDD_STATE_DIR } : {}),
+        env,
+      });
+      if (updated?.length > 0 && stderr?.isTTY === true) {
+        const metadata = await readPackageVersion({ packageRoot });
+        if (metadata?.ok && typeof metadata.version === 'string' && metadata.version)
+          line(stderr, `Updated PDD skills to ${metadata.version} (${updated.join(', ')}).`);
+      }
+    } catch { /* Post-upgrade skill sync never blocks or fails a CLI command. */ }
+  }
   if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'init', 'status', 'lint', 'prove'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });

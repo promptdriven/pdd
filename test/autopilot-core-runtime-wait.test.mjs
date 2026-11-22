@@ -27,7 +27,7 @@ const summary = (exitCode, state, stories = ['place-order']) => `${JSON.stringif
   rows: stories.map(story => ({ story, test: `tests/${story}.json`, state, checks: state === 'not run' ? null : { passed: state === 'passed' ? 3 : 2, total: 3 } })) })}\n`;
 const answer = (w, n, exitCode, state, stories) => { const job = w.job(n, 'runtime'); appendFileSync(job.log, summary(exitCode, state, stories)); w.finish(n, 'runtime', { code: exitCode }); return job; };
 // The PR changes the Story (a PASS of a Story that the PR does not change never counts, #3227).
-const story = (w, n, path = STORY) => { const cwd = w.job(n, 'build').cwd; mkdirSync(join(cwd, 'user_stories'), { recursive: true }); writeFileSync(join(cwd, path), `# ${path}\n`); };
+const story = (w, n, path = STORY) => { const cwd = w.job(n, 'build').cwd; const slug = path.split('/').at(-1).replace(/\.md$/i, ''); mkdirSync(join(cwd, 'user_stories'), { recursive: true }); mkdirSync(join(cwd, 'tests'), { recursive: true }); writeFileSync(join(cwd, path), `# ${slug.replace(/-/g, ' ')}\n\n## Acceptance criteria\n\n1. Action succeeds.\n`); writeFileSync(join(cwd, 'tests', `${slug}.json`), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', story_path: path, criteria: [{ id: 'AC1', text: 'Action succeeds.' }], initial_world: {}, simulation: {}, steps: [] }) + '\n'); };
 const status = w => coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now });
 
 test('maintenance for 30 minutes: the job waits, sends the check after the window, gets PASS, and the PR has no "not run"', async t => {

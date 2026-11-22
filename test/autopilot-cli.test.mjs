@@ -74,20 +74,16 @@ function setupOptions(extra = {}) {
     setupProject: () => ({ file: 'AGENTS.md', changed: false }), setupAgentMcp: async () => 0,
     workflowAgents: { checkWorkflowAgents: async () => ({ ok: true, agent: 'codex', message: '' }) }, ...extra };
 }
-for (const mode of ['', 'observe', 'auto']) test(`autopilot-setup${mode ? `-${mode}` : ''}: CLI saves first answer and uses additional trust names`, async t => {
+for (const mode of ['', 'observe', 'auto']) test(`autopilot-setup${mode ? `-${mode}` : ''}: laptop pdd setup never writes pdd.json or asks repo Autopilot questions`, async t => {
   const cwd = repo(t); let questions = 0;
   const options = setupOptions({ autopilotPorts: {
-    terminal: { mode: async () => { questions++; return { answer: mode }; }, names: async info => {
-      assert.deepEqual(info, { owner: 'Ada', writers: ['Bo', 'Cy'], complete: true }); return { names: ['Dana'] };
-    } }, github: { lookup: async () => ({ owner: 'Ada', writers: ['Bo', 'Cy'], complete: true }) },
+    terminal: { mode: async () => { questions++; return { answer: mode }; }, names: async () => ({ names: ['Dana'] }) },
+    github: { lookup: async () => ({ owner: 'Ada', writers: ['Bo', 'Cy'], complete: true }) },
   } });
   const result = await invoke(cwd, ['setup'], options);
   assert.equal(result.exitCode, 0, result.stderr);
-  assert.ok(existsSync(join(cwd, 'pdd.json')), 'Setup must save Autopilot settings');
-  assert.deepEqual(JSON.parse(readFileSync(join(cwd, 'pdd.json'))).autopilot, { mode: mode || 'off', trust: ['Dana'] });
-  assert.match(result.stdout, /owner.*Ada/); assert.match(result.stdout, /write.*Bo.*Cy/);
-  assert.equal((await invoke(cwd, ['setup'], options)).exitCode, 0);
-  assert.equal(questions, 1, 'Repeat setup must not ask the mode again');
+  assert.equal(existsSync(join(cwd, 'pdd.json')), false, 'Laptop pdd setup never creates pdd.json');
+  assert.equal(questions, 0, 'Laptop pdd setup never prompts for repo Autopilot mode');
 });
 
 test('autopilot-setup: CLI does not ask or save without a terminal or outside Git', async t => {
@@ -98,7 +94,7 @@ test('autopilot-setup: CLI does not ask or save without a terminal or outside Gi
   const context = async () => null;
   const result = await invoke(outside, ['setup'], setupOptions({ gitContext: context, autopilotPorts: noQuestions }));
   assert.equal(result.exitCode, 0);
-  assert.equal(result.stdout, 'AGENTS.md already has this PDD block. No change.\n');
+  assert.match(result.stdout, /Done! Use \/pdd in Claude Code or \$pdd in Codex\./);
   assert.equal(result.stderr, '');
   assert.throws(() => readFileSync(join(outside, 'pdd.json')), { code: 'ENOENT' });
 });

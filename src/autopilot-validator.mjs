@@ -2982,3 +2982,57 @@ export function lintRepoValidationBackside({ root, files, config, workspaceRoot 
   }
   return { ok: errors.length === 0, errors, warnings, findings };
 }
+
+const PRIVATE_IMPORT_SYM_RE = /^_(?!_)[A-Za-z0-9_$]*$/;
+const RELATIVE_SPEC_RE = /^\.\.?\//;
+
+/**
+ * Layer-2 Autopilot changed-file test hygiene probe (`test-private-import`).
+ * Runs only inside Autopilot pre-review on PR-changed test files (never in user-facing Layer-1 `pdd lint`).
+ */
+export function lintChangedTestPrivateImports({ root, files = [], changedFiles = [], config } = {}) {
+  if (!root || !Array.isArray(changedFiles) || !changedFiles.length) return { findings: [] };
+  const cfg = loadProjectLintConfig(config !== undefined ? config : root);
+  if (cfg.disabledRules?.has('test-private-import')) return { findings: [] };
+  const explicitSev = cfg.ruleSeverities?.get('test-private-import');
+  if (explicitSev === 'off') return { findings: [] };
+  const severity = explicitSev ?? 'warn';
+  const allowedSet = new Set(Array.isArray(files) ? files : []);
+  const findings = [];
+  for (const rel of changedFiles) {
+    if (typeof rel !== 'string' || !allowedSet.has(rel)) continue;
+    if (!/(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$)/i.test(rel)) continue;
+    if (!/\.(?:mjs|cjs|js|ts|tsx|jsx)$/i.test(rel) || /(?:^|\/)(?:fixtures|helpers)\//i.test(rel)) continue;
+    let text;
+    try {
+      const full = join(root, rel);
+      const st = lstatSync(full);
+      if (st.isSymbolicLink() || !st.isFile() || st.size > 512 * 1024) continue;
+      text = readFileSync(full, 'utf8');
+    } catch {
+      continue;
+    }
+    const importRe = /\bimport\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
+    for (const m of text.matchAll(importRe)) {
+      const spec = m[2];
+      if (!RELATIVE_SPEC_RE.test(spec)) continue;
+      const line = text.slice(0, m.index).split('\n').length;
+      for (const rawPart of m[1].split(',')) {
+        const sym = rawPart.trim().split(/\s+as\s+/i)[0]?.trim();
+        if (!sym || !PRIVATE_IMPORT_SYM_RE.test(sym)) continue;
+        const message = `Test imports private internal symbol "${sym}" from "${spec}". Test observable behavior through public exports instead of private helpers.`;
+        const prefix = severity === 'error' ? 'Error' : 'Warning';
+        findings.push({
+          path: rel,
+          line,
+          code: 'test-private-import',
+          category: 'public-interface test',
+          severity,
+          message,
+          formatted: `${prefix}: public-interface test: ${rel}:${line} [test-private-import] ${message}`,
+        });
+      }
+    }
+  }
+  return { findings };
+}

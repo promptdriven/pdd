@@ -373,7 +373,7 @@ export function findOwners({ root, paths = [] }, ports = {}) {
   return resolveOwners({ paths, allPaths: ctx.visible, bindings: ctx.bindings, heads, prompts: ctx.prompts });
 }
 
-export function findTestPromptViolations({ root, promptPaths = [], checkPaths = [] } = {}, ports = {}) {
+export function findTestPromptViolations({ root, promptPaths = [], checkPaths = [], includeProse = false } = {}, ports = {}) {
   const checkedPrompts = unique(promptPaths.filter(path => canonicalPath(path) && path.endsWith('.prompt.md')));
   const checkedTests = unique(checkPaths.filter(path => canonicalPath(path) && isTestOwnedPath(path)));
   const violations = [], reportedTargets = new Set();
@@ -410,7 +410,7 @@ export function findTestPromptViolations({ root, promptPaths = [], checkPaths = 
       }
     }
   }
-  for (const [promptPath, claimed] of collectPromptTestClaims(ctx, ordinaryPrompts, reportedTargets)) {
+  for (const [promptPath, claimed] of collectPromptTestClaims(ctx, ordinaryPrompts, reportedTargets, { includeProse })) {
     violations.push({
       kind: 'test-file-claim', prompt: promptPath, targets: claimed,
       message: `Error: misplaced prompt owner: ${promptPath} claims ${claimed.join(', ')}. Prompts own production modules, not test files; remove test ownership before continuing.`,

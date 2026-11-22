@@ -149,8 +149,8 @@ test('P5 (#75, #103) a new file on path e is red with the path c hint; a new tes
 
 test('P6 (#103) a new prompt whose opening sentence names the new file, with no binding and no header, is red (R3)', async t => {
   const head = module('ordinal', ORDINAL), h = tree(t, head);
-  const owner = ownerTable(fs, h.dir, h.files).get('src/ordinal.js');
-  assert.equal(owner.prompt, 'prompts/ordinal.prompt.md'); assert.equal(owner.how, 'prose'); assert.equal(owner.certain, false);
+  // Honest S2 ownership: prose opening sentences never claim ownership; only explicit header or pdd-bindings.json does.
+  assert.equal(ownerTable(fs, h.dir, h.files).get('src/ordinal.js'), undefined);
   const body = `Path: c — prompts/ordinal.prompt.md, src/ordinal.js — prompts/ordinal.prompt.md — new prompt — Test: test/ordinal.test.js\n${NEW_MODULE_D('ordinal')}`;
   assert.deepEqual(check(t, { base: SANDBOX, head, body }).reds, [`prompts/ordinal.prompt.md ${R3_TEXT}`]);
   assert.deepEqual(check(t, { base: SANDBOX, head: module('ordinal', ORDINAL, { header: true }), body }).reds, [], 'a header is enough');
@@ -235,9 +235,10 @@ test('P12 one owner reader: the engine table and `pdd owner` give the same answe
     assert.deepEqual(mine ? [mine.prompt, mine.owners, mine.certain] : [null, [], true], [row.owner, row.owners, row.certain], path);
     if (mine?.prompt) assert.equal(mine.how, row.source, path);
   }
-  assert.equal(engine.get('src/split.js')?.how, 'path');
-  assert.equal(engine.get('src/split.js')?.certain, false);
-  assert.equal(engine.get('src/ordinal.js')?.how, 'prose');
+  assert.equal(engine.get('src/split.js'), undefined, 'path match is advisory only');
+  assert.match(cli.get('src/split.js')?.note ?? '', /matched by (?:path|file name) to prompts\/split\.prompt\.md/);
+  assert.equal(engine.get('src/ordinal.js'), undefined, 'prose match is advisory only');
+  assert.match(cli.get('src/ordinal.js')?.note ?? '', /named only in the opening sentence of prompts\/ordinal\.prompt\.md/);
   assert.equal(engine.get('src/money.js')?.how, 'binding', 'the binding comes first');
 });
 

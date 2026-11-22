@@ -145,7 +145,7 @@ export function runLocalLint(
   const ok = exitCode === 0;
   const errLabel = `${problems.length} ${problems.length === 1 ? 'error' : 'errors'}`;
   const warnLabel = `${warnings.length} ${warnings.length === 1 ? 'warning' : 'warnings'}`;
-  const summaryLine = `Local lint: ${errLabel}, ${warnLabel}. (0 AI/network calls)`;
+  const summaryLine = `Local lint: ${errLabel}, ${warnLabel}. (0 AI calls, 0 network calls)`;
 
   const payload = {
     schema_version: 'pdd.local-lint.v1',

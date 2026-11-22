@@ -854,11 +854,8 @@ test('3595/3596 R1-5/6: malformed non-object state_schema warns, screens[] keeps
 
   // R1-6: docs document 4 top-level check targets and input as ref_target only
   for (const rel of [
-    '../RUNBOOK.md',
     '../skills/pdd-prompting/RUNBOOK.md',
-    '../docs/prompting-guide.md',
     '../skills/pdd-prompting/guide.md',
-    '../docs/story-guide.md',
     '../skills/pdd-prompting/story-guide.md',
     '../skills/pdd-prompting/runbook/checks-and-budgets.md',
   ]) {

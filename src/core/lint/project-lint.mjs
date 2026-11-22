@@ -170,7 +170,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
     : allPrompts;
 
   if (targetPrompts.length) {
-    const check = findTestPromptViolations({ root: realRoot, promptPaths: targetPrompts, checkPaths: [] }, {
+    const check = findTestPromptViolations({ root: realRoot, promptPaths: targetPrompts, checkPaths: [], includeProse: true }, {
       files: () => scopedFiles,
       read: (p, lim) => { const t = p.endsWith('.prompt.md') ? getPrompt(p) : (lim <= HEAD_BYTES + 1 ? getHead(p) : getFull(p)); return typeof t === 'string' ? Buffer.from(t, 'utf8') : null; },
     });

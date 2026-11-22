@@ -2499,8 +2499,7 @@ test('O1 the build brief has the owner table (binding, header line in the first 
   const input = w.job(17, 'build').input;
   assert.match(input, /- src\/words\.js: prompts\/words\.prompt\.md \(binding\)/);
   assert.match(input, /- src\/late\.js: prompts\/late\.prompt\.md \(header\)/, 'a header past the first 10 lines, in the first 4 KiB');
-  assert.match(input, /- src\/money\.js: prompts\/money\.prompt\.md \(prose, not certain: treat as owned\)/, 'the opening sentence (pdd owner)');
-  assert.doesNotMatch(input, /- src\/(?:other|third)\.js:/, 'only the opening sentence counts');
+  assert.doesNotMatch(input, /- src\/(?:money|other|third)\.js:/, 'prose-only mentions are advisory hints, not ownership claims');
   assert.match(input, /run the same lookup \(`pdd owner FILE`\)/); assert.match(input, /A file that you add is never path e/);
   assert.match(input, /e\.[^\n]*\.prompt\.md/); assert.match(input, /Generated from/);
   assert.match(input, /The prompt and the code may be in one commit\. Never rewrite history/);
@@ -2764,10 +2763,10 @@ test('Q5 review keep by changed lines: a base change far from the PR keeps the r
     ['near', w => w.baseCommit('calc.js', lines({ 30: 'base change near the PR' })), /near the PR's lines/],
     ['prompt', w => w.baseCommit('prompts/calc.prompt.md', '# Calc\n\nOwn `calc.js`: totals. Changed on the base.\n'), /a prompt that owns a PR file/]]) {
     const w = await coreWorld(t, { settings: { runs: 1 } });
-    w.baseCommit('calc.js', lines({}));
+    w.baseCommit('calc.js', `// Prompt: prompts/calc.prompt.md\n${lines({})}`);
     w.baseCommit('prompts/calc.prompt.md', '# Calc\n\nOwn `calc.js`: totals.\n');
     w.issue(17); await w.tick();
-    editIn(w, 17, 'calc.js', lines({ 25: 'the PR change' }));
+    editIn(w, 17, 'calc.js', `// Prompt: prompts/calc.prompt.md\n${lines({ 25: 'the PR change' })}`);
     w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: b — calc.js — prompts/calc.prompt.md — no contract change — Test: done check' }); await greenLane(w, 17);
     baseEdit(w);
     await w.tick();

@@ -15,6 +15,8 @@ test('replay signed-in workflow agent scenario through public functions', async 
     // Reserve the scripted response for this step even if a defective implementation skips the probe.
     const readinessRow = step.operation === 'runPdd' && !step.input.argv.includes('--help')
       ? scenario.simulation['agents.checkWorkflowAgents'].cases[readiness++] : undefined;
+    // Laptop `pdd setup` no longer probes coding agents or edits repo files (split into `pdd init`).
+    if (step.operation === 'runPdd' && step.input.argv[0] === 'setup') continue;
     await t.test(step.step_id, async () => {
     const calls = {};
     const call = (name, args) => {
@@ -54,7 +56,7 @@ test('replay signed-in workflow agent scenario through public functions', async 
   }
 });
 
-test('workflow and setup admit a ready Claude using status probes before effects', async () => {
+test('workflow admits a ready Claude using status probes before effects; laptop setup stays probe-free', async () => {
   const env = { HOME: '/home/example', PATH: '/bin/example', CLAUDE_CONFIG_DIR: '/custom/claude' };
   const probes = [], starts = [], effects = [];
   const run = async (agent, args, options) => {
@@ -67,11 +69,12 @@ test('workflow and setup admit a ready Claude using status probes before effects
     setupSkills: () => { effects.push('skills'); return []; }, setupProject: () => { effects.push('project'); return { file: '/project/AGENTS.md', changed: true }; },
     setupAgentMcp: async () => { effects.push('mcp'); return 0; }, workflowRunner: { startRun: async (input, ports) => { starts.push({ input, env: ports.env }); return { exitCode: 0, message: 'Started' }; } } };
   assert.equal(await runPdd(['setup'], common), 0);
-  assert.deepEqual(effects, ['skills', 'project', 'mcp']);
+  assert.deepEqual(effects, ['skills', 'mcp']);
+  assert.equal(probes.length, 0);
   assert.equal(await runPdd(['workflow', 'run', 'bug', '42'], common), 0);
   assert.equal(starts[0].input.agent, 'claude');
   assert.equal(starts[0].env, env);
-  assert.equal(probes.length, 8);
+  assert.equal(probes.length, 4);
   for (const probe of probes) {
     assert.deepEqual(probe.args, probe.agent === 'codex' ? ['login', 'status'] : probe.agent === 'gemini' ? ['--version'] : probe.agent === 'agy' ? ['models'] : ['auth', 'status']);
     assert.equal(probe.options.env, env);

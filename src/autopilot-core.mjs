@@ -38,6 +38,7 @@ import {
   evaluateValidationOutcome,
   formatHumanVerificationCard,
   inspectTestBoundaryTargets,
+  lintChangedTestPrivateImports,
   lintRepoValidationBackside,
   planValidationResume,
   shouldClaimWithCooldowns,
@@ -6995,13 +6996,20 @@ function collectBacksideLint(headTree, changed, baseTree) {
     };
   }
   const lintOut = lintRepoProject({ root: headTree, config: baseTree, workspaceRoot: baseTree });
+  const baseLintOut = lintRepoProject({ root: baseTree, config: baseTree, workspaceRoot: baseTree });
+  const baseErrorKeys = new Set(
+    (baseLintOut.findings ?? [])
+      .filter(f => f && f.severity === 'error')
+      .map(f => `${f.code}\0${f.path}`),
+  );
   const backsideOut = lintRepoValidationBackside({ root: headTree, config: baseTree, workspaceRoot: baseTree });
   const changedSet = new Set(changed);
   const codeSet = new Set();
   const details = [];
   for (const f of [...(lintOut.findings ?? []), ...(backsideOut.findings ?? [])]) {
     const isValRule = f.code === 'silent-validation-skip' || f.code === 'boundary-mock-only-test';
-    if (f.severity === 'error' || (isValRule && changedSet.has(f.path))) {
+    const isNewError = f.severity === 'error' && changedSet.has(f.path) && !baseErrorKeys.has(`${f.code}\0${f.path}`);
+    if (isNewError || (isValRule && changedSet.has(f.path))) {
       codeSet.add(f.code);
       const lineText = `${f.path}:${f.line ?? 1} [${f.code}] ${f.message ?? f.detail ?? f.warning ?? f.code}`;
       if (!details.includes(lineText)) details.push(lineText);
@@ -8161,6 +8169,25 @@ export function evaluateChangedFileHygiene({ root, changedFiles = [], mode = 'ob
       config: effectiveConfigInput,
       workspacePolicy,
     });
+    const allowedHeadFiles = headFiles.filter(f => workspace.allows(workspacePolicy, f));
+    const backsideOut = lintRepoValidationBackside({
+      root: realHeadRoot,
+      files: allowedHeadFiles,
+      config: effectiveConfigInput,
+      workspaceRoot: realWorkspaceRoot,
+    });
+    const privateImportOut = lintChangedTestPrivateImports({
+      root: realHeadRoot,
+      files: allowedHeadFiles,
+      changedFiles: [...changedSet],
+      config: effectiveConfigInput,
+    });
+    const combinedFindings = [
+      ...(lintOut?.findings ?? []),
+      ...(backsideOut?.findings ?? []).map(f => ({ ...f, message: f.message ?? f.detail, formatted: f.formatted ?? f.warning })),
+      ...(privateImportOut?.findings ?? []),
+    ];
+    lintOut = { ...lintOut, findings: combinedFindings };
     if (splitConfigRoot) {
       headLintConfig = loadProjectLintConfig(realHeadRoot);
     }
