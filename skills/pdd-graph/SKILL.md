@@ -1,6 +1,7 @@
 ---
 name: pdd-graph
 description: Use when asked to read or open the saved PDD issue dependency graph, explain why an issue waits, or show what has no recorded blocker.
+disable-model-invocation: true
 metadata:
   pdd-skills: 0.1.41
 ---

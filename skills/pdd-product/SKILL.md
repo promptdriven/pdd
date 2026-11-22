@@ -1,6 +1,7 @@
 ---
 name: pdd-product
 description: Use when a person asks to plan a multi-part product roadmap with shared contracts and staged feature runs across independent parts.
+disable-model-invocation: true
 metadata:
   pdd-skills: 0.1.41
 ---

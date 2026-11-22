@@ -1,6 +1,7 @@
 ---
 name: pdd-prompting
 description: The PDD Prompting guide. Use when you write, change or review a module prompt (*.prompt.md), a Story or test cases, when the person asks how to write prompts in PDD, or asks to set up real behavior verification for a repository. In PDD, prompts are the source and code follows them.
+disable-model-invocation: true
 metadata:
   pdd-skills: 0.1.41
 ---
@@ -24,7 +25,7 @@ Each module's `.prompt.md` is the source; code implements it.
 
 - `RUNBOOK.md`: concise topic router and core commands.
 - `guide.md`, `story-guide.md`: prompting and Story rules.
-- `review.md`, `verification-setup.md`, `verification-recipe.md`, `autopilot-job-rules.md`: check, code and Autopilot references.
+- `review.md`, `autopilot-job-rules.md`, and `../pdd/references/verification.md`: review, Autopilot, and verification references.
 
 ## How to write
 
