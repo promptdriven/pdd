@@ -10,7 +10,7 @@ import { compileGlobMatcher } from './lint/regex-safety.mjs';
 const MAX_VERIFY_PATHS = 100;
 const PATH_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
 const CAPABILITY_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
-const NON_SURFACE_PATH_RE = /(?:^|\/)(?:docs?|user_stories|pdd\/stories|\.github|fixtures|examples|__pycache__|\.pytest_cache|node_modules)\/|\.prompt\.md$|\.(?:md|mdx|txt|rst|svg|png|jpe?g|gif|webp|ico|lock|pyc|pyo)$|(?:^|\/)(?:\.DS_Store|README|CHANGELOG|LICENSE|AGENTS|CLAUDE|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|go\.sum|poetry\.lock|uv\.lock)$/i;
+const NON_SURFACE_PATH_RE = /(?:^|\/)(?:docs?|user_stories|pdd\/stories|__pycache__|\.pytest_cache|node_modules)\/|\.prompt\.md$|\.(?:md|mdx|txt|rst|pyc|pyo)$|(?:^|\/)\.DS_Store$/i;
 
 export const isProductionSurfaceFile = filePath =>
   canonicalRepoPath(filePath) && !isTestOwnedPath(filePath) && !NON_SURFACE_PATH_RE.test(filePath);
@@ -140,14 +140,34 @@ export function detectHostCapabilities(requiredNeeds = [], { env = process.env, 
   const explicitFalse = new Set();
   if (typeof env?.PDD_CAPABILITIES === 'string' && env.PDD_CAPABILITIES.trim()) {
     for (const part of env.PDD_CAPABILITIES.split(',').map(s => s.trim()).filter(Boolean)) {
-      if (part.startsWith('!')) explicitFalse.add(part.slice(1));
-      else available.add(part);
+      if (part.startsWith('!')) {
+        const cap = part.slice(1);
+        available.delete(cap);
+        explicitFalse.add(cap);
+      } else {
+        explicitFalse.delete(part);
+        available.add(part);
+      }
     }
   }
   if (Array.isArray(capabilities) || capabilities instanceof Set) {
-    for (const cap of capabilities) if (typeof cap === 'string' && cap.trim()) available.add(cap.trim());
+    for (const cap of capabilities) {
+      if (typeof cap === 'string' && cap.trim()) {
+        const c = cap.trim();
+        explicitFalse.delete(c);
+        available.add(c);
+      }
+    }
   } else if (capabilities && typeof capabilities === 'object') {
-    for (const [k, v] of Object.entries(capabilities)) if (v) available.add(k); else explicitFalse.add(k);
+    for (const [k, v] of Object.entries(capabilities)) {
+      if (v) {
+        explicitFalse.delete(k);
+        available.add(k);
+      } else {
+        available.delete(k);
+        explicitFalse.add(k);
+      }
+    }
   }
 
   const probeFn = typeof probe === 'function' ? probe : (cap => defaultProbeCapability(cap, { env, isTTY }));

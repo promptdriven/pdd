@@ -2,11 +2,12 @@ import '../helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   detectHostCapabilities,
+  isProductionSurfaceFile,
   matchCapabilities,
   matchVerifyPaths,
   parseVerifyConfig,
@@ -386,4 +387,135 @@ test('G1/G2 polyglot prove works offline on real Python (pytest/pyproject.toml) 
   assert.equal(goZero.exitCode, EXIT_PROVED, JSON.stringify(goZero.receipt));
   assert.equal(goZero.receipt.test.command, 'go test ./...');
   assert.equal(readFileSync(join(goRepo, 'calc.go'), 'utf8').includes('a + b'), true);
+});
+
+test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-auth block, symlink/dangling overlay refusal, deleted-test parity & zero checkout mutation, Go [build failed] & signal setup-error, broad env scrubbing, negative capability override, and .svg/.github surfaces', t => {
+  const nodeBin = JSON.stringify(process.execPath);
+
+  // #7 Negative capability override: { browser: false } MUST remove 'browser' even when PDD_CAPABILITIES lists it!
+  const negCap = detectHostCapabilities(['browser', 'docker'], {
+    env: { PDD_CAPABILITIES: 'browser,docker' },
+    capabilities: { browser: false },
+  });
+  assert.equal(negCap.checked.browser, false);
+  assert.deepEqual(matchCapabilities(['browser', 'docker'], negCap), { satisfied: false, missing: ['browser'] });
+
+  // #8 .svg UI assets and .github/ workflows MUST NOT be silently excluded as non-surfaces!
+  assert.equal(isProductionSurfaceFile('ui/checkout.ui.svg'), true);
+  assert.equal(isProductionSurfaceFile('.github/workflows/ci.yml'), true);
+  assert.equal(isProductionSurfaceFile('pkg/__pycache__/mod.cpython-314.pyc'), false);
+  assert.equal(isProductionSurfaceFile('.pytest_cache/v/cache/lastfailed'), false);
+  assert.equal(isProductionSurfaceFile('node_modules/pkg/index.js'), false);
+  assert.equal(isProductionSurfaceFile('.DS_Store'), false);
+
+  // #1 + #2: Unresolvable base ref -> Not proved (exit 3); uncommitted pdd.json on main (baseSha === headSha) CANNOT self-authorize!
+  const repo = initGitRepo(t, 'pdd-prove-astra-trust-');
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.mjs'), 'export const v = 1;\n');
+  commitAll(repo, 'base without pdd.json');
+
+  const badBase = runProve({ cwd: repo, base: 'refs/heads/nonexistent-ref', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  assert.equal(badBase.exitCode, EXIT_NOT_PROVED);
+  assert.equal(badBase.outcome, OUTCOME_NOT_PROVED);
+
+  // Still on `main` (`baseSha === headSha`) with uncommitted pdd.json + src edit -> MUST be Not proved!
+  writeFileSync(
+    join(repo, 'pdd.json'),
+    JSON.stringify({ verify: { test: `${nodeBin} -e "process.exit(0)"`, paths: [{ id: 'app', when: ['src/**'], run: `${nodeBin} -e "process.exit(0)"` }] } }) + '\n',
+  );
+  writeFileSync(join(repo, 'src', 'app.mjs'), 'export const v = 2;\n');
+  const selfAuth = runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  assert.equal(selfAuth.exitCode, EXIT_NOT_PROVED, 'uncommitted pdd.json when baseSha===headSha MUST NOT self-authorize');
+  assert.ok(selfAuth.receipt.notProvedReasons.some(r => r.includes('not yet trusted on merge base')));
+
+  // #4a Deleted failing test parity + #4b Zero caller checkout mutation without --setup + #6 Broader env scrubbing!
+  const parityRepo = initGitRepo(t, 'pdd-prove-parity-');
+  mkdirSync(join(parityRepo, 'test'), { recursive: true });
+  writeFileSync(join(parityRepo, 'test', 'failing.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('fails', () => assert.fail('DELIBERATE_FAIL'));\n");
+  writeFileSync(
+    join(parityRepo, 'test', 'side-effect.test.mjs'),
+    [
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { writeFileSync } from 'node:fs';",
+      "test('writes file and verifies scrubbed env', () => {",
+      "  writeFileSync('side-effect-marker.tmp', 'isolated');",
+      '  for (const k of ["GH_CUSTOM", "GITHUB_ACTOR", "CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_BASE_URL", "OPENAI_ORG_ID", "CODEX_HOME", "HERDR_SOCKET", "PDD_CUSTOM", "AWS_ACCESS_KEY_ID", "STRIPE_API_KEY", "DB_PASSWORD", "CUSTOM_SECRET", "AUTH_TOKEN"]) {',
+      '    assert.equal(process.env[k], undefined, `env ${k} must be scrubbed`);',
+      '  }',
+      '});',
+    ].join('\n') + '\n',
+  );
+  commitAll(parityRepo, 'base with failing test');
+  execFileSync('git', ['checkout', '-q', '-b', 'delete-failing-test'], { cwd: parityRepo });
+  // Deleting the failing test on head MUST mirror into baseWorktree -> base ALSO passes -> Failed (base-passes), NEVER Proved!
+  rmSync(join(parityRepo, 'test', 'failing.test.mjs'));
+  const delCheat = runProve(
+    {
+      cwd: parityRepo,
+      base: 'main',
+      test: `${nodeBin} --test test/*.test.mjs`,
+      expect: 'DELIBERATE_FAIL',
+      json: true,
+      env: {
+        ...process.env,
+        GH_CUSTOM: 'x', GITHUB_ACTOR: 'x', CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_BASE_URL: 'x',
+        OPENAI_ORG_ID: 'x', CODEX_HOME: '/tmp/x', HERDR_SOCKET: '/tmp/x', PDD_CUSTOM: 'x',
+        AWS_ACCESS_KEY_ID: 'x', STRIPE_API_KEY: 'x', DB_PASSWORD: 'x', CUSTOM_SECRET: 'x', AUTH_TOKEN: 'x',
+      },
+    },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(delCheat.exitCode, EXIT_FAILED, JSON.stringify(delCheat.receipt));
+  assert.equal(delCheat.receipt.reason, 'base-passes', 'deleting a failing test must mirror deletion into base worktree');
+  assert.equal(existsSync(join(parityRepo, 'side-effect-marker.tmp')), false, 'head test without --setup MUST NOT mutate caller checkout');
+
+  // #5a Signalled base process -> setup-error (Not proved, exit 3), NEVER causal proof!
+  const sigRepo = initGitRepo(t, 'pdd-prove-signal-');
+  writeFileSync(join(sigRepo, 'app.mjs'), 'export const crash = true;\n');
+  commitAll(sigRepo, 'base crashes');
+  execFileSync('git', ['checkout', '-q', '-b', 'fix-crash'], { cwd: sigRepo });
+  writeFileSync(join(sigRepo, 'app.mjs'), 'export const crash = false;\n');
+  writeFileSync(join(sigRepo, 'app.test.mjs'), "import { crash } from './app.mjs';\nif (crash) { console.error('EXPECTED_MSG'); process.kill(process.pid, 'SIGKILL'); }\n");
+  const sigRes = runProve(
+    { cwd: sigRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'EXPECTED_MSG', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(sigRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(sigRes.receipt));
+  assert.equal(sigRes.receipt.reason, 'setup-error');
+
+  // #5b Go `FAIL pkg [build failed]` mid-line -> setup-error (Not proved, exit 3), NEVER causal proof!
+  const goBuildRepo = initGitRepo(t, 'pdd-prove-go-build-');
+  writeFileSync(join(goBuildRepo, 'go.mod'), 'module example.com/b\n\ngo 1.21\n');
+  writeFileSync(join(goBuildRepo, 'calc.go'), 'package b\nfunc Add(a, b int) int { return a + b }\n');
+  commitAll(goBuildRepo, 'go base missing NewFunc');
+  execFileSync('git', ['checkout', '-q', '-b', 'add-newfunc'], { cwd: goBuildRepo });
+  writeFileSync(join(goBuildRepo, 'calc.go'), 'package b\nfunc Add(a, b int) int { return a + b }\nfunc NewFunc() int { return 7 }\n');
+  writeFileSync(join(goBuildRepo, 'calc_test.go'), 'package b\nimport "testing"\nfunc TestNew(t *testing.T) { if NewFunc() != 7 { t.Fatal("bad") } }\n');
+  const goBuildFail = runProve(
+    { cwd: goBuildRepo, base: 'main', test: 'go test ./...', expect: 'build failed', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(goBuildFail.exitCode, EXIT_NOT_PROVED, JSON.stringify(goBuildFail.receipt));
+  assert.equal(goBuildFail.receipt.reason, 'setup-error');
+
+  // #3 Overlay symlink traversal / dangling destination symlink -> refused (`setup-error`, NEVER writes outside)!
+  const outsideDir = mkdtempSync(join(tmpdir(), 'pdd-prove-outside-'));
+  t.after(() => rmSync(outsideDir, { recursive: true, force: true }));
+  const symRepo = initGitRepo(t, 'pdd-prove-sym-');
+  mkdirSync(join(symRepo, 'test'), { recursive: true });
+  writeFileSync(join(symRepo, 'test', 'ok.test.mjs'), 'export const x = 1;\n');
+  // Commit a dangling symlink in base at test/dangling.test.mjs -> outsideDir/escaped.txt
+  symlinkSync(join(outsideDir, 'escaped.txt'), join(symRepo, 'test', 'dangling.test.mjs'));
+  commitAll(symRepo, 'base with dangling symlink');
+  execFileSync('git', ['checkout', '-q', '-b', 'replace-symlink'], { cwd: symRepo });
+  rmSync(join(symRepo, 'test', 'dangling.test.mjs'));
+  writeFileSync(join(symRepo, 'test', 'dangling.test.mjs'), 'console.log("pwned");\n');
+  const symRes = runProve(
+    { cwd: symRepo, base: 'main', test: `${nodeBin} -e "process.exit(0)"`, expect: 'x', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(symRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(symRes.receipt));
+  assert.equal(symRes.receipt.reason, 'setup-error');
+  assert.equal(existsSync(join(outsideDir, 'escaped.txt')), false, 'dangling symlink destination MUST NEVER be written through');
 });

@@ -2,13 +2,13 @@
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { isTestOwnedPath } from '../file-owner.mjs';
 import { causeText } from '../shared/safe-read.mjs';
-import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8 } from './lint/diagnostics.mjs';
+import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBaseRef, scrubChildEnv } from './lint/diagnostics.mjs';
 import { lintRepoProject } from './lint/project-lint.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
-import { resolveDefaultBaseRef, runDiffSpotlight } from './lint/test-inventory.mjs';
+import { runDiffSpotlight } from './lint/test-inventory.mjs';
 import { detectHostCapabilities, loadVerifyConfig, matchCapabilities, matchVerifyPaths } from './verify-paths.mjs';
 
 export const OUTCOME_PROVED = 'Proved';
@@ -19,37 +19,29 @@ export const EXIT_FAILED = 1;
 export const EXIT_USAGE = 2;
 export const EXIT_NOT_PROVED = 3;
 
-const SCRUBBED_ENV_KEYS = [
-  'GH_TOKEN', 'GITHUB_TOKEN', 'GITHUB_PAT', 'GH_PAT', 'PDD_CLOUD_TOKEN', 'NPM_TOKEN',
-  'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
-  'CODEX_THREAD_ID', 'CLAUDECODE', 'HERDR_SESSION', 'PDD_AGENT_SESSION', 'PDD_AUTOPILOT_CONTEXT', 'NODE_TEST_CONTEXT',
-];
-const SETUP_FAILURE_RE = /(?:^|\n)\s*(?:#\s*)?(?:Error:\s*Cannot find module|Error \[ERR_MODULE_NOT_FOUND\]|ERR_MODULE_NOT_FOUND|Cannot find package|ModuleNotFoundError:|ImportError:|No module named|SyntaxError:|FileNotFoundError:|Error:\s*ENOENT|ENOENT:|ERROR collecting|command not found|not recognized as an internal|\[build failed\]|cannot find package|no Go files|error\[E\d+\]:|failed to compile)/i;
+const SETUP_FAILURE_RE = /(?:(?:^|\n)\s*(?:#\s*)?(?:Error:\s*Cannot find module|Error \[ERR_MODULE_NOT_FOUND\]|ERR_MODULE_NOT_FOUND|Cannot find package|ModuleNotFoundError:|ImportError:|No module named|SyntaxError:|FileNotFoundError:|Error:\s*ENOENT|ENOENT:|ERROR collecting|command not found|not recognized as an internal|cannot find package|no Go files|error\[E\d+\]:|failed to compile)|\[build failed\])/i;
 const COLOCATED_TEST_RE = /(?:\.(?:test|spec)\.(?:[cm]?[jt]s|[jt]sx)|(?:^|\/)test_[^/]+\.py$|_test\.(?:py|go|rs)$|^(?:test|tests|__tests__|fixtures)\/)/i;
 
 const gitExec = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 const resolveGitRoot = cwd => { const r = gitExec(cwd, ['rev-parse', '--show-toplevel']); return r.status === 0 && r.stdout.trim() ? realpathSync(r.stdout.trim()) : realpathSync(cwd); };
 const resolveCommit = (root, ref) => { const r = gitExec(root, ['rev-parse', '--verify', `${ref}^{commit}`]); return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null; };
 
-function scrubEnv(env = process.env) {
-  const clean = { ...env };
-  for (const key of SCRUBBED_ENV_KEYS) delete clean[key];
-  return clean;
-}
-
 function execShellCommand(command, { cwd, env, timeoutMs }, ports = {}) {
   const runner = ports.spawnSync ?? spawnSync;
   const started = Date.now();
-  const proc = runner(command, { cwd, env: scrubEnv(env), shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = runner(command, { cwd, env: scrubChildEnv(env), shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   const stdout = String(proc.stdout ?? ''), stderr = String(proc.stderr ?? '');
   const timedOut = proc.error?.code === 'ETIMEDOUT';
   const exitCode = typeof proc.status === 'number' ? proc.status : null;
+  const signal = proc.signal ?? '';
   const setupMatch = exitCode !== 0 ? SETUP_FAILURE_RE.exec(`${stderr}\n${stdout}`) : null;
   const setupError = proc.error && !timedOut
     ? causeText(proc.error.message)
-    : ([126, 127].includes(exitCode) ? `Command exited ${exitCode}` : (setupMatch ? causeText(setupMatch[0]) : ''));
+    : (signal && !timedOut
+        ? `Process terminated by signal ${signal}`
+        : ([126, 127].includes(exitCode) ? `Command exited ${exitCode}` : (setupMatch ? causeText(setupMatch[0]) : '')));
   return {
-    command, ok: exitCode === 0 && !proc.error && !proc.signal, exitCode, signal: proc.signal ?? '', timedOut,
+    command, ok: exitCode === 0 && !proc.error && !signal, exitCode, signal, timedOut,
     durationMs: Math.max(0, Date.now() - started), stdout, stderr, setupError,
     summary: causeText(stderr || stdout || setupError || (timedOut ? 'command timed out' : '')),
   };
@@ -86,30 +78,72 @@ function listChangedFiles(root, ref) {
   return [...seen].filter(canonicalRepoPath).sort();
 }
 
+function lstatSafe(fullPath) {
+  try { return lstatSync(fullPath); }
+  catch (err) { if (err?.code === 'ENOENT') return null; throw err; }
+}
+
+function walkCheckedSegments(baseReal, relPath, { createDirs = false } = {}) {
+  const parts = relPath.split('/');
+  let cur = baseReal;
+  for (let i = 0; i < parts.length - 1; i++) {
+    cur = join(cur, parts[i]);
+    let st = lstatSafe(cur);
+    if (!st) {
+      if (!createDirs) return { fullPath: join(baseReal, relPath), leafStat: null };
+      mkdirSync(cur);
+      st = lstatSync(cur);
+    }
+    if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`Refused symlink or non-directory path segment: ${parts.slice(0, i + 1).join('/')}`);
+  }
+  const fullPath = join(cur, parts.at(-1));
+  const leafStat = lstatSafe(fullPath);
+  if (leafStat?.isSymbolicLink()) throw new Error(`Refused symlinked overlay path: ${relPath}`);
+  return { fullPath, leafStat };
+}
+
 function copyWorkingTreeOverlay(root, worktree, relPaths, { deleteMissing = false } = {}) {
-  const copied = [];
+  const rootReal = realpathSync(root), wtReal = realpathSync(worktree);
+  const mirrored = [];
   for (const rel of relPaths) {
     if (!canonicalRepoPath(rel)) throw new Error(`Unsafe overlay path: ${rel}`);
-    const src = join(root, rel);
-    const dst = join(worktree, rel);
-    if (!existsSync(src)) {
-      if (deleteMissing && existsSync(dst)) rmSync(dst, { force: true });
+    const srcInfo = walkCheckedSegments(rootReal, rel);
+    if (!srcInfo.leafStat) {
+      if (deleteMissing) {
+        const dstInfo = walkCheckedSegments(wtReal, rel);
+        if (dstInfo.leafStat) {
+          if (!dstInfo.leafStat.isFile()) throw new Error(`Refused non-regular deletion target in worktree: ${rel}`);
+          rmSync(dstInfo.fullPath, { force: true });
+          mirrored.push(rel);
+        }
+      }
       continue;
     }
-    const st = lstatSync(src);
-    if (st.isSymbolicLink() || !st.isFile()) throw new Error(`Refused non-regular or symlinked overlay file: ${rel}`);
-    const fd = openSync(src, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    if (!srcInfo.leafStat.isFile()) throw new Error(`Refused non-regular overlay file: ${rel}`);
+    const rfd = openSync(srcInfo.fullPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     let bytes;
     try {
-      if (!fstatSync(fd).isFile()) throw new Error(`Overlay path changed to non-regular file: ${rel}`);
-      bytes = readFileSync(fd);
-    } finally { closeSync(fd); }
-    mkdirSync(dirname(dst), { recursive: true });
-    if (existsSync(dst) && lstatSync(dst).isSymbolicLink()) throw new Error(`Refused symlink target in worktree: ${rel}`);
-    writeFileSync(dst, bytes, { mode: st.mode & 0o777 });
-    copied.push(rel);
+      if (!fstatSync(rfd).isFile()) throw new Error(`Overlay path changed to non-regular file: ${rel}`);
+      bytes = readFileSync(rfd);
+    } finally { closeSync(rfd); }
+    const dstInfo = walkCheckedSegments(wtReal, rel, { createDirs: true });
+    if (dstInfo.leafStat && !dstInfo.leafStat.isFile()) throw new Error(`Refused non-regular destination in worktree: ${rel}`);
+    const mode = srcInfo.leafStat.mode & 0o777;
+    const wfd = openSync(dstInfo.fullPath, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0), mode);
+    try { writeFileSync(wfd, bytes); } finally { closeSync(wfd); }
+    mirrored.push(rel);
   }
-  return copied;
+  return mirrored;
+}
+
+function rawVerifyFingerprint(rawText) {
+  if (typeof rawText !== 'string') return null;
+  try {
+    const parsed = JSON.parse(rawText);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'verify')
+      ? JSON.stringify(parsed.verify)
+      : null;
+  } catch { return '__INVALID__'; }
 }
 
 function runBugContrastProve({ root, base, test, expect, overlay, setup, timeoutMinutes, json, env }, ports = {}) {
@@ -133,11 +167,11 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
         ? mbRes.stdout.trim()
         : (resolveCommit(root, 'HEAD~1') ?? resolvedBaseCommit));
 
-  if (!baseSha) {
+  if (!baseSha || !headSha) {
     const receipt = {
       schema_version: 'pdd.prove.v1', mode: 'bug-contrast', outcome: OUTCOME_NOT_PROVED, reason: 'base-unavailable',
-      exit_code: EXIT_NOT_PROVED, baseRef: requestedBase, baseSha: null, headSha, overlayPaths: [], test, expect,
-      base: null, head: null, notProvedReasons: [`Offline base ref "${requestedBase}" could not be resolved locally.`],
+      exit_code: EXIT_NOT_PROVED, baseRef: requestedBase, baseSha, headSha, overlayPaths: [], test, expect,
+      base: null, head: null, notProvedReasons: [`Offline base ref "${requestedBase}" or HEAD could not be resolved locally.`],
     };
     if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
     else stderr.write(`Not proved: offline base ref "${requestedBase}" not found locally.\n`);
@@ -155,7 +189,7 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
   const timeoutMs = timeoutMinutes * 60_000;
   const worktreeParent = mkdtempSync(join(tmpdir(), 'pdd-prove-'));
   const baseWorktree = join(worktreeParent, 'base');
-  const headWorktree = setup ? join(worktreeParent, 'head') : null;
+  const headWorktree = join(worktreeParent, 'head');
   const createdWorktrees = [];
   let basePhase = null, headPhase = null, setupError = '', copiedPaths = [];
 
@@ -163,23 +197,24 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
     const wtBase = gitExec(root, ['worktree', 'add', '--detach', baseWorktree, baseSha]);
     if (wtBase.status !== 0) throw new Error(wtBase.stderr || wtBase.stdout || 'git worktree add base failed');
     createdWorktrees.push(baseWorktree);
-    copiedPaths = copyWorkingTreeOverlay(root, baseWorktree, overlayPaths);
+    copiedPaths = copyWorkingTreeOverlay(root, baseWorktree, overlayPaths, { deleteMissing: true });
+
+    // Always isolate head inside its own disposable worktree so `pdd prove` NEVER mutates the caller's checkout.
+    const wtHead = gitExec(root, ['worktree', 'add', '--detach', headWorktree, headSha]);
+    if (wtHead.status !== 0) throw new Error(wtHead.stderr || wtHead.stdout || 'git worktree add head failed');
+    createdWorktrees.push(headWorktree);
+    copyWorkingTreeOverlay(root, headWorktree, listChangedFiles(root, headSha), { deleteMissing: true });
 
     if (setup) {
       const baseSetup = execShellCommand(setup, { cwd: baseWorktree, env, timeoutMs }, ports);
       if (!baseSetup.ok) throw new Error(`base --setup failed (exit ${baseSetup.exitCode}): ${baseSetup.summary}`);
-      // Isolate head --setup inside its own disposable worktree so the caller's checkout is never mutated.
-      const wtHead = gitExec(root, ['worktree', 'add', '--detach', headWorktree, headSha]);
-      if (wtHead.status !== 0) throw new Error(wtHead.stderr || wtHead.stdout || 'git worktree add head failed');
-      createdWorktrees.push(headWorktree);
-      copyWorkingTreeOverlay(root, headWorktree, listChangedFiles(root, headSha), { deleteMissing: true });
       const headSetup = execShellCommand(setup, { cwd: headWorktree, env, timeoutMs }, ports);
       if (!headSetup.ok) throw new Error(`head --setup failed (exit ${headSetup.exitCode}): ${headSetup.summary}`);
     }
 
     basePhase = execShellCommand(test, { cwd: baseWorktree, env, timeoutMs }, ports);
-    basePhase.expectedFound = !basePhase.setupError && (basePhase.stdout.includes(expect) || basePhase.stderr.includes(expect));
-    headPhase = execShellCommand(test, { cwd: headWorktree ?? root, env, timeoutMs }, ports);
+    basePhase.expectedFound = !basePhase.setupError && !basePhase.signal && (basePhase.stdout.includes(expect) || basePhase.stderr.includes(expect));
+    headPhase = execShellCommand(test, { cwd: headWorktree, env, timeoutMs }, ports);
   } catch (err) {
     setupError = causeText(err?.message || String(err));
   } finally {
@@ -189,9 +224,9 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
 
   let outcome, reason, exitCode;
   const notProvedReasons = [];
-  if (setupError || basePhase?.setupError || headPhase?.setupError) {
+  if (setupError || basePhase?.setupError || headPhase?.setupError || (!basePhase?.timedOut && basePhase?.signal) || (!headPhase?.timedOut && headPhase?.signal)) {
     outcome = OUTCOME_NOT_PROVED; reason = 'setup-error'; exitCode = EXIT_NOT_PROVED;
-    notProvedReasons.push(`Setup/dependency/compile failure prevented causal bug-contrast proof: ${setupError || basePhase?.setupError || headPhase?.setupError}`);
+    notProvedReasons.push(`Setup/dependency/compile failure prevented causal bug-contrast proof: ${setupError || basePhase?.setupError || headPhase?.setupError || basePhase?.signal || headPhase?.signal}`);
   } else if (basePhase?.timedOut || headPhase?.timedOut) {
     outcome = OUTCOME_FAILED; reason = basePhase?.timedOut ? 'base-timeout' : 'head-timeout'; exitCode = EXIT_FAILED;
   } else if (!headPhase?.ok) {
@@ -205,7 +240,7 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
     outcome = OUTCOME_PROVED; reason = 'proved'; exitCode = EXIT_PROVED;
   }
 
-  const summarize = p => p ? { exitCode: p.exitCode, ok: p.ok, timedOut: p.timedOut, durationMs: p.durationMs, setupError: p.setupError, expectedFound: Boolean(p.expectedFound), summary: p.summary } : null;
+  const summarize = p => p ? { exitCode: p.exitCode, signal: p.signal || null, ok: p.ok, timedOut: p.timedOut, durationMs: p.durationMs, setupError: p.setupError, expectedFound: Boolean(p.expectedFound), summary: p.summary } : null;
   const receipt = {
     schema_version: 'pdd.prove.v1', mode: 'bug-contrast', outcome, reason, exit_code: exitCode,
     baseRef: requestedBase, baseSha, headSha, overlayPaths: copiedPaths, test, expect,
@@ -238,27 +273,44 @@ export function runProve(
 
   const lint = lintRepoProject({ root });
   const diff = runDiffSpotlight({ cwd: root, baseRef: baseSha || baseRef || undefined });
-  const touchedFiles = diff.touchedFiles;
-
-  const baseVerify = baseSha ? loadVerifyConfig(root, { gitRef: baseSha }) : loadVerifyConfig(null);
-  const worktreeVerify = loadVerifyConfig(root);
-  const usingBaseConfig = baseVerify.configured;
-  const verifyConfig = usingBaseConfig ? baseVerify : worktreeVerify;
   const notProvedReasons = [];
-  if (!usingBaseConfig && worktreeVerify.configured && baseSha && headSha && baseSha !== headSha) {
-    notProvedReasons.push('verify.paths in pdd.json is introduced in this branch and not yet trusted on merge base; human review required before auto-merge.');
+
+  if (!baseSha || !diff.baseAvailable) {
+    notProvedReasons.push(diff.baseError || `Base ref "${baseRef || 'default'}" could not be resolved locally; refusing to assume an empty diff.`);
+    const receipt = {
+      schema_version: 'pdd.prove.v1', mode: 'verify', outcome: OUTCOME_NOT_PROVED, exit_code: EXIT_NOT_PROVED,
+      baseRef: baseRef ?? null, baseSha: null, headSha, configSource: null, touchedFiles: [], changedSurfaces: [],
+      lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
+      diff: { ok: false, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
+      test: null, paths: [], notProvedReasons,
+    };
+    if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
+    else stdout.write(`Not proved:\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
+    return { exitCode: EXIT_NOT_PROVED, outcome: OUTCOME_NOT_PROVED, receipt };
   }
 
-  const testCommand = verifyConfig.test || detectRepoTestCommand(root);
+  // Always trust verify config strictly from git merge base (`baseSha:pdd.json`), NEVER from untrusted working-tree edits.
+  const baseVerify = loadVerifyConfig(root, { gitRef: baseSha });
+  const worktreeVerify = loadVerifyConfig(root);
+  const baseRaw = gitExec(root, ['show', `${baseSha}:pdd.json`]);
+  const baseFp = baseRaw.status === 0 ? rawVerifyFingerprint(baseRaw.stdout) : null;
+  const worktreeFp = rawVerifyFingerprint(readSafeUtf8(root, 'pdd.json'));
+  if (!baseVerify.configured && worktreeVerify.configured) {
+    notProvedReasons.push('verify config in pdd.json exists only in the working tree/branch and is not yet trusted on merge base; human review required.');
+  } else if (baseVerify.configured && worktreeFp !== baseFp) {
+    notProvedReasons.push('Working-tree/branch edits to "verify" in pdd.json are not yet trusted on merge base; executed merge-base recipes only.');
+  }
+
+  const testCommand = baseVerify.test || detectRepoTestCommand(root);
   let testResult = null;
   if (testCommand) {
     const r = execShellCommand(testCommand, { cwd: root, env, timeoutMs }, ports);
     testResult = { command: testCommand, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs, setupError: r.setupError, summary: r.summary };
   } else {
-    notProvedReasons.push('No verify.test command configured in pdd.json and no standard test runner detected.');
+    notProvedReasons.push('No verify.test command configured in merge-base pdd.json and no standard test runner detected.');
   }
 
-  const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(verifyConfig, touchedFiles);
+  const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, diff.touchedFiles);
   const capState = detectHostCapabilities(matched.flatMap(r => r.needs), { env, capabilities, probe: ports.probeCapability, isTTY: ports.isTTY });
   const pathResults = [];
   for (const recipe of matched) {
@@ -274,9 +326,9 @@ export function runProve(
   if (unmappedSurfaces.length > 0) notProvedReasons.push(`No verify.paths recipe covers changed production surface(s): ${unmappedSurfaces.join(', ')}.`);
 
   const failedErrors = [
-    ...verifyConfig.errors.map(e => formatTeachingDetail({ invariant: e, fix: 'Fix the invalid "verify" block in pdd.json', rerun: 'pdd prove' })),
+    ...baseVerify.errors.map(e => formatTeachingDetail({ invariant: e, fix: 'Fix the invalid "verify" block in pdd.json', rerun: 'pdd prove' })),
     ...lint.errors,
-    ...diff.errors.map(e => e.formatted),
+    ...diff.errors.filter(e => e.code !== 'diff-base-unavailable').map(e => e.formatted),
     ...(testResult && !testResult.ok ? [`Test suite failed (\`${testResult.command}\`, exit ${testResult.exitCode}): ${testResult.summary}`] : []),
     ...pathResults.filter(p => p.status === 'failed').map(p => `Verify path "${p.id}" failed (\`${p.run}\`, exit ${p.exitCode}): ${p.summary}`),
   ];
@@ -285,7 +337,7 @@ export function runProve(
   const exitCode = outcome === OUTCOME_FAILED ? EXIT_FAILED : (outcome === OUTCOME_NOT_PROVED ? EXIT_NOT_PROVED : EXIT_PROVED);
   const receipt = {
     schema_version: 'pdd.prove.v1', mode: 'verify', outcome, exit_code: exitCode, baseRef, baseSha, headSha,
-    configSource: verifyConfig.source, touchedFiles, changedSurfaces,
+    configSource: baseVerify.source, touchedFiles: diff.touchedFiles, changedSurfaces,
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
     test: testResult, paths: pathResults, notProvedReasons,
