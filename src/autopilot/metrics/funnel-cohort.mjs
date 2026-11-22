@@ -21,15 +21,18 @@ const CAPACITY_SIGNALS = new Set([
   'missing-capacity', 'missing_capacity', 'missing-capability', 'missing_capability',
   'capacity-full', 'slot-cap', 'no-worker-slot', 'quota-exhausted', 'rate-limited', 'rate-limit',
 ]);
-const PASS_GATES = new Set(['pass', 'passed', 'green', 'proved', 'bounded']);
-const FAIL_GATES = new Set(['fail', 'failed', 'red', 'broken', 'hung']);
+const PASS_GATES = new Set(['pass', 'passed', 'success', 'green', 'proved', 'bounded']);
+const FAIL_GATES = new Set(['fail', 'failed', 'failure', 'error', 'timed_out', 'timeout', 'cancelled', 'startup_failure', 'action_required', 'red', 'broken', 'hung']);
 const RUNNING_GATES = new Set(['running', 'pending', 'in_progress', 'queued']);
+const ACTIVE_STATUSES = new Set(['running', 'open', 'draft', 'in-progress', 'in_progress', 'pending']);
+const TERMINAL_DROP_STATUSES = new Set(['ended', 'failed', 'stopped', 'released', 'abandoned', 'closed']);
 
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const asText = v => (typeof v === 'string' ? v : '');
 const posInt = v => Number.isSafeInteger(v) && v > 0;
 const lower = v => asText(v).trim().toLowerCase();
 const parseMs = (v, fb = null) => (typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && v.trim() && Number.isFinite(Date.parse(v)) ? Date.parse(v) : fb));
+const partsAsUtc = p => Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0);
 
 export const roundPct = (num, den) => (den === null || den === undefined || den <= 0 ? null : Math.round((num / den) * 1000) / 10);
 export const fmtPct = pct => (pct === null ? 'n/a' : `${pct.toFixed(1)}%`);
@@ -54,36 +57,49 @@ export function localDateParts(ms, timezone) {
   };
 }
 
-/** Resolve exact UTC ms for a local wall-clock anchor (`year, month, day, hour`) in `timezone` (DST-safe). */
+/**
+ * Resolve exact UTC ms for a local wall-clock anchor (`year, month, day, hour`) in `timezone` (DST-safe).
+ * If the local time falls inside a spring-forward DST gap, advances to the first valid instant after the gap.
+ */
 export function localAnchorUtcMs(year, month, day, hour = 0, timezone = 'UTC') {
   const tz = validateTimezone(timezone), targetUtc = Date.UTC(year, month - 1, day, hour, 0, 0, 0);
   let guess = targetUtc;
   for (let i = 0; i < 6; i++) {
-    const p = localDateParts(guess, tz);
-    const diff = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0) - targetUtc;
-    if (diff === 0) break;
+    const diff = partsAsUtc(localDateParts(guess, tz)) - targetUtc;
+    if (diff === 0) return guess;
     guess -= diff;
   }
+  // If iterative convergence landed before a DST spring-forward gap, binary-search for the first valid instant >= target.
+  if (partsAsUtc(localDateParts(guess, tz)) < targetUtc) {
+    let lo = guess, hi = guess + 3 * HOUR_MS;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (partsAsUtc(localDateParts(mid, tz)) >= targetUtc) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo;
+  }
   return guess;
+}
+
+function formatAnchorHour(hour) {
+  const h = ((Number(hour) % 24) + 24) % 24;
+  return h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h - 12}pm`;
 }
 
 function parseDateArg(date) {
   if (isObj(date) && posInt(date.year) && posInt(date.month) && posInt(date.day)) {
     return { text: date.text ?? `${String(date.year).padStart(4, '0')}-${String(date.month).padStart(2, '0')}-${String(date.day).padStart(2, '0')}`, year: date.year, month: date.month, day: date.day };
   }
-  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date.trim())) {
-    throw Object.assign(new Error(`Invalid date "${date ?? ''}". Expected YYYY-MM-DD.`), { code: 'invalid-date' });
-  }
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date.trim())) throw Object.assign(new Error(`Invalid date "${date ?? ''}". Expected YYYY-MM-DD.`), { code: 'invalid-date' });
   const text = date.trim(), [year, month, day] = text.split('-').map(Number), probe = new Date(Date.UTC(year, month - 1, day));
-  if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) {
-    throw Object.assign(new Error(`Invalid calendar date "${text}". Expected YYYY-MM-DD.`), { code: 'invalid-date' });
-  }
+  if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) throw Object.assign(new Error(`Invalid calendar date "${text}". Expected YYYY-MM-DD.`), { code: 'invalid-date' });
   return { text, year, month, day };
 }
 
-/** Compute DST-safe 09:00-09:00 standup window boundaries (23h spring-forward, 25h fall-back, 24h standard). */
+/** Compute DST-safe standup window boundaries (23h spring-forward, 25h fall-back, 24h standard). */
 export function resolveStandupWindow({ now = Date.now(), date = null, timezone = DEFAULT_STANDUP_TIMEZONE, anchorHour = DEFAULT_STANDUP_HOUR } = {}) {
-  const tz = validateTimezone(timezone);
+  const tz = validateTimezone(timezone), hStr = formatAnchorHour(anchorHour), span = `${hStr}-${hStr}`;
   const finish = (label, startMs, endMs, endExclusiveMs) => ({
     key: 'standup', label, timezone: tz, anchorHour, startMs, endMs, endExclusiveMs,
     startAt: new Date(startMs).toISOString(), endAt: new Date(endMs).toISOString(),
@@ -93,7 +109,7 @@ export function resolveStandupWindow({ now = Date.now(), date = null, timezone =
     const d = parseDateArg(date), prev = new Date(Date.UTC(d.year, d.month - 1, d.day - 1));
     const startMs = localAnchorUtcMs(prev.getUTCFullYear(), prev.getUTCMonth() + 1, prev.getUTCDate(), anchorHour, tz);
     const endExclusiveMs = localAnchorUtcMs(d.year, d.month, d.day, anchorHour, tz);
-    return finish(`Standup ${d.text} (9am-9am)`, startMs, endExclusiveMs - 1, endExclusiveMs);
+    return finish(`Standup ${d.text} (${span})`, startMs, endExclusiveMs - 1, endExclusiveMs);
   }
   const nowMs = parseMs(now, null);
   if (nowMs === null) throw Object.assign(new Error(`Invalid timestamp "${now ?? ''}".`), { code: 'invalid-now' });
@@ -101,16 +117,14 @@ export function resolveStandupWindow({ now = Date.now(), date = null, timezone =
   const todayAnchor = localAnchorUtcMs(local.year, local.month, local.day, anchorHour, tz);
   const startMs = localAnchorUtcMs(prev.getUTCFullYear(), prev.getUTCMonth() + 1, prev.getUTCDate(), anchorHour, tz);
   const endMs = nowMs >= todayAnchor ? todayAnchor - 1 : nowMs;
-  const label = tz === DEFAULT_STANDUP_TIMEZONE ? 'Standup (9am-9am PT)' : 'Standup (9am-9am)';
-  return finish(label, startMs, endMs, endMs + 1);
+  return finish(tz === DEFAULT_STANDUP_TIMEZONE ? `Standup (${span} PT)` : `Standup (${span})`, startMs, endMs, endMs + 1);
 }
 
 /** Shared summary builder for `metrics-model.mjs` overview/stages funnel line. */
 export function buildFunnelSummary({ pool, poolDisplay, taken, pr, merged, regressions, regressionsComplete = true }) {
   const takenPct = pool !== null ? roundPct(taken, pool) : null, prPct = roundPct(pr, taken);
   const mergedOfPrPct = roundPct(merged, pr), mergedOfTakenPct = roundPct(merged, taken), rawRegPct = roundPct(regressions, merged);
-  const incompleteZero = !regressionsComplete && merged > 0 && regressions === 0;
-  const incompletePartial = !regressionsComplete && merged > 0 && regressions > 0;
+  const incompleteZero = !regressionsComplete && merged > 0 && regressions === 0, incompletePartial = !regressionsComplete && merged > 0 && regressions > 0;
   const regressionsPct = incompleteZero ? null : rawRegPct;
   const regPart = incompleteZero ? '? Regressions (scan incomplete)'
     : incompletePartial ? `${regressions}+ Regressions (${rawRegPct.toFixed(1)}%+)` : `${regressions} Regressions (${fmtPct(regressionsPct)})`;
@@ -125,49 +139,69 @@ const normalizeGateBucket = raw => {
 
 function canonicalRecord(raw, idx) {
   const repo = asText(raw.repo).trim() || 'default/repo', issue = posInt(raw.issue) ? raw.issue : null;
-  const attempt = asText(raw.attemptId ?? raw.attempt).trim();
-  const id = asText(raw.id).trim() || (issue ? `${repo.toLowerCase()}#${issue}${attempt ? `@${attempt}` : ''}` : `item-${idx + 1}`);
-  const status = lower(raw.status ?? raw.outcome), hint = lower(raw.disposition ?? raw.holdReason ?? raw.reasonCode ?? raw.skipReason);
+  const id = issue ? `${repo.toLowerCase()}#${issue}` : (asText(raw.id).trim().replace(/@[^@]+$/, '') || `item-${idx + 1}`);
+  const status = lower(raw.status ?? raw.outcome), prState = lower(raw.prState ?? raw.pr_state);
+  const hint = lower(raw.disposition ?? raw.holdReason ?? raw.reasonCode ?? raw.skipReason);
   const stageIdx = STAGE_RANK[lower(raw.stage)] ?? -1;
 
   const humanMerged = raw.humanMerged === true || lower(raw.mergeSource ?? raw.mergedBy) === 'human' || status === 'human-merged';
-  const merged = raw.merged === true || raw.autoMerged === true || humanMerged || status === 'merged' || status === 'auto-merged' || stageIdx >= 4;
+  const merged = raw.merged === true || raw.autoMerged === true || humanMerged || status === 'merged' || status === 'auto-merged' || prState === 'merged' || stageIdx >= 4;
   const autoMerged = merged && !humanMerged;
   const wouldMerge = !merged && (raw.wouldMerge === true || status === 'would-merge');
   const realHold = !merged && !wouldMerge && (raw.realHold === true || REAL_HOLD_SIGNALS.has(status) || REAL_HOLD_SIGNALS.has(hint));
   const missingCapacity = !merged && !wouldMerge && !realHold && (raw.missingCapacity === true || CAPACITY_SIGNALS.has(status) || CAPACITY_SIGNALS.has(hint));
   const pr = merged || wouldMerge || raw.prCreated === true || posInt(raw.pr) || stageIdx >= 3;
-  const claimed = pr || raw.claimed === true || stageIdx >= 2 || ['running', 'ended', 'failed', 'stopped', 'released', 'abandoned'].includes(status);
+  const claimed = pr || raw.claimed === true || stageIdx >= 2 || ACTIVE_STATUSES.has(status) || TERMINAL_DROP_STATUSES.has(status);
   const eligible = claimed || missingCapacity || raw.eligible === true || (!realHold && raw.eligible !== false);
-  const regressed = merged && (raw.regressed === true || raw.reopened === true || raw.reverted === true || (Array.isArray(raw.regressionIssues) && raw.regressionIssues.length > 0));
+  const regressed = raw.regressed === true || raw.reopened === true || raw.reverted === true || (Array.isArray(raw.regressionIssues) && raw.regressionIssues.length > 0);
+  const isInProgress = !merged && !wouldMerge && !realHold && !missingCapacity && (ACTIVE_STATUSES.has(status) || prState === 'open' || (pr && !TERMINAL_DROP_STATUSES.has(status) && prState !== 'closed'));
   const disposition = autoMerged ? 'autoMerged' : humanMerged ? 'humanMerged' : wouldMerge ? 'wouldMerge'
-    : realHold ? 'realHold' : missingCapacity ? 'missingCapacity' : status === 'running' ? 'inProgress' : 'dropped';
-  const reachedStage = merged ? 'merged' : pr ? 'pr' : claimed ? 'claimed' : eligible ? 'eligible' : 'considered';
+    : realHold ? 'realHold' : missingCapacity ? 'missingCapacity' : isInProgress ? 'inProgress' : 'dropped';
   const atMs = parseMs(raw.mergedAt ?? raw.at ?? raw.updatedAt ?? raw.startedAt, 0);
   const rank = merged ? 6 : wouldMerge ? 5 : pr ? 4 : claimed ? 3 : eligible ? 2 : 1;
   return {
-    id, repo, issue, prNumber: posInt(raw.pr) ? raw.pr : null, atMs, rank,
-    stages: { considered: true, eligible, claimed, pr, merged }, reachedStage, disposition,
-    autoMerged, humanMerged, wouldMerge, realHold, missingCapacity, regressed, gates: isObj(raw.gates) ? raw.gates : {},
+    id, repo, issue, prNumber: posInt(raw.pr) ? raw.pr : null, atMs, rank, attempts: 1,
+    stages: { considered: true, eligible, claimed, pr, merged }, reachedStage: merged ? 'merged' : pr ? 'pr' : claimed ? 'claimed' : eligible ? 'eligible' : 'considered',
+    disposition, autoMerged, humanMerged, wouldMerge, realHold, missingCapacity, regressed, gates: isObj(raw.gates) ? { ...raw.gates } : {},
   };
 }
 
-/**
- * Compute canonical `considered -> eligible -> claimed -> pr -> merged` stage funnel with honest `%`
- * separating autoMerged, humanMerged, wouldMerge, realHold, missingCapacity, regressed, and never mixing `not-run` into pass counts.
- */
+function mergeRecords(prev, rec, gates) {
+  const newerWins = rec.rank > prev.rank || (rec.rank === prev.rank && rec.atMs >= prev.atMs);
+  const primary = newerWins ? rec : prev, secondary = newerWins ? prev : rec;
+  const merged = prev.stages.merged || rec.stages.merged, humanMerged = merged && (prev.humanMerged || rec.humanMerged), autoMerged = merged && !humanMerged;
+  const wouldMerge = !merged && (prev.wouldMerge || rec.wouldMerge), pr = merged || wouldMerge || prev.stages.pr || rec.stages.pr;
+  const claimed = pr || prev.stages.claimed || rec.stages.claimed, eligible = claimed || prev.stages.eligible || rec.stages.eligible;
+  const realHold = !merged && !wouldMerge && !claimed && (primary.realHold || (!eligible && secondary.realHold));
+  const missingCapacity = !merged && !wouldMerge && !claimed && !realHold && (primary.missingCapacity || secondary.missingCapacity);
+  const disposition = autoMerged ? 'autoMerged' : humanMerged ? 'humanMerged' : wouldMerge ? 'wouldMerge'
+    : realHold ? 'realHold' : missingCapacity ? 'missingCapacity' : primary.disposition;
+  const mergedGates = {};
+  for (const g of new Set([...gates, ...Object.keys(prev.gates), ...Object.keys(rec.gates)])) {
+    const pB = normalizeGateBucket(prev.gates[g]), rB = normalizeGateBucket(rec.gates[g]);
+    const pick = rec.atMs >= prev.atMs ? [rec.gates[g], rB, prev.gates[g], pB] : [prev.gates[g], pB, rec.gates[g], rB];
+    mergedGates[g] = (pick[1] === 'pass' || pick[1] === 'fail') ? pick[0] : (pick[3] === 'pass' || pick[3] === 'fail') ? pick[2] : (pick[1] === 'running' ? pick[0] : pick[2]);
+  }
+  return {
+    ...primary, prNumber: primary.prNumber ?? secondary.prNumber, atMs: Math.max(prev.atMs, rec.atMs), rank: Math.max(prev.rank, rec.rank),
+    attempts: prev.attempts + 1, stages: { considered: true, eligible, claimed, pr, merged },
+    reachedStage: merged ? 'merged' : pr ? 'pr' : claimed ? 'claimed' : eligible ? 'eligible' : 'considered',
+    disposition, autoMerged, humanMerged, wouldMerge, realHold, missingCapacity, regressed: merged && (prev.regressed || rec.regressed), gates: mergedGates,
+  };
+}
+
+/** Compute canonical `considered -> eligible -> claimed -> pr -> merged` stage funnel (unique issues, retries counted in `attempts`). */
 export function computeStageFunnel(records = [], { gates = ['runtime', 'vectors', 'formal', 'suite', 'review', 'ci'] } = {}) {
   const byId = new Map();
+  let totalAttempts = 0;
   for (let i = 0; i < (Array.isArray(records) ? records.length : 0); i++) {
     if (!isObj(records[i])) continue;
+    totalAttempts += 1;
     const rec = canonicalRecord(records[i], i), prev = byId.get(rec.id);
-    if (!prev || rec.rank > prev.rank || (rec.rank === prev.rank && rec.atMs >= prev.atMs)) byId.set(rec.id, rec);
+    byId.set(rec.id, prev ? mergeRecords(prev, rec, gates) : { ...rec, regressed: rec.stages.merged && rec.regressed });
   }
   const items = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
-  const counts = {
-    considered: items.length, eligible: 0, claimed: 0, pr: 0, merged: 0,
-    autoMerged: 0, humanMerged: 0, wouldMerge: 0, realHold: 0, missingCapacity: 0, regressed: 0, inProgress: 0, dropped: 0,
-  };
+  const counts = { considered: items.length, attempts: totalAttempts, eligible: 0, claimed: 0, pr: 0, merged: 0, autoMerged: 0, humanMerged: 0, wouldMerge: 0, realHold: 0, missingCapacity: 0, regressed: 0, inProgress: 0, dropped: 0 };
   const gateStats = Object.fromEntries(gates.map(g => [g, { passed: 0, failed: 0, running: 0, notRun: 0, applicable: 0, passPct: null }]));
 
   for (const item of items) {
@@ -188,17 +222,15 @@ export function computeStageFunnel(records = [], { gates = ['runtime', 'vectors'
   }
   for (const g of gates) gateStats[g].passPct = roundPct(gateStats[g].passed, gateStats[g].applicable);
 
-  const rates = {
-    eligiblePct: roundPct(counts.eligible, counts.considered),
-    takenPct: roundPct(counts.claimed, counts.eligible),
-    takenOfConsideredPct: roundPct(counts.claimed, counts.considered),
-    prPct: roundPct(counts.pr, counts.claimed),
-    mergedPct: roundPct(counts.merged, counts.pr),
-    mergedOfClaimedPct: roundPct(counts.merged, counts.claimed),
-    autoMergedPct: roundPct(counts.autoMerged, counts.pr),
-    regressionPct: roundPct(counts.regressed, counts.merged),
+  return {
+    schema: FUNNEL_SCHEMA, stages: FUNNEL_STAGES, items, counts, gateStats,
+    rates: {
+      eligiblePct: roundPct(counts.eligible, counts.considered), takenPct: roundPct(counts.claimed, counts.eligible),
+      takenOfConsideredPct: roundPct(counts.claimed, counts.considered), prPct: roundPct(counts.pr, counts.claimed),
+      mergedPct: roundPct(counts.merged, counts.pr), mergedOfClaimedPct: roundPct(counts.merged, counts.claimed),
+      autoMergedPct: roundPct(counts.autoMerged, counts.pr), regressionPct: roundPct(counts.regressed, counts.merged),
+    },
   };
-  return { schema: FUNNEL_SCHEMA, stages: FUNNEL_STAGES, items, counts, rates, gateStats };
 }
 
 /** Extract `REOPENED_EVENT` timestamps from GitHub GraphQL issue timeline nodes. */
@@ -217,8 +249,7 @@ export function extractGraphQlReopenedEvents(graphqlData, { repo = null } = {}) 
   if (Array.isArray(graphqlData)) { collect(repo, graphqlData); return out; }
   const root = isObj(graphqlData?.data) ? graphqlData.data : graphqlData;
   if (!isObj(root)) return out;
-  for (const val of Object.values(root)) {
-    if (!isObj(val)) continue;
+  for (const val of Object.values(root)) if (isObj(val)) {
     const repoName = asText(val.nameWithOwner).trim() || repo;
     collect(repoName, val.issues?.nodes);
     collect(repoName, val.closedIssues?.nodes);
@@ -228,7 +259,8 @@ export function extractGraphQlReopenedEvents(graphqlData, { repo = null } = {}) 
 
 /**
  * Mature 7-day post-merge cohort tracker separating mature (`>= 7d`) vs immature (`< 7d`) merges.
- * Counts GraphQL `REOPENED_EVENT` timestamps, reverts, and linked follow-up defect issues strictly at/after merge.
+ * Strictly bounds regression signals to `[mergedAt, min(now, mergedAt + maturityMs)]`, requires repo match,
+ * and attributes each reopen/revert/follow-up ONLY to the single most recent prior merge.
  */
 export function evaluateMatureCohort(merges = [], {
   now = Date.now(), maturityDays = DEFAULT_COHORT_MATURITY_DAYS, reopenedEvents = [], reverts = [], followUpIssues = [],
@@ -238,54 +270,84 @@ export function evaluateMatureCohort(merges = [], {
   const days = typeof maturityDays === 'number' && Number.isFinite(maturityDays) && maturityDays > 0 ? maturityDays : DEFAULT_COHORT_MATURITY_DAYS;
   const maturityMs = days * DAY_MS;
 
-  const indexList = (list, keyFn) => {
-    const map = new Map();
-    for (const row of Array.isArray(list) ? list : []) {
-      if (!isObj(row)) continue;
-      for (const k of keyFn(row)) if (k) map.set(k, [...(map.get(k) ?? []), row]);
-    }
-    return map;
-  };
-  const rk = (r, type, num) => (posInt(num) ? `${lower(r)}#${type}:${num}` : null);
-  const reopensByKey = indexList(reopenedEvents, r => [rk(r.repo, 'issue', r.issue), rk(r.repo, 'pr', r.pr)]);
-  const revertsByKey = indexList(reverts, r => [rk(r.repo, 'pr', r.pr), rk(r.repo, 'issue', r.issue)]);
-  const followUpsByKey = indexList(followUpIssues, r => [rk(r.repo, 'pr', r.pr ?? r.targetPr), rk(r.repo, 'issue', r.targetIssue ?? r.linkedIssue)]);
-  const makeBucket = () => ({ total: 0, clean: 0, regressed: 0, reopened: 0, reverted: 0, followUpDefects: 0, items: [] });
-  const mature = makeBucket(), immature = makeBucket();
-
-  for (const m of Array.isArray(merges) ? merges : []) {
+  const validMerges = [];
+  for (let i = 0; i < (Array.isArray(merges) ? merges.length : 0); i++) {
+    const m = merges[i];
     if (!isObj(m)) continue;
     const mergedAtMs = parseMs(m.mergedAt, null);
     if (mergedAtMs === null || mergedAtMs > nowMs) continue;
-    const repo = asText(m.repo).trim() || 'default/repo', issue = posInt(m.issue) ? m.issue : null, pr = posInt(m.pr) ? m.pr : null;
-    const ageMs = nowMs - mergedAtMs, isMature = ageMs >= maturityMs;
-    const keys = [rk(repo, 'issue', issue), rk(repo, 'pr', pr), rk('', 'issue', issue), rk('', 'pr', pr)].filter(Boolean);
+    const repo = asText(m.repo).trim(), repoLower = repo.toLowerCase();
+    validMerges.push({
+      raw: m, idx: i, repo: repo || 'default/repo', repoLower, issue: posInt(m.issue) ? m.issue : null, pr: posInt(m.pr) ? m.pr : null,
+      mergedAtMs, windowEndMs: Math.min(nowMs, mergedAtMs + maturityMs),
+      extReopens: [], extReverts: [], extFollowUps: [], sawExternalReopenTs: false, sawExternalRevertTs: false,
+    });
+  }
+  const byChrono = [...validMerges].sort((a, b) => a.mergedAtMs - b.mergedAtMs || a.idx - b.idx);
+  const matchesRepo = (evRepoLower, merge) => (merge.repoLower ? Boolean(evRepoLower) && evRepoLower === merge.repoLower : !evRepoLower);
 
-    const reopenTs = [
+  const attributeEvent = (ev, ts, { prField, issueField, onSeen, onMatch }) => {
+    const evRepo = lower(ev.repo), prNum = posInt(ev[prField]) ? ev[prField] : null, issueNum = posInt(ev[issueField]) ? ev[issueField] : null;
+    if (!prNum && !issueNum) return;
+    let best = null;
+    for (const m of byChrono) {
+      if (!matchesRepo(evRepo, m) || !((prNum && m.pr === prNum) || (issueNum && m.issue === issueNum))) continue;
+      if (ts !== null && onSeen) onSeen(m);
+      if (ts !== null && ts > nowMs) continue;
+      if (ts === null || m.mergedAtMs <= ts) best = m;
+    }
+    if (best) onMatch(best, ts);
+  };
+
+  for (const ev of Array.isArray(reopenedEvents) ? reopenedEvents : []) if (isObj(ev)) {
+    const ts = parseMs(ev.reopenedAt ?? ev.createdAt ?? ev.at, null);
+    attributeEvent(ev, ts, { prField: 'pr', issueField: 'issue', onSeen: m => { m.sawExternalReopenTs = true; }, onMatch: (m, t) => { if (t !== null) m.extReopens.push(t); } });
+  }
+  for (const ev of Array.isArray(reverts) ? reverts : []) if (isObj(ev)) {
+    const ts = parseMs(ev.revertedAt ?? ev.createdAt ?? ev.at, null);
+    attributeEvent(ev, ts, { prField: 'pr', issueField: 'issue', onSeen: m => { m.sawExternalRevertTs = true; }, onMatch: (m, t) => m.extReverts.push(t) });
+  }
+  for (const ev of Array.isArray(followUpIssues) ? followUpIssues : []) if (isObj(ev)) {
+    const ts = parseMs(ev.createdAt ?? ev.at, null), fNum = posInt(ev.issue ?? ev.number) ? (ev.issue ?? ev.number) : null;
+    const targetPr = posInt(ev.pr ?? ev.targetPr) ? (ev.pr ?? ev.targetPr) : null, targetIssue = posInt(ev.targetIssue ?? ev.linkedIssue) ? (ev.targetIssue ?? ev.linkedIssue) : null;
+    attributeEvent({ repo: ev.repo, pr: targetPr, issue: targetIssue }, ts, { prField: 'pr', issueField: 'issue', onMatch: (m, t) => m.extFollowUps.push({ num: fNum, ts: t }) });
+  }
+
+  const makeBucket = () => ({ total: 0, clean: 0, regressed: 0, reopened: 0, reverted: 0, followUpDefects: 0, items: [] });
+  const mature = makeBucket(), immature = makeBucket();
+
+  for (const entry of validMerges) {
+    const { raw: m, repo, issue, pr, mergedAtMs, windowEndMs } = entry;
+    const ageMs = nowMs - mergedAtMs, isMature = ageMs >= maturityMs;
+    const inWindow = ts => ts !== null && ts >= mergedAtMs && ts <= windowEndMs;
+
+    const rawReopenTs = [
       ...(m.reopenedAt ? [parseMs(m.reopenedAt, null)] : []),
       ...(Array.isArray(m.reopenedEvents) ? m.reopenedEvents.map(e => parseMs(isObj(e) ? (e.createdAt ?? e.reopenedAt ?? e.at) : e, null)) : []),
-      ...keys.flatMap(k => (reopensByKey.get(k) ?? []).map(e => parseMs(e.reopenedAt ?? e.createdAt ?? e.at, null))),
-    ].filter(ts => ts !== null && ts >= mergedAtMs).sort((a, b) => a - b);
-    const reopened = reopenTs.length > 0 || (m.reopened === true && !m.reopenedAt);
-    const reopenedAt = reopenTs.length > 0 ? new Date(reopenTs[0]).toISOString() : null;
+      ...entry.extReopens,
+    ].filter(ts => ts !== null);
+    const validReopenTs = rawReopenTs.filter(inWindow).sort((a, b) => a - b);
+    const hasExplicitReopenTs = rawReopenTs.length > 0 || entry.sawExternalReopenTs;
+    const reopened = validReopenTs.length > 0 || (!hasExplicitReopenTs && m.reopened === true);
+    const reopenedAt = validReopenTs.length > 0 ? new Date(validReopenTs[0]).toISOString() : null;
 
-    const revertMatches = keys.flatMap(k => revertsByKey.get(k) ?? []);
-    const revertTs = [...(m.revertedAt ? [parseMs(m.revertedAt, null)] : []), ...revertMatches.map(e => parseMs(e.revertedAt ?? e.createdAt ?? e.at, null))]
-      .filter(ts => ts !== null && ts >= mergedAtMs).sort((a, b) => a - b);
-    const reverted = revertTs.length > 0 || m.reverted === true || revertMatches.some(e => parseMs(e.revertedAt ?? e.createdAt ?? e.at, null) === null);
-    const revertedAt = revertTs.length > 0 ? new Date(revertTs[0]).toISOString() : null;
+    const rawRevertTs = [...(m.revertedAt ? [parseMs(m.revertedAt, null)] : []), ...entry.extReverts.filter(t => t !== null)].filter(ts => ts !== null);
+    const validRevertTs = rawRevertTs.filter(inWindow).sort((a, b) => a - b);
+    const hasExplicitRevertTs = rawRevertTs.length > 0 || entry.sawExternalRevertTs;
+    const untimedExtRevert = entry.extReverts.some(t => t === null);
+    const reverted = validRevertTs.length > 0 || untimedExtRevert || (!hasExplicitRevertTs && m.reverted === true);
+    const revertedAt = validRevertTs.length > 0 ? new Date(validRevertTs[0]).toISOString() : null;
 
     const followSet = new Set(Array.isArray(m.followUpIssues ?? m.regressionIssues) ? (m.followUpIssues ?? m.regressionIssues).filter(posInt) : []);
-    const followTs = [];
-    for (const k of keys) for (const f of followUpsByKey.get(k) ?? []) {
-      const createdMs = parseMs(f.createdAt ?? f.at, null);
-      if (createdMs !== null && createdMs < mergedAtMs) continue;
-      if (posInt(f.issue ?? f.number)) followSet.add(f.issue ?? f.number);
-      if (createdMs !== null) followTs.push(createdMs);
+    const validFollowTs = [];
+    for (const f of entry.extFollowUps) {
+      if (f.ts !== null && !inWindow(f.ts)) continue;
+      if (posInt(f.num)) followSet.add(f.num);
+      if (f.ts !== null) validFollowTs.push(f.ts);
     }
     const linkedFollowUps = [...followSet].sort((a, b) => a - b);
     const regressed = reopened || reverted || linkedFollowUps.length > 0;
-    const allTs = [...reopenTs, ...revertTs, ...followTs].sort((a, b) => a - b);
+    const allTs = [...validReopenTs, ...validRevertTs, ...validFollowTs].sort((a, b) => a - b);
     const item = {
       id: asText(m.id).trim() || `${repo.toLowerCase()}#${pr ? `pr:${pr}` : `issue:${issue}`}`, repo, issue, pr,
       mergedAt: new Date(mergedAtMs).toISOString(), ageDays: Math.round((ageMs / DAY_MS) * 100) / 100, mature: isMature,

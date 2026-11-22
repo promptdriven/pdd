@@ -1,9 +1,12 @@
 import '../helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import {
   AUTO_DEPS_MARKER_PREFIX,
   acquireFileClaim,
@@ -16,6 +19,9 @@ import {
   sweepExpiredClaims,
 } from '../../src/autopilot/intake/auto-deps.mjs';
 import * as intakeFacade from '../../src/autopilot-intake.mjs';
+
+const execFileAsync = promisify(execFile);
+const AUTO_DEPS_URL = pathToFileURL(new URL('../../src/autopilot/intake/auto-deps.mjs', import.meta.url).pathname).href;
 
 const REPO = 'acme/platform';
 
@@ -61,13 +67,15 @@ function makeFakeGh({ openPages = [[]], issues = {}, blockedBy = {}, timelines =
         if (custom !== undefined) return custom;
       }
       const list = liveBlocked.get(dep) ?? [];
-      if (!list.some(x => x.number === blocker.number)) list.push(blocker);
+      const key = x => x.html_url ?? `local#${x.number}`;
+      if (!list.some(x => key(x) === key(blocker))) list.push(blocker);
       liveBlocked.set(dep, list);
       return { status: 201 };
     },
     removeBlockedBy: async (dep, blocker) => {
       calls.removed.push({ dep, blocker: blocker.number });
-      liveBlocked.set(dep, (liveBlocked.get(dep) ?? []).filter(x => x.number !== blocker.number));
+      const key = x => x.html_url ?? `local#${x.number}`;
+      liveBlocked.set(dep, (liveBlocked.get(dep) ?? []).filter(x => key(x) !== key(blocker)));
       return { status: 200 };
     },
     createComment: async (dep, body) => {
@@ -93,6 +101,8 @@ test('auto-deps: re-exports from autopilot-intake.mjs and parses only explicit d
       'Blocked by #10, acme/platform#11 and https://github.com/acme/platform/issues/12.',
       'Must land before #30 and #31.',
       'This is NOT blocked by #99 and no longer depends on #98.',
+      "This isn't currently blocked by #5; Un-blocked by #9; The form requires #3.",
+      'Inline code `blocked by #7` must not trigger an edge.',
       'Does not block #97 and ignores foreign repo other/repo#55.',
       'Depends on #20 (self-ref ignored).',
       '```md',
@@ -177,17 +187,33 @@ test('auto-deps: paginated bidirectional discovery, confirmed contract edges, se
     assert.doesNotMatch(c.body, /ghp_secretLeakValue123456|secret-token-xyz/, 'secrets must be redacted from comments');
   }
 
-  // Same content hash short-circuits with zero GitHub writes.
-  const r2 = await reconcileAutoDependencies({ repo: REPO, subjectIssue: subject, gh, stateDir });
+  // Same content hash + same confirmed contracts short-circuits with zero GitHub writes.
+  const contracts = [{ dependent: 3, blocker: 5, contract: 'REST response v2 schema', confirmed: true }];
+  const r2 = await reconcileAutoDependencies({ repo: REPO, subjectIssue: subject, contractDependencies: contracts, gh, stateDir });
   assert.equal(r2.skipped, true);
   assert.equal(r2.reason, 'unchanged-content-hash');
   assert.equal(gh.calls.added.length, 3);
   assert.equal(gh.calls.commented.length, 3);
 
+  // Adding a NEW confirmed contract on unchanged issue text MUST NOT be skipped!
+  const i4 = { number: 4, title: 'New consumer', body: 'Uses v2 schema' };
+  const ghNewContract = makeFakeGh({
+    openPages: [[i1, subject, i4], [i2, i3]],
+    issues: { 1: i1, 2: i2, 3: i3, 4: i4, 5: subject },
+    blockedBy: { 2: [subject], 3: [subject], 5: [i1] },
+  });
+  const r2b = await reconcileAutoDependencies({
+    repo: REPO, subjectIssue: subject,
+    contractDependencies: [...contracts, { dependent: 4, blocker: 5, contract: 'v2 schema', confirmed: true }],
+    gh: ghNewContract, stateDir,
+  });
+  assert.equal(r2b.skipped, false);
+  assert.ok(r2b.actions.some(a => a.action === 'add' && a.dependent === 4 && a.blocker === 5));
+
   // Forced replay is fully idempotent: 0 new adds, 0 duplicate comments.
   const r3 = await reconcileAutoDependencies({
     repo: REPO, subjectIssue: subject,
-    contractDependencies: [{ dependent: 3, blocker: 5, contract: 'REST response v2 schema', confirmed: true }],
+    contractDependencies: contracts,
     gh, stateDir, force: true,
   });
   assert.equal(r3.skipped, false);
@@ -376,4 +402,148 @@ test('file-claim reservations: atomic TTL claims, conflict independence from Git
   assert.throws(() => acquireFileClaim(stateDir, { owner: 'w', issue: 9, leaseId: 'l9', files: ['../escape.mjs'], now }), /invalid_claim|valid files/i);
   assert.equal(issueContentHash({ title: 'a', body: 'b' }).length, 16);
   assert.equal(JSON.parse(readFileSync(join(stateDir, 'file-claims.json'), 'utf8')).claims.length, 0);
+});
+
+test('auto-deps Fable regressions: persistent holds, fail-closed 422, no false stale pruning, PR filter, cross-repo key, transient 404, delayed actor, incremental persist, BFS cost', async t => {
+  const stateDir = makeTempDir(t, 'pdd-autodeps-fable-');
+
+  // #1: Holds persist across runs (hash NOT saved when holds occurred).
+  const s1 = { number: 201, title: 'Needs missing', body: 'Blocked by #999' };
+  const ghHold = makeFakeGh({ openPages: [[s1]], issues: { 201: s1, 999: { status: 404 } } });
+  const h1 = await reconcileAutoDependencies({ repo: REPO, subjectIssue: s1, gh: ghHold, stateDir });
+  const h2 = await reconcileAutoDependencies({ repo: REPO, subjectIssue: s1, gh: ghHold, stateDir });
+  assert.equal(h1.holds.length, 1);
+  assert.equal(h2.skipped, false, 'held issue must not be skipped on second run');
+  assert.equal(h2.holds.length, 1, 'hold must persist across runs');
+
+  // #3: Non-duplicate 422 (e.g., limit/validation rejected, edge absent on re-read) MUST fail closed into hold!
+  const b202 = { number: 202, title: 'Target', body: '' };
+  const s203 = { number: 203, title: 'Limit hit', body: 'Blocked by #202' };
+  const gh422 = makeFakeGh({
+    openPages: [[b202, s203]], issues: { 202: b202, 203: s203 },
+    addHandler: async () => ({ status: 422, message: 'Dependency limit reached' }),
+  });
+  const r422 = await reconcileAutoDependencies({ repo: REPO, subjectIssue: s203, gh: gh422, stateDir });
+  assert.equal(r422.holds.length, 1);
+  assert.equal(r422.holds[0].reason, 'blocker-write-rejected-422');
+  assert.equal(r422.actions.some(a => a.action === 'noop-exists'), false);
+
+  // #4, #5, #16, #17, #18: Bound listOpenIssues, filter PRs, never prune when openIssues:[] or error 500, no contradictory remove-stale + skip-human-owned.
+  const s210 = { number: 210, title: 'Core', body: '' };
+  const other211 = { number: 211, title: 'Consumer', body: 'Depends on #210' };
+  const pr212 = { number: 212, title: 'Stacked PR', body: 'Depends on #210', pull_request: { url: 'https://api.github.com/repos/acme/platform/pulls/212' } };
+  let boundThisOk = false;
+  const gh4 = makeFakeGh({ openPages: [[s210, other211, pr212]], issues: { 210: s210, 211: other211, 212: pr212 } });
+  const origList = gh4.listOpenIssues;
+  gh4.marker = 'bound-ok';
+  gh4.listOpenIssues = async function (p) { if (this?.marker === 'bound-ok') boundThisOk = true; return origList(p); };
+  const r4a = await reconcileAutoDependencies({ repo: REPO, subjectIssue: s210, gh: gh4, stateDir });
+  assert.equal(boundThisOk, true, 'listOpenIssues must preserve gh `this` binding');
+  assert.deepEqual(gh4.calls.added, [{ dep: 211, blocker: 210 }], 'PR #212 must be filtered out');
+  // Now call with openIssues: [] (incomplete open index) -> MUST NOT remove valid edge 211->210 as stale!
+  const r4b = await reconcileAutoDependencies({ repo: REPO, subjectIssue: { ...s210, body: 'edited' }, openIssues: [], gh: gh4, stateDir });
+  assert.equal(gh4.calls.removed.length, 0, 'empty openIssues must never prune edge declared by another issue');
+  assert.equal(r4b.actions.some(a => a.action === 'remove-stale'), false);
+  // Error status 500 from listOpenIssues records a hold instead of empty list.
+  const gh500 = { ...gh4, listOpenIssues: async () => ({ status: 500, message: 'Server Error' }) };
+  const r500 = await reconcileAutoDependencies({ repo: REPO, subjectIssue: { ...s210, body: 'edited2' }, gh: gh500, stateDir });
+  assert.ok(r500.holds.some(h => h.reason === 'open-issues-unavailable-500'));
+
+  // #6: Transient 404 from listBlockedBy MUST NOT poison humanRemovedEdges permanently.
+  const b220 = { number: 220, title: 'Prereq', body: '' };
+  const s221 = { number: 221, title: 'Dep', body: 'Blocked by #220' };
+  const gh6 = makeFakeGh({ openPages: [[b220, s221]], issues: { 220: b220, 221: s221 } });
+  await reconcileAutoDependencies({ repo: REPO, subjectIssue: s221, gh: gh6, stateDir });
+  gh6.liveBlocked.set(221, { status: 404 });
+  const r6a = await reconcileAutoDependencies({ repo: REPO, subjectIssue: { ...s221, body: 'Blocked by #220 (v2)' }, gh: gh6, stateDir });
+  assert.equal(r6a.holds.length, 1);
+  // 404 clears (edge missing on live but previously managed): simulate edge cleared by autopilot/empty timeline not poisoned by transient 404
+  const stateAfter404 = JSON.parse(readFileSync(join(stateDir, 'auto-deps-state.json'), 'utf8'));
+  assert.equal(stateAfter404.humanRemovedEdges['221->220'], undefined, 'transient 404 must never write humanRemovedEdges');
+
+  // #7: Default actor detection (no autopilotLogins) handles 30s delay cleanly without turning own add into human-owned.
+  const t0 = Date.parse('2026-11-22T12:00:00Z');
+  const tlDelayed = inspectEdgeTimeline(
+    [{ id: 9001, event: 'blocked_by_added', blocker: 220, actor: { login: 'owner' }, created_at: new Date(t0 + 30_000).toISOString() }],
+    220,
+    { repo: REPO, managedEdge: { addedAt: new Date(t0).toISOString(), windowStartMs: t0, windowEndMs: t0 }, existsInLive: true },
+  );
+  assert.equal(tlDelayed.humanOwned, false, '30s API delay must not misclassify own add as human-owned');
+
+  // #8 & #13: Mid-run 403 persists earlier add incrementally; missing addBlockedBy records hold (no phantom add).
+  const b230 = { number: 230, title: 'B1', body: '' }, b231 = { number: 231, title: 'B2', body: '' };
+  const s232 = { number: 232, title: 'Two deps', body: 'Blocked by #230 and #231' };
+  const gh8 = makeFakeGh({
+    openPages: [[b230, b231, s232]], issues: { 230: b230, 231: b231, 232: s232 },
+    addHandler: async (_d, blk) => { if (blk.number === 231) throw Object.assign(new Error('Forbidden'), { status: 403 }); return { status: 201 }; },
+  });
+  await assert.rejects(() => reconcileAutoDependencies({ repo: REPO, subjectIssue: s232, gh: gh8, stateDir }), /Forbidden/);
+  const savedAfter403 = JSON.parse(readFileSync(join(stateDir, 'auto-deps-state.json'), 'utf8'));
+  assert.ok(savedAfter403.managedEdges['232->230'], 'first add must be persisted before second add throws 403');
+  const ghNoWriter = { listOpenIssues: async () => [b230, s232], listBlockedBy: async () => [], getIssue: async n => ({ number: n }) };
+  const rNoW = await reconcileAutoDependencies({ repo: REPO, subjectIssue: { number: 233, title: 'No writer', body: 'Blocked by #230' }, gh: ghNoWriter, stateDir });
+  assert.ok(rNoW.holds.some(h => h.reason === 'missing-add-blocked-by-writer'));
+  assert.equal(rNoW.actions.some(a => a.action === 'add'), false);
+
+  // #11: Newly linked candidate pointing to a `not_planned` blocker flags re-triage immediately.
+  const np240 = { number: 240, title: 'Wontfix', state: 'closed', state_reason: 'not_planned' };
+  const s241 = { number: 241, title: 'New dep on wontfix', body: 'Blocked by #240' };
+  const gh11 = makeFakeGh({ openPages: [[s241]], issues: { 240: np240, 241: s241 } });
+  const r11 = await reconcileAutoDependencies({ repo: REPO, subjectIssue: s241, gh: gh11, stateDir });
+  assert.equal(r11.retriage.length, 1);
+  assert.equal(gh11.calls.added.length, 0);
+
+  // #12 & #14 & #17: Cross-repo blocker does not collide with local #5; scoped BFS avoids unrelated open issues & catches closed-node cycles; remove-stale has no contradictory skip-human-owned.
+  const unrelated = Array.from({ length: 30 }, (_, i) => ({ number: 500 + i, title: `Unrelated ${i}`, body: '' }));
+  const local5 = { number: 5, title: 'Local 5', body: '' };
+  const s250 = { number: 250, title: 'Cross-repo test', body: 'Blocked by #5' };
+  let blockedByCalls = 0;
+  const gh12 = makeFakeGh({
+    openPages: [[local5, s250, ...unrelated]], issues: { 5: local5, 250: s250 },
+    blockedBy: { 250: [{ number: 5, html_url: 'https://github.com/other/repo/issues/5' }] },
+  });
+  const baseListBlocked = gh12.listBlockedBy;
+  gh12.listBlockedBy = async n => { blockedByCalls += 1; return baseListBlocked(n); };
+  const r12 = await reconcileAutoDependencies({ repo: REPO, subjectIssue: s250, gh: gh12, stateDir });
+  assert.ok(blockedByCalls <= 3, `scoped BFS should not scan 30 unrelated issues (got ${blockedByCalls})`);
+  assert.ok(r12.actions.some(a => a.action === 'add' && a.dependent === 250 && a.blocker === 5), 'other/repo#5 must not block linking local acme/platform#5');
+  // Scope edit removes 250->5 and must NOT emit contradictory skip-human-owned for 250->5!
+  const r17 = await reconcileAutoDependencies({ repo: REPO, subjectIssue: { number: 250, title: 'Cross-repo test', body: 'Standalone' }, gh: gh12, stateDir });
+  assert.ok(r17.actions.some(a => a.action === 'remove-stale' && a.blocker === 5));
+  assert.equal(r17.actions.some(a => a.action === 'skip-human-owned' && a.blocker === 5), false);
+});
+
+test('file-claim Fable regressions (#9, #10): cross-process lock serializes concurrent workers, corrupt JSON fails closed, lease hijack rejected', async t => {
+  const stateDir = makeTempDir(t, 'pdd-claims-lock-');
+  const workerScript = `
+    import { acquireFileClaim } from ${JSON.stringify(AUTO_DEPS_URL)};
+    const [dir, owner, issue, leaseId] = process.argv.slice(1);
+    const res = acquireFileClaim(dir, { owner, issue: Number(issue), leaseId, files: ['src/shared/hot.mjs'], ttlMs: 60000 });
+    process.stdout.write(JSON.stringify(res));
+  `;
+  const [p1, p2] = await Promise.all([
+    execFileAsync(process.execPath, ['--input-type=module', '-e', workerScript, stateDir, 'worker-1', '11', 'lease-1']),
+    execFileAsync(process.execPath, ['--input-type=module', '-e', workerScript, stateDir, 'worker-2', '12', 'lease-2']),
+  ]);
+  const res1 = JSON.parse(p1.stdout), res2 = JSON.parse(p2.stdout);
+  assert.equal([res1.acquired, res2.acquired].filter(Boolean).length, 1, 'concurrent processes must serialize so exactly one acquires');
+  assert.equal([res1.conflict, res2.conflict].filter(Boolean).length, 1);
+
+  // Lease hijack by different owner reusing an active leaseId must be rejected!
+  const winner = res1.acquired ? res1.claim : res2.claim;
+  const hijack = acquireFileClaim(stateDir, { owner: 'attacker', issue: 99, leaseId: winner.leaseId, files: ['src/other.mjs'], ttlMs: 60000 });
+  assert.equal(hijack.acquired, false);
+  assert.equal(hijack.error, 'lease-owner-mismatch');
+
+  // Corrupt/truncated file-claims.json must fail closed (NEVER treat as empty)!
+  const corruptDir = makeTempDir(t, 'pdd-claims-corrupt-');
+  writeFileSync(join(corruptDir, 'file-claims.json'), '{"version":1,"claims":[{"owner":"w1"');
+  const acqCorrupt = acquireFileClaim(corruptDir, { owner: 'w2', issue: 2, leaseId: 'l2', files: ['src/a.mjs'] });
+  assert.equal(acqCorrupt.acquired, false);
+  assert.equal(acqCorrupt.error, 'corrupt-claims-store');
+  const chkCorrupt = activeFileConflicts(corruptDir, { files: ['src/a.mjs'] });
+  assert.equal(chkCorrupt.hasConflict, true);
+  assert.equal(chkCorrupt.error, 'corrupt-claims-store');
+  assert.throws(() => sweepExpiredClaims(corruptDir), /corrupt_claims_store|corrupt/i);
+  assert.throws(() => releaseFileClaim(corruptDir, { leaseId: 'l2' }), /corrupt_claims_store|corrupt/i);
 });

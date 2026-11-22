@@ -12,8 +12,10 @@ import {
   formatInvestigationMarkdown,
   incidentFingerprint,
   investigateIncidents,
+  loadInvestigationLedger,
   loadKnownInvestigationFingerprints,
   persistDailyInvestigationReport,
+  proposeRootCauseFix,
 } from '../../src/autopilot/investigator/investigator.mjs';
 import {
   computeStageFunnel,
@@ -334,4 +336,146 @@ test('funnel-cohort: mature 7-day cohort tracks GraphQL REOPENED_EVENT, reverts,
   assert.equal(exactBoundary.mature.items[0].pr, 301);
   assert.equal(exactBoundary.immature.total, 1);
   assert.equal(exactBoundary.immature.items[0].pr, 302);
+});
+
+test('investigator Fable regressions (#19-#28): structured precedence, anchored regexes, underscore codes, consistent rungs, mention/code redaction, stable cross-issue fingerprints, seen vs filed ledger, cap & PT date', async t => {
+  const stateDir = makeTempDir(t, 'pdd-inv-fable-');
+
+  // #19: Structured code beats free text; bare PR #503 does not trigger HTTP 503.
+  assert.equal(classifyIncidentBucket({ reasonCode: 'state-corrupt', detail: 'mentions cross repo link' }).bucket, 'orchestrator');
+  assert.equal(classifyIncidentBucket({ title: 'PR #503 tokenizer parser crash' }).bucket, 'agent-quality');
+
+  // #20 & #21: "tokenizer" does NOT match auth-expired; underscore codes map accurately.
+  assert.equal(classifyIncidentBucket({ title: 'Tokenizer edge case fails test' }).bucket, 'agent-quality');
+  assert.equal(classifyIncidentBucket({ reasonCode: 'lease_expired' }).bucket, 'orchestrator');
+  assert.equal(classifyIncidentBucket({ reasonCode: 'claim_collision' }).bucket, 'orchestrator');
+  assert.equal(classifyIncidentBucket({ reasonCode: 'runner_oom' }).bucket, 'environment');
+  assert.equal(classifyIncidentBucket({ reasonCode: 'no_worker_slot' }).bucket, 'environment');
+
+  // #22: Ladder rung is identical regardless of input form & immune to incidental words like "lint".
+  const clsQuotaCode = classifyIncidentBucket({ reasonCode: 'quota-exhausted' });
+  const clsQuotaText = classifyIncidentBucket({ reason: 'Quota exceeded during run' });
+  assert.equal(proposeRootCauseFix(clsQuotaCode, {}).rung, 'architecture-api');
+  assert.equal(proposeRootCauseFix(clsQuotaText, {}).rung, 'architecture-api');
+  const clsMissed = classifyIncidentBucket({ reasonCode: 'missed-proof', reason: 'lint failed to catch missed proof' });
+  assert.equal(proposeRootCauseFix(clsMissed, { reason: 'lint failed to catch missed proof' }).rung, 'runtime-proof');
+
+  // #23: Raw reasonCode + diagnosticTemplate + markdown + issue body redact secrets, strip CR/LF, and defang @mentions.
+  const secretVal = 'ultraSecret42';
+  const rSan = await investigateIncidents({
+    incidents: [{ repo: 'acme/app', issue: 1, reasonCode: `custom_${secretVal}\n@alice`, detail: 'Ping @bob\nnext line with ' + secretVal }],
+    repo: 'acme/app',
+    now: () => Date.parse('2026-11-19T01:00:00Z'), // 2026-11-18 17:00 PT (#28!)
+    secrets: [secretVal],
+  });
+  assert.equal(rSan.date, '2026-11-18', '#28 default report date must use America/Los_Angeles PT standup day, not UTC');
+  const fSan = rSan.findings[0];
+  assert.equal(fSan.reasonCode.includes(secretVal), false);
+  assert.equal(/[\r\n@]/.test(fSan.reasonCode), false);
+  assert.equal(JSON.stringify(fSan).includes(secretVal), false);
+  assert.match(fSan.provenance[0].snippet, /`@bob`/);
+  assert.equal(fSan.provenance[0].snippet.includes('\n'), false);
+
+  // #24: Root-cause fingerprint ignores SHAs, run IDs, durations, and groups same root cause across two issues.
+  const incA = { repo: 'acme/app', issue: 10, pr: 110, reasonCode: 'runner_sigterm', target: 'test/core.test.mjs', detail: 'sha=abcdef123456 run_id=r999 took 42.5s' };
+  const incB = { repo: 'acme/app', issue: 20, pr: 220, reasonCode: 'runner-sigterm', target: 'test/core.test.mjs', detail: 'sha=999888777666 run_id=r111 took 1200ms' };
+  assert.equal(incidentFingerprint(incA), incidentFingerprint(incB));
+  const grouped = await investigateIncidents({ incidents: [incA, incB], repo: 'acme/app', date: '2026-11-18' });
+  assert.equal(grouped.findings.length, 1);
+  assert.equal(grouped.findings[0].occurrences, 2);
+
+  // #25, #26, #27: Read-only run saves `seen` WITHOUT blocking later `writeIssues: true`; paginated `listIssues`; maxIssuesPerRun cap; consistent merged summary + prior-day recurrence visible.
+  const readOnlyRep = await investigateIncidents({ incidents: [incA], repo: 'acme/app', date: '2026-11-18' });
+  persistDailyInvestigationReport(stateDir, readOnlyRep, { now: () => Date.parse('2026-11-18T18:00:00Z') });
+  const ledger1 = loadInvestigationLedger(stateDir);
+  assert.equal(ledger1.seen.size, 1);
+  assert.equal(ledger1.filed.size, 0, 'read-only run must not mark finding as filed');
+
+  // Later opt-in writeIssues with cap=1 and paginated listIssues still files the unseen-as-filed finding!
+  const manyIncidents = [
+    incA,
+    { repo: 'acme/app', issue: 30, reasonCode: 'state-corrupt', target: 'a.mjs' },
+    { repo: 'acme/app', issue: 31, reasonCode: 'lease-expired', target: 'b.mjs' },
+  ];
+  const filedIssues = [];
+  let listPages = 0;
+  const ghPaginated = {
+    listIssues: async ({ page }) => { listPages += 1; return { items: page === 1 ? [{ body: 'unrelated' }] : [], hasNext: page === 1 }; },
+    createIssue: async payload => { filedIssues.push(payload); return { number: 800 + filedIssues.length }; },
+  };
+  const writeRep = await investigateIncidents({
+    incidents: manyIncidents, repo: 'acme/app', date: '2026-11-19',
+    knownFingerprints: loadKnownInvestigationFingerprints(stateDir),
+    writeIssues: true, gh: ghPaginated, maxIssuesPerRun: 1,
+  });
+  assert.equal(listPages, 2, 'listIssues must be paginated');
+  assert.equal(writeRep.createdIssues.length, 1, 'maxIssuesPerRun=1 must cap created issues');
+  const pDay2 = persistDailyInvestigationReport(stateDir, writeRep, { now: () => Date.parse('2026-11-19T18:00:00Z') });
+  const day2Disk = JSON.parse(readFileSync(pDay2.reportPath, 'utf8'));
+  assert.equal(day2Disk.findings.length, 3, 'prior-day recurrence incA must appear in today daily file');
+  assert.equal(day2Disk.summary.uniqueFindings, day2Disk.findings.length, 'persisted summary must match merged findings');
+  assert.equal(loadInvestigationLedger(stateDir).filed.size, 1);
+
+  // Missing gh.listIssues with writeIssues:true fails closed (0 issues filed).
+  const noListRep = await investigateIncidents({ incidents: manyIncidents, repo: 'acme/app', date: '2026-11-19', writeIssues: true, gh: { createIssue: async () => ({ number: 1 }) } });
+  assert.equal(noListRep.createdIssues.length, 0);
+});
+
+test('funnel-cohort Fable regressions (#29-#36): bounded 7d window, most-recent-merge attribution, no pre-merge flag leak, repo scoping, failure/success gates, merged dedupe, open PR inProgress, retries, DST gap', () => {
+  const now = '2026-11-22T12:00:00Z';
+
+  // #29, #30, #31: Window upper bound (80d late & future ignored), single reopen attributed ONLY to most recent prior merge,
+  // pre-merge reopen NOT overridden by `reopened: true`, and repo-less event does NOT match repo-scoped merge!
+  const cohort = evaluateMatureCohort([
+    { repo: 'acme/app', issue: 1, pr: 101, mergedAt: '2026-08-01T12:00:00Z' }, // 80d-late reopen Oct 20 -> clean!
+    { repo: 'acme/app', issue: 2, pr: 201, mergedAt: '2026-11-01T12:00:00Z' }, // earlier merge of issue #2 -> clean!
+    { repo: 'acme/app', issue: 2, pr: 202, mergedAt: '2026-11-10T12:00:00Z' }, // most recent merge before Nov 12 reopen -> regressed!
+    { repo: 'acme/app', issue: 3, pr: 301, mergedAt: '2026-11-10T12:00:00Z', reopened: true }, // only pre-merge external reopen Nov 5 -> clean!
+    { repo: 'acme/app', issue: 4, pr: 401, mergedAt: '2026-11-10T12:00:00Z' }, // repo-less event must NOT match acme/app!
+    { repo: 'acme/app', issue: 5, pr: 501, mergedAt: '2026-11-10T12:00:00Z' }, // future reopen after `now` ignored -> clean!
+  ], {
+    now, maturityDays: 7,
+    reopenedEvents: [
+      { repo: 'acme/app', issue: 1, reopenedAt: '2026-10-20T12:00:00Z' }, // 80d after merge -> outside 7d window
+      { repo: 'acme/app', issue: 2, reopenedAt: '2026-11-12T12:00:00Z' }, // matches ONLY pr:202, NOT pr:201
+      { repo: 'acme/app', issue: 3, reopenedAt: '2026-11-05T12:00:00Z' }, // pre-merge -> suppresses `reopened: true` leak
+      { repo: null, issue: 4, reopenedAt: '2026-11-12T12:00:00Z' },       // missing repo -> must NOT match acme/app
+      { repo: 'acme/app', issue: 5, reopenedAt: '2026-11-25T12:00:00Z' }, // after `now` -> ignored
+    ],
+  });
+  assert.equal(cohort.mature.total, 6);
+  assert.equal(cohort.mature.regressed, 1, 'only PR #202 should be regressed');
+  assert.equal(cohort.mature.items.find(x => x.pr === 101).cohortStatus, 'mature-clean');
+  assert.equal(cohort.mature.items.find(x => x.pr === 201).cohortStatus, 'mature-clean');
+  assert.equal(cohort.mature.items.find(x => x.pr === 202).cohortStatus, 'mature-regressed');
+  assert.equal(cohort.mature.items.find(x => x.pr === 301).cohortStatus, 'mature-clean');
+  assert.equal(cohort.mature.items.find(x => x.pr === 401).cohortStatus, 'mature-clean');
+  assert.equal(cohort.mature.items.find(x => x.pr === 501).cohortStatus, 'mature-clean');
+
+  // #32, #33, #34, #35: failure/error/timed_out -> fail, success -> pass; dedupe merges reopened + earlier gate failure;
+  // open PRs -> inProgress; retries do NOT inflate `considered` (counted in `attempts`).
+  const funnel = computeStageFunnel([
+    { repo: 'acme/app', issue: 10, attemptId: 'a1', at: '2026-11-20T10:00:00Z', status: 'ended', pr: 1010, gates: { ci: 'failure', suite: 'timed_out', review: 'error' } },
+    { repo: 'acme/app', issue: 10, attemptId: 'a2', at: '2026-11-20T12:00:00Z', status: 'merged', pr: 1010, gates: { ci: 'success', suite: 'not-run', review: 'not-run' } },
+    { repo: 'acme/app', issue: 10, attemptId: 'a3', at: '2026-11-21T12:00:00Z', status: 'ended', reopened: true },
+    { repo: 'acme/app', issue: 11, status: 'open', pr: 1011, prState: 'open', gates: { ci: 'timeout', suite: 'success' } },
+  ]);
+  assert.equal(funnel.counts.considered, 2, 'retries on issue #10 must not inflate considered');
+  assert.equal(funnel.counts.attempts, 4, 'attempts tracks all 4 records separately');
+  assert.equal(funnel.counts.merged, 1);
+  assert.equal(funnel.counts.regressed, 1, 'later reopened record on issue #10 must be preserved on dedupe');
+  assert.equal(funnel.counts.inProgress, 1, 'open PR #1011 must count as inProgress, not dropped');
+  assert.equal(funnel.counts.dropped, 0);
+  // Issue #10 merged gate kept newer ci=success (pass) while preserving earlier suite=timed_out (fail) & review=error (fail)!
+  assert.deepEqual(funnel.gateStats.ci, { passed: 1, failed: 1, running: 0, notRun: 0, applicable: 2, passPct: 50 });
+  assert.deepEqual(funnel.gateStats.suite, { passed: 1, failed: 1, running: 0, notRun: 0, applicable: 2, passPct: 50 });
+  assert.deepEqual(funnel.gateStats.review, { passed: 0, failed: 1, running: 0, notRun: 1, applicable: 1, passPct: 0 });
+
+  // #36: DST gap anchors advance forward to first valid instant after gap & label uses anchorHour.
+  const laGap = localAnchorUtcMs(2026, 3, 8, 2, 'America/Los_Angeles');
+  assert.equal(new Date(laGap).toISOString(), '2026-03-08T10:00:00.000Z', '02:00 LA spring-forward gap advances to 03:00 PDT (10:00Z), not 01:00 PST');
+  const havanaGap = localAnchorUtcMs(2026, 3, 8, 0, 'America/Havana');
+  assert.equal(new Date(havanaGap).toISOString(), '2026-03-08T05:00:00.000Z', '00:00 Havana spring-forward gap advances to 01:00 CDT (05:00Z)');
+  const tenAm = resolveStandupWindow({ date: '2026-11-19', timezone: 'America/Los_Angeles', anchorHour: 10 });
+  assert.equal(tenAm.label, 'Standup 2026-11-19 (10am-10am)');
 });
