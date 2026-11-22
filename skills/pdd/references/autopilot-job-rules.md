@@ -4,7 +4,7 @@ Read this whole file before you write or check the PR body. It is short on purpo
 `$PDD_SKILLS/pdd/SKILL.md` and the co-located references (`prompting.md`, `stories.md`, `verification.md`) on demand. A tool output over about 10,000 tokens
 loses its middle: read big files in parts.
 
-These rules are for a job of the Autopilot core engine (`pdd autopilot start --engine core`). The job makes one PR.
+These rules are for a job of the Autopilot core engine (`pdd autopilot start`). The job makes one PR.
 It writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot checks each
 line against its own records. A line that the records do not support is red.
 
@@ -31,7 +31,7 @@ line against its own records. A line that the records do not support is red.
 ## Runtime lines
 
 - Commit every change. Then run `pdd test` for each changed Story, all of them in one `pdd test` batch where you can
-  (`pdd test STORY STORY ...`). Every Story whose test reaches a changed prompt counts, however many (Serhan, D3).
+  (`pdd test STORY STORY ...`). Every Story whose test reaches a changed prompt counts.
 - Write one `Runtime:` line for each changed Story. Put the verdict first. Then put the Story file path (as
   `git diff` shows it) first in the parentheses:
   ```text
@@ -50,7 +50,7 @@ line against its own records. A line that the records do not support is red.
   steps of the same check can still fail.
 - When the line shows fewer passed checks than the total (`no verdict · 10 of 13 criteria · 17/19 checks`), open the
   report and read each step.
-- A step that shows `expected X, got Y` is a failed check. Find the cause and fix it (RUNBOOK §11 "After a ✗").
+- A step that shows `expected X, got Y` is a failed check. Find the cause and fix it in the owning prompt or scenario.
   Never write a failed check as `not run`.
 - Only a check with no failed step is no verdict.
 
@@ -64,9 +64,8 @@ line against its own records. A line that the records do not support is red.
 - A changed Story with no Runtime test is no such cause. Write its Runtime test (one step for each criterion) and run
   `pdd test`, or mark the owning prompt native-only with frontmatter kind and reason.
 - A refusal with a fix from pdd is this PR's work. Apply the fix and check again. For `impossible-result-value-pointer`,
-  the port's `result_schema` excluded `simulation` `result_value_pointer`: set `result_value_pointer` to `""` when the
-  port returns the value directly, or state the exact returned JSON object keys in the prompt's Ports section so
-  `result_schema` includes that pointer (fix it in the prompt/scenario rather than shipping `not run`).
+  set `result_value_pointer` to `""` when the port returns the value directly, or state the exact returned JSON object
+  keys in the prompt's Ports section so `result_schema` includes that pointer.
 - Write the exact cause in the line: `Runtime: not run (STORY: CAUSE)`.
 
 ## Real end-to-end tests
@@ -78,7 +77,8 @@ line against its own records. A line that the records do not support is red.
   - Web UI: exercise the real rendered flow in a browser (for example Playwright).
   - External tool, auth, or cloud integration: exercise the real live binding where healthy; never rewrite a real E2E
     check into mocks when a login or external service is down.
-- For a bug fix, prove the regression test (including the real E2E check) fails on the merge base and passes on HEAD.
+- For a bug fix, prove the regression test (including the real E2E check) fails on the merge base and passes on HEAD
+  (`pdd prove --base origin/BASE --test ... --expect ...`).
 - Never add silent validation skips (`test.skip` on validation/E2E tests or `real-binding-unavailable` local-skip
   bypasses). Docs-only changes need no E2E run.
 
@@ -86,15 +86,11 @@ line against its own records. A line that the records do not support is red.
 
 - For a parameter that takes a Number, write a whole number outside ±(2^53−1) in its exact Number spelling, for
   example `"seconds": 4.2501298345826807e+24` for 3600 × 2^70. The interpreter admits it with `"type": "integer"`.
-- Write each scenario number with `String(n)` in JavaScript. Between 2^53 and 1e21, `String(n)` gives plain digits,
-  so use `n.toExponential()` there.
-- Never write a scenario number with `json.dumps` of a Python int. It gives plain digits. The interpreter refuses
-  plain digits outside ±(2^53−1) before execution (`scenario-integer-out-of-range`, 0 AI calls).
-- When pdd warns `If the parameter takes a Number, write its exact Number spelling …`, write that spelling and check
-  again. This refusal is never a reason for `not run`.
-- Only a value that no Number holds (2^53 + 1, or a BigInt parameter) stays in plain JSON digits. Then only the
-  repository's own vector test checks it.
-- Do not change the input type or the expected value to fit the interpreter.
+- Write each scenario number with `String(n)` in JavaScript (and `n.toExponential()` between 2^53 and 1e21).
+- Never write a scenario number with `json.dumps` of a Python int: plain digits outside ±(2^53−1) are refused before
+  execution (`scenario-integer-out-of-range`, 0 AI calls).
+- Only a value that no Number holds (2^53 + 1, or a BigInt parameter) stays in plain JSON digits and is checked by the
+  repository's own vector test. Do not change the input type or expected value to fit the interpreter.
 
 ## Maintenance
 
@@ -102,8 +98,7 @@ line against its own records. A line that the records do not support is red.
   anything.
 - Stop pdd then. For each changed Story that pdd did not send, write `Runtime: not run (STORY: maintenance until
   HH:MM UTC)` with the end time that pdd printed.
-- Autopilot sends the check itself when maintenance ends, and it rewrites the line. Never send it again yourself.
-- Never cut short a check that pdd has already sent.
+- Autopilot sends the check itself when maintenance ends and rewrites the line. Never cut short an already-sent check.
 
 ## Vectors in the Evidence line
 
@@ -113,61 +108,41 @@ line against its own records. A line that the records do not support is red.
 
 ## After a merge from the base
 
-- Check that the fix is still needed.
-- Check out the new merge base (`git merge-base origin/BASE HEAD`) in a throwaway worktree. Copy in the PR's changed
-  tests and run them.
-- When they pass on the base code too, the base already holds the fix. Keep the base's code, keep only what the base
-  does not hold, and say so in the PR body.
+- Check that the fix is still needed by checking out `git merge-base origin/BASE HEAD` in a throwaway worktree,
+  copying in the PR's changed tests, and running them.
+- When they pass on the base code too, keep the base's code, keep only what the base does not hold, and say so in the
+  PR body.
 
 ## Choices and questions
 
-- Autopilot decides when at least one reasonable fix solves the problem and breaks nothing that people use today: pick
-  that fix and list it in the PR body under "Choices Autopilot made:", one line each with its reason
-  ("- CHOICE (REASON)"), with "(changes public behavior: WHAT)" when users see a change. For example, "make remove
-  safer" is decided: ask y/N only in an interactive terminal, --yes skips it, scripts stay unchanged; nothing is asked.
-- A pdd-bug or pdd-small-change run never asks a choice question: pick the fix that makes the reported behavior right
+- When at least one reasonable fix solves the problem and breaks nothing that people use today, pick it and list it in
+  the PR body under `Choices Autopilot made:` (`- CHOICE (REASON)`, adding `(changes public behavior: WHAT)` when
+  users see a change).
+- A `bug` or `small-change` mode run never asks a choice question: pick the fix that makes the reported behavior right
   with the least surprise.
-- With `decisions` `decide` (the default): never ask a person about a choice. Decide every choice yourself,
-  product-direction ones too, and list each; list the big ones first, each marked "(big)". A choice question is never
-  posted: Autopilot starts the job once more with "Autopilot decides this choice: do not ask."
-- With `decisions` `ask`: routine compatible choices of command syntax, options or data representation are agent
-  decisions when a safe, low-surprise choice exists. Preserve existing APIs, defaults and behavior unless the request
-  authorizes a change. Several valid designs alone are not a reason to ask. A choice may be a question
-  (`"kind":"choice"`) only when every reasonable fix breaks something that people use today, or, in a pdd-feature
-  run, when the choice actually changes product direction: whether a new feature
-  area or capability should exist, removing a feature, an on-purpose change to a core contract, security, privacy or
-  data policy, or something that costs money; an open trusted issue that asks the same product question counts too.
-  Then do not choose and open no PR. Decide and list every other choice. An issue gets at most one choice question.
-- A bug fix may change an approved rule (Serhan, D1): when the fix of a pdd-bug or pdd-small-change run changes a
-  rule in an approved prompt, change it without asking and list it with "(changes approved rule: OLD -> NEW)", so a
-  person sees it. The repository's approval setting still applies to the changed prompt.
-- Two cases always go to a person, in every run: a change against a person's recorded answer to an earlier question
-  (an answer above, a decision issue), and a change of what blocks merges (a new required check, a gate, a hash pin,
-  CI policy). Do not make such a change: write the needs-person result with `"kind":"blocker"`. A real blocker (missing access or a secret, an issue that contradicts
-  itself, work that cannot be done) is `"kind":"blocker"` too.
-- The needs-person result asks exactly one question with 2 or 3 options, so a person can answer with one letter:
+- With `decisions` `decide` (the default): decide every choice yourself and list each, big ones first marked `(big)`.
+- With `decisions` `ask`: routine compatible choices are agent decisions when a safe, low-surprise choice exists. Ask
+  (`"kind":"choice"`) only when every reasonable fix breaks something people use today, or in `feature` mode when a
+  choice changes product direction (new capability, removing a feature, core contract, security/privacy/data policy, or
+  cost). An issue gets at most one choice question.
+- A bug fix may change an approved rule: when a `bug` or `small-change` mode fix changes a rule in an approved prompt,
+  change it without asking and note `(changes approved rule: OLD -> NEW)` in `Choices Autopilot made:`. The
+  repository's approval setting still applies to the changed prompt.
+- Two cases always go to a person as `"kind":"blocker"`: contradicting a person's recorded answer to an earlier
+  question, or changing what blocks merges (a new required check, gate, hash pin, or CI policy). Real blockers (missing
+  access/secret, contradictory issue) are `"kind":"blocker"` too.
+- Return a needs-person decision as JSON with 2 or 3 options so a person can answer with one letter:
   ```json
   {"outcome":"needs-person","kind":"blocker|choice","question":"<one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"}
   ```
-- A vague issue is never a reason to ask. When the issue, or a person's answer above, settles a choice, build.
-- Autopilot posts the question on the issue, adds `pdd:needs-decision` and says: "Please answer in a comment (one
-  letter is enough)." A trusted person's reply ends the wait: at its next check Autopilot reads the answer, removes
-  the label itself and goes on. The next job gets the answer.
+- A vague issue is never a reason to ask. When the issue or an earlier human answer settles a choice, build.
 
 ## For the reviewer
 
-- A tool output over about 10,000 tokens loses its middle, so never read the whole PR's diff in one call. Run
-  `git diff --stat` first, then read one file per command. End the summary with "Read: FILE, FILE, ...".
-- A Runtime PASS counts only for a changed Story (above). A PASS of another Story proves nothing for this PR.
-- A failed step inside a check with no verdict is a FAIL. When the checks did not all pass, open the report.
+- Never read the whole PR's diff in one call: run `git diff --stat` first, then read one file per command. End the
+  summary with `Read: FILE, FILE, ...`.
+- A Runtime PASS counts only for a changed Story (above). A failed step inside a `no verdict` check is a FAIL.
 - A `not run` line needs a cause from "When `not run` is allowed". A cause that pdd gives a fix for is a must-fix.
-- Non-code path `d` files (docs, config, CI settings, `package.json`, lock files, and test files or fixtures) need no
-  prompt and no Story. Never ask for a new prompt or Story for them; a new prompt or Story added for a non-code file is
-  a must-fix. Ask for a test only when the change alters a result that users see.
-- Every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its
-  reason (with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix
-  (fix the list).
-- A bug or small-change fix may change a rule in an approved prompt; it must be listed with "(changes approved rule:
-  OLD -> NEW)", and a missing mark is a P2 must-fix (fix the list). A change against a person's recorded answer to an
-  earlier question, or a change of what blocks merges (a required check, a gate, a hash pin, CI policy), is a P1
-  must-fix in every mode: undo it, or end with the needs-person result `"kind":"blocker"`.
+- Non-code path `d` files (docs, config, CI, `package.json`, lock files, tests/fixtures) need no prompt and no Story;
+  a new prompt or Story added for a non-code file is a must-fix.
+- Every unsettled choice must appear under `Choices Autopilot made:` with its reason (and `(changes approved rule: OLD -> NEW)` when a bug fix changed an approved prompt rule). Contradicting a recorded human answer or altering merge blockers is a P1 must-fix: undo it or return `"kind":"blocker"`.

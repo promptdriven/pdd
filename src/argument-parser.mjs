@@ -1,5 +1,5 @@
 // Generated from prompts/cli/argument-parser.prompt.md (sha256: 4a837dc76607532a46b38ca5cedacb06793321dcb21c5fc4703a99f744f422bc).
-import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
+import { PUBLIC_COMMAND_ROUTES, REMOVED_COMMANDS } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
   constructor(message) { super(message); this.name = 'CommandInputError'; this.exitCode = 2; }
@@ -24,6 +24,8 @@ function refuseRemoved(input) {
   const at = input[0] === 'help' ? 1 : 0, rest = input.slice(at + 1);
   const entry = REMOVED.find(item => item.word === input[at] && item.flags.every(flag => rest.includes(flag)));
   if (entry) throw new CommandInputError(`pdd ${entry.route.removed.join(' ')} was removed. Use pdd ${entry.route.prefix.join(' ')}.`);
+  const retired = REMOVED_COMMANDS.find(item => item.words.every((word, index) => input[at + index] === word));
+  if (retired) throw new CommandInputError(retired.message);
 }
 function helpFor(words) {
   if (!words.length) return help([]);

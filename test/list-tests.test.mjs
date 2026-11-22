@@ -43,7 +43,7 @@ test('list-tests includes every top-level test file, keeps only valid .test.mjs 
   assert.deepEqual([...unit, ...browser].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), all);
 });
 
-test('list-tests discovers nested unit and browser tests recursively and skips excluded fixtures', t => {
+test('list-tests discovers nested unit and browser tests recursively and omits non-test helpers', t => {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-list-tests-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -53,8 +53,6 @@ test('list-tests discovers nested unit and browser tests recursively and skips e
     'test/nested/core/unit-a.test.mjs',
     'test/nested/visual/screen-modal.test.mjs',
     'test/nested/helper.mjs',
-    'test/workflow-commit-warning-paths/baseline.test.mjs',
-    'test/workflow-commit-warning-paths-replay.test.mjs',
   ];
   for (const rel of files) {
     const abs = join(dir, rel);
@@ -67,12 +65,10 @@ test('list-tests discovers nested unit and browser tests recursively and skips e
     'test/nested/visual/screen-modal.test.mjs',
     'test/screen-top.test.mjs',
     'test/top.test.mjs',
-    'test/workflow-commit-warning-paths-replay.test.mjs',
   ]);
   assert.deepEqual(discoverTestFiles({ root: dir, mode: 'unit' }), [
     'test/nested/core/unit-a.test.mjs',
     'test/top.test.mjs',
-    'test/workflow-commit-warning-paths-replay.test.mjs',
   ]);
   assert.deepEqual(discoverTestFiles({ root: dir, mode: 'browser' }), [
     'test/nested/visual/screen-modal.test.mjs',

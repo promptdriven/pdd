@@ -34,7 +34,7 @@ structural cleanup into a bug or feature pull request.**
 When one pull request changes structure and behavior together, test failures become ambiguous and
 reverts discard working fixes along with structural moves. If you find a live bug during a refactor
 pass, preserve the current behavior in the structural pull request, file a separate issue, and fix
-the defect in its own `pdd-bug` pull request.
+the defect in its own `/pdd` `bug` pull request.
 
 Declare one of three structural classes in every cleanup pull request:
 
@@ -47,8 +47,8 @@ Declare one of three structural classes in every cleanup pull request:
 - **Class A (Internal structure):** Deduplicate helpers, simplify control flow, or remove
   non-essential comments inside existing prompt boundaries. Owning `.prompt.md` files and public
   behavior stay unchanged, and `pdd owner` stays green with zero AI calls. For unowned repository
-  files outside PDD (docs, CI, config, lockfiles, or test-only maintenance), `pdd-small-change`
-  applies directly.
+  files outside PDD (docs, CI, config, lockfiles, or test-only maintenance), `/pdd` `small-change`
+  mode applies directly.
 - **Class B (Module and boundary splits):** Split an oversized source file along real domain
   responsibilities, not arbitrary line counts. First, split code only while keeping the source
   file's ownership header on extracted modules and re-exporting compatibility bindings when needed:
@@ -115,7 +115,7 @@ GitHub's `pulls/{pr}/files` REST endpoint caps at 3,000 files; for any pull requ
 to list every path.
 
 Exclude every file touched by an open pull request, along with files claimed by active
-`pdd workflow` runs or high-churn shared command catalogs. Leaving active paths untouched prevents
+`pdd autopilot` jobs or high-churn shared command catalogs. Leaving active paths untouched prevents
 rebase pileups across open branches.
 
 ### 2. Pin observable behavior at the edge

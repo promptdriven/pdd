@@ -1,16 +1,18 @@
 # Local argument parser
 
-Own `src/argument-parser.mjs`; export `CommandInputError` (exitCode2) and `parseArgv(argv)`. Use only `PUBLIC_COMMAND_ROUTES` to resolve exact prefixes and declared operand/flag types. Return a fresh immutable local plan `{commandId,local,operands,options}`. Do not emit service-adapter arguments or dispositions, private validators or an execution-service enum.
+Own `src/argument-parser.mjs`; export `CommandInputError` (exitCode 2) and `parseArgv(argv)`. Use only `PUBLIC_COMMAND_ROUTES` and `REMOVED_COMMANDS` from the [Command catalog](command-catalog.prompt.md) to resolve exact prefixes and declared operand/flag types. Return a fresh immutable local plan `{commandId, local, operands, options}`. Do not emit service-adapter arguments or dispositions, private validators, or an execution-service enum.
 
-Empty argv, root --help/-h/-help/help, a [help topic](#help-topics), and known exact command/group help succeed; `-help` is accepted wherever `--help` is. Unknown command plus --help/-h still refuses2. A first word that is no known command and no option refuses with exactly `Unknown command "WORD". Run pdd --help to see the commands.`, with control characters in WORD shown as spaces. The catalog's version routes accept no unrelated arguments. `completion` requires exactly bash or zsh. `workflow list` accepts one optional --json and no operands. `setup` accepts only optional `--yes` and no operands. Only a catalog route explicitly marked `passthrough: true` (`accounts.codex`) collects trailing arguments verbatim into `operands` (consuming at most one leading `--` separator right after the route prefix, while returning local help when a single help flag immediately follows the prefix); no other route forwards native flags. Unknown/duplicate options, NUL/nonstrings, missing/extra operands and excluded commands refuse clearly without printing raw invalid input. Never mutate the caller's array. A help flag cannot hide invalid trailing arguments.
+Empty argv, root `--help`/`-h`/`-help`/`help`, a [help topic](#help-topics), and known exact command/group help succeed; `-help` is accepted wherever `--help` is. Unknown command plus `--help`/`-h` still refuses with exit 2. A first word that is no known command, no removed command, and no option refuses with exactly `Unknown command "WORD". Run pdd --help to see the commands.`, with control characters in `WORD` shown as spaces. The catalog's version routes accept no unrelated arguments. `completion` requires exactly `bash` or `zsh`. Only a catalog route explicitly marked `passthrough: true` (`accounts.codex`) collects trailing arguments verbatim into `operands` (consuming at most one leading `--` separator right after the route prefix, while returning local help when a single help flag immediately follows the prefix); no other route forwards native flags. Unknown/duplicate options, NUL/nonstrings, missing/extra operands, and excluded commands refuse clearly without printing raw invalid input. Never mutate the caller's array. A help flag cannot hide invalid trailing arguments.
 
 ## Authoring
 
-Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before authoring prompts or Stories. The [public alpha boundary](public-boundary.prompt.md) remains required native authoring/generation context for scope. These authoring instructions are not inputs to runtime parsing; the pure parser uses the catalog and the validation rules owned here.
+Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before authoring prompts or Stories. Follow the [public boundary](public-boundary.prompt.md) for scope and shared local command policy.
 
 ## Removed names
 
-Check for the catalog's removed words ([Names](command-catalog.prompt.md#names)) first, before any other rule, also right after `help`. `check` and `try` are known first words, so they never get `Unknown command`, and they never run. Every input whose command word is `check` or `try` (`pdd check …`, `pdd try …`, `pdd help check`, `pdd help try`), with any operands, options, help flags or unknown options, is a `CommandInputError` (exit 2) with exactly one line:
+Check for removed commands first, before any other rule, also right after `help`:
+
+1. Route-owned removed words ([Names](command-catalog.prompt.md#names)): `check` and `try` are known first words, so they never get `Unknown command` and never run. Every input whose command word is `check` or `try` (`pdd check …`, `pdd try …`, `pdd help check`, `pdd help try`) throws `CommandInputError` (exit 2) with one line:
 
 | Input | Line |
 |---|---|
@@ -18,45 +20,30 @@ Check for the catalog's removed words ([Names](command-catalog.prompt.md#names))
 | `check`, any other words | `pdd check was removed. Use pdd test.` |
 | `try`, any words | `pdd try was removed. Use pdd simulate.` |
 
-The line names the old and the new command, with no backticks or quotes, and repeats no other word of the input. Forbidden: help, a plan, a usage error about another word, or a second line.
+2. Standalone retired commands (`REMOVED_COMMANDS` in the catalog): `pdd workflow` (with any subcommand, flags, or after `help`) throws `CommandInputError` (exit 2) with an actionable pointer to `/pdd` (or `$pdd`), `pdd prove`, and `pdd autopilot` instead of bare `Unknown command "workflow"`.
 
 ## Help topics
 
-A help topic is a word after `help` that the catalog's `help` route lists as a topic ([help forms](command-catalog.prompt.md#help-forms)). Today the one topic is `prompting`. `pdd help prompting`, exactly these two words, returns the help plan with an empty `helpPrefix` and `topic: 'prompting'`. Any other word after the topic, also a help flag, is unsupported input (exit 2). A topic is no command: `pdd prompting` still gets `Unknown command`, and `pdd prompting --help` still refuses with exit 2. Forbidden: a plan that runs a command for a topic word, or a topic plan with extra words.
+A help topic is a word after `help` that the catalog's `help` route lists as a topic (`prompting`). `pdd help prompting`, exactly these two words, returns the help plan with an empty `helpPrefix` and `topic: 'prompting'`. Any other word after the topic, also a help flag, is unsupported input (exit 2). A topic is no command: `pdd prompting` gets `Unknown command`, and `pdd prompting --help` refuses with exit 2.
 
 ## Quiet names
 
-A quiet word (`sim`, `workflow start`) parses like the prefix of its route: same operands, options, validation, help and plan, with nothing added. So `pdd sim --help` is the `simulate` help and `pdd workflow start --help` is the `workflow run` help. `pdd test --lint` works like `pdd lint`. No plan has a `notice`.
-
-## Missing workflow name
-
-When the first operand after `workflow run`, or after the quiet `workflow start`, is a positive decimal issue number
-(the existing digits-only issue form), reject it with `CommandInputError` and
-message `Name the workflow: pdd workflow run small-change NUMBER (or bug, feature). See pdd workflow list.`,
-replacing NUMBER with that operand. The message names `run` also for `workflow start`. This identifies the missing name rather than
-using the generic unsupported-input diagnostic. Never infer or start a workflow.
-Preserve all other command parsing, help, option validation and issue forms;
-this rule changes only the diagnostic for a number in the workflow-name position.
+A quiet word (`sim`, `-V`) parses like the prefix of its route: same operands, options, validation, help, and plan, with nothing added. `pdd test --lint` resolves to the `lint` route's local disposition. No plan has a `notice`.
 
 ## Argument validation
 
-Runner routes accept exactly their catalogued operands and options. An option of kind `text` takes any one nonblank value (`--summary`, `--said`). Preserve its exact bytes including leading/trailing spaces and option-like strings such as "--help"; consumed text values are not help flags. Empty/whitespace-only, duplicate and missing values refuse before effects. A route whose last operand is repeated text (workflow.changes) supports `--` to end options, and a help word after `--` is text. Issue operands are a positive number, `owner/repo#number` or a GitHub issue URL. Workflow and step names are lowercase words joined by single hyphens, at most 64 characters. Whether a workflow, run or step exists belongs to the runner. Reject unsafe names, unsupported issues, unknown options and extra operands with exit 2 before any effect. Help for every route is local.
-
-Option kind `text-list` takes one or more nonblank words up to the next word that starts with `-` or the end of argv. Preserve each word's bytes and order in a fresh frozen array at that option's key. An empty list, including an option immediately followed by a help flag, refuses. Duplicate options still refuse; ordinary `text` options still take exactly one value. This supplies the catalog's selected test paths; the runner owns their path safety, uniqueness and source meaning.
-
-Option kind `integer` takes decimal digits with no sign and no leading zero (`0` itself only when the option's `min` is 0), within the option's `min` and `max`. Option kind `uuid` takes one UUID (8-4-4-4-12 hex digits). Which `check` and `try` options go together belongs to the [Runtime seam](runtime-seam.prompt.md).
-
-Option kind `optional-integer` consumes the following word only when it is decimal digits; validate against
-min/max and store it as a string. With no number, store the catalog's default as a string. A subsequent option
-or Story operand remains available for ordinary parsing. This supports --serve [PORT].
-
-Option kind `optional-text` consumes the following word when present and not starting with `-` (requiring nonblank text and preserving exact bytes); otherwise store Boolean `true` and leave subsequent options available for ordinary parsing.
-
-Accept the catalog's `pdd mcp` route without operands or options; normal local help forms apply. Parsing never starts the server or registers it.
+Routes accept exactly their catalogued operands and options:
+- `text`: any one nonblank value, preserving exact bytes including leading/trailing spaces and option-like strings such as `--help`.
+- `text-list`: one or more nonblank words up to the next `-` token or end of argv.
+- `integer`: decimal digits with no sign and no leading zero (`0` only when `min` is `0`), within `min..max`.
+- `optional-integer`: consumes the next token when decimal digits within `min..max`, else stores the catalog default string.
+- `optional-text`: consumes the next token when present and not starting with `-` (nonblank), else stores Boolean `true`.
+- `uuid`: standard 8-4-4-4-12 hex UUID.
+- `value`: exact match against `option.choices`.
+- `issue` operand: positive number, `owner/repo#number`, or GitHub issue URL.
+- Routes whose last operand is repeated `text` accept `--` to end options.
 
 ## Dependencies
 
-- [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for `PUBLIC_COMMAND_ROUTES`, exact prefixes, operand/option declarations and local dispositions. Parsing uses these route facts, with no outside calls.
-- Native authoring/generation also uses the repository context identified in Authoring above. The runtime-client link in Argument validation identifies ownership of downstream combination checks; parsing never calls it and needs no runtime client/session/token context.
-
-Workflow run parses the catalog origin, decision-id and outcome options as observational metadata and forwards them without granting workflow authority.
+- [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for `PUBLIC_COMMAND_ROUTES`, `REMOVED_COMMANDS`, exact prefixes, operand/option declarations, and local dispositions.
+- [Runtime seam](runtime-seam.prompt.md): owns downstream combination checks for `test`, `lint`, and `simulate`; parsing never imports it.

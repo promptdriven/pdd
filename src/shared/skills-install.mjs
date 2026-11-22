@@ -161,9 +161,22 @@ function findIn(read, skills, version) {
   return { found, stale: !staleSkills.length ? null : staleSkills.every(({ state }) => state === 'older') ? 'older' : 'differs', staleSkills };
 }
 
+function removeOwnedRetiredSkills(root) {
+  const removed = [];
+  for (const name of RETIRED_SKILL_NAMES) {
+    const dest = join(root, name);
+    if (pddOwned(dest)) { rmSync(dest, { recursive: true, force: true }); removed.push(dest); }
+  }
+  return removed;
+}
+
 function setupAgent({ agent, read, root, pluginManaged = null }, skills, version) {
   if (pluginManaged) {
-    return { agent, root, found: pluginManaged, pluginManaged: true, stale: null, staleSkills: [], installed: [], updated: [], removed: [] };
+    const result = { agent, root, found: pluginManaged, pluginManaged: true, stale: null, staleSkills: [], installed: [], updated: [], removed: [] };
+    try {
+      result.removed.push(...removeOwnedRetiredSkills(root));
+    } catch (error) { result.error = error; }
+    return result;
   }
   const result = { agent, root, found: null, stale: null, staleSkills: [], installed: [], updated: [], removed: [] };
   try {
@@ -172,10 +185,7 @@ function setupAgent({ agent, read, root, pluginManaged = null }, skills, version
     Object.assign(result, findIn(read, skills, version));
     if (!result.found) for (const { name, source, digest: sum } of skills)
       if (copyState(join(root, name), version, sum) === 'missing') result.installed.push(copySkill(source, root, name, version, sum));
-    for (const name of RETIRED_SKILL_NAMES) {
-      const dest = join(root, name);
-      if (pddOwned(dest)) { rmSync(dest, { recursive: true, force: true }); result.removed.push(dest); }
-    }
+    result.removed.push(...removeOwnedRetiredSkills(root));
   } catch (error) { result.error = error; }
   return result;
 }
@@ -198,6 +208,14 @@ function secondaryCodexRoots({ home, codexHome }) {
 function hasOwnedSkill(root) {
   try { if (!statSync(root).isDirectory()) return false; } catch { return false; }
   for (const name of [...PDD_SKILL_NAMES, ...RETIRED_SKILL_NAMES]) {
+    try { if (pddOwned(join(root, name))) return true; } catch { /* Unreadable entry is not owned. */ }
+  }
+  return false;
+}
+
+function hasOwnedRetiredSkill(root) {
+  try { if (!statSync(root).isDirectory()) return false; } catch { return false; }
+  for (const name of RETIRED_SKILL_NAMES) {
     try { if (pddOwned(join(root, name))) return true; } catch { /* Unreadable entry is not owned. */ }
   }
   return false;
@@ -272,18 +290,28 @@ export function syncOwnedUserSkills({ packageRoot, home, claudeConfigDir, codexH
     seen.add(key);
     if (hasOwnedSkill(root)) ownedRoots.push(root);
   }
-  if (!ownedRoots.length) {
+  const retiredOnlyRoots = [];
+  if (claudePluginManaged) {
+    const claudeKey = canonicalPath(claudeRoot);
+    if (!seen.has(claudeKey)) {
+      seen.add(claudeKey);
+      if (hasOwnedRetiredSkill(claudeRoot)) retiredOnlyRoots.push(claudeRoot);
+    }
+  }
+  if (!ownedRoots.length && !retiredOnlyRoots.length) {
     // Record sync state for this version so subsequent commands do not rescan all skill roots indefinitely.
     writeSyncState(resolvedStateRoot, syncFile, version);
     return { updated: [] };
   }
-  let skills;
-  try {
-    skills = PDD_SKILL_NAMES.map(name => ({ name, source: join(packageRoot, 'skills', name) }))
-      .map(skill => ({ ...skill, digest: digest(skill.source) }));
-  } catch (error) {
-    onError?.(packageRoot, error);
-    return { updated: [] };
+  let skills = [];
+  if (ownedRoots.length) {
+    try {
+      skills = PDD_SKILL_NAMES.map(name => ({ name, source: join(packageRoot, 'skills', name) }))
+        .map(skill => ({ ...skill, digest: digest(skill.source) }));
+    } catch (error) {
+      onError?.(packageRoot, error);
+      return { updated: [] };
+    }
   }
   const updated = [];
   let hadError = false;
@@ -297,14 +325,16 @@ export function syncOwnedUserSkills({ packageRoot, home, claudeConfigDir, codexH
           changed = true;
         }
       }
-      for (const name of RETIRED_SKILL_NAMES) {
-        const dest = join(root, name);
-        if (pddOwned(dest)) {
-          rmSync(dest, { recursive: true, force: true });
-          changed = true;
-        }
-      }
+      if (removeOwnedRetiredSkills(root).length > 0) changed = true;
       if (changed) updated.push(root);
+    } catch (error) {
+      hadError = true;
+      onError?.(root, error);
+    }
+  }
+  for (const root of retiredOnlyRoots) {
+    try {
+      if (removeOwnedRetiredSkills(root).length > 0) updated.push(root);
     } catch (error) {
       hadError = true;
       onError?.(root, error);

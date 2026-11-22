@@ -13,6 +13,16 @@ export function normalizeReleaseTag(tag) {
   return match ? match[1] : null;
 }
 
+/** Convert a SemVer version (including -alpha/-beta/-rc prereleases) to its PEP 440 PyPI equivalent. */
+export function toPep440Version(version) {
+  const raw = String(version).trim();
+  const match = /^(\d+\.\d+\.\d+)-(alpha|a|beta|b|rc)\.?(\d+)$/i.exec(raw);
+  if (!match) return raw;
+  const [, base, label, num] = match;
+  const l = label.toLowerCase();
+  return `${base}${l.startsWith('a') ? 'a' : l.startsWith('b') ? 'b' : 'rc'}${num}`;
+}
+
 export function readPyprojectField(pyprojectText, fieldName) {
   const lines = String(pyprojectText).split(/\r?\n/);
   const pattern = new RegExp(`^${fieldName}\\s*=\\s*"([^"]+)"\\s*(?:#.*)?$`);
@@ -55,11 +65,12 @@ export function checkVersionParity({ root = DEFAULT_ROOT, tag = null } = {}) {
   if (typeof npmVersion !== 'string' || !npmVersion) {
     problems.push('package.json is missing a valid version string.');
   }
-  if (pyprojectVersion !== npmVersion) {
-    problems.push(`python/pyproject.toml version (${pyprojectVersion ?? 'missing'}) != package.json version (${npmVersion}).`);
+  const expectedPyVersion = typeof npmVersion === 'string' && npmVersion ? toPep440Version(npmVersion) : npmVersion;
+  if (pyprojectVersion !== expectedPyVersion) {
+    problems.push(`python/pyproject.toml version (${pyprojectVersion ?? 'missing'}) != expected PEP 440 version (${expectedPyVersion}) for package.json (${npmVersion}).`);
   }
-  if (pyInitVersion !== npmVersion) {
-    problems.push(`python/pdd_cli/__init__.py __version__ (${pyInitVersion ?? 'missing'}) != package.json version (${npmVersion}).`);
+  if (pyInitVersion !== expectedPyVersion) {
+    problems.push(`python/pdd_cli/__init__.py __version__ (${pyInitVersion ?? 'missing'}) != expected PEP 440 version (${expectedPyVersion}) for package.json (${npmVersion}).`);
   }
   if (tag !== null && tag !== undefined && String(tag).trim() !== '') {
     const tagVersion = normalizeReleaseTag(tag);
@@ -73,6 +84,7 @@ export function checkVersionParity({ root = DEFAULT_ROOT, tag = null } = {}) {
   return {
     ok: problems.length === 0,
     version: npmVersion,
+    pyVersion: expectedPyVersion,
     pyprojectVersion,
     pyInitVersion,
     tagVersion: tag ? normalizeReleaseTag(tag) : null,
@@ -86,6 +98,7 @@ export function syncPypiVersion({ root = DEFAULT_ROOT } = {}) {
   if (typeof version !== 'string' || !version) {
     throw new Error('package.json is missing a valid version string.');
   }
+  const pyVersion = toPep440Version(version);
 
   const pyprojectPath = join(root, 'python', 'pyproject.toml');
   const pyprojectText = readFileSync(pyprojectPath, 'utf8');
@@ -101,7 +114,7 @@ export function syncPypiVersion({ root = DEFAULT_ROOT } = {}) {
       }
       if (inProject && !replacedPyproject && /^version\s*=\s*"[^"]+"/.test(trimmed)) {
         replacedPyproject = true;
-        return line.replace(/version\s*=\s*"[^"]+"/, `version = "${version}"`);
+        return line.replace(/version\s*=\s*"[^"]+"/, `version = "${pyVersion}"`);
       }
       return line;
     })
@@ -116,10 +129,10 @@ export function syncPypiVersion({ root = DEFAULT_ROOT } = {}) {
   if (!/^__version__\s*=\s*"[^"]+"/m.test(pyInitText)) {
     throw new Error('Could not find __version__ = "..." in python/pdd_cli/__init__.py.');
   }
-  const updatedInit = pyInitText.replace(/^__version__\s*=\s*"[^"]+"/m, `__version__ = "${version}"`);
+  const updatedInit = pyInitText.replace(/^__version__\s*=\s*"[^"]+"/m, `__version__ = "${pyVersion}"`);
   writeFileSync(pyInitPath, updatedInit);
 
-  return version;
+  return pyVersion;
 }
 
 const STAGE_SCRUB_EXACT_KEYS = new Set([

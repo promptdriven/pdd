@@ -62,7 +62,7 @@ for (const entry of readdirSync(skills, { withFileTypes: true }).filter(entry =>
     assert.equal(result.name, entry.name);
     assert.equal(typeof result.description, 'string');
     assert.ok(result.description.length <= 1024);
-    assert.match(result.metadata['pdd-skills'], /^\d+\.\d+\.\d+$/);
+    assert.match(result.metadata['pdd-skills'], /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
     if (entry.name === 'pdd') {
       assert.notEqual(result['disable-model-invocation'], true, 'pdd must remain model-invocable');
     } else {
@@ -88,3 +88,12 @@ for (const suffix of ['', ' ', '\t']) {
     assert.throws(() => frontmatter(header), { name: 'AssertionError' });
   });
 }
+
+test('skill frontmatter accepts SemVer prerelease versions such as 0.2.0-rc.1', () => {
+  for (const version of ['0.2.0-rc.1', '0.2.0-beta.2', '0.2.0-alpha.1']) {
+    const header = `---\nname: pdd\ndescription: Prompt-driven development\nmetadata:\n  pdd-skills: ${version}\n---\n`;
+    const parsed = frontmatter(header);
+    assert.equal(parsed.metadata['pdd-skills'], version);
+    assert.match(parsed.metadata['pdd-skills'], /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
+  }
+});

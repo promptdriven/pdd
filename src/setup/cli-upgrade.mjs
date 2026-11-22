@@ -4,11 +4,21 @@ import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isNewerRelease, parseReleaseVersion, pickLatestRelease } from '../release-notice.mjs';
+import {
+  classifyInstallKind,
+  detectGlobalInstallPrefix,
+  formatNpmInstallCommand,
+  formatNpmUninstallCommand,
+  hasLegacyUnscopedPdd,
+  npmCommandForInstall,
+  resolveInstalledRoot,
+} from '../shared/install-kind.mjs';
 import { PACKAGE_ROOT } from '../shared/package-root.mjs';
 import { resolvePddStateBase } from '../shared/state-dir.mjs';
 import * as defaultSkillsInstall from '../skills-install.mjs';
 
-const quote = text => `'${String(text).replace(/'/g, "'\\''")}'`;
+export { classifyInstallKind, detectGlobalInstallPrefix, hasLegacyUnscopedPdd };
+
 const writeLine = (stream, text) => { if (stream?.write) stream.write(`${text}\n`); };
 const canonicalDir = (folder, fs) => { try { return fs.realpathSync(folder); } catch { return folder; } };
 
@@ -27,50 +37,6 @@ const SKIP_LABELS = {
   'local-project': 'a local project node_modules installation',
   'unowned-prefix': 'a non-user-owned npm prefix',
 };
-
-export function classifyInstallKind(packageRoot, ports = {}) {
-  const fs = ports.fs ?? nativeFs;
-  const uid = ports.uid !== undefined ? ports.uid : (typeof process.getuid === 'function' ? process.getuid() : null);
-  if (typeof packageRoot !== 'string' || !packageRoot) return { kind: 'invalid' };
-  let real, info;
-  try {
-    real = fs.realpathSync(packageRoot);
-    info = fs.statSync(real);
-    if (!info.isDirectory()) return { kind: 'invalid' };
-  } catch { return { kind: 'invalid' }; }
-  const norm = real.replace(/\\/g, '/').replace(/\/+$/, '');
-  if (fs.existsSync(join(real, '.git'))) return { kind: 'git-checkout', realPackageRoot: real, hint: 'git pull && npm install' };
-  if (/(?:^|\/)(?:site-packages|dist-packages)\/(?:pdd|pdd_cli|pdd-cli)(?:\/|$)/.test(norm)) return { kind: 'pypi', realPackageRoot: real, hint: 'pip install -U pdd-cli' };
-  if (/(?:^|\/)\.pnpm(?:\/|$)|\/pnpm\/global(?:\/|$)/.test(norm)) return { kind: 'pnpm', realPackageRoot: real, hint: 'pnpm add -g @promptdriven/pdd@latest' };
-  if (/(?:^|\/)_npx(?:\/|$)/.test(norm)) return { kind: 'npx', realPackageRoot: real, hint: 'npm install -g @promptdriven/pdd && pdd setup' };
-  const match = /^(.*?)\/(?:lib\/)?node_modules\/(?:@promptdriven\/pdd|pdd)$/.exec(norm);
-  if (!match?.[1]) return { kind: 'unknown', realPackageRoot: real, hint: 'npm install -g @promptdriven/pdd && pdd setup' };
-  const prefix = match[1];
-  // Only classify as local-project when parent holds package.json; never check prefix/.git (Apple Silicon /opt/homebrew/.git is global!).
-  if (fs.existsSync(join(prefix, 'package.json'))) {
-    return { kind: 'local-project', prefix, realPackageRoot: real, hint: 'npm install @promptdriven/pdd@latest' };
-  }
-  try {
-    const prefixInfo = fs.statSync(prefix);
-    if (uid !== null && ((Number.isInteger(info.uid) && info.uid !== uid) || (Number.isInteger(prefixInfo.uid) && prefixInfo.uid !== uid))) {
-      return { kind: 'unowned-prefix', prefix, realPackageRoot: real, hint: 'npm install -g @promptdriven/pdd && pdd setup' };
-    }
-  } catch { return { kind: 'invalid', realPackageRoot: real }; }
-  return { kind: 'npm-global', prefix, realPackageRoot: real };
-}
-
-export function detectGlobalInstallPrefix(packageRoot, ports = {}) {
-  const c = classifyInstallKind(packageRoot, ports);
-  return c.kind === 'npm-global' ? { prefix: c.prefix, realPackageRoot: c.realPackageRoot } : null;
-}
-
-function resolveInstalledRoot(prefix, fallbackRoot, fs) {
-  for (const rel of ['lib/node_modules/@promptdriven/pdd', 'node_modules/@promptdriven/pdd', 'lib/node_modules/pdd', 'node_modules/pdd']) {
-    const candidate = join(prefix, rel);
-    try { if (fs.statSync(join(candidate, 'package.json')).isFile()) return candidate; } catch {}
-  }
-  return fallbackRoot;
-}
 
 async function queryGitHubJson(endpoint, { fetchImpl, spawnSyncImpl, env = process.env } = {}) {
   const effectiveFetch = typeof fetchImpl === 'function' ? fetchImpl : (!spawnSyncImpl ? globalThis.fetch : null);
@@ -119,11 +85,12 @@ export async function resolveMainCommitTarget(options = {}) {
   return { channel: 'main', ref: sha, sha, spec: `github:promptdriven/pdd#${sha}` };
 }
 
-function runNpmInstall(spawnImpl, prefix, spec, env) {
-  const res = spawnImpl('npm', ['install', '-g', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', spec], { encoding: 'utf8', timeout: 120000, env });
+function runNpmAction(spawnImpl, install, action, spec, env, timeout = 120000) {
+  const invocation = npmCommandForInstall(install, action, spec, env);
+  const res = spawnImpl(invocation.command, invocation.args, { encoding: 'utf8', timeout, env: invocation.env });
   const ok = (res?.status ?? res?.code ?? (res?.error ? 1 : 0)) === 0;
   const raw = `${res?.stderr || ''}\n${res?.stdout || ''}\n${res?.error?.message || ''}`;
-  const detail = (res?.stderr || res?.stdout || res?.error?.message || 'npm install failed').trim().split('\n')[0];
+  const detail = (res?.stderr || res?.stdout || res?.error?.message || `npm ${action} failed`).trim().split('\n')[0];
   return { ok, raw, detail };
 }
 
@@ -133,13 +100,13 @@ export async function runCliUpgrade({
 } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const resolvedHome = home ?? env.HOME ?? (ports.homedir ?? homedir)();
-  const install = classifyInstallKind(packageRoot, { fs, uid: ports.uid });
+  const install = classifyInstallKind(packageRoot, { fs, uid: ports.uid, env, platform: ports.platform });
   const fail = (msg, fromVersion, toVersion) => {
     writeLine(stderr, msg);
     return { exitCode: 1, cliUpdated: false, ...(fromVersion ? { fromVersion, toVersion } : {}), updatedSkills: [], skippedSkills: [], failedSkills: [] };
   };
-  if (install.kind !== 'npm-global') {
-    return fail(`pdd upgrade skips ${SKIP_LABELS[install.kind] ?? 'this installation'} (${packageRoot}).\n  Invariant: pdd upgrade modifies only a user-owned global npm installation of @promptdriven/pdd.\n  Fix: Run \`${install.hint ?? 'npm install -g @promptdriven/pdd && pdd setup'}\`.\n  Rerun: pdd --version`);
+  if (install.kind !== 'npm-global' && install.kind !== 'volta') {
+    return fail(`pdd upgrade skips ${SKIP_LABELS[install.kind] ?? 'this installation'} (${packageRoot}).\n  Invariant: pdd upgrade modifies only a user-owned global npm installation (including Volta) of @promptdriven/pdd.\n  Fix: Run \`${install.hint ?? 'npm install -g @promptdriven/pdd && pdd setup'}\`.\n  Rerun: pdd --version`);
   }
   const currentVersion = readJson(join(install.realPackageRoot, 'package.json'), fs)?.version;
   if (!parseReleaseVersion(currentVersion)) {
@@ -154,25 +121,37 @@ export async function runCliUpgrade({
   }
 
   const spawnImpl = spawnSyncImpl ?? nativeSpawnSync;
-  const quotedPrefix = quote(install.prefix);
+  const isVolta = install.kind === 'volta';
+  const legacyVoltaUnscoped = isVolta && (install.isLegacyUnscoped || hasLegacyUnscopedPdd(install, { fs, uid: ports.uid }));
   let cliUpdated = false;
-  if (main || isNewerRelease(target.version, currentVersion)) {
+  if (main || legacyVoltaUnscoped || isNewerRelease(target.version, currentVersion)) {
+    if (legacyVoltaUnscoped) {
+      const uninstall = runNpmAction(spawnImpl, install, 'uninstall', 'pdd', env, 60000);
+      if (!uninstall.ok) {
+        return fail(
+          `pdd upgrade failed to remove the unscoped pdd package under Volta (${uninstall.detail}). To migrate manually, run: ${formatNpmUninstallCommand(install)} && ${formatNpmInstallCommand(install, target.spec)} && pdd setup`,
+          currentVersion,
+          currentVersion,
+        );
+      }
+    }
     let spec = target.spec;
-    let attempt = runNpmInstall(spawnImpl, install.prefix, spec, env);
+    let attempt = runNpmAction(spawnImpl, install, 'install', spec, env, 120000);
     if (!attempt.ok && !/\bEEXIST\b/.test(attempt.raw) && target.fallbackSpec) {
       spec = target.fallbackSpec;
-      attempt = runNpmInstall(spawnImpl, install.prefix, spec, env);
+      attempt = runNpmAction(spawnImpl, install, 'install', spec, env, 120000);
     }
     if (!attempt.ok) {
+      const retryInstall = formatNpmInstallCommand(install, spec);
       if (/\bEEXIST\b/.test(attempt.raw)) {
-        return fail(`pdd upgrade hit an existing bin/pdd collision at ${join(install.prefix, 'bin/pdd')} (${attempt.detail}).\n  Invariant: global npm refuses to overwrite an unscoped "pdd" or foreign bin/pdd binary.\n  Fix: Run \`npm uninstall -g pdd\` to remove the conflicting package.\n  Rerun: npm install -g --prefix ${quotedPrefix} --ignore-scripts ${spec} && pdd setup`, currentVersion, currentVersion);
+        return fail(`pdd upgrade hit an existing bin/pdd collision at ${join(install.prefix, 'bin/pdd')} (${attempt.detail}).\n  Invariant: global npm refuses to overwrite an unscoped "pdd" or foreign bin/pdd binary.\n  Fix: Run \`npm uninstall -g pdd\` to remove the conflicting package.\n  Rerun: ${retryInstall} && pdd setup`, currentVersion, currentVersion);
       }
-      return fail(`pdd upgrade failed to install ${spec} (${attempt.detail}). To retry, run: npm install -g --prefix ${quotedPrefix} --ignore-scripts ${spec} && pdd setup`, currentVersion, currentVersion);
+      return fail(`pdd upgrade failed to install ${spec} (${attempt.detail}). To retry, run: ${retryInstall} && pdd setup`, currentVersion, currentVersion);
     }
     cliUpdated = true;
   }
 
-  const targetPkgRoot = resolveInstalledRoot(install.prefix, install.realPackageRoot, fs);
+  const targetPkgRoot = resolveInstalledRoot(install, install.realPackageRoot, fs);
   const toVersion = readJson(join(targetPkgRoot, 'package.json'), fs)?.version ?? (cliUpdated && target.version ? target.version : currentVersion);
   const stateRoot = ports.stateHome ? join(ports.stateHome, 'pdd') : resolvePddStateBase(env);
   try { fs.rmSync(join(stateRoot, 'release-check.json'), { force: true }); } catch {}

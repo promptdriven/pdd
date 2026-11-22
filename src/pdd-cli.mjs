@@ -419,7 +419,9 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         };
         for (const result of skillsFn(skillOpts)) {
           if (result.pluginManaged) {
+            if (result.removed?.length) line(stdout, `Removed retired PDD skills from ${result.root}: ${skillNames(result.removed)}`);
             line(stdout, `PDD skills for ${result.agent} are managed by an installed plugin (${result.found}). Skipping duplicate copy.`);
+            if (result.error) { line(stderr, `pdd setup: the PDD skills could not be cleaned in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
             continue;
           }
           if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
@@ -700,11 +702,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'update-sync': {
       try {
-        const { runUpdate } = await import('./update-sync.mjs');
+        const mod = await import('./update-sync.mjs');
+        const runUpdate = mod.runUpdateSync ?? mod.runUpdate;
         return runUpdate({
           cwd,
           files: [...plan.operands],
           ...(plan.options['--from'] !== undefined ? { from: plan.options['--from'] } : {}),
+          ...(plan.options['--branch'] !== undefined ? { branch: plan.options['--branch'] } : {}),
+          all: plan.options['--all'] === true,
           check: plan.options['--check'] === true,
           write: plan.options['--write'] === true,
           json: plan.options['--json'] === true,

@@ -83,6 +83,16 @@ test('#3498 sync-pypi-version updates pyproject.toml + __init__.py on version bu
     const bad = spawnSync(process.execPath, [syncScript, '--check', '--root', sandbox, '--tag', badTag], { encoding: 'utf8' });
     assert.equal(bad.status, 1);
   }
+
+  // SemVer prereleases map to PEP 440 in Python while matching SemVer release tags.
+  for (const [semver, pep440] of [['0.2.0-rc.1', '0.2.0rc1'], ['0.2.0-beta.1', '0.2.0b1'], ['0.2.0-alpha.1', '0.2.0a1']]) {
+    writeFileSync(join(sandbox, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version: semver }, null, 2) + '\n');
+    assert.equal(syncPypiVersion({ root: sandbox }), pep440);
+    assert.equal(readPyprojectVersion(readFileSync(join(sandbox, 'python', 'pyproject.toml'), 'utf8')), pep440);
+    assert.equal(readPythonInitVersion(readFileSync(join(sandbox, 'python', 'pdd_cli', '__init__.py'), 'utf8')), pep440);
+    const ok = spawnSync(process.execPath, [syncScript, '--check', '--root', sandbox, '--tag', `v${semver}`], { encoding: 'utf8' });
+    assert.equal(ok.status, 0, ok.stderr);
+  }
 });
 
 test('#3498 release workflow validates release tags, smoke-tests offline PyPI pdd with empty stderr + lint --local, and sets attestations: false on token fallback', () => {
