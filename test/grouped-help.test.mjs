@@ -34,7 +34,7 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   assert.equal(allLines[0], 'PDD: prompt-driven development for your coding agent.');
   assert.equal(allLines[2], 'Usage: pdd <command> [options]');
   assert.equal(allLines[4], 'Quick start:');
-  assert.match(baseline, /Quick start:\n  pdd setup\b[\s\S]*?\n  pdd test\b[\s\S]*?\n  pdd simulate\b[\s\S]*?\n  pdd help prompting\b/);
+  assert.match(baseline, /Quick start:\n  pdd setup\b[\s\S]*?\n  pdd init\b[\s\S]*?\n  pdd status\b[\s\S]*?\n  pdd test\b[\s\S]*?\n  pdd simulate\b/);
 
   // Human-first group ordering: Core PDD workflow before Cloud accounts, Workflows, Autopilot, Metrics
   const coreIdx = baseline.indexOf('Core PDD workflow:');
@@ -49,6 +49,10 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
 
   // Core commands come right at the top, not buried behind metrics/internals
   assert.ok(baseline.indexOf('  pdd setup [--yes]') < baseline.indexOf('  pdd metrics'));
+  const initIdx = baseline.indexOf('  pdd init', coreIdx);
+  const statusIdx = baseline.indexOf('  pdd status [PATH...]', coreIdx);
+  assert.ok(initIdx > coreIdx && initIdx < accountsIdx);
+  assert.ok(statusIdx > coreIdx && statusIdx < accountsIdx);
   assert.ok(baseline.indexOf('  pdd autopilot logs [ISSUE] [-f]') > autopilotIdx);
   assert.ok(baseline.includes('  pdd --version | -V | pdd -VV   Show CLI version (and interpreter build).'));
 
@@ -64,10 +68,10 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
     assert.ok(line.length <= 80, `closingLine exceeds 80 columns (${line.length}): "${line}"`);
   }
 
-  // Preserves Focused help guidance and installed Prompting guide / RUNBOOK paths
+  // Preserves Focused help guidance and installed PDD skill / Prompting guide paths
   assert.match(baseline, /Focused help: run pdd <command> --help/);
-  assert.match(baseline, /Prompting guide: \/opt\/pdd\/docs\/prompting-guide\.md/);
-  assert.match(baseline, /RUNBOOK: \/opt\/pdd\/RUNBOOK\.md/);
+  assert.match(baseline, /Skill: \/opt\/pdd\/skills\/pdd\/SKILL\.md/);
+  assert.match(baseline, /Prompting guide: \/opt\/pdd\/skills\/pdd\/references\/prompting\.md/);
 });
 
 test('3496: focused family and command help exposes complete options, defaults, constraints and approval heredocs', async () => {

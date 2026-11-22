@@ -18,9 +18,9 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['setup', 'check', 'lint', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use', 'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause', 'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log', 'product.status', 'product.next', 'product.start', 'workflow.list', 'workflow.run', 'workflow.status', 'workflow.view', 'workflow.card', 'workflow.approve', 'workflow.changes', 'workflow.open', 'workflow.prove', 'workflow.suite', 'workflow.done', 'workflow.publish', 'workflow.ask', 'workflow.request-uptake', 'workflow.resend', 'workflow.park', 'workflow.yield', 'workflow.tidy', 'workflow.cancel', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'graph', 'dependencies.prepare', 'dependencies.complete', 'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop', 'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust', 'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.report', 'autopilot.regressions', 'autopilot.alerts', 'autopilot.alert', 'autopilot.audit', 'autopilot.check-base', 'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off', 'completion', 'help', 'version', 'version.detailed']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['setup', 'init', 'status', 'check', 'lint', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use', 'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause', 'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log', 'product.status', 'product.next', 'product.start', 'workflow.list', 'workflow.run', 'workflow.status', 'workflow.view', 'workflow.card', 'workflow.approve', 'workflow.changes', 'workflow.open', 'workflow.prove', 'workflow.suite', 'workflow.done', 'workflow.publish', 'workflow.ask', 'workflow.request-uptake', 'workflow.resend', 'workflow.park', 'workflow.yield', 'workflow.tidy', 'workflow.cancel', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'graph', 'dependencies.prepare', 'dependencies.complete', 'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop', 'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust', 'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.report', 'autopilot.regressions', 'autopilot.alerts', 'autopilot.alert', 'autopilot.audit', 'autopilot.check-base', 'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off', 'completion', 'help', 'version', 'version.detailed']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
-    ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
+    ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['setup', '--skills-dir', '/tmp/s'], ['init'], ['status'], ['status', '--changed', '--json'], ['sim', 'demo'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
   }
@@ -47,16 +47,16 @@ test('ALPHA4: actual packed package runs every advertised local command without 
   const pack = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', sandbox],
     { cwd: root, env, encoding: 'utf8', timeout: 30000 }))[0];
   const archive = join(sandbox, pack.filename), names = pack.files.map(f => f.path);
-  for (const required of ['bin/pdd.mjs', 'RUNBOOK.md', 'docs/prompting-guide.md', 'skills/pdd-prompting/SKILL.md',
+  for (const required of ['bin/pdd.mjs', 'skills/pdd/SKILL.md', 'skills/pdd/references/prompting.md', 'skills/pdd-prompting/SKILL.md',
     'src/workflow-runner.mjs', 'skills/pdd-feature/workflow.json', 'skills/pdd-bug/workflow.json', 'skills/pdd-small-change/workflow.json']) assert.ok(names.includes(required), required);
   for (const file of readdirSync(join(root, 'skills'), { recursive: true }))
-    if (file.startsWith('pdd-') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
-  // RUNBOOK §21's installed examples require these six runnable scenarios; no native tests, fixtures or other test assets ship.
+    if ((file.startsWith('pdd/') || file.startsWith('pdd-')) && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
+  // Installed examples require these six runnable scenarios; no native tests, fixtures or other test assets ship.
   assert.deepEqual(names.filter(name => name.startsWith('test/')).sort(), [
     'test/runtime/fake-database.json', 'test/runtime/fake-decision.json', 'test/runtime/fake-factory.json',
     'test/runtime/fake-files.json', 'test/runtime/fake-hash.json', 'test/runtime/fake-service.json'
   ]);
-  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('skills/pdd/') || name.startsWith('prompts/cli/') || name === 'src/guidance.mjs'), false);
+  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('prompts/cli/') || name === 'src/guidance.mjs'), false);
   bundleInstalledDependencies(root, archive, sandbox);
   execFileSync('npm', ['install', '--prefix', consumer, archive, '--ignore-scripts', '--offline', '--no-audit', '--no-fund', '--package-lock=false'],
     { cwd: consumer, env, encoding: 'utf8', timeout: 30000 });
@@ -70,14 +70,14 @@ for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync
 for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const original=fs[key];fs[key]=function(path,...args){if(/(?:\\/toolbox\\/|\\/\\.ssh(?:\\/|$)|\\/credentials(?:\\/|$)|\\/\\.npmrc$)/.test(String(path)))stop();return original.call(this,path,...args);};}syncBuiltinESMExports();`);
   const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', guard, bin, ...args],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','start','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['init','--help'], ['status','--help'], ['workflow','start','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|runtime|doctor|phone)\b/);
   }
-  // help-teaches-pdd: root help and the prompting topic name the guide files of the installed package, not of the cwd.
+  // help-teaches-pdd: root help and the prompting topic name the skill and guide files of the installed package, not of the cwd.
   for (const argv of [['help'], ['help', 'prompting']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
-    for (const file of ['docs/prompting-guide.md', 'RUNBOOK.md']) {
+    for (const file of ['skills/pdd/SKILL.md', 'skills/pdd/references/prompting.md']) {
       const path = answer.stdout.split('\n').find(line => line.endsWith(`/${file}`))?.replace(/^[^/]*/, '');
       assert.equal(path, join(realpathSync(packed), file)); assert.ok(existsSync(path), file);
     }

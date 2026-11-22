@@ -2,26 +2,30 @@
 
 This page lists every command of pdd 0.1.41, as `pdd --help` and `pdd <command> --help` show it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help catalog is on this page.
 
-You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
+You need the pdd command for local inspection (`pdd status`, `pdd files`, `pdd owner`), remote checks (`pdd test`, `pdd lint`, `pdd simulate`, `pdd approve`), and workflow runs with PRs. Install the single `/pdd` skill globally with `pdd setup` (or `npx skills add promptdriven/pdd -g`), and set up each repository once with `pdd init`. For simulations that your agent drives, use the Try tools in `pdd mcp`. Call the skill with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
 Typing `pdd check` or `pdd try` runs nothing and prints the name of the command to use.
 
-## Set up a repo
+## Set up your machine and repo
 
 | Command | What it does |
 |---|---|
-| `pdd setup [--yes]` | Check for a ready agent, install the seven [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. In a Git repository, add the line `.pdd/` at the end of the root `.gitignore` when no line there is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/`; `pdd test` keeps its local cache there. Setup only appends: all other bytes stay the same. When the last such line starts with `!`, or no such line exists but a `!` line names `.pdd` or a path in it (such as `!.pdd/config.json`), setup changes nothing and says so. Repeat setup keeps an existing Autopilot mode |
-| `pdd upgrade [--main]` | Update a user-owned global `pdd` installation from the latest GitHub release (or the pinned `main` commit with `--main`) using `--ignore-scripts`, refresh `.pdd-skill.json`-marked user PDD skills across supported agent folders, and clear cached release notices |
+| `pdd setup [--yes] [--skills-dir PATH]` | One-time laptop setup: check `gh` authentication (non-blocking), install or refresh the bundled [PDD skill](USAGE.md#4-the-pdd-skills) in user agent skill folders (respecting Claude Code plugin installs and optional `--skills-dir PATH`), preview and register PDD Simulator MCP tools in detected agents (Codex, Claude Code, Gemini CLI, Antigravity), and report any PATH conflict. Never edits repository files or asks Autopilot questions |
+| `pdd init` | One-time per-repository setup: add or update the 4-line PDD block between `<!-- pdd:start -->` and `<!-- pdd:end -->` in `CLAUDE.md` (if it exists) else `AGENTS.md` (creating `AGENTS.md` if neither exists), detect project language and test command, and keep all other bytes untouched |
+| `pdd status [PATH...] [--changed] [--json]` | Offline repository overview: inspect prompts, Stories, tests, file ownership, PDD block status, and `pdd.json` `verify.paths` Feature Map coverage without network or AI calls |
+| `pdd upgrade [--main]` | Update a user-owned global `@promptdriven/pdd` installation from npm (with GitHub tag fallback, or the pinned `main` commit with `--main`) using `--ignore-scripts`, refresh `.pdd-skill.json`-marked user PDD skills across supported agent folders, and clear cached release notices |
 
-`pdd setup` copies the skills to `~/.agents/skills` (Codex and Gemini) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path (Claude Code), and updates existing `.pdd-skill.json`-marked folders in `~/.codex/skills` and `$CODEX_HOME/skills`. If `npx skills` already installed them, it copies nothing. When the skills it finds are older than this pdd, or differ from its skills, it says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y`, without `-g` for a copy in the project. After an update of the pdd command, `pdd setup`, `pdd upgrade`, and the once-per-version automatic sync on normal `pdd` commands replace older or same-version differing copies with the `.pdd-skill.json` marker (including invalid markers), add missing bundled skills to existing marked folders, and remove `.pdd-skill.json`-marked retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`). Direct `npm install -g github:promptdriven/pdd` runs no lifecycle scripts; `pdd upgrade` updates the CLI and `.pdd-skill.json`-marked skills together in one command (including when the CLI is already at the latest version), and normal `pdd` commands sync existing `.pdd-skill.json`-marked user folders automatically. Unmarked folders, customized copies, symlinks and unrelated custom skills are never modified; `pdd upgrade` reports updated marked folders, lists skipped unmarked or customized folders with `npx skills add promptdriven/pdd -g --skill '*'` (without `-g` for project folders), and reports failed folders with their recovery commands. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd-feature is 0.1.20`. Run `pdd upgrade` or `pdd setup` to update copies installed by pdd in user folders. For copies from another installer, use the shown `npx skills add` command. Discovery and `--json` commands write nothing. The `pdd-setup` skill adds the project block and ignore rule in a chat; it installs nothing and does not register MCP tools. Run it in the top folder of the repo.
+`pdd setup` copies the bundled skill to `~/.agents/skills` (Codex and Gemini CLI), `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path, skipping automatically when Claude Code already has the PDD plugin installed in `installed_plugins.json`), and `~/.gemini/config/skills` (Antigravity). Pass `--skills-dir PATH` to target an extra skill folder. Setup also updates existing `.pdd-skill.json`-marked folders in `~/.codex/skills` and `$CODEX_HOME/skills`. After an update of the pdd command, `pdd setup`, `pdd upgrade`, and the once-per-version automatic sync on normal `pdd` commands replace older or same-version differing copies with the `.pdd-skill.json` marker (including invalid markers), add missing bundled skills to existing marked folders, and remove `.pdd-skill.json`-marked retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`). Unmarked folders, customized copies, symlinks and unrelated custom skills are never modified; `pdd upgrade` reports updated marked folders, lists skipped unmarked or customized folders with `npx skills add promptdriven/pdd -g --skill '*'` (without `-g` for project folders), and reports failed folders with their recovery commands. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd is 0.1.20`. Discovery, `pdd files`, `pdd init`, `pdd status` and `--json` commands write nothing and skip automatic network checks.
 
-Setup previews the exact MCP configuration changes for the Codex, Claude Code and Gemini agents it finds, then asks once (y/N). Only `y` writes those changes, including the approval setting for this Codex server. Registrations pin this running pdd executable, so another installation earlier on PATH cannot receive its tools. Other configuration is preserved. Codex uses `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and the `mcp_servers.pdd` entry with `default_tools_approval_mode = "approve"`. Claude Code uses the `mcpServers.pdd` entry in its configuration; Gemini uses `mcpServers.pdd` in `~/.gemini/settings.json` with server trust. Each entry runs `pdd mcp`. A conflicting existing entry is preserved and reported.
+Setup previews the exact PDD Simulator MCP tools configuration changes for the Codex, Claude Code, Gemini CLI and Antigravity (`agy`) agents it finds, then asks once (y/N). Passing `--yes` applies the previewed MCP configuration without asking; without `--yes` in a non-interactive terminal, MCP registration is skipped safely. Registrations pin this running pdd executable, so another installation earlier on PATH cannot receive its tools, and stale PDD entries are updated in place while preserving unrelated servers and formatting. Codex uses `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and `mcp_servers.pdd` with `default_tools_approval_mode = "approve"`. Claude Code uses `mcpServers.pdd` in its configuration; Gemini CLI uses `mcpServers.pdd` in `~/.gemini/settings.json` with server trust (detected via `settings.json` or `gemini` on PATH); Antigravity uses `mcpServers.pdd` in `~/.gemini/config/mcp_config.json`. Each entry runs `pdd mcp`. A symlinked agent config is skipped with a warning and exit 0, and a failure in one agent does not block registering healthy agents.
 
-Setup also reports the running pdd executable and version, the `pdd` paths in order, and which path and version a plain `pdd` selects. A PATH conflict report includes the absolute command for this pdd and explains that environment activation, such as conda, must come before correcting PATH. It keeps other installations. `--version` preserves its version-only stdout; PATH diagnostics go to stderr. `workflow run` gives a one-line warning when another pdd comes first.
+Setup also reports PATH conflicts when another `pdd` executable precedes this one on PATH, listing the running pdd executable and version, the `pdd` paths in order, and the exact command for this pdd. When PATH is clean, setup stays quiet. `--version` preserves its version-only stdout; PATH diagnostics go to stderr. `workflow run` gives a one-line warning when another pdd comes first.
+
+`pdd init` sets up the current repository without touching user-global skills, MCP config, or root `.gitignore` (`.pdd/.gitignore` is written automatically whenever `.pdd/` is created). It preserves existing line endings (LF or CRLF), refuses symlinked instruction files cleanly, and detects project stack and test commands so the agent can start immediately.
 
 ## Repository Autopilot settings
 
-`pdd setup` asks for `off`, `observe` or `auto` once in a Git repository with a terminal. An empty answer selects `off`. It shows the owner and available write-access people, warns when lookup is incomplete, and optionally asks for additional GitHub names. Repeat setup keeps the saved mode and can add names. Without a terminal on both stdin and stdout, with `--yes`, or outside Git, it asks no Autopilot questions and saves no Autopilot settings. Without both terminals or with `--yes`, setup also declines MCP registration without asking, even when called by an agent. The normal skills, project block and ignore-file actions still run. A symlinked agent config is skipped with a warning and exit 0; incomplete GitHub owner lookup also warns without failing setup. Required write failures and malformed configs still return an error.
+Manage Autopilot repository mode and trust directly with `pdd autopilot`:
 
 | Command | What it does |
 | --- | --- |
@@ -38,7 +42,7 @@ Settings live in the repository's `pdd.json`, for example `{"autopilot":{"mode":
 - When the default branch accepts changes only through a PR: the URL of a PR from a `pdd/autopilot-settings-…` branch, which you must merge before the GitHub copy has the new setting. While that PR is open, the next command adds its change to the same PR. When the new setting is the same as on the default branch, pdd closes the PR with a short comment.
 - When the copy on GitHub then has other settings than your checkout, one more line shows both.
 
-When another change of `pdd.json` on GitHub comes between pdd's read and its write, pdd reads the file again and tries once more. When GitHub cannot be reached or `gh` is not signed in, the local setting stays, the exit code is 0, and the line tells you to run the same command again. `pdd autopilot start` and `pdd autopilot status` print a warning when the copy on GitHub has another mode or trust list, with the commands that change it, or when a settings PR is still open, with its URL. The warning says that Autopilot on this machine uses this checkout's settings (and this machine's `--mode` and `--label`, when set), and that other machines and people read the GitHub copy. `pdd setup` saves a first mode only in your checkout and never writes to GitHub; it prints the command that puts the mode there. Invalid saved modes count as `off` with a notice; setup leaves them unchanged, and a mode command replaces them. Names match ignoring case. The repository owner, people with write access (including access through an organization team), and explicitly added names are trusted independently. An incomplete lookup never establishes trust for an unknown person.
+When another change of `pdd.json` on GitHub comes between pdd's read and its write, pdd reads the file again and tries once more. When GitHub cannot be reached or `gh` is not signed in, the local setting stays, the exit code is 0, and the line tells you to run the same command again. `pdd autopilot start` and `pdd autopilot status` print a warning when the copy on GitHub has another mode or trust list, with the commands that change it, or when a settings PR is still open, with its URL. The warning says that Autopilot on this machine uses this checkout's settings (and this machine's `--mode` and `--label`, when set), and that other machines and people read the GitHub copy. Invalid saved modes count as `off` with a notice; a mode command replaces them. Names match ignoring case. The repository owner, people with write access (including access through an organization team), and explicitly added names are trusted independently. An incomplete lookup never establishes trust for an unknown person.
 
 These commands store settings and determine trust. Selecting a mode starts no run and makes no interpreter call. Approval policy, including `strict_approvals`, stays independent. Code replay reads `replay.base_scenarios` (`"linked"` or `"all"`) from `pdd.json` on each run's base commit; see [add all approved base scenarios](replay-evidence.md#add-all-approved-base-scenarios).
 
@@ -75,24 +79,19 @@ working files only. It does not sign in, call the interpreter or change a file.
 PATH is relative to the current folder and must be inside the repository. The
 file does not need to exist: a prompt is written before its code.
 
-pdd reads three records, in this order:
+pdd reads two explicit ownership records, in this order:
 
 | Source | Record | Certain |
 |---|---|---|
 | `binding` | An entry of the root `pdd-bindings.json` with `module` PATH and a `prompt` | yes |
-| `header` | A `Prompt: PROMPT` or `Generated from PROMPT` comment line in the first 4 KiB of the file ([header form](replay-evidence.md#approved-scenarios-on-the-base)) | yes |
-| `prose` | The first sentence of a prompt's opening paragraph names PATH, for example ``Own `src/x.mjs`.`` | no |
+| `header` | A `Prompt: PROMPT` or `Generated from PROMPT` comment line (`//`, `#`, `--`, `/* ... */`, `<!-- ... -->`, MDX `{/* ... */}`, or YAML frontmatter `prompt:`) in the first 4 KiB of the file ([header form](replay-evidence.md#approved-scenarios-on-the-base)) | yes |
 
-The prose record is used only when no binding or header names a prompt. A prose
-answer is not certain. Treat a file with `certain: false` as owned. The answer is
-also not certain when a binding or header names a prompt that does not exist,
-when `pdd-bindings.json` cannot be read and no owner is found, or when the file
-cannot be read and no binding names a prompt. A short note tells you what to add.
+Prose mentions and filename stem matches never claim ownership: when no binding or header exists, pdd reports `owner: null`, `owners: []`, `source: null`, `certain: true`, and prints an advisory `note` suggesting an explicit `// Prompt: ...` header or `pdd-bindings.json` entry when a prompt mentions the path. The answer is `certain: false` when a binding or header names a prompt that does not exist, when `pdd-bindings.json` cannot be read and no owner is found, or when the file cannot be read and no binding names a prompt.
 
 ```text
 src/runner.mjs: prompts/cli/runner.prompt.md (header)
-src/queue.mjs: prompts/cli/queue.prompt.md (prose, not certain: treat as owned)
-  named only in the opening sentence of prompts/cli/queue.prompt.md; add a Generated from header or a pdd-bindings.json entry
+src/queue.mjs: no owner
+  hint: prompts/cli/queue.prompt.md mentions this path; add `// Prompt: prompts/cli/queue.prompt.md` or a pdd-bindings.json entry to claim ownership
 src/rules.mjs: prompts/cli/rules.prompt.md (header)
   prompts/cli/rules.prompt.md header hash is stale (OLD); current is NEW
 docs/guide.md: no owner
@@ -100,8 +99,8 @@ docs/guide.md: no owner
 
 With `--json`, pdd prints `{"schema_version":"pdd.owner.v1","files":[...]}`. Each
 row has `path`, `owner` (the first owner or null), `owners` (every owner: binding
-first, then headers in line order; or the sorted prose owners), `source`
-(`binding`, `header`, `prose` or null), `certain`, `note` (empty when there is
+first, then headers in line order), `source`
+(`binding`, `header` or null), `certain`, `note` (empty when there is
 nothing to add) and `headers`.
 
 `headers` has one row for each provenance header of the file: `prompt`,
@@ -535,9 +534,7 @@ missing or invalid value uses the default.
 The agent jobs' own `gh` calls are not counted and do not wait for the floor.
 Safety reads (claim checks, trust, permissions and write readbacks) and writes can
 use the reserve. Other `pdd` operations are counted but do not wait for this
-floor. The budget does not keep 70% of the limit for you. To give Autopilot a
-limit of its own, see the design note
-[A GitHub App token for Autopilot](autopilot-github-app-token.md).
+floor. The budget does not keep 70% of the limit for you.
 
 The dependency snapshot is saved beside the repository's GitHub call ledger as
 `github/H.snapshot.json` in the Autopilot state folder. Its temporary lock is
@@ -865,7 +862,7 @@ must be updated before comparison. An unknown action needs read-only state
 reconciliation; the comparator never sends it again. Ordinary page reports and
 exit codes remain as described above.
 
-See [Check prompts on the PDD interpreter](USAGE.md#7-check-prompts-on-the-pdd-interpreter) for the exit codes, `pdd test --help`, `pdd lint --help` and `pdd simulate --help` for the options, and `RUNBOOK.md` for the file formats.
+See [Check prompts on the PDD interpreter](USAGE.md#7-check-prompts-on-the-pdd-interpreter) for the exit codes, `pdd test --help`, `pdd lint --help` and `pdd simulate --help` for the options, and [`skills/pdd/references/stories.md`](../skills/pdd/references/stories.md) for the file formats.
 
 The Simulator's agent fills the fields directly when supported. It runs the action only when you explicitly ask, in your own words; otherwise you press Run. Actions use the simulation budget. Older pages keep manual Fill fields and Run.
 
@@ -1424,7 +1421,7 @@ Each tick, without AI calls:
    Story, the verdict first and the Story file path first in the parentheses
    (`Runtime: PASS (STORY, N/N checks)`, `Runtime: FAIL (STORY, N of M checks failed:
    STEPS)` or `Runtime: not run (STORY: REASON)`), and one `Evidence:` line in the PR
-   body ([RUNBOOK §15, "Autopilot core jobs"](../skills/pdd-prompting/runbook/autopilot-and-checklists.md#autopilot-core-jobs)). A
+   body ([verification reference](../skills/pdd/references/verification.md)). A
    single line with no Story is valid only when the PR changes one Story or none. Two
    lines for the same Story are red. It writes no review verdict: only the
    fresh reviewer gives one. In `auto` and

@@ -140,3 +140,51 @@ test('#2710 runPdd prints cached release notice on --version stderr while keepin
   assert.equal(jsonCode, 0);
   assert.equal(jsonErr.text, '');
 });
+
+test('S1 release-notice filters prereleases when stable exists, sorts by semver, honors PDD_STATE_DIR, and excludes files/setup/init/status', async t => {
+  // Stable releases take precedence over prereleases, and higher semver beats newer published_at backport.
+  assert.deepEqual(
+    pickLatestRelease([
+      { tag_name: 'v0.1.99', draft: false, prerelease: true, published_at: '2026-11-20T12:00:00Z' },
+      { tag_name: 'v0.1.40', draft: false, prerelease: false, published_at: '2026-11-21T12:00:00Z' },
+      { tag_name: 'v0.2.0', draft: false, prerelease: false, published_at: '2026-11-19T12:00:00Z' },
+    ]),
+    { tag: 'v0.2.0', version: '0.2.0' },
+  );
+
+  // PDD_STATE_DIR overrides XDG_STATE_HOME and HOME/.local/state/pdd.
+  const customState = mkdtempSync(join(tmpdir(), 'pdd-release-state-'));
+  t.after(() => rmSync(customState, { recursive: true, force: true }));
+  writeFileSync(join(customState, 'release-check.json'), JSON.stringify({
+    checkedAt: Date.now(),
+    latestTag: 'v88.0.0',
+    latestVersion: '88.0.0',
+    notifiedAt: null,
+  }));
+  const notice = await checkReleaseNotice(
+    { currentVersion: '0.1.41', isVersionCommand: true, env: { HOME: '/unused', PDD_STATE_DIR: customState } },
+    { fetchLatestRelease: async () => { throw Error('should read cached PDD_STATE_DIR'); } },
+  );
+  assert.match(notice, /88\.0\.0/);
+
+  // files, setup, init, and status never trigger releaseNotice even on a TTY.
+  let noticeCalls = 0;
+  const repoDir = mkdtempSync(join(tmpdir(), 'pdd-release-excl-'));
+  t.after(() => rmSync(repoDir, { recursive: true, force: true }));
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('git', ['init', '-q'], { cwd: repoDir });
+  for (const argv of [['files'], ['init'], ['status'], ['setup']]) {
+    const out = capture(true), err = capture(true);
+    const code = await runPdd(argv, {
+      cwd: repoDir,
+      packageRoot: root,
+      env: { HOME: customState, PATH: '' },
+      stdout: out,
+      stderr: err,
+      pathDiagnostic: () => [],
+      releaseNotice: async () => { noticeCalls++; return 'should not run'; },
+    });
+    assert.equal(code, 0, `${argv.join(' ')}: ${err.text}`);
+    assert.equal(noticeCalls, 0, `${argv.join(' ')} must not call releaseNotice`);
+  }
+});

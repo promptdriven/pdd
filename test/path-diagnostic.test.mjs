@@ -135,7 +135,7 @@ test('PATH8: #2715 package uses @promptdriven/pdd and pathDiagnostic flags an un
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, `${version}\n`);
   assert.match(r.stderr, /Found the unrelated npm package "pdd"/);
-  assert.match(r.stderr, /npm uninstall -g pdd && npm install -g github:promptdriven\/pdd/);
+  assert.match(r.stderr, /npm uninstall -g pdd && npm install -g @promptdriven\/pdd/);
 });
 
 test('PATH9: #3474 pathDiagnostic flags an unscoped PDD npm package owning bin/pdd and recommends explicit uninstall before install', t => {
@@ -155,6 +155,15 @@ test('PATH9: #3474 pathDiagnostic flags an unscoped PDD npm package owning bin/p
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, `${version}\n`);
   assert.match(r.stderr, /Found unscoped npm package "pdd".*blocks @promptdriven\/pdd on bin\/pdd/);
-  assert.match(r.stderr, /npm uninstall -g pdd && npm install -g github:promptdriven\/pdd/);
+  assert.match(r.stderr, /npm uninstall -g pdd && npm install -g @promptdriven\/pdd/);
   assert.doesNotMatch(r.stderr, /--force/);
+});
+
+test('PATH10: clean setup stays quiet on PATH diagnostics when no conflict exists', t => {
+  const f = fixture(t);
+  rmSync(join(f.old, 'pdd'));
+  f.env.PATH = [f.alpha, f.nodeBin, '/usr/bin', '/bin'].join(':');
+  const r = f.run('setup');
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /Running pdd|PATH selects:/);
 });

@@ -1,31 +1,42 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 1cd6f9cd515616d43e96276188d8f70ad5fb25d036da21d1f9855288d767f9ea).
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+// Prompt: prompts/cli/pdd-cli.prompt.md
+import { execFileSync, spawnSync } from 'node:child_process';
+import { accessSync, constants, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { basename, delimiter, join } from 'node:path';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
-import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
-import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
-import { findSkills as defaultFindSkills, setupSkills as defaultSetupSkills, syncOwnedUserSkills as defaultSyncOwnedUserSkills } from './skills-install.mjs';
-import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
-import { setupMayAsk } from './setup-interaction.mjs';
-import { setupWithWorkflowAgent } from './workflow-setup.mjs';
-import { causeText, runtimeOutputSlice } from './runtime-seam.mjs';
+import { gitContext as defaultGitContext } from './shared/git-context.mjs';
+import { PACKAGE_ROOT } from './shared/package-root.mjs';
+import { causeText } from './shared/safe-read.mjs';
+import { resolvePddStateBase } from './shared/state-dir.mjs';
 
-runtimeOutputSlice();
-
-const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 async function maybeCheckReleaseNotice(releaseNotice, input, ports) {
   if (releaseNotice) return releaseNotice(input, ports);
-  const home = input.env?.HOME || homedir();
-  const stateHome = ports?.stateHome ?? (input.env?.XDG_STATE_HOME || (home ? join(home, '.local', 'state') : null));
-  if (!input.interactive && !ports?.fetchLatestRelease && !(stateHome && existsSync(join(stateHome, 'pdd', 'release-check.json')))) return null;
+  const resolvedHome = input.env?.HOME || homedir();
+  const stateDir = ports?.stateHome
+    ? join(ports.stateHome, 'pdd')
+    : resolvePddStateBase(resolvedHome ? { ...input.env, HOME: resolvedHome } : input.env);
+  if (!input.interactive && !ports?.fetchLatestRelease && !(stateDir && existsSync(join(stateDir, 'release-check.json')))) return null;
   const { checkReleaseNotice } = await import('./release-notice.mjs');
   return checkReleaseNotice(input, ports);
+}
+
+function hasExecutableOnPath(name, env) {
+  return (env?.PATH ?? '').split(delimiter).filter(Boolean).some(dir => {
+    try { accessSync(join(dir, name), constants.X_OK); return true; } catch { return false; }
+  });
+}
+
+function checkPddAccountNonBlocking(env) {
+  if (!hasExecutableOnPath('gh', env)) return { checked: false, connected: false };
+  try {
+    const res = spawnSync('gh', ['auth', 'token'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500 });
+    return { checked: true, connected: !res.error && res.status === 0 && Boolean(res.stdout?.trim()) };
+  } catch {
+    return { checked: true, connected: false };
+  }
 }
 const defaultReadPackageVersion = ({ packageRoot }) => {
   try { const { version } = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
@@ -138,12 +149,6 @@ async function autopilotGithub(module, name, input, ports, fallback = '') {
   try { return (await (module ?? await import('./autopilot-github.mjs'))[name](input, ports))?.message || ''; }
   catch { return fallback; }
 }
-// The autopilot value of the root pdd.json, or undefined when there is none.
-function savedAutopilot(root) {
-  if (!root) return undefined;
-  try { const config = JSON.parse(readFileSync(join(root, 'pdd.json'), 'utf8')); return config !== null && typeof config === 'object' ? config.autopilot : undefined; }
-  catch { return undefined; }
-}
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
@@ -195,26 +200,28 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
-  autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, syncOwnedUserSkills = defaultSyncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
+  autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills,
+  setupProject, initProject, projectStatus, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic,
+  readPackageVersion = defaultReadPackageVersion, findSkills, syncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
-  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'update-sync', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
+  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'status', 'init', 'update-sync', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
     && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
     && plan.options['--json'] !== true
     && !argv.includes('--json')) {
     try {
-      const { updated } = syncOwnedUserSkills({
+      const syncFn = syncOwnedUserSkills ?? (await import('./skills-install.mjs')).syncOwnedUserSkills;
+      const { updated } = syncFn({
         packageRoot,
         home: env.HOME || homedir(),
         claudeConfigDir: env.CLAUDE_CONFIG_DIR,
         ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
         ...(env.PDD_STATE_DIR ? { stateRoot: env.PDD_STATE_DIR } : {}),
+        env,
       });
       if (updated?.length > 0 && stderr?.isTTY === true) {
         const metadata = await readPackageVersion({ packageRoot });
@@ -226,7 +233,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
     try {
       const mode = plan.local === 'workflow-run' ? 'workflow' : plan.local;
-      for (const message of pathDiagnostic({ packageRoot, cwd, env, mode })) line(stderr, message);
+      const diagFn = pathDiagnostic ?? (await import('./path-diagnostic.mjs')).pathDiagnostic;
+      for (const message of diagFn({ packageRoot, cwd, env, mode })) line(stderr, message);
     } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
   const code = await (async () => { switch (plan.local) {
@@ -380,7 +388,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
       line(stdout, metadata.version);
       try {
-        for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) }))
+        const findFn = findSkills ?? (await import('./skills-install.mjs')).findSkills;
+        for (const result of findFn({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) }))
           if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd));
       } catch { /* The skills check never changes --version. */ }
       try {
@@ -416,7 +425,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'product-status': case 'product-next': case 'product-start': {
       try {
-        const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd, productPorts);
+        const context = await (gitContext ?? defaultGitContext)(cwd, productPorts);
         if (!context?.toplevel) throw Error('No product repository was found.');
         const module = product ?? await import('./product.mjs');
         if (typeof module.runProduct !== 'function') throw Error('Missing product export');
@@ -506,55 +515,80 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd mcp could not start.${reason(error)}`); return 1; }
     }
     case 'setup': {
-      const interactive = setupMayAsk({ yes: plan.options['--yes'], stdinIsTTY: stdin.isTTY, stdoutIsTTY: stdout.isTTY });
-      return setupWithWorkflowAgent({ cwd, env }, { ...workflowAgentPorts, checkWorkflowAgents: workflowAgents.checkWorkflowAgents, stderr, setup: async () => {
+      // Laptop-wide setup: non-blocking PDD account hint, global skills sync, optional Simulator MCP registration.
+      // Never probes coding-agent logins, never edits repositories, and never prompts for Autopilot settings.
+      const yes = plan.options['--yes'] === true;
+      const interactive = Boolean(confirm) || Boolean(stdin?.isTTY && stdout?.isTTY);
       let code = 0;
-      for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(setupSkills === defaultSetupSkills && env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) })) {
-        if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
-        if (result.found && result.stale) {
-          const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
-          line(stdout, staleLine(result, version, cwd));
-        } else if (result.found) line(stdout, `PDD skills found in ${result.found}`);
-        else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${result.root}: ${skillNames(result.installed)}`);
-        if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
-      }
+      const account = checkPddAccountNonBlocking(env);
+      if (account.connected) line(stdout, 'Connected to promptdriven.ai (via gh).');
+      else if (account.checked) line(stdout, 'Not signed in to promptdriven.ai yet — run `gh auth login` or visit https://promptdriven.ai/login (continuing setup).');
       try {
-        const { file, changed } = setupProject({ cwd, packageRoot });
-        line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
-      } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
-      // One Git context serves the .gitignore part and the Autopilot part.
-      let context = null;
-      try { context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd); }
-      catch (error) { line(stderr, `pdd setup: the Git repository could not be read.${reason(error)}`); code = 1; }
-      try {
-        if (context?.toplevel) {
-          const { file, changed, negated } = ignorePddFolder({ root: context.toplevel });
-          if (changed) line(stdout, `Added .pdd/ to ${file}. pdd test keeps its local cache there.`);
-          else if (negated) line(stdout, `${file} has a "!" line for .pdd/, so pdd setup did not change the file.`);
+        const skillsFn = setupSkills ?? (await import('./skills-install.mjs')).setupSkills;
+        const skillOpts = {
+          packageRoot,
+          cwd,
+          home: env.HOME || homedir(),
+          claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+          ...(!setupSkills && env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
+          ...(plan.options['--skills-dir'] !== undefined ? { skillsDir: plan.options['--skills-dir'] } : {}),
+        };
+        for (const result of skillsFn(skillOpts)) {
+          if (result.pluginManaged) {
+            line(stdout, `PDD skills for ${result.agent} are managed by an installed plugin (${result.found}). Skipping duplicate copy.`);
+            continue;
+          }
+          if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
+          if (result.found && result.stale) {
+            const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
+            line(stdout, staleLine(result, version, cwd));
+          } else if (result.found) line(stdout, `PDD skills found in ${result.found}`);
+          else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${result.root}: ${skillNames(result.installed)}`);
+          if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
         }
-      } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
+      } catch (error) { line(stderr, `pdd setup: skills sync failed.${reason(error)}`); code = 1; }
       try {
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
-        if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm: interactive ? confirm : undefined, interactive })) code = 1;
+        if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm: interactive ? confirm : undefined, interactive, yes })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
-      try {
-        const module = autopilot ?? await import('./autopilot.mjs');
-        const before = savedAutopilot(context?.toplevel);
-        const result = await module.runAutopilot({ action: 'setup', interactive, inRepo: !!context?.toplevel },
-          { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
-        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
-        if (result.exitCode) code = result.exitCode;
-        // Setup saves a first mode only in this checkout and never writes to GitHub, where the workers read it.
-        const saved = savedAutopilot(context?.toplevel)?.mode;
-        if (result.exitCode === 0 && before === undefined && ['off', 'observe', 'auto'].includes(saved))
-          line(stdout, `Setup saved pdd.json, the PDD block and .gitignore only in this checkout. Commit and push them so that GitHub, other machines and Autopilot jobs have them, or run pdd autopilot ${saved} to put the Autopilot mode on GitHub.`);
-      } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
+      line(stdout, 'Done! Use /pdd in Claude Code or $pdd in Codex. Run `pdd init` inside a repo to add the 4-line PDD block.');
       return code;
-      } });
+    }
+    case 'init': {
+      try {
+        if (setupProject && !initProject) {
+          const { file, changed } = setupProject({ cwd, packageRoot });
+          line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
+          return 0;
+        }
+        const runInit = initProject ?? (await import('./project-setup.mjs')).initProject;
+        const result = await runInit({ cwd, packageRoot });
+        line(stdout, result.changed ? `Wrote the PDD block in ${result.file}.` : `${result.file} already has this PDD block. No change.`);
+        if (result.language || result.testCommand) {
+          const details = [result.language, result.testCommand ? `test: ${result.testCommand}` : null].filter(Boolean).join(' · ');
+          line(stdout, `Detected project: ${details}.`);
+        }
+        line(stdout, 'Next: invoke /pdd (or $pdd) in your coding agent, or run `pdd status`.');
+        return 0;
+      } catch (error) {
+        line(stderr, `pdd init: ${error.message}`);
+        return 1;
+      }
+    }
+    case 'status': {
+      try {
+        const mod = projectStatus ?? await import('./core/status.mjs');
+        return await mod.runStatus({
+          cwd,
+          paths: [...plan.operands],
+          changed: plan.options['--changed'] === true,
+          json: plan.options['--json'] === true,
+        }, { stdout, stderr });
+      } catch (error) { line(stderr, `pdd status failed.${reason(error)}`); return 1; }
     }
     case 'upgrade': {
       try {
-        const module = cliUpgrade ?? await import('./autopilot-update.mjs');
+        const module = cliUpgrade ?? await import('./setup/cli-upgrade.mjs');
         const result = await module.runCliUpgrade({
           env,
           stdout,
@@ -725,7 +759,11 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       const { runApprove } = await import('./prompt-approve.mjs');
       return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });
     }
-    case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
+    case 'completion': {
+      const { renderCompletion } = await import('./completion.mjs');
+      stdout.write(renderCompletion(plan.operands[0]));
+      return 0;
+    }
     case 'workflow-list':
       try {
         const areas = workflowAreas ?? { listWorkflowAreas, formatWorkflowList };
@@ -735,7 +773,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'init', 'status'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

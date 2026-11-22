@@ -46,25 +46,30 @@ binds the existing read-only discovery callback, wrapping its array as `{results
 with the same result rows as setupSkills. It is called only on ordinary version.
 All existing interface declarations and transport defaults remain in force.
 
-## Setup safe defaults
+## Setup, init, status, and upgrade
 
-For admitted `setup [--yes]`, call the required [setup terminal policy](setup-interaction.prompt.md)
-with the parsed yes flag and actual stdin/stdout TTY flags. Use its Boolean for
-all optional setup questions: MCP registration and Autopilot.
-Pass it as the MCP `interactive` port. When false, suppress even an injected
-confirm callback, leave agent configs unchanged, and let
-Autopilot's existing noninteractive route preserve settings without GitHub
-lookup. Skills, the project block and Git ignore handling still run. `--yes`
-selects these safe defaults; it never enables Autopilot or consents to config
-registration. Required write failures and agent admission failures remain fatal.
-MCP symlink skips are warnings owned by that module; incomplete owner lookup
-keeps Autopilot's existing warning and successful exit.
+- **Lazy loading:** `src/pdd-cli.mjs` keeps startup fast by dynamically importing command implementations per route (`runtime-seam.mjs`, `project-setup.mjs`, `skills-install.mjs`, `agent-mcp-setup.mjs`, `path-diagnostic.mjs`, `completion.mjs`, `setup/cli-upgrade.mjs`, `core/status.mjs`, etc.) and reading shared helpers (`causeText`, `gitContext`, `PACKAGE_ROOT`, `resolvePddStateBase`) from `src/shared/*`. `pdd --help` and `pdd --version` never import `runtime-seam.mjs`.
+- **`setup [--yes] [--skills-dir PATH]` (laptop-only):**
+  - Never edits repository files (`CLAUDE.md`, `AGENTS.md`, `.gitignore`, `pdd.json`), never probes coding-agent login CLIs, and never asks Autopilot setup questions.
+  - Non-blocking `gh auth status` advisory check (prints a short note when `gh` is missing or signed out; never blocks exit 0).
+  - Calls [skills install](skills-install.prompt.md) `setupSkills({ packageRoot, cwd, home, claudeConfigDir, codexHome, extraSkillsDir })` to install/sync bundled skills into user global roots (`~/.agents/skills`, `~/.claude/skills` unless Claude plugin is installed, `~/.gemini/config/skills`, plus `--skills-dir` when provided).
+  - Calls [agent MCP setup](agent-mcp-setup.prompt.md) `setupAgentMcp({ yes, interactive, ... })`: `--yes` applies previewed PDD Simulator MCP tool registrations without prompting; without `--yes` in a non-interactive terminal, MCP registration is skipped safely; in a TTY without `--yes`, previews changes and prompts once (y/N).
+  - Calls [PATH diagnostics](path-diagnostic.prompt.md) with `mode: 'setup'` (quiet when clean, conflict report on stderr when shadowed).
+  - Skips post-command automatic skill sync and release-notice network checks.
+- **`init` (per-repo):**
+  - Calls [project setup](project-setup.prompt.md) `initProject({ cwd, packageRoot })` to upsert the canonical 4-line PDD block in `CLAUDE.md` (if present) else `AGENTS.md`, detect language/test command, and never edit root `.gitignore`. Prints concise status lines and exits 0 (or prints error to stderr and exits 1).
+  - Skips post-command automatic skill sync and release-notice network checks.
+- **`status [PATH...] [--changed] [--json]` (offline repo overview):**
+  - Calls [repo status](status.prompt.md) `runStatus({ cwd, paths, changed, json }, { stdout, stderr })`. Zero network or AI calls; skips skill sync and release-notice checks.
+- **`upgrade [--main]`:**
+  - Dispatches directly to [CLI upgrade](cli-upgrade.prompt.md) `runCliUpgrade({ cwd, env, main, packageRoot }, ports)` with zero Autopilot imports.
+- **Release-notice exclusions:** skip the cached release-notice check on discovery, `--json`, `update-sync`, `project-files`, `setup`, `init`, and `status` routes.
 
 ## Authoring
 
-Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. Runtime parsing/forwarding receives no guide input; applicable concrete validation and route facts remain with the required parser/catalog contracts.
+Read the entire [Prompting guide](../../skills/pdd/references/prompting.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. Runtime parsing/forwarding receives no guide input; applicable concrete validation and route facts remain with the required parser/catalog contracts.
 
-For admitted setup, after the existing skills, project and MCP actions in the setup callback, call [Autopilot settings](autopilot.prompt.md) `runAutopilot({action: "setup", interactive, inRepo}, ports)` once; derive terminal context from the setup terminal policy below and repository context from Git, and supply real terminal-question, config and GitHub ports or their injected substitutes. Include its failure in the setup exit status while retaining other actions; print a setup message only when nonempty, so outside-repository setup adds no Autopilot output. Setup never writes to GitHub. When the root `pdd.json` had no `autopilot` key before that call and has a valid mode after it (exit 0), print one more stdout line: `Setup saved pdd.json, the PDD block and .gitignore only in this checkout. Commit and push them so that GitHub, other machines and Autopilot jobs have them, or run pdd autopilot MODE to put the Autopilot mode on GitHub.` Dispatch catalog dispositions `autopilot.off`, `autopilot.observe`, `autopilot.auto`, `autopilot-trust` and `autopilot-untrust` to the same function, with action mode and the named mode, or trust/untrust and parsed names respectively. For settings writes, supply the launcher’s native `withAutopilotModeLock({cwd,env}, action, ports)` as the settings write boundary; take it only for the final fresh read and save, after any setup questions. Preserve the settings result and non-repository behavior. Read-only setup takes no boundary. Print its message once to stdout on exit 0, stderr otherwise, and return its exit code. After a `mode` action with exit 0, best-effort invoke the launcher's `resetAutopilotCircuitBreaker({cwd, env, mode}, {...autopilotPorts, ...autopilotLauncherPorts})` (#3484) so `pdd autopilot auto`, `observe` and `off` clear any tripped circuit breaker and stale machine `observe` override. Autopilot workers start from the default branch on GitHub and read `pdd.json` there. So after a mode, trust or untrust action with exit 0, call [Autopilot settings on GitHub](autopilot-github.prompt.md) `publishAutopilotSettings({cwd, action, mode, names, retry}, autopilotGithubPorts)` with the parsed names and with retry the same command (`pdd autopilot MODE`, or `pdd autopilot trust|untrust NAMES`), and print its nonempty message to stdout. Tests may inject `dependencies.autopilotGithub` (the module) and `autopilotGithubPorts`. When that call throws, print `pdd.json on GitHub was not updated. To retry, run RETRY.` This line never changes the exit code, and the local write stays. Permit injected module and ports; a thrown error yields one finite diagnostic and exit 1. No Autopilot settings route starts a workflow or interpreter.
+Dispatch catalog dispositions `autopilot.off`, `autopilot.observe`, `autopilot.auto`, `autopilot-trust` and `autopilot-untrust` to [Autopilot settings](autopilot.prompt.md) `runAutopilot`, with action mode and the named mode, or trust/untrust and parsed names respectively. For settings writes, supply the launcher’s native `withAutopilotModeLock({cwd,env}, action, ports)` as the settings write boundary. Preserve the settings result and non-repository behavior. Print its message once to stdout on exit 0, stderr otherwise, and return its exit code. After a `mode` action with exit 0, best-effort invoke the launcher's `resetAutopilotCircuitBreaker({cwd, env, mode}, {...autopilotPorts, ...autopilotLauncherPorts})` (#3484) so `pdd autopilot auto`, `observe` and `off` clear any tripped circuit breaker and stale machine `observe` override. Autopilot workers start from the default branch on GitHub and read `pdd.json` there. So after a mode, trust or untrust action with exit 0, call [Autopilot settings on GitHub](autopilot-github.prompt.md) `publishAutopilotSettings({cwd, action, mode, names, retry}, autopilotGithubPorts)` with the parsed names and with retry the same command (`pdd autopilot MODE`, or `pdd autopilot trust|untrust NAMES`), and print its nonempty message to stdout. Tests may inject `dependencies.autopilotGithub` (the module) and `autopilotGithubPorts`. When that call throws, print `pdd.json on GitHub was not updated. To retry, run RETRY.` This line never changes the exit code, and the local write stays. Permit injected module and ports; a thrown error yields one finite diagnostic and exit 1. No Autopilot settings route starts a workflow or interpreter.
 
 Dispatch `issue-dependency-graph` to injected `issueGraph` (default `src/issue-dependency-graph.mjs`) module function `runIssueGraph({cwd,repository,issue,open}, issueGraphPorts)`, mapping repository and issue from the corresponding options and open to a Boolean. Print its message to stdout on exit 0, stderr otherwise, and return its exitCode. On a throw, print a finite diagnostic and return 1.
 
@@ -145,7 +150,8 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 - [Detailed version](interpreter-version.prompt.md): required generation, runtime and verification context for the single detailed-version call and result.
 
-- [Setup terminal policy](setup-interaction.prompt.md): required generation and verification context for every optional setup question.
+- [Repo status](status.prompt.md): required generation, runtime and verification context for offline `pdd status`.
+- [CLI upgrade](cli-upgrade.prompt.md): required generation, runtime and verification context for `pdd upgrade [--main]`.
 
 - [Regression detection](autopilot-regressions.prompt.md): required native generation/verification context for regression command dispatch.
 
@@ -184,7 +190,7 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 - [Workflow admission](workflow-agents.prompt.md): required authoring/generation/runtime/verification/testing context; owns readiness, default preference, explicit choice and safe refusal messages.
 - [Setup admission adapter](workflow-setup.prompt.md): required authoring/generation/runtime/verification/testing context; owns guarding the supplied setup action.
 
-- [Skills install](skills-install.prompt.md), [Autopilot self-update and CLI upgrade](autopilot-update.prompt.md), [project setup](project-setup.prompt.md), [agent MCP setup](agent-mcp-setup.prompt.md), [PATH diagnostics](path-diagnostic.prompt.md), and [cached release notice](release-notice.prompt.md): required authoring/generation/runtime/verification/testing context for the existing setup actions, automatic post-upgrade sync of marker-owned user skill folders, `pdd upgrade [--main]` dispatch, their streams and consent, optional PATH reporting, and the 24-hour cached CLI update notice.
+- [Skills install](skills-install.prompt.md), [CLI upgrade](cli-upgrade.prompt.md), [project setup](project-setup.prompt.md), [agent MCP setup](agent-mcp-setup.prompt.md), [PATH diagnostics](path-diagnostic.prompt.md), and [cached release notice](release-notice.prompt.md): required authoring/generation/runtime/verification/testing context for laptop `pdd setup`, per-repo `pdd init`, automatic post-upgrade sync of marker-owned user skill folders, `pdd upgrade [--main]` dispatch, their streams and consent, optional PATH reporting, and the 24-hour cached CLI update notice.
 
 Native integration uses the public APIs linked in the route sections below. Runtime bindings cover only the declared operations and supplied replies; unrelated command effects remain native.
 

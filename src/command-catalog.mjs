@@ -9,17 +9,21 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
   heading: "PDD: prompt-driven development for your coding agent.",
   usageLine: "Usage: pdd <command> [options]",
   quickStartLines: Object.freeze([
-    "  pdd setup                    Install PDD skills and project setup.",
+    "  pdd setup                    Install laptop skills and Simulator MCP.",
+    "  pdd init                     Add the 4-line PDD block to this repo.",
+    "  pdd status [--changed]       Inspect prompts, ownership & Feature Map.",
     `  pdd ${test} [STORY...]          Check Stories on the PDD interpreter.`,
-    `  pdd ${simulate} [STORY|PROMPT.md]  Open the PDD Simulator for a Story or prompt.`,
+    `  pdd ${simulate} [STORY|PROMPT.md]  Open PDD Simulator (short: pdd sim).`,
     "  pdd help prompting           Learn how prompts, Stories and tests work.",
   ]),
   groups: Object.freeze([
     group("Core PDD workflow", [
-      "  pdd setup [--yes]            Set up skills, AGENTS.md, MCP and Autopilot.",
+      "  pdd setup [--yes] [--skills-dir PATH]  Install global skills & MCP.",
+      "  pdd init                     Add the PDD block to CLAUDE.md/AGENTS.md.",
+      "  pdd status [PATH...] [--changed] [--json]  Offline status & ownership.",
       `  pdd ${test} [PATH|STORY...]     Check Stories on the PDD interpreter.`,
       `  pdd ${lint} [STORY...]          Run local SVG checks and interpreter lint.`,
-      `  pdd ${simulate} [STORY|PROMPT.md]  Run a Story or prompt in PDD Simulator.`,
+      `  pdd ${simulate} [STORY|PROMPT.md]  Run in PDD Simulator (alias: pdd sim).`,
       "  pdd approve PROMPT           Review prompt changes and record approval.",
       "  pdd files [--json]           List prompts, Stories, tests and refusals.",
       "  pdd owner PATH... [--json]   Show which prompt owns each file.",
@@ -76,16 +80,19 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
     "all options, defaults, approval heredocs, and execution details.",
   ]),
   closingLines: Object.freeze([
-    "Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex,",
-    "/pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).",
+    "Open Codex or Claude as usual and invoke the PDD skill: $pdd in Codex,",
+    "/pdd in Claude Code (covers product, bug, feature, and small-change).",
     `workflow ${run} opens the first area chat in Herdr session pdd and exits.`,
-    "Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.",
     "The CLI has no merge command. In auto mode, Autopilot merges its own pull",
     "request after CI, a fresh review and the full test suite pass; required",
     "human approvals still apply.",
   ]),
-  learnLines: Object.freeze(["Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.", "Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md", "RUNBOOK: PACKAGE_ROOT/RUNBOOK.md"]),
-  promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write Short JSON steps with an exact check for each criterion.", `4. Check: run pdd ${test} --files STORY && pdd ${test} STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd ${lint} for lint-only diagnosis.`, "5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person."])
+  learnLines: Object.freeze([
+    "Learn PDD: run pdd help prompting, or read the skill and prompting guide.",
+    "Skill: PACKAGE_ROOT/skills/pdd/SKILL.md",
+    "Prompting guide: PACKAGE_ROOT/skills/pdd/references/prompting.md",
+  ]),
+  promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write compact JSON steps with an exact check for each criterion.", `4. Check: run pdd ${test} --files STORY && pdd ${test} STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd ${lint} for lint-only diagnosis.`, "5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person."])
 });
 const approvalHelp = command => `Use the person's words after showing the gate or prompt. Ask the person in any chat, then relay their nonblank words without grading. Ask the person, then relay their words with --said. Without --said, use a separate person terminal. Chat alone never approves. Use this quoted heredoc by default:
 ${command} --said - <<'PDD_SAID'
@@ -94,8 +101,12 @@ PDD_SAID
 Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
 const routes = [
   // Core PDD workflow
-  { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }],
-    forms: [form('pdd setup [--yes]', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.')] },
+  { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }, { name: '--skills-dir', kind: 'text' }],
+    forms: [form('pdd setup [--yes] [--skills-dir PATH]', 'Install or refresh global PDD skills (~/.agents/skills, ~/.claude/skills, ~/.gemini/config/skills; plugin-aware for Claude Code; or custom PATH with --skills-dir) and offer Simulator MCP registration for detected Codex, Claude Code, Gemini and Antigravity configs. Never edits repositories or Autopilot settings. Pass --yes to register previewed MCP tools without prompting.')] },
+  { id: 'init', prefix: ['init'], local: 'init', operands: [], options: [],
+    forms: [form('pdd init', "Add or refresh the 4-line PDD block in this repository's CLAUDE.md (else AGENTS.md) and report detected language and test command; never edits root .gitignore.")] },
+  { id: 'status', prefix: ['status'], local: 'status', operands: [{ name: 'path', type: 'text', optional: true, repeat: true }], options: [{ name: '--changed', kind: 'flag' }, { name: '--json', kind: 'flag' }],
+    forms: [form('pdd status [PATH...] [--changed] [--json]', 'Show a compact offline overview of prompts, Stories, tests, file ownership and the pdd.json Feature Map; --changed inspects working-tree changes. No network or AI calls.')] },
   // A removed word runs nothing: the parser refuses it with one line that names the route's prefix.
   { id: 'check', prefix: [test], local: 'runtime-check', removed: ['check'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--target', kind: 'value', choices: ['code'] }, {name:'--affected',kind:'flag'}, {name:'--journeys',kind:'flag'}, { name: '--lf', kind: 'flag' }, { name: '--cache-clear', kind: 'flag' }, { name: '--fresh', kind: 'flag' }, { name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
@@ -134,7 +145,7 @@ const routes = [
   { id: 'files', prefix: ['files'], local: 'project-files', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd files [--json]', 'List prompts, Stories, tests and refusal reasons; no network calls.')] },
   { id: 'owner', prefix: ['owner'], local: 'file-owner', operands: [{ name: 'path', type: 'text', repeat: true }], options: [{ name: '--json', kind: 'flag' }],
-    forms: [form('pdd owner PATH... [--json]', 'Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only.')] },
+    forms: [form('pdd owner PATH... [--json]', 'Show which prompt owns each file, from pdd-bindings.json and top-of-file Prompt / Generated from headers; reads local files only.')] },
   { id: 'update', prefix: ['update'], local: 'update-sync', operands: [{ name: 'file', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--from', kind: 'text' }, { name: '--check', kind: 'flag' }, { name: '--write', kind: 'flag' }, { name: '--json', kind: 'flag' }],
     forms: [form('pdd update [FILE...] [--from RANGE] [--check] [--write] [--json]', 'Inspect or sync touched code files with their owning prompts and per-module content hashes using local Git and working files only, with zero AI calls. Use --check to fail on drift and --write to refresh derived hashes for touched modules.')] },
@@ -147,7 +158,7 @@ const routes = [
   { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],
     forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
   { id: 'upgrade', prefix: ['upgrade'], local: 'upgrade', operands: [], options: [{ name: '--main', kind: 'flag' }],
-    forms: [form('pdd upgrade [--main]', 'Upgrade a user-owned global pdd installation from the latest GitHub release (or pinned main commit with --main) and refresh installed user PDD skills.')] },
+    forms: [form('pdd upgrade [--main]', 'Upgrade a user-owned global npm @promptdriven/pdd installation from npm (with GitHub tag fallback, or pinned main commit with --main) and refresh installed user PDD skills.')] },
   // Cloud accounts
   { id: 'accounts', prefix: ['accounts'], local: 'accounts', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd accounts [--json]', 'List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites.')] },
