@@ -12,7 +12,7 @@ import {
   renderMetricsHtml,
 } from '../src/metrics-model.mjs';
 import { readAutopilotMetricsState, recordAutopilotMetric } from '../src/autopilot-metrics.mjs';
-import { runMetrics } from '../src/metrics-command.mjs';
+import { computeWindowBounds, runMetrics } from '../src/metrics-command.mjs';
 import { checkPostMergeRegressions, runAutopilotRegressions } from '../src/autopilot-regressions.mjs';
 import { runAutopilotLogs } from '../src/autopilot-logs.mjs';
 import { runAutopilotAlerts } from '../src/autopilot-alerts.mjs';
@@ -220,6 +220,71 @@ test('P0-5d: runMetrics --standup uses America/Los_Angeles and extracts GraphQL 
   assert.equal(json.overview.windows[0].key, 'standup');
   assert.equal(json.stages.regressions.reopened, 1);
   assert.equal(json.stages.regressions.events[0].reopenedAt, '2026-11-19T04:30:00.000Z');
+
+  // Standup --date bounds east of UTC+9 (UTC+12 / UTC+14) capture the full 9am-9am window without truncating early hours!
+  const utc12Bounds = computeWindowBounds(nowMs, '2026-11-19', { standup: true, timezone: 'Etc/GMT-12' });
+  assert.equal(utc12Bounds.sinceIso, '2026-11-17T21:00:00.000Z');
+  assert.equal(utc12Bounds.untilMs, Date.parse('2026-11-18T20:59:59.999Z'));
+  const utc14Bounds = computeWindowBounds(nowMs, '2026-11-19', { standup: true, timezone: 'Pacific/Kiritimati' });
+  assert.equal(utc14Bounds.sinceIso, '2026-11-17T19:00:00.000Z');
+  assert.equal(utc14Bounds.untilMs, Date.parse('2026-11-18T18:59:59.999Z'));
+  const ptBounds = computeWindowBounds(nowMs, '2026-11-19', { standup: true, timezone: 'America/Los_Angeles' });
+  assert.equal(ptBounds.sinceIso, '2026-11-18T17:00:00.000Z');
+  assert.equal(ptBounds.untilMs, Date.parse('2026-11-19T16:59:59.999Z'));
+
+  // End-to-end runMetrics --standup --date 2026-11-19 --timezone Etc/GMT-12 captures a PR/issue at 2026-11-17T22:30:00Z (2026-11-18 10:30 UTC+12).
+  const eastStateDir = tempDir(t, 'pdd-metrics-standup-east-');
+  mkdirSync(join(eastStateDir, 'autopilot'), { recursive: true });
+  writeFileSync(join(eastStateDir, 'autopilot', 'east1.json'), JSON.stringify({ repo: 'acme/app', enabled: true, mode: 'auto' }));
+  recordAutopilotMetric({
+    repo: 'acme/app',
+    issue: 702,
+    pr: 802,
+    status: 'merged',
+    skill: 'bug',
+    at: '2026-11-17T22:30:00Z',
+    mergedAt: '2026-11-17T22:45:00Z',
+  }, { stateDir: eastStateDir });
+  let capturedQuery = '';
+  const eastOut = capture(), eastErr = capture();
+  const eastCode = await runMetrics({
+    argv: ['--standup', '--date', '2026-11-19', '--timezone', 'Etc/GMT-12', '--json'],
+    cwd: dir,
+    stdout: eastOut,
+    stderr: eastErr,
+    ports: {
+      stateDir: eastStateDir,
+      now: () => nowMs,
+      execFile: async (_file, args) => {
+        const queryIdx = args.indexOf('query');
+        const q = queryIdx >= 0 ? args[queryIdx + 1] : args.find(a => a.startsWith('query='))?.slice(6) ?? '';
+        capturedQuery = q;
+        return {
+          stdout: JSON.stringify({
+            data: {
+              r0: {
+                issues: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                closedIssues: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [{ number: 702, closedAt: '2026-11-17T22:45:00Z', timelineItems: { nodes: [] } }],
+                },
+                pr_802: { number: 802, state: 'MERGED', merged: true, mergedAt: '2026-11-17T22:45:00Z', title: 'East UTC+12 fix', mergeCommit: { oid: 'f'.repeat(40) } },
+              },
+            },
+          }),
+          stderr: '',
+        };
+      },
+      regressionScan: async () => ({ merges: [], complete: true }),
+    },
+  });
+  assert.equal(eastCode, 0, eastErr.text);
+  assert.match(capturedQuery, /filterBy:\s*\{\s*since:\s*"2026-11-17T21:00:00\.000Z"\s*\}/, 'GraphQL since covers 9am UTC+12 on prev day');
+  assert.match(capturedQuery, /pr_802:/, 'PR merged at 2026-11-17T22:45Z is included in active PR query');
+  const eastJson = JSON.parse(eastOut.text);
+  assert.equal(eastJson.overview.windows[0].taken, 1);
+  assert.equal(eastJson.overview.windows[0].merged, 1);
+  assert.equal(eastJson.overview.windows[0].pool, 1);
 });
 
 test('P0-5e: PDD_STATE_DIR is honored uniformly by logs, regressions, and alerts', async t => {

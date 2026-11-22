@@ -2222,17 +2222,26 @@ function clearPoolExhausted(ctx) {
   delete m.poolOut;
   ctx.saveMachine({ ...m, poolOut: null });
 }
+function isAuthPoolFailure(exhausted, reason) {
+  if (exhausted?.state === 'reauth_required' || exhausted?.state === 'unavailable') return true;
+  if (Array.isArray(exhausted?.unavailable) && exhausted.unavailable.length > 0 && !(Array.isArray(exhausted?.cooling) && exhausted.cooling.length > 0)) return true;
+  const text = String(reason ?? '');
+  return isAuthFailureMessage(text) || /\b(?:auth(?:entication)? (?:is )?unavailable|account (?:is )?(?:disabled|suspended|deactivated)|reauth[_ -]?required|not logged in)\b/i.test(text);
+}
 async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
   const m = ctx.machineState();
   const already = Boolean(m.poolOut);
-  const resetAt = Number.isFinite(exhausted?.resetAt) && exhausted.resetAt > ctx.now() ? exhausted.resetAt : ctx.now() + POOL_FALLBACK_COOLDOWN_MS;
+  const hasProviderReset = Number.isFinite(exhausted?.resetAt) && exhausted.resetAt > ctx.now();
+  const resetAt = hasProviderReset ? exhausted.resetAt : ctx.now() + POOL_FALLBACK_COOLDOWN_MS;
   const cloud = Boolean(exhausted?.cloud || m.poolOut?.cloud);
   const wakeAt = typeof exhausted?.wakeAt === 'string' && exhausted.wakeAt ? exhausted.wakeAt : new Date(resetAt).toISOString();
   const cleanReason = safeLine(reason ?? exhausted?.cooling?.[0]?.reason ?? 'usage-limit', 200);
+  const isAuth = isAuthPoolFailure(exhausted, cleanReason);
   const poolOut = {
     since: m.poolOut?.since ?? ctx.now(),
     at: ctx.now(),
     resetAt,
+    kind: isAuth ? 'auth' : 'quota',
     ...(cloud ? { cloud: true } : {}),
     ...(wakeAt ? { wakeAt } : {}),
     reason: cleanReason,
@@ -2240,17 +2249,23 @@ async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
   };
   ctx.saveMachine({ ...m, poolOut });
   if (!already) {
-    const untilWords = resetAt ? `until ${new Date(resetAt).toISOString()}` : 'until the bounded retry window expires';
+    const untilWords = hasProviderReset ? `until ${new Date(resetAt).toISOString()}` : 'until the bounded retry window expires';
     try {
       await (ctx.ports.alert ?? (async () => {}))({
         issue: Number.isSafeInteger(issue) ? issue : 'pool',
         kind: 'usage-limit',
         update: true,
-        text: `Autopilot paused login-pool work ${untilWords}: every login in the pool reached quota or rate limits (last: "${cleanReason}", machine ${ctx.state.machine}).`,
-        tried: `Autopilot rotated across every configured login in the pool and put exhausted logins on cooldown ${untilWords}. No slot stays jammed and no retries are burned.`,
-        need: resetAt
-          ? `Nothing is needed if you want to wait: Autopilot resumes automatically after ${new Date(resetAt).toISOString()}. Or add a healthy login with pdd accounts add and run pdd autopilot start.`
-          : 'Check sign-in and usage limits on this machine with pdd autopilot doctor, or add a healthy login with pdd accounts add and run pdd autopilot start.',
+        text: isAuth
+          ? `Autopilot paused work until ${new Date(resetAt).toISOString()}: agent sign-in or authentication is unavailable (last: "${cleanReason}", machine ${ctx.state.machine}).`
+          : `Autopilot paused login-pool work ${untilWords}: every login in the pool reached quota or rate limits (last: "${cleanReason}", machine ${ctx.state.machine}).`,
+        tried: isAuth
+          ? `Autopilot paused work until ${new Date(resetAt).toISOString()} instead of retrying a broken sign-in. No slot stays jammed and no retries are burned.`
+          : `Autopilot rotated across every configured login in the pool and put exhausted logins on cooldown ${untilWords}. No slot stays jammed and no retries are burned.`,
+        need: isAuth
+          ? 'Check sign-in on this machine with pdd autopilot doctor, re-authenticate or add a healthy login with pdd accounts add, then run pdd autopilot start.'
+          : (hasProviderReset
+            ? `Nothing is needed if you want to wait: Autopilot resumes automatically after ${new Date(resetAt).toISOString()}. Or add a healthy login with pdd accounts add and run pdd autopilot start.`
+            : 'Check sign-in and usage limits on this machine with pdd autopilot doctor, or add a healthy login with pdd accounts add and run pdd autopilot start.'),
       });
     } catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
   }
@@ -4903,8 +4918,17 @@ async function reviewState(ctx, job, prBody = '', preselected = null, { noLaunch
     let reviewExtras = null;
     if (!scoped) {
       const priorMustFix = extractPriorMustFixChecklist(job.rounds);
-      const testInv = await preReviewTestInventoryCheck(ctx, job, prBody)
-        .catch(() => (job.testInventory?.head === job.head ? job.testInventory : null));
+      const cachedTestInv = (resolvedBaseSha = null) => (
+        job.testInventory?.head === job.head
+        && !job.testInventory.failed
+        && (!resolvedBaseSha || job.testInventory.baseSha === resolvedBaseSha)
+          ? job.testInventory
+          : null
+      );
+      const refreshedTestInv = await preReviewTestInventoryCheck(ctx, job, prBody).catch(() => null);
+      const testInv = refreshedTestInv && !refreshedTestInv.failed
+        ? refreshedTestInv
+        : (cachedTestInv(refreshedTestInv?.baseSha ?? null) ?? refreshedTestInv);
       const domainDecisions = await collectBaseDomainDecisions(ctx, job, changed).catch(() => ({ entries: [], text: '' }));
       const hygieneText = job.hygiene?.head === job.head ? formatHygieneForReview(job.hygiene) : '';
       reviewExtras = {
@@ -8499,9 +8523,9 @@ async function preReviewHygieneCheck(ctx, job, changed = [], { changedError = nu
 async function preReviewTestInventoryCheck(ctx, job, prBody = '') {
   const mode = hygieneGateMode(ctx);
   const bodyKey = createHash('sha256').update(String(prBody ?? '')).digest('hex').slice(0, 16);
-  const failedResult = errorText => {
+  const failedResult = (errorText, resolvedBaseSha = null) => {
     ctx.warn?.(`Autopilot core pre-review test inventory failed for #${job.issue} @ ${short(job.head)}: ${errorText}`);
-    return { head: job.head, mode, bodyKey, failed: true, error: errorText, available: false, reason: errorText, text: '', hasTestChanges: false, newSkips: [], deletedTestFiles: [], unacknowledgedDeletedTests: [], unavailableFiles: [], reds: [] };
+    return { head: job.head, ...(isGitCommitSha(resolvedBaseSha) ? { baseSha: resolvedBaseSha } : {}), mode, bodyKey, failed: true, error: errorText, available: false, reason: errorText, text: '', hasTestChanges: false, newSkips: [], deletedTestFiles: [], unacknowledgedDeletedTests: [], unavailableFiles: [], reds: [] };
   };
   const cwd = job.worktree && ctx.fs.existsSync?.(job.worktree) ? job.worktree : ctx.state?.cwd;
   if (!cwd) return failedResult('worktree unavailable');
@@ -8554,17 +8578,17 @@ async function preReviewTestInventoryCheck(ctx, job, prBody = '') {
       ? await ctx.ports.collectTestInventory({ cwd, baseSha, headSha: job.head })
       : await collectTestInventory({ cwd, baseSha, headSha: job.head }, ctx.ports.testInventoryPorts ?? {});
   } catch (error) {
-    return failedResult(error?.message ?? 'collectTestInventory threw');
+    return failedResult(error?.message ?? 'collectTestInventory threw', baseSha);
   }
   if (!inventory || (!inventory.available && inventory.reason !== 'inventory limit exceeded')) {
-    return failedResult(inventory?.reason || 'test inventory unavailable');
+    return failedResult(inventory?.reason || 'test inventory unavailable', baseSha);
   }
   const deletedTestFiles = [];
   let hasChangedTestFiles = false;
   try {
     const r = await ctx.ports.git(['-c', 'core.quotePath=false', 'diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', baseSha, job.head, '--'], { cwd });
     if (r?.code !== 0) {
-      return failedResult(`git diff exited ${r?.code ?? 'unknown'}`);
+      return failedResult(`git diff exited ${r?.code ?? 'unknown'}`, baseSha);
     }
     const raw = String(r.stdout ?? '');
     const fields = raw.endsWith('\0') ? raw.slice(0, -1).split('\0') : (raw ? raw.split('\0') : []);
@@ -8581,7 +8605,7 @@ async function preReviewTestInventoryCheck(ctx, job, prBody = '') {
       }
     }
   } catch (error) {
-    return failedResult(error?.message ?? 'git diff failed');
+    return failedResult(error?.message ?? 'git diff failed', baseSha);
   }
   const gate = evaluateTestInventoryGate({ inventory, deletedTestFiles, prBody, mode, hasChangedTestFiles });
   job.testInventory = {

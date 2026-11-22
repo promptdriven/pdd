@@ -2,18 +2,18 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { coreWorld } from './helpers/core-world.mjs';
 import { checkMachine, isolatedCheckCapacity, withCheckLifetime } from './helpers/check-machine.mjs';
 import { healthyDoctorPorts } from './helpers/doctor-fixture.mjs';
 import { healthyMachine } from './helpers/healthy-machine.mjs';
-import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
+import { keepEnv, runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
 import { intakeRows } from '../src/autopilot-intake.mjs';
-import { acquireSuiteLock, calculateCheckCapacity, readSuiteProgress, runTestSuite } from '../src/test-suite-queue.mjs';
+import { acquireSuiteLock, calculateCheckCapacity, collectSignalDiagnostics, readSuiteProgress, reconcileSuiteQueue, runTestSuite } from '../src/test-suite-queue.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const MIN = 60 * 1000;
@@ -43,8 +43,13 @@ test('P0-9A: terminal auth-unavailable and zero-quota errors park immediately wi
 
   const m1 = readMachineState(w1);
   assert.ok(m1.poolOut && Number.isFinite(m1.poolOut.resetAt) && m1.poolOut.resetAt > w1.now(), 'poolOut sets concrete future resetAt');
+  assert.equal(m1.poolOut.kind, 'auth', 'revoked auth failure is classified as kind=auth');
   assert.equal(m1.streak, 0, 'terminal auth park does not burn streak strikes');
   assert.equal(alerts1.length, 1, 'emits one deduplicated usage-limit alert');
+  assert.match(alerts1[0].text, /sign-in or authentication is unavailable/i, 'auth failure alert names sign-in/authentication failure');
+  assert.doesNotMatch(alerts1[0].text, /reached quota/i, 'auth failure alert must not falsely claim quota exhaustion');
+  assert.match(alerts1[0].need, /pdd autopilot doctor/, 'auth failure alert advises checking sign-in with pdd autopilot doctor');
+  assert.doesNotMatch(alerts1[0].need, /Nothing is needed if you want to wait/i, 'auth failure alert must not advise waiting for quota');
 
   // Subsequent ticks while parked never claim #11 or spin into retry storms.
   for (let i = 0; i < 5; i++) {
@@ -63,6 +68,7 @@ test('P0-9A: terminal auth-unavailable and zero-quota errors park immediately wi
 
   // 2. Phase-PR repair and review hitting zero-quota / exhaustLogin() => null park PR immediately with 0 burned repair/review strikes.
   const w2 = await coreWorld(t, { settings: { runs: 1, maxRepairs: 2 } });
+  const alerts2 = [];
   w2.issue(20);
   await w2.tick();
   w2.build(20, { body: 'Fixes #20\n\nRuntime: not run (no prompt)', result: { promptChanged: false } });
@@ -70,7 +76,7 @@ test('P0-9A: terminal auth-unavailable and zero-quota errors park immediately wi
   assert.ok(w2.job(20, 'review'));
   w2.say(20, 'review', JSON.stringify({ type: 'error', message: 'Zero quota: 0 remaining quota for this account' }));
   w2.finish(20, 'review', { code: 1 });
-  await w2.tick({ selectLogin: async () => ({ state: 'exhausted', resetAt: null }), exhaustLogin: async () => null });
+  await w2.tick({ alert: async a => alerts2.push(a), selectLogin: async () => ({ state: 'exhausted', resetAt: null }), exhaustLogin: async () => null });
 
   const parkedJob = readJobFile(w2, 20);
   assert.equal(parkedJob.stepStop?.poolExhausted, true, 'PR paused via poolExhausted');
@@ -78,7 +84,27 @@ test('P0-9A: terminal auth-unavailable and zero-quota errors park immediately wi
   assert.equal(parkedJob.review, null, 'review attempt rolled back cleanly');
   const m2 = readMachineState(w2);
   assert.ok(Number.isFinite(m2.poolOut?.resetAt) && m2.poolOut.resetAt > w2.now(), 'null provider resetAt falls back to concrete future cooldown');
+  assert.equal(m2.poolOut?.kind, 'quota', 'zero-quota failure is classified as kind=quota');
   assert.equal(m2.streak, 0, 'zero streak strikes burned on PR park');
+  assert.equal(alerts2.length, 1);
+  assert.match(alerts2[0].text, /every login in the pool reached quota or rate limits/);
+  assert.match(alerts2[0].need, /pdd autopilot doctor/, 'unknown resetAt quota alert directs operator to doctor/accounts');
+
+  // 3. Quota exhaustion WITH concrete provider resetAt emits auto-resume wait advice.
+  const w3 = await coreWorld(t, { settings: { runs: 1 } });
+  const alerts3 = [];
+  const providerResetAt = w3.now() + 90 * MIN;
+  w3.issue(21);
+  await w3.tick({
+    alert: async a => alerts3.push(a),
+    selectLogin: async () => ({ state: 'all_cooling', resetAt: providerResetAt, cooling: [{ id: 'codex-1', reason: 'rate limit exceeded' }] }),
+  });
+  const m3 = readMachineState(w3);
+  assert.equal(m3.poolOut?.kind, 'quota');
+  assert.equal(m3.poolOut?.resetAt, providerResetAt);
+  assert.equal(alerts3.length, 1);
+  assert.match(alerts3[0].text, /every login in the pool reached quota or rate limits/);
+  assert.match(alerts3[0].need, /Nothing is needed if you want to wait: Autopilot resumes automatically after/);
 });
 
 test('P0-9B: --issues / --issue allowlist filters launcher start/status, core readyRows, and intakeRows with 4-part error diagnostics', async t => {
@@ -171,9 +197,66 @@ test('P0-9B: --issues / --issue allowlist filters launcher start/status, core re
 });
 
 test('P0-9C: test-suite-queue has zero workflow-runner import, passes toolchain/PDD_TEST_ENV vars, logs SIGTERM diagnostics, and core uses direct test-suite-entry.mjs', async t => {
-  // 1. Verify test-suite-queue.mjs has zero static or dynamic import of workflow-runner.mjs and local lock works.
-  const queueSrc = readFileSync(join(REPO_ROOT, 'src/test-suite-queue.mjs'), 'utf8');
-  assert.equal(/workflow-runner\.mjs/.test(queueSrc), false, 'test-suite-queue.mjs must not import workflow-runner.mjs');
+  // 1. Verify test-suite-queue.mjs module graph never resolves workflow-runner.mjs via real ESM resolve hook.
+  const queueUrl = pathToFileURL(join(REPO_ROOT, 'src/test-suite-queue.mjs')).href;
+  const trace = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { registerHooks } from 'node:module';
+    const seen = [];
+    registerHooks({ resolve(specifier, context, nextResolve) { const r = nextResolve(specifier, context); seen.push(r.url); return r; } });
+    await import(${JSON.stringify(queueUrl)});
+    process.stdout.write(JSON.stringify(seen));
+  `], { cwd: REPO_ROOT, encoding: 'utf8', timeout: 15000 });
+  assert.equal(trace.status, 0, trace.stderr);
+  const queueGraph = JSON.parse(trace.stdout);
+  assert.equal(queueGraph.some(url => url.endsWith('/workflow-runner.mjs')), false, 'test-suite-queue.mjs must not resolve workflow-runner.mjs');
+
+  // Verify launcher keepEnv preserves toolchain roots and PDD_TEST_ENV_* while stripping secrets/hooks.
+  const kept = keepEnv({
+    HOME: '/home/dev',
+    PATH: '/usr/bin:/bin',
+    GOPATH: '/opt/gopath',
+    CARGO_HOME: '/opt/cargo',
+    RUSTUP_HOME: '/opt/rustup',
+    VIRTUAL_ENV: '/opt/venv',
+    PDD_TEST_ENV_MODE: 'sandbox',
+    PDD_TEST_ENV_PORT: '5432',
+    OPENAI_API_KEY: 'sk-secret',
+    GH_TOKEN: 'gho-secret',
+    BASH_ENV: '/tmp/evil.sh',
+  });
+  assert.equal(kept.GOPATH, '/opt/gopath');
+  assert.equal(kept.CARGO_HOME, '/opt/cargo');
+  assert.equal(kept.RUSTUP_HOME, '/opt/rustup');
+  assert.equal(kept.VIRTUAL_ENV, '/opt/venv');
+  assert.equal(kept.PDD_TEST_ENV_MODE, 'sandbox');
+  assert.equal(kept.PDD_TEST_ENV_PORT, '5432');
+  assert.equal(kept.OPENAI_API_KEY, undefined);
+  assert.equal(kept.GH_TOKEN, undefined);
+  assert.equal(kept.BASH_ENV, undefined);
+
+  // Verify collectSignalDiagnostics never reads /proc for dead/reconciled PIDs, only live process-signal for process.pid.
+  const procReads = [];
+  const spyFs = {
+    readFileSync(path) {
+      procReads.push(path);
+      if (path.endsWith('/cgroup')) return '0::/user.slice/pdd.service\n';
+      if (path.endsWith('/comm')) return 'systemd\n';
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    },
+  };
+  const deadDiag = collectSignalDiagnostics({ signal: 'SIGTERM', phase: 'reconciled', source: 'reconcile', pid: process.pid, ppid: process.ppid, fs: spyFs });
+  assert.deepEqual(procReads, [], 'reconcile must never read /proc for a dead or potentially reused PID');
+  assert.equal(deadDiag.cgroup, null);
+  assert.equal(deadDiag.parentCommand, null);
+
+  const childCloseDiag = collectSignalDiagnostics({ signal: 'SIGTERM', phase: 'child-signal', source: 'child-close', pid: process.pid, ppid: process.ppid, fs: spyFs });
+  assert.deepEqual(procReads, [], 'child-close must not read /proc for an exited child PID');
+  assert.equal(childCloseDiag.cgroup, null);
+
+  const liveDiag = collectSignalDiagnostics({ signal: 'SIGTERM', phase: 'waiting', source: 'process-signal', pid: process.pid, ppid: process.ppid, fs: spyFs });
+  assert.equal(liveDiag.cgroup, '0::/user.slice/pdd.service');
+  assert.equal(liveDiag.parentCommand, 'systemd');
+  assert.ok(procReads.includes(`/proc/${process.pid}/cgroup`));
 
   const dir = mkdtempSync(join(tmpdir(), 'pdd-suite-p09c-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

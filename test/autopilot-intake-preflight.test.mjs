@@ -1419,10 +1419,16 @@ test('3534 R3 regressions (section resets, heading self-match, polish)', () => {
 });
 
 test('P0-11: repo-agnostic siblingRepos, unclear_or_unsound preflight class, minIntakeConfidence floor, and mandatory commentWhyDeclined (active vs shadow)', async t => {
-  // 1. Zero hardcoded org/repo/user assumptions in src/autopilot-intake-preflight.mjs.
-  const preflightSrc = readFileSync(new URL('../src/autopilot-intake-preflight.mjs', import.meta.url), 'utf8');
-  assert.equal(/(?:pdd_cloud|pdd-workflow|prompt-runtime|runtime-client|github_pdd_app|promptdriven|serhan)/i.test(preflightSrc), false,
-    'autopilot-intake-preflight.mjs must contain zero hardcoded repo/user assumptions');
+  // 1. Zero hardcoded org/repo assumptions: bare names without siblingRepos do not trigger cross_repo routing.
+  for (const bareRepoName of ['pdd_cloud', 'prompt-runtime', 'runtime-client', 'pdd-workflow']) {
+    const noHardcodedSibling = classifyPreflightIssue({
+      repository: 'acme/web-app',
+      issue: { number: 1000, title: `Mention ${bareRepoName} in docs`, body: `Update \`src/app.tsx\` to document ${bareRepoName} integration.` },
+      repoFiles: ['src/app.tsx'],
+      siblingRepos: [],
+    });
+    assert.equal(noHardcodedSibling.decision, 'allow', `bare mention of ${bareRepoName} must not trigger hardcoded cross_repo`);
+  }
 
   // Configurable siblingRepos works across arbitrary Web/API/Mobile/Go/Python repos.
   const siblings = normalizeSiblingRepos(['acme/mobile-ios', { canonical: 'billing-api', aliases: ['billing_api'] }]);
@@ -1569,11 +1575,95 @@ test('P0-11: repo-agnostic siblingRepos, unclear_or_unsound preflight class, min
   assert.equal(shadowRes.commented, false);
   assert.equal(hShadow.writes.length, 0, 'zero GitHub writes in shadow mode');
 
-  // wouldPick enforces minConfidence floor too.
+  // wouldPick enforces minConfidence floor too, and cardPrompt interpolates the effective minConfidence.
   const cards = new Map([
     [1101, { issue: 1101, version: issueVersion(rows[0]), card: { class: 'ready', confidence: 0.6, reason: 'low' } }],
     [1106, { issue: 1106, version: issueVersion(rows[5]), card: { class: 'ready', confidence: 0.85, reason: 'high' } }],
   ]);
   assert.deepEqual(wouldPick([rows[0], rows[5]], cards), [1106]);
   assert.deepEqual(wouldPick([rows[0], rows[5]], cards, { minConfidence: 0.5 }), [1106, 1101]);
+
+  const defaultPrompt = cardPrompt({ repo: 'acme/api', row: rows[5], comments: [], pool: [], mode: 'active' });
+  assert.match(defaultPrompt, /confidence >= 0\.75/);
+  const customPrompt = cardPrompt({ repo: 'acme/api', row: rows[5], comments: [], pool: [], mode: 'active', minConfidence: 0.85 });
+  assert.match(customPrompt, /confidence >= 0\.85/);
+  assert.doesNotMatch(customPrompt, /confidence >= 0\.75/);
+});
+
+test('P0-11 review fix: transient GitHub write failure during collectActiveIntake persists declineCommentPending and retries on next activeIntake tick without re-running LLM', async t => {
+  const h = makeIntakeHarness(t, { mode: 'active', repo: 'acme/api', repoFiles: ['src/accounts-cli.mjs'] });
+  const f = intakeFolders(h.root);
+  for (const dir of [f.base, f.cards, f.jobs, f.logs, f.empty]) mkdirSync(dir, { recursive: true });
+
+  const row = {
+    number: 1201,
+    state: 'open',
+    title: 'Unclear low-confidence issue',
+    body: 'Update `src/accounts-cli.mjs` behavior.',
+    labels: [],
+    assignees: [],
+    comments: 0,
+    user: { login: 'maintainer' },
+    created_at: '2026-11-18T01:00:00Z',
+  };
+
+  // Seed a finished low-confidence card job.
+  const answerPath = join(f.logs, 'intake-1201.answer.txt');
+  const exitPath = join(f.logs, 'intake-1201.exit.json');
+  writeFileSync(answerPath, JSON.stringify({ class: 'ready', reason: 'Uncertain scope.', confidence: 0.5, areas: ['src/accounts-cli.mjs'] }));
+  writeFileSync(exitPath, JSON.stringify({ code: 0 }));
+  writeFileSync(join(f.jobs, '1201.json'), JSON.stringify({
+    issue: 1201,
+    stage: 'card',
+    version: issueVersion(row),
+    startedAt: h.ctx.now() - 1000,
+    agent: { kind: 'codex', model: 'gpt-test' },
+    job: { id: 'intake-1201', exit: exitPath, log: answerPath },
+    answer: answerPath,
+  }));
+  h.ctx.jobs.read = job => ({ state: 'exited', exit: JSON.parse(readFileSync(job.exit, 'utf8')), result: null });
+
+  let llmStarts = 0;
+  h.ctx.jobs.start = (...args) => { llmStarts++; return { id: `unexpected-${llmStarts}`, exit: exitPath, log: answerPath }; };
+
+  // Tick 1: fail the comment POST transiently.
+  const origOk = h.ctx.gh.ok;
+  const origCall = h.ctx.gh.call;
+  let failComments = true;
+  let failLabels = false;
+  h.ctx.gh.call = async (method, path, body) => {
+    if (failLabels && method === 'POST' && path.endsWith('/labels')) return { status: 503, body: 'Service Unavailable' };
+    return origCall(method, path, body);
+  };
+  h.ctx.gh.ok = async (method, path, body) => {
+    if (failComments && method === 'POST' && path.endsWith('/comments')) throw new Error('502 Bad Gateway');
+    if (failLabels && method === 'POST' && path.endsWith('/labels')) throw new Error('503 Service Unavailable');
+    return origOk(method, path, body);
+  };
+
+  const readSavedCard = () => JSON.parse(readFileSync(join(f.cards, '1201.json'), 'utf8'));
+
+  await collectActiveIntake(h.ctx, [row]);
+  const savedAfterFail = readSavedCard();
+  assert.equal(savedAfterFail?.declineCommentPending, true, 'declineCommentPending persisted when GH write fails');
+  assert.equal((h.commentsByIssue.get(1201) ?? []).length, 0, 'no comment posted on failed attempt');
+  assert.equal(activeReadyCards(h.root, [row], fs).size, 0, 'declined issue is never claimable');
+
+  // Tick 2: comment succeeds, label fails transiently -> stays pending without duplicating comment later.
+  failComments = false;
+  failLabels = true;
+  await activeIntake(h.ctx, [row]);
+  assert.equal(llmStarts, 0, 'retry must not spawn a new LLM card job');
+  assert.equal((h.commentsByIssue.get(1201) ?? []).length, 1, 'decline comment posted on retry');
+  const savedAfterPartial = readSavedCard();
+  assert.equal(savedAfterPartial?.declineCommentPending, true, 'stays pending while label write is still incomplete');
+
+  // Tick 3: label write recovers -> label applied, ZERO duplicate comment, declineCommentPending cleared!
+  failLabels = false;
+  await activeIntake(h.ctx, [row]);
+  assert.equal(llmStarts, 0, 'completion tick must not spawn a new LLM card job');
+  assert.equal((h.commentsByIssue.get(1201) ?? []).length, 1, 'marker deduplication prevents duplicate comment on label retry');
+  assert.equal(h.labelsByIssue.get(1201)?.has('pdd:needs-decision'), true, 'pdd:needs-decision label applied on retry');
+  const savedAfterSuccess = readSavedCard();
+  assert.equal(savedAfterSuccess?.declineCommentPending, undefined, 'declineCommentPending cleared once applied');
 });

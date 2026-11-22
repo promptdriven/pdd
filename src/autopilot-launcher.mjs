@@ -84,7 +84,15 @@ function portsFor(state, ports) {
 }
 const AGENT_KINDS = ['codex', 'claude', 'gemini', 'agy'];
 const AGENT_CONFIG_VARS = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME', agy: 'ANTIGRAVITY_APP_DATA_DIR' };
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'ANTIGRAVITY_APP_DATA_DIR', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_STATE_DIR', 'PDD_ACCOUNTS_URL', 'PDD_CLOUD_URL', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const KEEP_ENV_KEYS = ['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'ANTIGRAVITY_APP_DATA_DIR', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_STATE_DIR', 'PDD_ACCOUNTS_URL', 'PDD_CLOUD_URL', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'GOPATH', 'CARGO_HOME', 'RUSTUP_HOME', 'VIRTUAL_ENV'];
+export const keepEnv = env => {
+  const source = env && typeof env === 'object' ? env : {};
+  const entries = KEEP_ENV_KEYS.filter(k => typeof source[k] === 'string').map(k => [k, source[k]]);
+  for (const [k, v] of Object.entries(source)) {
+    if (/^PDD_TEST_ENV_[A-Z0-9_]+$/.test(k) && typeof v === 'string') entries.push([k, v]);
+  }
+  return Object.fromEntries(entries);
+};
 function explicitConfigOverride(previous, env) {
   const kind = previous?.agent?.kind, variable = kind ? AGENT_CONFIG_VARS[kind] : null;
   if (!variable || typeof env?.[variable] !== 'string' || !env[variable].trim()) return false;

@@ -14,6 +14,7 @@ import {
   calculateAutopilotMetrics,
   formatMetricsText,
   isMetricsEnabled,
+  localAnchorUtcMs,
   renderMetricsHtml,
   validateRepoName,
 } from './metrics-model.mjs';
@@ -83,12 +84,27 @@ function parseMetricsArgv(argv = []) {
   return { subcommand, options };
 }
 
-/** Conservative UTC bounds covering active windows across any IANA timezone. */
-function computeWindowBounds(nowMs, dateOption) {
+/** UTC bounds covering active windows across any IANA timezone (UTC-12 through UTC+14). */
+export function computeWindowBounds(nowMs, dateOption, { standup = false, timezone = null } = {}) {
   if (typeof dateOption === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateOption)) {
+    const [year, month, day] = dateOption.split('-').map(Number);
+    const probe = new Date(Date.UTC(year, month - 1, day));
+    const validCal = probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day;
+    if (standup && validCal && typeof timezone === 'string' && timezone.trim()) {
+      const prev = new Date(Date.UTC(year, month - 1, day - 1));
+      try {
+        const sinceMs = localAnchorUtcMs(prev.getUTCFullYear(), prev.getUTCMonth() + 1, prev.getUTCDate(), 9, timezone);
+        const untilMs = localAnchorUtcMs(year, month, day, 9, timezone) - 1;
+        if (Number.isFinite(sinceMs) && Number.isFinite(untilMs) && untilMs >= sinceMs) {
+          return { sinceIso: new Date(sinceMs).toISOString(), sinceMs, untilMs };
+        }
+      } catch {
+        // Fall through to conservative UTC bounds when timezone validation fails later.
+      }
+    }
     const baseMs = Date.parse(`${dateOption}T00:00:00Z`);
     if (Number.isFinite(baseMs)) {
-      const sinceMs = baseMs - DAY_MS;
+      const sinceMs = baseMs - 2 * DAY_MS;
       return { sinceIso: new Date(sinceMs).toISOString(), sinceMs, untilMs: baseMs + 2 * DAY_MS };
     }
   }
@@ -634,7 +650,10 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
     ? (localState.repos.length > 0 ? localState.repos : [validatedRepo])
     : localState.repos.filter(repo => localState.config.repos[repo.toLowerCase()] !== false);
 
-  const { sinceIso, sinceMs, untilMs } = computeWindowBounds(nowMs, options['--date'] ?? null);
+  const { sinceIso, sinceMs, untilMs } = computeWindowBounds(nowMs, options['--date'] ?? null, {
+    standup: Boolean(options['--standup']),
+    timezone: resolvedTz,
+  });
   const execFile = ports.execFile ?? defaultExecFile;
 
   let openIssues = ports.openIssues;

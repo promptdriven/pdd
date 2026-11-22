@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createDependencyReadPorts,
   refreshClaimHeartbeat,
@@ -21,13 +22,35 @@ function writeIn(cwd, rel, text) {
   writeFileSync(abs, text);
 }
 
-test('P0-10: claims.mjs is standalone (zero workflow/Herdr imports) and core wires directly to ./autopilot/claims.mjs', () => {
-  const claimsSrc = readFileSync(join(REPO_ROOT, 'src/autopilot/claims.mjs'), 'utf8');
-  const coreSrc = readFileSync(join(REPO_ROOT, 'src/autopilot-core.mjs'), 'utf8');
-  const forbidden = /(?:workflow-|issue-dependencies-|issue-sort-|issue-mixed|autopilot-parking|herdr)/i;
-  assert.equal(forbidden.test(claimsSrc), false, 'claims.mjs must not import workflow, Herdr, or dependency-graph modules');
-  assert.match(coreSrc, /from\s+['"]\.\/autopilot\/claims\.mjs['"]/);
-  assert.equal(/from\s+['"]\.\/issue-dependencies-github\.mjs['"]/.test(coreSrc), false);
+function traceResolvedImports(entryRelPath) {
+  const entryUrl = pathToFileURL(join(REPO_ROOT, entryRelPath)).href;
+  const script = `
+    import { registerHooks } from 'node:module';
+    const seen = [];
+    registerHooks({
+      resolve(specifier, context, nextResolve) {
+        const res = nextResolve(specifier, context);
+        seen.push(res.url);
+        return res;
+      },
+    });
+    await import(${JSON.stringify(entryUrl)});
+    process.stdout.write(JSON.stringify(seen));
+  `;
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: REPO_ROOT, encoding: 'utf8', timeout: 15000 });
+  assert.equal(run.status, 0, `import trace for ${entryRelPath} failed: ${run.stderr}`);
+  return JSON.parse(run.stdout);
+}
+
+test('P0-10: claims.mjs module graph has zero workflow/Herdr imports and autopilot-core resolves ./autopilot/claims.mjs', () => {
+  const claimsGraph = traceResolvedImports('src/autopilot/claims.mjs');
+  const forbidden = /\/(?:workflow-|issue-dependencies-|issue-sort-|issue-mixed|autopilot-parking|herdr)/i;
+  const badInClaims = claimsGraph.filter(url => forbidden.test(url));
+  assert.deepEqual(badInClaims, [], 'claims.mjs module graph must not resolve workflow, Herdr, or dependency-graph modules');
+
+  const coreGraph = traceResolvedImports('src/autopilot-core.mjs');
+  assert.ok(coreGraph.some(url => url.endsWith('/src/autopilot/claims.mjs')), 'autopilot-core resolves src/autopilot/claims.mjs');
+  assert.equal(coreGraph.some(url => url.endsWith('/src/issue-dependencies-github.mjs')), false, 'autopilot-core must not resolve src/issue-dependencies-github.mjs');
 });
 
 test('P0-10: takeoverLimited, withoutClaimHeartbeat, refreshClaimHeartbeat, and createDependencyReadPorts work cleanly', async () => {
@@ -225,6 +248,23 @@ test('P0-3: preReviewTestInventoryCheck cache is keyed by BOTH baseSha and headS
   assert.equal(calls[1].baseSha, originalBaseSha);
   const saved2 = JSON.parse(readFileSync(jobFile, 'utf8'));
   assert.equal(saved2.testInventory.baseSha, originalBaseSha);
+
+  // Transient refresh failure for the SAME baseSha+headSha (e.g. after PR body edit) preserves valid cached job.testInventory for reviewPrompt without overwriting it!
+  saved2.review = null;
+  saved2.testInventory.bodyKey = 'stale-body-key';
+  saved2.testInventory.text = 'CACHED-INVENTORY-MARKER\nNew skips: none.\n';
+  writeFileSync(jobFile, JSON.stringify(saved2, null, 2));
+
+  await w.tick({
+    collectTestInventory: async () => { throw new Error('transient git error'); },
+  });
+  const saved3 = JSON.parse(readFileSync(jobFile, 'utf8'));
+  assert.equal(saved3.testInventory.failed, false, 'transient refresh error must not overwrite valid cached job.testInventory');
+  assert.equal(saved3.testInventory.baseSha, originalBaseSha);
+  assert.match(saved3.testInventory.text, /CACHED-INVENTORY-MARKER/);
+  const reviewJob = w.job(83, 'review');
+  assert.ok(reviewJob, 'review starts in observe mode on transient refresh failure');
+  assert.match(reviewJob.input, /CACHED-INVENTORY-MARKER/, 'reviewPrompt retains valid cached inventory for same baseSha+headSha');
 });
 
 test('P0-4: pathRules & pathChecks populate job.paths.letters and record accurate pathsOnlyD', async t => {

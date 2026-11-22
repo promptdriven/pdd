@@ -125,8 +125,9 @@ export function collectSignalDiagnostics({ signal = null, exitCode = null, phase
   const atMs = now();
   const safePid = Number.isSafeInteger(pid) && pid > 0 ? pid : null;
   const safePpid = Number.isSafeInteger(ppid) && ppid > 0 ? ppid : null;
-  const parentCommand = safePpid ? readProcLine(`/proc/${safePpid}/comm`, fs) : null;
-  const cgroup = safePid ? readProcLine(`/proc/${safePid}/cgroup`, fs) : null;
+  const readLiveProc = source === 'process-signal' && phase !== 'reconciled' && safePid === process.pid;
+  const parentCommand = readLiveProc && safePpid ? readProcLine(`/proc/${safePpid}/comm`, fs) : null;
+  const cgroup = readLiveProc && safePid ? readProcLine(`/proc/${safePid}/cgroup`, fs) : null;
   return {
     signal: typeof signal === 'string' && signal ? safeEvidenceText(signal) : null,
     exitCode: Number.isSafeInteger(exitCode) ? exitCode : null,

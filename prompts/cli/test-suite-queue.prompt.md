@@ -203,7 +203,7 @@ The detached recorder is the execution custodian. Save `recorderPid` and
 `recorderIdentity` (Linux process start ticks, or null when unavailable) before
 it receives permission to start. The recorder saves `childPid` before releasing
 the child command's start gate. No validation command may run if this save fails.
-Save bounded, sanitized stdout/stderr evidence at `logPath` before forwarding it to the caller.
+Save bounded, sanitized stdout/stderr evidence at `logPath` before forwarding it to the caller, and flush any buffered post-overflow tail (`log.flush()`) in a `finally` path as well as on completion so errors or termination signals never drop newest log tail bytes (while still surfacing flush failures on the normal completion path as an evidence-save failure rather than fabricated success).
 A closed caller must not stop recording or cause a resend. On completion, stop
 owned descendants, drain output, remove the owned temporary environment, and
 atomically save the terminal receipt before returning or forwarding completion.
@@ -212,7 +212,10 @@ Receipts and `readSuiteProgress` expose the added fields above plus `exitCode`
 (integer or null), `signal` (termination signal or null), `signalDiagnostics`
 (null unless interrupted or terminated by a signal, else `{signal, exitCode,
 phase, source, pid, ppid, parentCommand, cgroup, elapsedMs, waitedMs, at}`
-with secret-safe bounded strings; when `announceReceipt !== false`,
+with secret-safe bounded strings — reading `/proc/<pid>/cgroup` and `/proc/<ppid>/comm`
+only live for the current running process inside a signal handler (`source === "process-signal"`,
+`phase !== "reconciled"`, `pid === process.pid`), never for a dead or recycled PID during
+reconciliation or after child exit; when `announceReceipt !== false`,
 `runTestSuite` also emits one secret-safe `Signal diagnostic:` line), `outcome`
 (`running`, `completed`, `interrupted`, or `unknown`), and `counts` (null without a complete TAP summary,
 else `{tests, suites, pass, fail, cancelled, skipped, todo}`, each a nonnegative
