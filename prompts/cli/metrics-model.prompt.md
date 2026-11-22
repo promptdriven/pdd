@@ -1,6 +1,6 @@
 # Autopilot metrics calculator
 
-Own `src/metrics-model.mjs`. Export pure deterministic functions `SKILLS`, `GATES`, `PR_GATES`, `PROMPT_CHECKS`, `localAnchorUtcMs`, `validateRepoName`, `normalizeSkill`, `normalizeMetricsConfig`, `isMetricsEnabled`, `applyMetricsToggle`, `calculateAutopilotMetrics`, `formatMetricsText`, and `renderMetricsHtml`. Perform no filesystem, network, process, or clock I/O, and never mutate caller inputs.
+Own `src/metrics-model.mjs`. Export pure deterministic functions `SKILLS`, `GATES`, `PR_GATES`, `PROMPT_CHECKS`, `localAnchorUtcMs`, `resolveStandupWindow`, `buildFunnelSummary`, `computeStageFunnel`, `evaluateMatureCohort`, `extractGraphQlReopenedEvents`, `validateRepoName`, `normalizeSkill`, `normalizeMetricsConfig`, `isMetricsEnabled`, `applyMetricsToggle`, `calculateAutopilotMetrics`, `formatMetricsText`, and `renderMetricsHtml` (delegating DST-safe standup window, stage funnel, and 7-day cohort helpers to `src/autopilot/metrics/funnel-cohort.mjs`). Perform no filesystem, network, process, or clock I/O, and never mutate caller inputs.
 
 ## Domain decisions
 

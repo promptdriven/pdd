@@ -1,4 +1,23 @@
 // Generated from prompts/cli/metrics-model.prompt.md (sha256: 965e27a4c6b5c07204070f858cb6848c0a92c8267ff0ffd4008e02f35eb3193c).
+import {
+  buildFunnelSummary,
+  computeStageFunnel,
+  evaluateMatureCohort,
+  extractGraphQlReopenedEvents,
+  localAnchorUtcMs,
+  localDateParts,
+  resolveStandupWindow,
+  validateTimezone,
+} from './autopilot/metrics/funnel-cohort.mjs';
+
+export {
+  buildFunnelSummary,
+  computeStageFunnel,
+  evaluateMatureCohort,
+  extractGraphQlReopenedEvents,
+  localAnchorUtcMs,
+  resolveStandupWindow,
+};
 
 export const SKILLS = Object.freeze(['small-change', 'bug', 'feature']);
 export const GATES = Object.freeze(['runtime', 'vectors', 'formal', 'suite', 'review', 'ci']);
@@ -16,7 +35,6 @@ const DAY_MS = 86_400_000;
 const MAX_DATE_MS = 8_640_000_000_000_000;
 const validDateMs = ms => typeof ms === 'number' && Number.isFinite(ms) && Math.abs(ms) <= MAX_DATE_MS;
 const nonNegativeSafeInt = value => (Number.isSafeInteger(value) && value >= 0 ? value : 0);
-const WEEKDAY_INDEX = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
 
 function modelError(code, message) {
   return Object.assign(new Error(message), { code });
@@ -51,16 +69,6 @@ function parseTimestampMs(value, fallback = null) {
   return fallback;
 }
 
-function validateTimezone(timezone) {
-  const tz = typeof timezone === 'string' && timezone.trim() ? timezone.trim() : 'UTC';
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(0);
-    return tz;
-  } catch {
-    throw modelError('invalid-timezone', `Invalid IANA timezone "${timezone}".`);
-  }
-}
-
 function validateCalendarDate(date) {
   if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date.trim())) {
     throw modelError('invalid-date', `Invalid date "${date ?? ''}". Expected YYYY-MM-DD.`);
@@ -72,47 +80,6 @@ function validateCalendarDate(date) {
     throw modelError('invalid-date', `Invalid calendar date "${trimmed}". Expected YYYY-MM-DD.`);
   }
   return { text: trimmed, year: y, month: m, day: d };
-}
-
-function localParts(ms, timezone) {
-  const dtf = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    weekday: 'short',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  });
-  const map = {};
-  for (const part of dtf.formatToParts(new Date(ms))) {
-    if (part.type !== 'literal') map[part.type] = part.value;
-  }
-  return {
-    weekday: WEEKDAY_INDEX[map.weekday] ?? 0,
-    year: Number(map.year),
-    month: Number(map.month),
-    day: Number(map.day),
-    hour: Number(map.hour === '24' ? 0 : map.hour),
-    minute: Number(map.minute),
-    second: Number(map.second),
-  };
-}
-
-export function localAnchorUtcMs(year, month, day, hour = 0, timezone = 'UTC') {
-  const tz = validateTimezone(timezone);
-  const targetUtc = Date.UTC(year, month - 1, day, hour, 0, 0, 0);
-  let guess = targetUtc;
-  for (let i = 0; i < 4; i++) {
-    const p = localParts(guess, tz);
-    const observedAsUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0);
-    const diff = observedAsUtc - targetUtc;
-    if (diff === 0) break;
-    guess -= diff;
-  }
-  return guess;
 }
 
 function localMidnightUtcMs(year, month, day, timezone) {
@@ -643,46 +610,6 @@ function resolveWindowPool(repoLowers, windowDef, items, openMap, openNumbersMap
     }
   }
   return { pool: totalPool, poolDisplay: String(totalPool) };
-}
-
-function roundPct(numerator, denominator) {
-  if (denominator === null || denominator === undefined || denominator <= 0) return null;
-  return Math.round((numerator / denominator) * 1000) / 10;
-}
-
-function fmtPct(pct) {
-  return pct === null ? 'n/a' : `${pct.toFixed(1)}%`;
-}
-
-function buildFunnelSummary({ pool, poolDisplay, taken, pr, merged, regressions, regressionsComplete = true }) {
-  const takenPct = pool !== null ? roundPct(taken, pool) : null;
-  const prPct = roundPct(pr, taken);
-  const mergedOfPrPct = roundPct(merged, pr);
-  const mergedOfTakenPct = roundPct(merged, taken);
-  const rawRegPct = roundPct(regressions, merged);
-  const incompleteZero = !regressionsComplete && merged > 0 && regressions === 0;
-  const incompletePartial = !regressionsComplete && merged > 0 && regressions > 0;
-  const regressionsPct = incompleteZero ? null : rawRegPct;
-  const regPart = incompleteZero
-    ? '? Regressions (scan incomplete)'
-    : incompletePartial
-      ? `${regressions}+ Regressions (${rawRegPct.toFixed(1)}%+)`
-      : `${regressions} Regressions (${fmtPct(regressionsPct)})`;
-  const line = `${poolDisplay} Pool -> ${taken} Taken (${fmtPct(takenPct)}) -> ${pr} PRs (${fmtPct(prPct)}) -> ${merged} Merged (${fmtPct(mergedOfPrPct)} of PRs, ${fmtPct(mergedOfTakenPct)} of Taken) | ${regPart}`;
-  return {
-    pool,
-    poolDisplay,
-    taken,
-    takenPct,
-    pr,
-    prPct,
-    merged,
-    mergedOfPrPct,
-    mergedOfTakenPct,
-    regressions,
-    regressionsPct,
-    line,
-  };
 }
 
 function summarizeOverviewRow(key, label, windowDef, items, repoLowers, openMap, openNumbersMap, closedIssues, regressionsComplete = true) {
@@ -1290,11 +1217,9 @@ export function calculateAutopilotMetrics(input = {}) {
   let windowDefs;
   let targetRefMs = nowMs;
   if (standup && parsedDate) {
-    const prevDay = new Date(Date.UTC(parsedDate.year, parsedDate.month - 1, parsedDate.day - 1));
-    const startMs = localAnchorUtcMs(prevDay.getUTCFullYear(), prevDay.getUTCMonth() + 1, prevDay.getUTCDate(), 9, timezone);
-    const endMs = localAnchorUtcMs(parsedDate.year, parsedDate.month, parsedDate.day, 9, timezone) - 1;
-    windowDefs = [{ key: 'standup', label: `Standup ${parsedDate.text} (9am-9am)`, startMs, endMs }];
-    targetRefMs = endMs;
+    const win = resolveStandupWindow({ date: parsedDate, timezone });
+    windowDefs = [{ key: win.key, label: win.label, startMs: win.startMs, endMs: win.endMs }];
+    targetRefMs = win.endMs;
   } else if (parsedDate) {
     const startMs = localMidnightUtcMs(parsedDate.year, parsedDate.month, parsedDate.day, timezone);
     const nextDay = new Date(Date.UTC(parsedDate.year, parsedDate.month - 1, parsedDate.day + 1));
@@ -1302,7 +1227,7 @@ export function calculateAutopilotMetrics(input = {}) {
     windowDefs = [{ key: 'date', label: parsedDate.text, startMs, endMs }];
     targetRefMs = startMs + 12 * 3_600_000;
   } else {
-    const nowLocal = localParts(nowMs, timezone);
+    const nowLocal = localDateParts(nowMs, timezone);
     const mondayUtcDate = new Date(Date.UTC(nowLocal.year, nowLocal.month - 1, nowLocal.day - nowLocal.weekday));
     const weekStartMs = localMidnightUtcMs(
       mondayUtcDate.getUTCFullYear(),
@@ -1311,13 +1236,9 @@ export function calculateAutopilotMetrics(input = {}) {
       timezone,
     );
     if (standup) {
-      const prevDay = new Date(Date.UTC(nowLocal.year, nowLocal.month - 1, nowLocal.day - 1));
-      const todayAnchor = localAnchorUtcMs(nowLocal.year, nowLocal.month, nowLocal.day, 9, timezone);
-      const startMs = localAnchorUtcMs(prevDay.getUTCFullYear(), prevDay.getUTCMonth() + 1, prevDay.getUTCDate(), 9, timezone);
-      const endMs = nowMs >= todayAnchor ? todayAnchor - 1 : nowMs;
-      const standupLabel = timezone === 'America/Los_Angeles' ? 'Standup (9am-9am PT)' : 'Standup (9am-9am)';
+      const win = resolveStandupWindow({ now: nowMs, timezone });
       windowDefs = [
-        { key: 'standup', label: standupLabel, startMs, endMs },
+        { key: win.key, label: win.label, startMs: win.startMs, endMs: win.endMs },
         { key: 'week', label: 'Week (Mon-Sun)', startMs: weekStartMs, endMs: nowMs },
       ];
     } else {

@@ -26,6 +26,21 @@ export {
   summarizeIntakeFilterPrecision,
 };
 
+export {
+  AUTO_DEPS_MARKER_PREFIX,
+  DEPENDENCY_EVIDENCE_KINDS,
+  DEPENDENCY_ACTIONS,
+  DEFAULT_FILE_CLAIM_TTL_MS,
+  issueContentHash,
+  parseExplicitDependencies,
+  inspectEdgeTimeline,
+  reconcileAutoDependencies,
+  acquireFileClaim,
+  releaseFileClaim,
+  activeFileConflicts,
+  sweepExpiredClaims,
+} from './autopilot/intake/auto-deps.mjs';
+
 export const DEFAULT_MIN_INTAKE_CONFIDENCE = 0.75;
 export const INTAKE_MODES = Object.freeze(['off', 'shadow', 'active']);
 export const CARD_CLASSES = Object.freeze(['ready', 'improve', 'person', 'duplicate', 'blocked', 'held', 'fixed', 'elsewhere']);
