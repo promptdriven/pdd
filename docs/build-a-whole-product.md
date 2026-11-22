@@ -77,7 +77,7 @@ pdd product status --json
 in parallel or in order. `pdd product start RUN` finds the exact run marker in
 an existing trusted issue (including closed issues) before creating one, pins
 the integration base commit SHA when available locally, and prints a concise
-`/pdd` handoff for your coding agent (or queues with `pdd autopilot --issue N`).
+`/pdd` handoff for your coding agent (or queues with `pdd autopilot start --issue N`).
 `--no-run` prepares or reuses the scoped issue without starting a run.
 
 The marker search reads bounded pages, including closed issues. A run belongs to

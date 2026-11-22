@@ -1,4 +1,4 @@
-// Retired #3053/JSON-comment dependency intake; minimal zero-legacy compat stub retained only for frozen src/workflow-runner.mjs and src/pdd-cli.mjs until Train 2 Tail / Train 4 L1 cleanup.
+// Retired #3053/JSON-comment dependency intake; minimal zero-legacy compat stub retained only for frozen src/workflow-runner.mjs, src/pdd-cli.mjs, and legacy workflow tests until Train 2 Tail / Train 4 L1 cleanup.
 import { parkingSummary } from './autopilot-parking.mjs';
 import { projectIssueGraph, issueKey } from './issue-dependencies.mjs';
 import { createDependencyReadPorts, readDependencySnapshot } from './issue-dependencies-github.mjs';
@@ -72,6 +72,26 @@ export async function checkDependencyStart({ cwd = '', repository, issue, coordi
   } catch {
     return { allowed: false, reason: 'unknown' };
   }
+}
+
+export async function reconcileDependencyIntake({ cwd = '', repository, mode }, ports = {}) {
+  if (mode === 'off') return { queued: [], eligible: [], skipped: [], pending: false, claims: [], groups: [] };
+  ports = createDependencyReadPorts({ cwd }, ports);
+  const { snapshot } = await snapshotRead(ports, { cwd, repository });
+  const graph = projectIssueGraph({ snapshot });
+  const subjects = graph.nodes.filter(n => root(n.key, repository) && n.nativeState === 'open').map(n => n.key);
+  const owners = subjects.length ? json((await ports.owners.read({ repository, issues: subjects })).json) : { claims: [] };
+  const ownedElsewhere = key => {
+    const claim = (owners.claims || []).find(c => issueKey(c.issue) === key && c.active);
+    return Boolean(claim && claim.owner && claim.owner !== owners.localOwner);
+  };
+  const skipReasons = (snapshot.issues ?? [])
+    .filter(x => subjects.includes(x.key) && x.assignees?.length)
+    .map(x => ({ issue: x.key, reason: 'assigned to a person' }));
+  const skipped = subjects.filter(x => ownedElsewhere(x) || skipReasons.some(s => s.issue === x));
+  const eligible = graph.nodes.filter(n => subjects.includes(n.key) && !skipped.includes(n.key) && n.eligible).map(n => n.key);
+  const claims = Array.isArray(owners.claims) ? owners.claims : [];
+  return { queued: [], eligible, skipped, ...(skipReasons.length ? { skipReasons } : {}), pending: false, claims, groups: [] };
 }
 
 export async function runDependencyIntake() {

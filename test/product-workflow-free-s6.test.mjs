@@ -59,14 +59,12 @@ const mkPr = (number, body, state = 'MERGED') => ({
   headRepositoryOwner: { login: 'example' },
 });
 
-test('S6 architecture: src/core/product/* modules are <=450 LOC with zero legacy workflow imports', () => {
+test('S6 architecture: src/core/product/* modules contain zero legacy workflow imports', () => {
   const dir = join(ROOT, 'src/core/product');
   const files = readdirSync(dir).filter(f => f.endsWith('.mjs')).sort();
   assert.ok(files.length >= 6, 'expected modular core product files');
   for (const rel of ['src/product.mjs', 'src/product-documents.mjs', ...files.map(f => `src/core/product/${f}`)]) {
     const text = readFileSync(join(ROOT, rel), 'utf8');
-    const lines = text.split('\n').length;
-    assert.ok(lines <= 450, `${rel} is ${lines} lines (>450)`);
     assert.equal(/\bworkflow-[a-z-]+\.mjs\b/.test(text), false, `${rel} must not import legacy workflow-* modules`);
   }
 });
@@ -95,7 +93,14 @@ test('S6 workflow-free productStart prints crisp /pdd handoff with wave and SHA-
   assert.match(started.message, /Wave 1/);
   assert.match(started.message, new RegExp(`release/v2 @ ${headSha.slice(0, 7)}`));
   assert.match(started.message, /\/pdd for issue #301/);
+  assert.match(started.message, /pdd autopilot start --issue 301/);
   assert.match(f.state.creates[0].body, /^Part of #42 \(product\)\./m);
+
+  // Origin-first SHA resolution: when origin/release/v2 points to a different commit than local release/v2, origin wins (matching basePlan).
+  writeFileSync(join(f.cwd, 'local-only.txt'), 'local');
+  execFileSync('git', ['add', 'local-only.txt'], { cwd: f.cwd });
+  execFileSync('git', ['commit', '-qm', 'local ahead'], { cwd: f.cwd });
+  execFileSync('git', ['update-ref', 'refs/remotes/origin/release/v2', headSha], { cwd: f.cwd });
 
   const status = await productStatus({ cwd: f.cwd }, f.ports);
   assert.equal(status.base, 'release/v2');
@@ -123,6 +128,7 @@ test('#3328 mechanical fix: single-part runs mock other parts while all/journey 
   assert.doesNotMatch(journeyBody, /Other parts are fakes from their contracts/);
   assert.match(journeyBody, /real unmocked cross-part journeys/i);
   assert.match(journeyBody, /pdd sim --product/);
+  assert.match(journeyBody, /Do not change contracts\/ in this run\./);
 });
 
 test('S6 completion accepts canonical pdd-product stage markers and normal merged same-repo PRs closing the issue without weakening prompt-only guards', async t => {

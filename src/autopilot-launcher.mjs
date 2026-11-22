@@ -2,6 +2,10 @@
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { acquireRunLock } from './shared/file-lock.mjs';
+import { gitContext } from './shared/git-context.mjs';
+import { parseGitHubIssueUrl, sameRepo } from './shared/github-repo.mjs';
+import { resolvePddStateBase } from './shared/state-dir.mjs';
+import { captureCosts, costReport, costStatusLines } from './cost-ledger.mjs';
 import { releaseCheckCapacity, readCheckStatus } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
 import { loginEnvironment, isCloudAccountsActive, isCreditOrResetAccount, selectCloudPoolLogin, exhaustCloudPoolLogin, accountsStatePath, readCloudAccountsState } from './login-pool.mjs';
@@ -1216,48 +1220,101 @@ async function statusJsonPayload(input, ports, p) {
   };
 }
 
-function emptyCostWindow(since) {
-  return {
-    since,
-    totals: {
-      totalTokens: null, uncachedInput: null, cacheHitShare: null, effectiveTokens: null,
-      tokens: [], person: { questions: 0, answers: 0, approvals: 0, waitingMinutes: 0, activeMinutes: null },
-      suiteMinutes: null, ciMinutes: null, githubCalls: 0,
-    },
-    coverage: [], mergedIssues: 0, p50: null, p90: null,
-  };
+const SAVED_RUN_FOLDER_RE = /^[1-9][0-9]*(?:-cancelled-[0-9a-f]+)?$/;
+
+function readSavedRunsIn(commonDir) {
+  let names;
+  try { names = readdirSync(join(commonDir, 'pdd', 'runs')); } catch { return []; }
+  const out = [];
+  for (const name of names) {
+    if (!SAVED_RUN_FOLDER_RE.test(name)) continue;
+    const runDir = join(commonDir, 'pdd', 'runs', name);
+    try {
+      const parsed = read(join(runDir, 'status.json'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Number.isSafeInteger(parsed.number)) {
+        out.push({ ...parsed, runDir, commonDir });
+      }
+    } catch { /* Skip unreadable saved run records. */ }
+  }
+  return out.sort((a, b) => a.number - b.number);
 }
-async function localCosts(_input, ports) {
-  const now = (ports.now ?? Date.now)();
-  return {
-    schema: 'pdd.cost-report.v1',
-    generatedAt: now,
-    runs: [],
-    day: emptyCostWindow(now - 24 * 60 * 60 * 1000),
-    week: emptyCostWindow(now - 7 * 24 * 60 * 60 * 1000),
-  };
+
+async function readLocalCostRuns({ cwd, all = false, env = process.env }) {
+  if (all) {
+    const indexPath = join(resolvePddStateBase(env), 'runs.json');
+    let entries = [];
+    try {
+      const idx = read(indexPath);
+      if (Array.isArray(idx?.runs)) entries = idx.runs.filter(e => e && typeof e === 'object' && Number.isSafeInteger(e.number));
+    } catch { /* Missing index returns empty list. */ }
+    const commonDirs = new Set(entries.map(e => (typeof e.runDir === 'string' ? join(e.runDir, '..', '..', '..') : null)).filter(Boolean));
+    const seen = new Set();
+    return [...commonDirs].flatMap(dir => readSavedRunsIn(dir)).filter(run => {
+      const key = JSON.stringify([run.runDir, run.runId, run.startedAt]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+  const ctx = cwd ? await gitContext(cwd) : null;
+  return ctx?.commonDir ? readSavedRunsIn(ctx.commonDir) : [];
 }
-async function resolveSavedRun(ref, cwd, p) {
+
+async function localCosts(input, ports, state = {}) {
+  const options = { ...ports, env: input.env ?? ports.env };
+  const runs = await (ports.costRuns ?? (() => readLocalCostRuns({ cwd: state.cwd ?? input.cwd, all: Boolean(input.all), env: options.env })))();
+  const measured = runs.map(run => {
+    try {
+      const observed = structuredClone(run);
+      observed.cost = captureCosts(run, observed, options);
+      return observed;
+    } catch { return run; }
+  });
+  return costReport(measured, (ports.now ?? Date.now)());
+}
+
+export function parseSavedRunRef(ref) {
   const token = String(ref ?? '').trim();
-  if (!token) return { error: 'Give a run number or run id.' };
+  if (!token || /[\x00-\x1f\x7f]/.test(token)) return null;
+  let match = /^#?([1-9][0-9]*)$/.exec(token);
+  if (match) return { number: Number(match[1]), repo: null };
+  match = /^([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*)#([1-9][0-9]*)$/.exec(token);
+  if (match) return { number: Number(match[2]), repo: match[1].toLowerCase() };
+  const parsedUrl = parseGitHubIssueUrl(token);
+  if (parsedUrl) return { number: parsedUrl.issue, repo: parsedUrl.repository };
+  // Strict single-segment runId (rejects slashes, backslashes, and ".." traversal).
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(token) && !token.includes('..')) return { runId: token, repo: null };
+  return null;
+}
+
+export async function resolveSavedRun(ref, cwd, p) {
+  const wanted = parseSavedRunRef(ref);
+  if (!wanted) return { error: `"${line(String(ref ?? '')).slice(0, 80)}" is not an issue number, #N, owner/repo#N, GitHub issue URL, or run id.` };
   let commonDir;
   try {
     const out = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
     commonDir = resolve(cwd, out);
   } catch (error) { return { error: line(error.message || 'Not a Git repository.') }; }
   const runsDir = join(commonDir, 'pdd', 'runs');
-  const direct = join(runsDir, token, 'status.json');
-  if (existsSync(direct)) {
-    const run = read(direct);
-    if (run && typeof run === 'object') return { run };
+  const matchesRepo = candidate => !wanted.repo || sameRepo(candidate.repo, wanted.repo);
+  if (wanted.number !== undefined) {
+    const direct = join(runsDir, String(wanted.number), 'status.json');
+    if (existsSync(direct)) {
+      const candidate = read(direct);
+      if (candidate && typeof candidate === 'object' && matchesRepo(candidate)) return { run: candidate };
+    }
   }
   try {
     for (const entry of readdirSync(runsDir)) {
+      if (!SAVED_RUN_FOLDER_RE.test(entry)) continue;
       const candidate = read(join(runsDir, entry, 'status.json'));
-      if (candidate && (String(candidate.runId) === token || String(candidate.number) === token)) return { run: candidate };
+      if (!candidate || typeof candidate !== 'object' || !matchesRepo(candidate)) continue;
+      if ((wanted.number !== undefined && candidate.number === wanted.number) || (wanted.runId && String(candidate.runId) === wanted.runId)) {
+        return { run: candidate };
+      }
     }
   } catch { /* Missing runs dir falls through to not-found message. */ }
-  return { error: `No saved run ${token} found.` };
+  return { error: `No saved run ${wanted.repo ? `${wanted.repo}#${wanted.number}` : wanted.number !== undefined ? `#${wanted.number}` : wanted.runId} found.` };
 }
 export async function runAutopilotLauncher(input, ports = {}) {
   const { command, packageRoot, runs, checks, issues = [] } = input;
@@ -1428,7 +1485,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     if (command === 'status' && input.json) return ok(JSON.stringify(await statusJsonPayload(input, ports, p), null, 2));
     if (command === 'status' && input.all) {
-      return await machineStatus(stateFolder(ports, p.env), ports, input.env ?? p.env, input.cwd);
+      const status = await machineStatus(stateFolder(ports, p.env), ports, input.env ?? p.env, input.cwd);
+      try { status.message += '\n' + costStatusLines(await localCosts(input, ports)); } catch {}
+      return status;
     }
     state.cwd = await gitRoot(p);
     const id = createHash('sha256').update(state.cwd).digest('hex').slice(0, 20);

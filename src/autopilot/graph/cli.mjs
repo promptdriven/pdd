@@ -7,8 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { resolveRepository } from '../../shared/github-repo.mjs';
-import { createDependencyReadPorts } from '../claims.mjs';
-import { readDependencySnapshot } from '../../issue-dependencies-github.mjs';
+import { createDependencyReadPorts, readDependencySnapshot } from '../../issue-dependencies-github.mjs';
 import { projectIssueGraph } from './dag.mjs';
 import { renderIssueGraph } from './view.mjs';
 

@@ -62,7 +62,7 @@ export async function resolveProductRepository({ cwd } = {}, ports = {}) {
 
 export async function resolveBaseSha(p, { cwd, baseBranch }) {
   if (typeof baseBranch !== 'string' || !baseBranch.trim()) return null;
-  for (const ref of [`refs/heads/${baseBranch}`, `refs/remotes/origin/${baseBranch}`]) {
+  for (const ref of [`refs/remotes/origin/${baseBranch}`, `refs/heads/${baseBranch}`]) {
     const found = await command(p, cwd, 'git', ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`], true);
     if (found !== null) {
       const sha = found.trim();
