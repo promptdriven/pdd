@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {serializeValidationReceipt, redactingLines, validationLog, safeEvidenceText} from './validation-evidence.mjs';
 import {executeSuite} from './test-suite-queue.mjs';
+import {parseTestSummaryOutput} from './autopilot/core/test-runners.mjs';
 
 let started = false;
 const send = (message, done = () => {}) => {
@@ -39,13 +40,44 @@ process.on('message', async message => {
     send({stream,bytes:Buffer.from(text).toString('base64')});
   };
   let pending = '', summary = {}, complete = null, tap = false, plan = false;
+  let polyPending = '', polyOverflow = false, polyBytes = 0;
+  const polyLines = [];
+  const MAX_POLY_BYTES = 262_144, MAX_POLY_LINE = 1024;
   const keys = ['tests','suites','pass','fail','cancelled','skipped','todo'];
+  const pushPolyLine = line => {
+    polyLines.push(line); polyBytes += line.length;
+    if (polyBytes <= MAX_POLY_BYTES) return;
+    let keptBytes = 0;
+    const tail = [];
+    for (let i = polyLines.length - 1; i >= 0 && keptBytes < 65_536; i -= 1) {
+      tail.push(polyLines[i]); keptBytes += polyLines[i].length;
+    }
+    tail.reverse();
+    const tailStart = polyLines.length - tail.length;
+    const anchors = [];
+    for (let i = 0; i < tailStart && keptBytes < MAX_POLY_BYTES - 16_384; i += 1) {
+      const l = polyLines[i];
+      if (/^(?:running \d+ tests?|test result:)|\s*"Action"\s*:\s*"(?:run|pass|fail|skip|build-fail)"/.test(l)) {
+        anchors.push(l); keptBytes += l.length;
+      }
+    }
+    polyLines.length = 0;
+    polyLines.push(...anchors, ...tail);
+    polyBytes = keptBytes;
+  };
   const output = (stream, bytes) => {
     log.evidence.outputBytes += bytes.length;
     filters[stream].write(bytes); flush(stream);
     if (stream === 'stdout') {
       // Summary lines are short. Never retain a large, unterminated output line.
       for (const part of bytes.toString('utf8').split(/(?<=\n)/)) {
+        if (polyOverflow) {
+          if (part.endsWith('\n')) { polyPending = ''; polyOverflow = false; }
+        } else {
+          polyPending += part;
+          if (polyPending.endsWith('\n')) { pushPolyLine(polyPending); polyPending = ''; }
+          else if (polyPending.length > MAX_POLY_LINE) { polyPending = ''; polyOverflow = true; }
+        }
         pending += part;
         if (pending.endsWith('\n')) {
           const header = /^TAP version 13\r?\n$/.test(pending);
@@ -80,7 +112,20 @@ process.on('message', async message => {
     if (result.signalDiagnostics) record.signalDiagnostics = result.signalDiagnostics;
     record.outcome = result.ownershipConfirmed === false ? 'unknown' : 'completed';
     record.exitCode = result.ownershipConfirmed === false ? null : result.exitCode;
-    record.counts = record.outcome === 'completed' && !pending ? complete : null;
+    let counts = null;
+    if (record.outcome === 'completed' && !pending) {
+      if (complete) counts = complete;
+      else if (!tap && polyLines.length) {
+        const parsed = parseTestSummaryOutput(polyLines.join(''));
+        if (parsed && parsed.format !== 'tap') {
+          counts = {
+            tests: parsed.total, pass: parsed.passed, fail: parsed.failed, skipped: parsed.skipped,
+            total: parsed.total, passed: parsed.passed, failed: parsed.failed, format: parsed.format,
+          };
+        }
+      }
+    }
+    record.counts = counts;
   } catch (error) {
     result = {exitCode:1,reason:safeEvidenceText(`Validation recorder failed: ${error.code ?? error.message}`)};
     record.exitCode = null; record.signal = null; record.outcome = 'unknown'; record.counts = null;

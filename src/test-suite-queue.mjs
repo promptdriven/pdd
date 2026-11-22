@@ -452,7 +452,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     p.say('running the full test suite');
     environmentRoot = p.fs.mkdtempSync(join(p.root, 'suite-env-'));
     const childEnv = Object.fromEntries(Object.entries(env).filter(([key, value]) =>
-      typeof value === 'string' && /^(?:PATH|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TERM|CI|SystemRoot|WINDIR|GOPATH|CARGO_HOME|RUSTUP_HOME|VIRTUAL_ENV|PDD_TEST_ENV_[A-Z0-9_]+)$/.test(key)));
+      typeof value === 'string' && /^(?:PATH|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TERM|CI|SystemRoot|WINDIR|GOPATH|GOMODCACHE|CARGO_HOME|RUSTUP_HOME|VIRTUAL_ENV|UV_CACHE_DIR|PYTEST_ADDOPTS|PDD_TEST_ENV_[A-Z0-9_]+)$/.test(key)));
     childEnv.PATH ??= '/usr/bin:/bin';
     childEnv.POCKET_BROWSER_BIN = env.POCKET_BROWSER_BIN ?? '/usr/bin/google-chrome';
     for (const [folder, names] of [
