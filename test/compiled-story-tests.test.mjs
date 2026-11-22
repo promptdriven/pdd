@@ -310,3 +310,33 @@ test('3641 non-CLI plain-prompt steps without pdd.json report input or check ref
  assert.equal(nonCliCheck.data.stories[0].steps[0].status,'not run');
  assert.equal(nonCliCheck.data.stories[0].steps[0].reason,'A check is unsupported.');
 });
+test('codeTestReport lists runnable steps without running them in dry mode and runs commands in implementationRoot', async () => {
+ const { codeTestReport, runCliStep } = await import('../src/compiled-test.mjs');
+ const root = project(), elsewhere = mkdtempSync(join(tmpdir(), 'pdd-compiled-impl-')); roots.push(elsewhere);
+ writeFileSync(join(root,'app.mjs'), "process.stdout.write('root\\n');\n");
+ writeFileSync(join(elsewhere,'app.mjs'), "process.stdin.setEncoding('utf8');let s='';for await (const c of process.stdin) s+=c;process.stdout.write(process.argv[2]+s);\n");
+ const calls = [];
+ const spawn = (command, args, options) => { if (command !== 'git') calls.push(options.cwd); return spawnSync(command, args, options); };
+ const dry = codeTestReport({root, words:['demo'], dry:true}, {spawn});
+ assert.equal(dry.error, null); assert.deepEqual(calls, []);
+ assert.deepEqual(dry.runs.map(run => [run.step_id, run.entry_path, run.operation, run.words.join(' ')]), [['one','prompts/app.prompt.md','main','node app.mjs']]);
+ assert.deepEqual(dry.runs[0].input, {argv:['hello'], stdin:'\n'});
+ assert.equal(dry.report.stories[0].status, 'not run');
+ const real = codeTestReport({root, words:['demo'], implementationRoot:elsewhere}, {spawn});
+ assert.deepEqual(calls, [elsewhere]); assert.equal(real.exit, 0); assert.equal(real.report.stories[0].status, 'passed');
+ assert.equal(existsSync(join(root,'.pdd/code-test/latest.json')), false, 'codeTestReport writes nothing');
+ assert.deepEqual(runCliStep({words:['node','app.mjs'], input:{argv:['x'], stdin:'y'}, cwd:elsewhere}), {exit_code:0, stdout:'xy', stderr:''});
+ assert.match(runCliStep({words:['no-such-command-pdd'], input:{argv:[]}, cwd:elsewhere}).not_run, /Command did not complete/);
+ assert.match(codeTestReport({root, words:['missing']}, {spawn}).error, /No selected Story tests: missing/);
+});
+
+test('3416 a plain-prompt step is listed for blind build with its pdd.json command and the CLI input schema', async () => {
+ const { codeTestReport } = await import('../src/compiled-test.mjs');
+ const { checkInput } = await import('../src/runtime-seam.mjs');
+ const dry = codeTestReport({root:plainProject(), words:['demo'], dry:true});
+ assert.equal(dry.error, null);
+ assert.deepEqual(dry.runs.map(run => [run.step_id, run.words.join(' ')]), [['one','node app.mjs']]);
+ const schema = dry.runs[0].input_schema;
+ assert.equal(checkInput(dry.runs[0].input, schema, 0).refusals.length, 0);
+ assert.ok(checkInput({argv:['a'], extra:1}, schema, 0).refusals.length > 0);
+});

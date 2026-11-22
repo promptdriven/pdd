@@ -115,6 +115,7 @@ otherwise, and catch unexpected errors with one finite stderr line and exit 1.
 
 - [Compiled Story checker](compiled-test.prompt.md): required native generation and verification context for code-target dispatch.
 - [Adaptive AI prompt and Story lint engine](ai-lint.prompt.md): required native generation and verification context for `pdd lint --ai` and hidden host-plumbing dispatch.
+- [Blind build](blind-build.prompt.md): required native generation and verification context for blind-build dispatch.
 - [Codex readability and quality lint](codex-lint.prompt.md): required native generation and verification context for `pdd lint --codex` dispatch.
 - [Repo hygiene and extensible project lint](repo-hygiene-lint.prompt.md): required native generation and verification context for default-on deterministic structural error rules and `pdd.json` `"lint"` error-severity rule enforcement.
 - [Formal-to-Vector Short JSON export](vector-export.prompt.md): required native generation and verification context for offline `pdd vector export` dispatch.
@@ -1231,6 +1232,8 @@ Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with
 Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. Dispatch `autopilot-intake` the same way with command intake and `--json` as `json`. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label`, `--mode` as `mode`, `--report` as `report`, `--decisions` as `decisions`, `--intake` as `intake`, `--agent` as `agent`, `--pool` as `pool` and `--auto-update` as `autoUpdate` when given.
 
 Route `pdd test --target code` to the local compiled Story checker without contacting the interpreter. Reject other test options except `--json` for this route.
+
+Route `pdd test --blind-build` (before the `--target code` route) to [Blind build](blind-build.prompt.md) `runBlindBuild({root: cwd, words, builds, agent, timeout, resume, json}, {stdout, stderr, env})` without contacting the interpreter, with `--builds` (default 1), `--agent`, `--timeout` (default 30), `--resume` and `--json`. Reject any other test option except `--target` with exit 2, and reject Story selections, `--builds` or `--agent` together with `--resume`.
 
 Dispatch local `accounts` by dynamically importing [Cloud accounts CLI](accounts-cli.prompt.md) (`accountsCli ?? await import('./accounts-cli.mjs')`) and calling `runAccountsCli({commandId: plan.commandId, operands: [...plan.operands], options: {...plan.options}, cwd, env, stdin}, accountsPorts)`. When `result.message` is non-empty, write it to `stdout` on exit 0 or `stderr` otherwise; keep `stdout` silent when `result.message === ''` (such as `pdd accounts sync --quiet`).
 

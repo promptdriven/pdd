@@ -1,7 +1,7 @@
 // Prompt: prompts/cli/compiled-test.prompt.md
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, lstatSync, statSync, realpathSync } from 'node:fs';
-import { join, resolve, relative, sep } from 'node:path';
+import { join, resolve, relative, sep, dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { findTests, selectTests, readPrompt, scenarioShapeRefusal, storyCriteria, checkInput, createStrictSourceAccess, preflight, exactValue, parseScenarioJson, stringifyScenarioJson } from './runtime-seam.mjs';
 import { compileScenarioText } from './scenario-compile.mjs';
@@ -22,7 +22,9 @@ function codeCommands(source, visible) {
     return object(commands) ? commands : {};
   } catch { return {}; }
 }
-function execute(step, doc, found, root, ports) {
+// A plain prompt is a CLI whose input is argv and optional stdin, the shape checked below.
+const PLAIN_CLI_INPUT_SCHEMA = {type:'object', properties:{argv:{type:'array', items:{type:'string'}}, stdin:{type:'string'}}, required:['argv'], additionalProperties:false};
+function execute(step, doc, found, root, ports, cwd = root, runs = null, where = {}) {
   if (step.simulation_overrides !== undefined && (!object(step.simulation_overrides) || Object.keys(step.simulation_overrides).length))
     return unrun(step, 'Step simulation overrides are not supported.');
   if (!object(doc.initial_world) || Object.keys(doc.initial_world).length ||
@@ -32,7 +34,7 @@ function execute(step, doc, found, root, ports) {
   try { prompt = readPrompt(root, found.visible, step.entry_path, found.workspace); } catch { return unrun(step, 'Entry prompt is unavailable.'); }
   if (Object.hasOwn(step, 'expected_error')) return unrun(step, 'Expected-error steps are unsupported.');
   const plain = prompt.error === 'interface-missing' && prompt.interface === undefined;
-  let words;
+  let words, inputSchema = PLAIN_CLI_INPUT_SCHEMA;
   if (!plain) {
   const iface = prompt.interface;
   if (!object(iface) || !Array.isArray(iface.entries) || !iface.entries.every(object) ||
@@ -49,6 +51,7 @@ function execute(step, doc, found, root, ports) {
   if (!iface.entries[index].input_schema || admission.refusals.length || admission.warnings.length) return unrun(step, 'CLI input schema cannot admit this input.');
   const implementation = iface.entries[index].implementation;
   words = commandWords(implementation?.command);
+  inputSchema = iface.entries[index].input_schema;
   if (implementation?.kind !== 'cli' || !words) return unrun(step, 'CLI implementation command is missing or unsupported.');
   }
   if (!step.input || !Array.isArray(step.input.argv) || !step.input.argv.every(x => typeof x === 'string') || (step.input.stdin !== undefined && typeof step.input.stdin !== 'string') || Object.keys(step.input).some(k => !['argv','stdin'].includes(k))) return unrun(step, 'CLI input is unsupported.');
@@ -57,18 +60,25 @@ function execute(step, doc, found, root, ports) {
     words = commandWords(ports.commands && Object.hasOwn(ports.commands, step.entry_path) ? ports.commands[step.entry_path] : undefined);
     if (!words) return unrun(step, missingCommand(step.entry_path));
   }
-  let result;
-  try { result = ports.spawn(words[0], [...words.slice(1), ...step.input.argv], { cwd:root, input:step.input.stdin ?? '', encoding:'utf8', timeout:600000, maxBuffer:10_485_760 }); }
-  catch (error) { return unrun(step, `Command did not complete: ${error.message}`); }
-  if (result.error || result.status === null) return unrun(step, `Command did not complete: ${result.error?.message ?? result.signal ?? 'unknown reason'}`);
-  const actual = {exit_code:result.status, stdout:result.stdout, stderr:result.stderr};
+  runs?.push({...where, step_id:step.step_id, entry_path:step.entry_path, operation:step.operation, words, input:step.input, input_schema:inputSchema});
+  if (ports.dry) return unrun(step, 'Selection only.');
+  const actual = runCliStep({words, input:step.input, cwd}, ports);
+  if (actual.not_run) return unrun(step, actual.not_run);
   const checks = step.checks.map(c => ({criterion_id:c.criterion_id, path:c.path, status:isDeepStrictEqual(exactValue(actual[c.path.slice(1)]),exactValue(c.value)) ? 'passed':'failed', expected:c.value, actual:actual[c.path.slice(1)]}));
   return {step_id:step.step_id,status:checks.every(c => c.status === 'passed') ? 'passed':'failed',checks};
 }
-export async function runCompiledTest({root, words, json}, {stdout, stderr, spawn = spawnSync} = {}) {
+export function runCliStep({words, input, cwd}, {spawn = spawnSync} = {}) {
+  let result;
+  try { result = spawn(words[0], [...words.slice(1), ...input.argv], { cwd, input:input.stdin ?? '', encoding:'utf8', timeout:600000, maxBuffer:10_485_760 }); }
+  catch (error) { return {not_run:`Command did not complete: ${error.message}`}; }
+  if (result.error || result.status === null) return {not_run:`Command did not complete: ${result.error?.message ?? result.signal ?? 'unknown reason'}`};
+  return {exit_code:result.status, stdout:result.stdout, stderr:result.stderr};
+}
+export function codeTestReport({root, words, implementationRoot = null, dry = false}, {spawn = spawnSync} = {}) {
   const cwd = root;
+  const fail = error => ({exit:2, report:null, runs:[], error});
   const top = spawn('git',['rev-parse','--show-toplevel'],{cwd:root,encoding:'utf8'});
-  if (top.status !== 0 || !top.stdout?.trim()) { stderr.write('No Git project root is available.\n'); return 2; }
+  if (top.status !== 0 || !top.stdout?.trim()) return fail('No Git project root is available.');
   root = top.stdout.trim();
   const found = findTests({root, excludeFixtureProjects:words.length === 0});
   const directories = new Set();
@@ -83,7 +93,8 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
   const missing = (found.untested ?? []).filter(item => !words.length || [...directories].some(dir => dir === '.' || item.storyPath.startsWith(dir.replace(/\/$/, '') + '/')));
   const selection = selectTests(found, normalized);
   selection.unknown = selection.unknown.filter(word => !directories.has(word) || !missing.some(item => word === '.' || item.storyPath.startsWith(word.replace(/\/$/, '') + '/')));
-  if (selection.unknown.length || selection.untested.length || (!selection.selected.length && !missing.length)) { stderr.write(`No selected Story tests: ${[...selection.unknown,...selection.untested].join(', ')}\n`); return 2; }
+  if (selection.unknown.length || selection.untested.length || (!selection.selected.length && !missing.length)) return fail(`No selected Story tests: ${[...selection.unknown,...selection.untested].join(', ')}`);
+  const runs = [], runIn = implementationRoot ?? root;
   const git = spawn('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}), commit = git.status === 0 ? git.stdout.trim() : null;
   const state = spawn('git',['status','--porcelain','--untracked-files=normal'],{cwd:root,encoding:'utf8'}), dirty = state.status === 0 ? !!state.stdout.trim() : null;
   const source = createStrictSourceAccess(root, found.workspace).sourceFilePort(found.visible);
@@ -188,7 +199,7 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
     else {
       const covered = new Set(doc.steps.flatMap(step => step.checks.map(check => check.criterion_id)));
       if (!siblingCoverageValid && doc.criteria.some(criterion => !covered.has(criterion.id))) steps.push({scenario:test.path, step:unrun({step_id:test.path}, 'A Story criterion has no check.')});
-      steps.push(...doc.steps.map(step => ({scenario:test.path, step:execute(step,doc,found,root,{spawn,commands})})));
+      steps.push(...doc.steps.map(step => ({scenario:test.path, step:execute(step,doc,found,root,{spawn,commands,dry},runIn,runs,{story,scenario:test.path})})));
     }
     groups.set(story,steps);
   }
@@ -197,13 +208,26 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
     return {story, status:steps.some(s=>s.status==='failed')?'failed':steps.every(s=>s.status==='passed')?'passed':'not run',steps};
   });
   const report = {target:'code',commit,dirty,ai_calls:0,stories};
-  for (const path of [join(root,'.pdd'),join(root,'.pdd','.gitignore'),join(root,'.pdd','code-test'),join(root,'.pdd','code-test','latest.json')]) {
-    try { if (lstatSync(path).isSymbolicLink()) { stderr.write('Code test result path is a symbolic link.\n'); return 1; } }
+  return {exit:commit && stories.every(row=>row.status==='passed') ? 0 : 1, report, runs, error:null, root, groups, found, selected:selection.selected};
+}
+export function writeLocalReport(root, parts, text, stderr) {
+  const paths = [join(root,'.pdd')]; let dir = join(root,'.pdd');
+  for (const part of parts) { dir = join(dir, part); paths.push(dir); }
+  for (const path of [join(root,'.pdd','.gitignore'), ...paths]) {
+    try { if (lstatSync(path).isSymbolicLink()) { stderr.write('Code test result path is a symbolic link.\n'); return false; } }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
-  mkdirSync(join(root,'.pdd','code-test'),{recursive:true});
+  mkdirSync(dirname(dir),{recursive:true});
   try { writeFileSync(join(root,'.pdd','.gitignore'),'*\n',{flag:'wx'}); } catch (error) { if (error.code !== 'EEXIST') throw error; }
-  writeFileSync(join(root,'.pdd','code-test','latest.json'),stringifyScenarioJson(report,2)+'\n');
+  writeFileSync(dir,text);
+  return true;
+}
+export async function runCompiledTest({root, words, json}, {stdout, stderr, spawn = spawnSync} = {}) {
+  const result = codeTestReport({root, words}, {spawn});
+  if (result.error) { stderr.write(`${result.error}\n`); return 2; }
+  const {report, groups} = result, {commit, dirty, stories} = report;
+  root = result.root;
+  if (!writeLocalReport(root, ['code-test','latest.json'], stringifyScenarioJson(report,2)+'\n', stderr)) return 1;
   if(json) stdout.write(stringifyScenarioJson(report)+'\n'); else for(const row of stories) { stdout.write(`${row.status.toUpperCase()}  ${row.story}  ${commit ?? 'commit unknown'}  ${dirty === null ? 'dirty unknown' : dirty ? 'dirty' : 'clean'}\n`); for(const {scenario, step} of groups.get(row.story) ?? []) { if(step.reason) stdout.write(`  ${step.step_id}: not run: ${step.reason}\n`); for(const check of step.checks ?? []) if(check.status === 'failed') stdout.write(`  ${scenario} · step ${step.step_id} · ${check.criterion_id} ${check.path}: expected ${stringifyScenarioJson(check.expected)}, actual ${stringifyScenarioJson(check.actual)}\n`); } }
-  return commit && stories.every(row=>row.status==='passed') ? 0 : 1;
+  return result.exit;
 }
