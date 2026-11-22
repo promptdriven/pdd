@@ -661,14 +661,19 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
             const runtimeCode = await runtime.lint({ words: [...plan.operands], options: opts, cwd }, { stdout: bufferedStdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
             if (runtimeCode === 0 || runtimeCode === 1) {
               const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], opts);
-              if (projectErrors.length > 0) {
+              if (projectErrors.length > 0 || opts['--local'] === true) {
                 try {
                   const parsed = JSON.parse(captured.trim());
-                  parsed.problems = [...(Array.isArray(parsed.problems) ? parsed.problems : []), ...projectErrors];
-                  parsed.ok = false;
-                  parsed.exit_code = 1;
+                  if (opts['--local'] === true && !parsed.schema_version) parsed.schema_version = 'pdd.local-lint.v1';
+                  if (projectErrors.length > 0) {
+                    parsed.problems = [...(Array.isArray(parsed.problems) ? parsed.problems : []), ...projectErrors];
+                    parsed.ok = false;
+                    parsed.exit_code = 1;
+                    stdout.write(`${JSON.stringify(parsed)}\n`);
+                    return 1;
+                  }
                   stdout.write(`${JSON.stringify(parsed)}\n`);
-                  return 1;
+                  return runtimeCode;
                 } catch {}
               }
             }

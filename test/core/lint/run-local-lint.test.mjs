@@ -51,7 +51,7 @@ test('runLocalLint runs 100% offline in <1s, writes 0 batch-state files, and emi
 
   assert.equal(exitCode, 0);
   assert.equal(stderr.text, '', 'clean repo must leave stderr completely empty');
-  assert.match(stdout.text, /^Local lint: 0 errors, 0 warnings\. \(0 AI\/network calls\)\n$/);
+  assert.match(stdout.text, /^Local lint: 0 errors, 0 warnings\. \(0 AI calls, 0 network calls\)\n$/);
   assert.deepEqual(readdirSync(stateDir), [], 'local lint must write 0 batch-state files');
   assert.ok(elapsedMs < 1000, `expected <1s offline run, took ${elapsedMs.toFixed(1)}ms`);
 

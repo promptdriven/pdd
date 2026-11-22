@@ -116,8 +116,8 @@ test('workflow start reaches the same runner export as workflow run, with no ext
 test('sim runs like simulate and test --lint like lint, in local modes', async t => {
   const setup = harbor(t);
   const options = () => ({ cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PATH: '/usr/bin:/bin' } });
-  const lint = await sameRun([[LINT, '--local', '--json'], [TEST, '--lint', '--local', '--json']], options);
-  const summaries = lint.map(result => {
+  const offline = await sameRun([[LINT, '--json'], [TEST, '--lint', '--json']], options);
+  const offlineSummaries = offline.map(result => {
     assert.equal(result.code, 0, result.stderr); assert.equal(result.stderr, '');
     const summary = JSON.parse(result.stdout);
     assert.equal(summary.schema_version, 'pdd.local-lint.v1');
@@ -125,8 +125,16 @@ test('sim runs like simulate and test --lint like lint, in local modes', async t
     assert.equal(summary.exit_code, 0);
     return summary;
   });
-  assert.deepEqual(summaries[0], summaries[1]);
-  assert.equal(existsSync(join(setup.state, 'batches')), false, 'offline lint writes zero batch state');
+  assert.deepEqual(offlineSummaries[0], offlineSummaries[1]);
+  assert.equal(existsSync(join(setup.state, 'batches')), false, 'default offline lint writes zero batch state');
+  const lint = await sameRun([[LINT, '--local', '--json'], [TEST, '--lint', '--local', '--json']], options);
+  const summaries = lint.map(result => {
+    assert.equal(result.code, 0, result.stderr); assert.equal(result.stderr, '');
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.local_only, true);
+    assert.equal(summary.exit_code, 0);
+    return summary;
+  });
   const stable = summaries.map(({ batch, ...fields }) => fields);
   assert.deepEqual(stable[0], stable[1]);
   const story = await sameRun([[SIMULATE, 'no-such-story'], ['sim', 'no-such-story']], options);
