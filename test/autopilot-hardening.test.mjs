@@ -16,11 +16,10 @@ import {
 import { boundSuiteCommand, runtimeVerdicts } from '../src/autopilot-core.mjs';
 import {
   isCreditOrResetAccount,
-  loadLoginPool,
   selectCloudPoolLogin,
-  selectPoolLogin,
   writeCloudAccountsState,
 } from '../src/login-pool.mjs';
+import { loadLoginPool, selectPoolLogin } from '../src/autopilot/local-pool.mjs';
 import { runStepAgentProcess } from '../src/agent-adapters.mjs';
 import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
 import {

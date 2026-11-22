@@ -6,15 +6,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   POOL_FALLBACK_COOLDOWN_MS,
-  clearPoolCooldowns,
   isQuotaExhaustionMessage,
-  loadLoginPool,
   loginEnvironment,
+} from '../src/login-pool.mjs';
+import {
+  clearPoolCooldowns,
+  loadLoginPool,
   markLoginExhausted,
   readPoolCooldowns,
   resolvePoolPath,
   selectPoolLogin,
-} from '../src/login-pool.mjs';
+} from '../src/autopilot/local-pool.mjs';
 
 function makeTemp(t) {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-login-pool-'));

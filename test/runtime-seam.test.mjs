@@ -853,7 +853,7 @@ registerHooks({
     'workflow-cost', 'workflow-prove', 'workflow-suite', 'workflow-evidence', 'workflow-evidence-associate',
     'workflow-park', 'workflow-yield', 'workflow-cancel', 'workflow-tidy',
     'autopilot-status', 'autopilot-logs', 'autopilot-doctor', 'autopilot-regressions', 'autopilot-alerts', 'autopilot-alert',
-    'autopilot-start', 'autopilot-stop', 'autopilot-add', 'autopilot-release', 'autopilot-report',
+    'autopilot-start', 'autopilot-suite', 'autopilot-stop', 'autopilot-add', 'autopilot-release', 'autopilot-report',
     'autopilot-intake', 'autopilot-audit', 'autopilot-check-base',
     'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot-trust', 'autopilot-untrust', 'accounts', 'upgrade',
   ]);

@@ -21,7 +21,8 @@ import { evaluateForensicsResult, findConfiguredSkipLabel, formatForensicsBrief,
 import { readSuiteProgress, reconcileSuiteQueue } from './test-suite-queue.mjs';
 import { issueAreas, areasOverlap, groupReadyIssues, orderGroupsSpreadFirst, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
-import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage, loadLoginPool, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS, selectPoolLogin } from './login-pool.mjs';
+import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS } from './login-pool.mjs';
+import { loadLoginPool, selectPoolLogin } from './autopilot/local-pool.mjs';
 import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
 const isPoolRotatableService = text => Boolean(text && (isQuotaExhaustionMessage(text) || isAuthFailureMessage(text)));
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';

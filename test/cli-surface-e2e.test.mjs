@@ -981,7 +981,7 @@ const REGISTERED_E2E_ROUTES = Object.freeze([
   // Graph & dependencies
   'graph', 'dependencies.prepare', 'dependencies.complete',
   // Autopilot
-  'autopilot.doctor', 'autopilot.start', 'autopilot.status', 'autopilot.logs', 'autopilot.stop',
+  'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop',
   'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust',
   'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.report', 'autopilot.regressions',
   'autopilot.alerts', 'autopilot.alert', 'autopilot.audit', 'autopilot.check-base',
@@ -1911,7 +1911,27 @@ test('all 19 autopilot commands execute end-to-end safely in isolated temp HOME 
   assert.match(startNoLabel.stderr, /label/i);
   const startFullEngine = await fx.cli(['autopilot', 'start', '--engine', 'full'], { extraEnv: ghEnv });
   assert.equal(startFullEngine.code, 2);
+  const startBadIssues = await fx.cli(['autopilot', 'start', '--issues', 'abc'], { extraEnv: ghEnv });
+  assert.equal(startBadIssues.code, 2);
   markExecuted('autopilot.start');
+
+  // 9b. autopilot suite (direct queue-backed suite without workflow dependencies)
+  const suiteMissingCmd = await fx.cli(['autopilot', 'suite']);
+  assert.equal(suiteMissingCmd.code, 2);
+  await configureCheckCapacity({
+    env: { PDD_SUITE_QUEUE: join(fx.home, '.local', 'state', 'pdd-suite-queue') },
+    checks: 1,
+    runs: 2,
+    resources: {
+      memory: { available: 16 * 1024 ** 3 },
+      load: 0,
+      check: { cpuIds: [0, 1, 2, 3], platform: 'other', battery: false, virtualized: true, taskset: null },
+    },
+  });
+  const suitePass = await fx.cli(['autopilot', 'suite', '--command', "node -e 'console.log(\"autopilot-suite-ok\")'", '--timeout', '1']);
+  assert.equal(suitePass.code, 0, suitePass.stderr);
+  assert.match(suitePass.stdout, /autopilot-suite-ok|passed|completed|finished/i);
+  markExecuted('autopilot.suite');
 
   // 10. autopilot stop (safe with launchctl/systemctl shims)
   const stopRes = await fx.cli(['autopilot', 'stop']);

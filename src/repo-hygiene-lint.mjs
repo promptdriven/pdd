@@ -5,7 +5,9 @@ import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTarge
 import { isTestOwnedPath, resolveOwners } from './file-owner.mjs';
 import { auditProductPlan } from './product-documents.mjs';
 import { isLintableStoryPath, lintStory } from './story-lint.mjs';
-import { gitFiles, isSecretPath, workspace } from './runtime-seam.mjs';
+import { gitFiles } from './shared/git-context.mjs';
+import { isSecretPath } from './shared/safe-read.mjs';
+import { workspace } from './shared/workspace-policy.mjs';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const HEAD_BYTES = 4096;

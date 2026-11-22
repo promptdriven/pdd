@@ -31,14 +31,6 @@ export {
   loginEnvironment,
   resolvePddStateBase,
 };
-export {
-  clearPoolCooldowns,
-  loadLoginPool,
-  markLoginExhausted,
-  readPoolCooldowns,
-  resolvePoolPath,
-  selectPoolLogin,
-} from './autopilot/local-pool.mjs';
 
 export const readCodexUsageWindows = (...args) => (codexLimitsModule.readCodexUsageWindows ?? codexLimitsModule.readCodexLimits)(...args);
 const CODEX_GATEWAY_OVERLAY_LINKS = [

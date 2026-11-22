@@ -303,10 +303,25 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return result.exitCode;
       } catch (error) { line(stderr, `Autopilot logs failed.${reason(error)}`); return 1; }
     }
+    case 'autopilot-suite': {
+      const command = plan.options['--command'];
+      if (!command?.trim()) { line(stderr, 'Use pdd autopilot suite --command COMMAND [--timeout MIN].'); return 2; }
+      try {
+        const { runTestSuite } = await import('./test-suite-queue.mjs');
+        const timeout = plan.options['--timeout'] !== undefined ? Number(plan.options['--timeout']) : undefined;
+        const result = await runTestSuite(
+          { cwd, env, command, ...(timeout !== undefined ? { timeout } : {}) },
+          { say: text => line(stdout, text) },
+        );
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string') throw Error('Invalid suite reply');
+        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch (error) { line(stderr, `Autopilot suite failed.${reason(error)}`); return 1; }
+    }
     case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), ...(plan.options['--agent'] !== undefined ? { agent: plan.options['--agent'] } : {}), ...(plan.options['--pool'] !== undefined ? { pool: plan.options['--pool'] } : {}), ...(plan.options['--auto-update'] ? { autoUpdate: plan.options['--auto-update'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], ...(plan.options['--issues'] !== undefined ? { allowedIssues: plan.options['--issues'] } : {}), ...(plan.options['--issue'] !== undefined ? { issue: plan.options['--issue'] } : {}), runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), ...(plan.options['--agent'] !== undefined ? { agent: plan.options['--agent'] } : {}), ...(plan.options['--pool'] !== undefined ? { pool: plan.options['--pool'] } : {}), ...(plan.options['--auto-update'] ? { autoUpdate: plan.options['--auto-update'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true && plan.options['--json'] !== true) {

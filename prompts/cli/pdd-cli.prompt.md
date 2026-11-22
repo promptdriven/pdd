@@ -80,6 +80,8 @@ return its exitCode unchanged. A finite intake import or call throw returns 1 wi
 safe line and no automatic retry. No route silently chooses or calls an AI model.
 Preserve every existing evidence-associate route and --test text-list behavior.
 
+Dispatch `autopilot-suite` directly to `runTestSuite` in `src/test-suite-queue.mjs` with `cwd`, `env`, `command` from `--command`, optional integer `timeout` from `--timeout`, and `{ say }` writing live queue lines to stdout; require a nonblank `--command` (exit 2 otherwise) before importing execution, with zero workflow-runner dependency. For `autopilot-start`, forward `--issues` as `allowedIssues` and `--issue` as `issue` to `runAutopilotLauncher`.
+
 Dispatch `workflow-suite` through the workflow runner's `runSuite` with cwd,
 env, command from `--command` and optional timeout from `--timeout` (passed whenever it is
 given, also 0). Require a

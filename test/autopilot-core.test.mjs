@@ -15,7 +15,7 @@ import { autopilotEngine, busySlots, coreSettings, failingTests, readyIssues, co
 const { agentModelFamily } = autopilotCore;
 import { listReportDrafts, sendReportDraft } from '../src/autopilot-reports.mjs';
 import { cleanupAgentJob } from '../src/agent-job.mjs';
-import { selectPoolLogin } from '../src/login-pool.mjs';
+import { selectPoolLogin } from '../src/autopilot/local-pool.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN;
 const endComments = (w, n) => w.comments(n).filter(body => body.includes('<!-- pdd:autopilot-core:end:'));

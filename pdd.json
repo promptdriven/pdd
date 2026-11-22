@@ -1,6 +1,11 @@
 {
   "autopilot": {
     "mode": "auto",
-    "trust": []
+    "trust": [],
+    "siblingRepos": [
+      "promptdriven/pdd_cloud",
+      "promptdriven/pdd-workflow",
+      "promptdriven/prompt-runtime"
+    ]
   }
 }

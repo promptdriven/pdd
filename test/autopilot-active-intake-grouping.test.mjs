@@ -30,7 +30,7 @@ import {
 } from '../src/autopilot-areas.mjs';
 import { coreSettings, coreStatus } from '../src/autopilot-core.mjs';
 import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
-import { selectPoolLogin, markLoginExhausted } from '../src/login-pool.mjs';
+import { selectPoolLogin, markLoginExhausted } from '../src/autopilot/local-pool.mjs';
 import { parseCodexLimits } from '../src/codex-limits.mjs';
 
 const intakeJobs = w => w.started.filter(job => job.role === 'intake');
