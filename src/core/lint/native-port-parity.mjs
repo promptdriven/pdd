@@ -126,6 +126,7 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
   }
 
   let inPorts = false, portsDepth = 0, inTable = false, portCols = [], splitCols = null;
+  let cuePending = false, cueBlankLeft = 0, inCueBullets = false;
   for (let idx = 0; idx < proseLines.length; idx++) {
     const { lineNo, text: line } = proseLines[idx];
     const hm = /^ {0,3}(#{2,6})\s+(.+)$/.exec(line);
@@ -134,11 +135,13 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
       if (!NET_PORT_HEADING_RE.test(title) && PORT_SECTION_RE.test(title)) { inPorts = true; portsDepth = depth; }
       else if (depth <= portsDepth) { inPorts = false; portsDepth = 0; }
       inTable = false; portCols = []; splitCols = null;
+      cuePending = false; cueBlankLeft = 0; inCueBullets = false;
       continue;
     }
     if (line.includes('|') && idx + 1 < proseLines.length && isMarkdownTableSeparator(proseLines[idx + 1].text)) {
       const headers = splitMarkdownTableRow(line) ?? [];
       inTable = true; portCols = []; splitCols = null;
+      cuePending = false; cueBlankLeft = 0; inCueBullets = false;
       let pCol = -1, oCol = -1;
       for (let c = 0; c < headers.length; c++) {
         const h = headers[c];
@@ -166,7 +169,8 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
     const { spans } = splitBackticks(line);
     const hasCue = WIRE_CUE_RE.test(splitBackticks(line.replace(NON_PORT_IDIOM_RE, ' ')).outside);
     const bm = BULLET_RE.exec(line);
-    if (bm && (inPorts || hasCue)) {
+    if (bm && (inPorts || hasCue || cuePending || inCueBullets)) {
+      if (!inPorts && (cuePending || inCueBullets)) { inCueBullets = true; cuePending = false; cueBlankLeft = 0; }
       const body = bm[2].trim();
       const lead = /^`([^`\r\n]+)`/.exec(body) ?? /^([a-z][a-zA-Z0-9_-]*\.[a-z][a-zA-Z0-9_-]*)(?:\s*\([^()\r\n]*\))?(?=\s*(?::|—|–|->|=>|-\s|$))/.exec(body);
       const sepMatch = lead ? /(?::|—|–|->|=>| - )/.exec(body.slice(lead[0].length)) : null;
@@ -176,6 +180,15 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
       } else scanChunk(body, lineNo);
       continue;
     }
+    if (!line.trim()) {
+      inCueBullets = false;
+      if (cuePending && cueBlankLeft > 0) cueBlankLeft -= 1;
+      else cuePending = false;
+      continue;
+    }
+    inCueBullets = false;
+    cuePending = !inPorts && hasCue && /:\s*$/.test(line.trim());
+    cueBlankLeft = cuePending ? 1 : 0;
     if (inPorts || hasCue) scanChunk(line, lineNo);
     else scanSpans(spans, lineNo, true);
   }

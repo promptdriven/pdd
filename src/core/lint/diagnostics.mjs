@@ -1,9 +1,27 @@
 // Shared Layer-1 diagnostics, 4-part agent-teaching formatting, and safe in-root file reads.
+import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const HEAD_BYTES = 4096;
+export const SCRUBBED_CHILD_ENV_RE = /^(?:GH_.*|GITHUB_.*|CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|ANTHROPIC_.*|OPENAI_.*|CODEX_.*|HERDR_.*|PDD_.*|AWS_.*|NODE_TEST_CONTEXT|.*(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD))$/i;
+
+export function scrubChildEnv(env = process.env) {
+  const clean = {};
+  for (const [k, v] of Object.entries(env ?? {})) {
+    if (!SCRUBBED_CHILD_ENV_RE.test(k)) clean[k] = v;
+  }
+  return clean;
+}
+
+export function resolveDefaultBaseRef(cwd) {
+  for (const candidate of ['origin/main', 'main', 'origin/master', 'master', 'HEAD']) {
+    const check = spawnSync('git', ['rev-parse', '--verify', `${candidate}^{commit}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (check.status === 0 && check.stdout.trim()) return candidate;
+  }
+  return null;
+}
 
 export const canonicalRepoPath = value =>
   typeof value === 'string'
@@ -128,7 +146,10 @@ export function formatDiagnosticLine(item, severity) {
   if (severity === 'error' && item.fix && !/\bFix:\s/i.test(detail)) {
     detail = formatTeachingDetail({ invariant: detail, fix: item.fix, rerun: item.rerun ?? 'pdd lint --local' });
   } else if (severity === 'error' && !/\bFix:\s/i.test(detail)) {
-    detail = `${detail.replace(/\.+$/, '')}. Fix: resolve [${item.code}] at ${item.filePath}:${item.line} and rerun \`pdd lint --local\`.`;
+    const fallbackFix = item.category === 'custom rule'
+      ? `Update ${item.filePath}:${item.line} to satisfy custom rule "${item.code}"`
+      : `Resolve [${item.code}] at ${item.filePath}:${item.line}`;
+    detail = formatTeachingDetail({ invariant: detail, fix: fallbackFix, rerun: item.rerun ?? 'pdd lint --local' });
   }
   return `${prefix}: ${item.category}: ${item.filePath}:${item.line} [${item.code}] ${detail}`;
 }

@@ -80,7 +80,7 @@ test('runLocalLint supports --diff hard gates (.only / conflicts) and opt-in lin
   assert.match(diffErr.text, /\[diff-focus-only\]/);
   assert.match(diffErr.text, /Fix:.*Rerun: `pdd lint --diff`/);
 
-  // Remove .only and test lint.commands execution.
+  // Remove .only and verify Astra #9: untrusted working-tree lint.commands are SKIPPED unless committed on base or --trust-working-tree!
   writeFileSync(join(repo, 'test', 'price.test.mjs'), "test('clean', () => {});\n");
   writeFileSync(
     join(repo, 'pdd.json'),
@@ -88,9 +88,22 @@ test('runLocalLint supports --diff hard gates (.only / conflicts) and opt-in lin
   );
   execFileSync('git', ['add', 'pdd.json'], { cwd: repo });
 
-  const cmdOut = makeSink(), cmdErr = makeSink();
-  const cmdCode = runLocalLint({ cwd: repo, runCommands: true }, { stdout: cmdOut, stderr: cmdErr });
-  assert.equal(cmdCode, 1);
-  assert.match(cmdErr.text, /\[lint-command-failed(?::[^\]]+)?\]/);
-  assert.match(cmdErr.text, /custom linter failed/);
+  const untrustedOut = makeSink(), untrustedErr = makeSink();
+  const untrustedCode = runLocalLint({ cwd: repo, runCommands: true }, { stdout: untrustedOut, stderr: untrustedErr });
+  assert.equal(untrustedCode, 0, 'untrusted working-tree lint.commands must NOT execute by default');
+  assert.match(untrustedOut.text, /\[lint-commands-untrusted\]/);
+
+  // Explicit trustWorkingTree: true opts in locally.
+  const optInOut = makeSink(), optInErr = makeSink();
+  const optInCode = runLocalLint({ cwd: repo, runCommands: true, trustWorkingTree: true }, { stdout: optInOut, stderr: optInErr });
+  assert.equal(optInCode, 1);
+  assert.match(optInErr.text, /\[lint-command-failed(?::[^\]]+)?\]/);
+  assert.match(optInErr.text, /custom linter failed/);
+
+  // Once committed on merge base (`main`), base-trusted lint.commands run automatically without --trust-working-tree.
+  execFileSync('git', ['commit', '-q', '-m', 'trust lint command on base'], { cwd: repo });
+  const baseOut = makeSink(), baseErr = makeSink();
+  const baseCode = runLocalLint({ cwd: repo, runCommands: true }, { stdout: baseOut, stderr: baseErr });
+  assert.equal(baseCode, 1);
+  assert.match(baseErr.text, /\[lint-command-failed(?::[^\]]+)?\]/);
 });

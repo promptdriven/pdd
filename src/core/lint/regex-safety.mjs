@@ -136,8 +136,8 @@ export function isSafeRegexPattern(pattern, cleanFlags = '') {
   const ignoreCase = cleanFlags.includes('i');
   const unicodeIgnoreCase = ignoreCase && cleanFlags.includes('u');
   const normChar = ch => (ignoreCase ? ch.toLowerCase() : ch);
-  // Root frame tracks top-level chained/adjacent unbounded quantifiers cleanly.
-  const stack = [{ kind: 'root', hasInnerQuantifier: false, hasUnboundedQuantifier: false, branches: [makeBranch()] }];
+  // Root frame tracks top-level chained/adjacent unbounded quantifiers and nested alternations cleanly.
+  const stack = [{ kind: 'root', hasInnerQuantifier: false, hasUnboundedQuantifier: false, hasAlternation: false, hasAmbiguousAlternation: false, branches: [makeBranch()] }];
 
   const currentBranch = () => stack.at(-1).branches.at(-1);
 
@@ -235,7 +235,7 @@ export function isSafeRegexPattern(pattern, cleanFlags = '') {
           return false;
         }
       }
-      stack.push({ kind, hasInnerQuantifier: false, hasUnboundedQuantifier: false, branches: [makeBranch()] });
+      stack.push({ kind, hasInnerQuantifier: false, hasUnboundedQuantifier: false, hasAlternation: false, hasAmbiguousAlternation: false, branches: [makeBranch()] });
       i += step;
       continue;
     }
@@ -251,20 +251,26 @@ export function isSafeRegexPattern(pattern, cleanFlags = '') {
       const frame = stack.pop();
       if (frame.kind === 'lookaround' && frame.hasUnboundedQuantifier) return false;
       i += 1;
+      const groupHasAlt = frame.branches.length > 1 || frame.hasAlternation;
+      let ambiguousAlt = frame.hasAmbiguousAlternation;
+      if (frame.branches.length > 1) {
+        // Under /iu Unicode case folding, mark alternations ambiguous unconditionally (e.g. (?:(?:s|ſ))+$/iu).
+        if (unicodeIgnoreCase) {
+          ambiguousAlt = true;
+        } else {
+          const starts = [];
+          for (const br of frame.branches) {
+            if (br.len === 0 || !br.pureLiteralPrefix || br.firstChar === null) { ambiguousAlt = true; break; }
+            starts.push(br.firstChar);
+          }
+          if (!ambiguousAlt && new Set(starts).size !== frame.branches.length) ambiguousAlt = true;
+        }
+      }
       const q = readRegexQuantifier(pattern, i);
       if (q) {
         if (frame.kind === 'lookaround') return false;
         if (frame.hasInnerQuantifier) return false;
-        if (q.repeats && frame.branches.length > 1) {
-          // Under /iu Unicode case folding, reject repeated alternations unconditionally (e.g. (?:s|ſ)+$/iu).
-          if (unicodeIgnoreCase) return false;
-          const starts = [];
-          for (const br of frame.branches) {
-            if (br.len === 0 || !br.pureLiteralPrefix || br.firstChar === null) return false;
-            starts.push(br.firstChar);
-          }
-          if (new Set(starts).size !== frame.branches.length) return false;
-        }
+        if (q.repeats && (ambiguousAlt || (unicodeIgnoreCase && groupHasAlt))) return false;
         i += q.len;
       }
       if (frame.kind === 'normal') {
@@ -272,6 +278,8 @@ export function isSafeRegexPattern(pattern, cleanFlags = '') {
         if (!recordAtom(null, effectiveQuant)) return false;
         if (frame.hasInnerQuantifier) stack.at(-1).hasInnerQuantifier = true;
         if (frame.hasUnboundedQuantifier) stack.at(-1).hasUnboundedQuantifier = true;
+        if (groupHasAlt) stack.at(-1).hasAlternation = true;
+        if (ambiguousAlt) stack.at(-1).hasAmbiguousAlternation = true;
       }
       continue;
     }

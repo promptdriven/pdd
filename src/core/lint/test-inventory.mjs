@@ -2,12 +2,16 @@
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { isTestPromptPath } from '../../file-owner.mjs';
-import { formatTeachingDetail, readSafeUtf8 } from './diagnostics.mjs';
+import { causeText } from '../../shared/safe-read.mjs';
+import { buildLineStarts, formatTeachingDetail, lineNumberAt, readSafeUtf8, resolveDefaultBaseRef } from './diagnostics.mjs';
+
+export { resolveDefaultBaseRef };
 
 const UTILITY_TEST_DIR = /(?:^|\/)(?:helpers?|fixtures?|mocks?|__mocks__|__fixtures__)\//i;
 const DOC_OR_FIXTURE_PATH = /(?:^|\/)(?:docs?|fixtures?|__fixtures__)\/|\.md$/i;
 const SNAPSHOT_PATH = /\.snap$|(?:^|\/)__snapshots__\//i;
 const HARNESS_PATH = /(?:^|\/)(?:package\.json|vitest\.config\.[^/]+|jest\.config\.[^/]+|pytest\.ini|pyproject\.toml|conftest\.py|tox\.ini|setup\.cfg|\.github\/workflows\/[^/]+\.ya?ml)$/i;
+const EXPECT_CHAIN_RE = /^\s*\.\s*(?:not|resolves|rejects|to[A-Z]\w*|be|equal|eql|include|contain|match|throw|have|deep|nested|own|ordered|any|all|a|an|ok|true|false|null|undefined|NaN|exist|empty|above|below|least|most|within|lengthOf|property|members|keys|satisfy|closeTo|change|increase|decrease|respondTo|itself|instanceof|oneOf|finite|string|json|status|header|redirect|cookie|charset|type)\b/;
 
 export function detectTestLanguage(path) {
   if (!path || UTILITY_TEST_DIR.test(path)) return null;
@@ -61,11 +65,13 @@ export function findExecutableOnlyMarkers(source, filePath) {
     return hits;
   }
   if (lang !== 'js') return [];
-  const lines = maskJsNonCode(source).split('\n'), hits = [];
-  const onlyRe = /(?<![.\w$])((?:test|it|describe|suite|context)\s*\.\s*only|fit|fdescribe)\s*\(/;
-  for (let i = 0; i < lines.length; i++) {
-    const m = onlyRe.exec(lines[i]);
-    if (m) hits.push({ path: filePath, line: i + 1, marker: m[1].replace(/\s+/g, '') });
+  const masked = maskJsNonCode(source), ls = buildLineStarts(masked), hits = [], seen = new Set();
+  const onlyRe = /(?<![.\w$])((?:test|it|describe|suite|context)\s*\.\s*only(?:\s*\.\s*each)?|fit|fdescribe)\s*\(/g;
+  for (const m of masked.matchAll(onlyRe)) {
+    const line = lineNumberAt(ls, m.index);
+    if (seen.has(line)) continue;
+    seen.add(line);
+    hits.push({ path: filePath, line, marker: m[1].replace(/\s+/g, '') });
   }
   return hits;
 }
@@ -73,11 +79,12 @@ export function findExecutableOnlyMarkers(source, filePath) {
 export function findConflictMarkers(source, filePath) {
   if (!source || DOC_OR_FIXTURE_PATH.test(filePath)) return [];
   const lines = source.split(/\r?\n/), hits = [];
-  let openLine = -1, sawMid = false;
+  let inBlock = false;
   for (let i = 0; i < lines.length; i++) {
-    if (/^<{7}(?:\s|$)/.test(lines[i])) { openLine = i + 1; sawMid = false; }
-    else if (openLine > 0 && /^={7}$/.test(lines[i])) sawMid = true;
-    else if (openLine > 0 && sawMid && /^>{7}(?:\s|$)/.test(lines[i])) { hits.push({ path: filePath, line: openLine }); openLine = -1; sawMid = false; }
+    const line = lines[i];
+    if (/^<{7}(?:\s|$)/.test(line)) { hits.push({ path: filePath, line: i + 1 }); inBlock = true; }
+    else if (/^={7}$/.test(line)) { if (!inBlock) hits.push({ path: filePath, line: i + 1 }); }
+    else if (/^>{7}(?:\s|$)/.test(line)) { if (!inBlock) hits.push({ path: filePath, line: i + 1 }); inBlock = false; }
   }
   return hits;
 }
@@ -88,6 +95,22 @@ function countTableRows(source, lang) {
   let count = 0;
   for (const m of source.matchAll(re)) if (m[1].trim()) count += m[1].trim().split(/,(?![^[\]{}()]*[\]}])/).filter(x => x.trim()).length;
   return count;
+}
+
+function collectJsAssertions(maskedBlock) {
+  const assertions = [];
+  for (const m of maskedBlock.matchAll(/(?<![.\w$])assert\s*[.(]/g)) assertions.push(m[0]);
+  for (const m of maskedBlock.matchAll(/(?<![.\w$])expect\s*\.\s*(?:assertions|hasAssertions)\s*\(/g)) assertions.push(m[0]);
+  for (const m of maskedBlock.matchAll(/(?<![.\w$])expect\s*\(/g)) {
+    const openIdx = m.index + m[0].length - 1;
+    let depth = 0, closeIdx = -1;
+    for (let i = openIdx; i < maskedBlock.length; i++) {
+      if (maskedBlock[i] === '(') depth++;
+      else if (maskedBlock[i] === ')' && --depth === 0) { closeIdx = i; break; }
+    }
+    if (closeIdx > openIdx && EXPECT_CHAIN_RE.test(maskedBlock.slice(closeIdx + 1))) assertions.push(maskedBlock.slice(m.index, closeIdx + 1));
+  }
+  return assertions;
 }
 
 export function extractTestCases(source, lang) {
@@ -106,14 +129,11 @@ export function extractTestCases(source, lang) {
         end = i; if (started && parenDepth <= 0) break;
       }
       const slice = lines.slice(at, end + 1), maskSlice = maskedLines.slice(at, end + 1);
-      const assertions = [], skips = [];
+      const assertions = collectJsAssertions(maskSlice.join('\n'));
+      const skips = [];
       if (/^\s*(?:(?:test|it)\.(?:skip|todo)|xit|xtest)\s*\(/.test(maskLine) || /\{\s*(?:skip|todo)\s*:\s*(?:true|q)/.test(maskLine)) skips.push(rawLine.trim());
-      for (let j = 0; j < maskSlice.length; j++) {
-        if (/\b(?:expect|assert)\s*[.(]/.test(maskSlice[j])) {
-          const nextLine = /\bexpect\s*\([^)]*$/.test(slice[j]) && j + 1 < slice.length ? ` ${slice[j + 1].trim()}` : '';
-          assertions.push(`${slice[j].trim()}${nextLine}`);
-        }
-        if (j > 0 && /\b(?:t|ctx)\.(?:skip|todo)\s*\(/.test(maskSlice[j])) skips.push(slice[j].trim());
+      for (let j = 1; j < maskSlice.length; j++) {
+        if (/\b(?:t|ctx)\.(?:skip|todo)\s*\(/.test(maskSlice[j])) skips.push(slice[j].trim());
       }
       found.push({ name: decl[3], line: at + 1, assertions, skips });
     }
@@ -211,6 +231,7 @@ export function analyzeDiffEntries(entries = []) {
     const prev = extractTestCases(entry.before || '', oldLang), next = extractTestCases(entry.after || '', newLang);
     if (prev.tableCaseCount > next.tableCaseCount) tableDrops.push({ path: activePath, before: prev.tableCaseCount, after: next.tableCaseCount });
 
+    const isFileRename = Boolean(oldPath && newPath && oldPath !== newPath);
     const prevMap = new Map(prev.cases.map(c => [c.name, c])), nextMap = new Map(next.cases.map(c => [c.name, c]));
     for (const c of prev.cases) {
       if (!nextMap.has(c.name)) {
@@ -228,6 +249,7 @@ export function analyzeDiffEntries(entries = []) {
         addedByName.get(c.name).push(rec);
         for (const sk of c.skips) newSkips.push({ path: newPath, name: c.name, line: c.line, marker: sk });
       } else {
+        if (isFileRename) movedTests.push({ name: c.name, from: oldPath, to: newPath });
         const oldCase = prevMap.get(c.name);
         if (c.assertions.length < oldCase.assertions.length) assertionDrops.push({ path: newPath, name: c.name, before: oldCase.assertions.length, after: c.assertions.length });
         const oldSkips = new Set(oldCase.skips);
@@ -259,33 +281,40 @@ export function analyzeDiffEntries(entries = []) {
   return { ok: errors.length === 0, errors, advisories, removedTests: genuinelyRemoved, movedTests, addedTests, newSkips, assertionDrops, tableDrops, snapshotEdits, harnessEdits };
 }
 
-export function resolveDefaultBaseRef(cwd) {
-  for (const candidate of ['origin/main', 'main', 'origin/master', 'master', 'HEAD']) {
-    const check = spawnSync('git', ['rev-parse', '--verify', `${candidate}^{commit}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    if (check.status === 0 && check.stdout.trim()) return candidate;
-  }
-  return null;
+function baseUnavailableResult(baseRef, reason) {
+  const detail = formatTeachingDetail({ invariant: reason, fix: 'Pass a valid local git ref via --diff <REF> or commit an initial base commit', rerun: 'pdd lint --diff' });
+  return {
+    ok: false, baseAvailable: false, baseRef: baseRef ?? null, baseSha: null, baseError: reason, touchedFiles: [],
+    errors: [{ path: '.', line: 1, code: 'diff-base-unavailable', formatted: `Error: diff gate: .:1 [diff-base-unavailable] ${detail}` }],
+    advisories: [], removedTests: [], movedTests: [], addedTests: [], newSkips: [], assertionDrops: [], tableDrops: [], snapshotEdits: [], harnessEdits: [],
+  };
 }
 
 export function runDiffSpotlight({ cwd, baseRef } = {}) {
   const realRoot = realpathSync(cwd);
   const resolvedBase = baseRef || resolveDefaultBaseRef(realRoot);
-  if (!resolvedBase) return { ok: true, baseRef: null, touchedFiles: [], errors: [], advisories: [], removedTests: [], movedTests: [], newSkips: [], assertionDrops: [], tableDrops: [], snapshotEdits: [], harnessEdits: [] };
-  const mb = spawnSync('git', ['merge-base', 'HEAD', resolvedBase], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  const baseSha = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : resolvedBase;
+  if (!resolvedBase) return baseUnavailableResult(baseRef, 'Could not resolve a default base commit locally.');
+  const revCheck = spawnSync('git', ['rev-parse', '--verify', `${resolvedBase}^{commit}`], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  if (revCheck.status !== 0 || !revCheck.stdout.trim()) {
+    return baseUnavailableResult(resolvedBase, `Base ref "${resolvedBase}" could not be resolved locally.`);
+  }
+  const resolvedCommit = revCheck.stdout.trim();
+  const mb = spawnSync('git', ['merge-base', 'HEAD', resolvedCommit], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const baseSha = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : resolvedCommit;
 
   const diffRes = spawnSync('git', ['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', baseSha, '--'], { cwd: realRoot, maxBuffer: 32 * 1024 * 1024 });
+  if (diffRes.status !== 0) {
+    return baseUnavailableResult(resolvedBase, `git diff against base "${resolvedBase}" failed: ${causeText(diffRes.stderr?.toString('utf8') || 'unknown git diff error')}`);
+  }
   const entries = [], seenPaths = new Set();
-  if (diffRes.status === 0) {
-    const fields = diffRes.stdout.toString('utf8').replace(/\0$/, '').split('\0').filter(Boolean);
-    for (let i = 0; i < fields.length;) {
-      const st = fields[i++], first = fields[i++], second = st.startsWith('R') || st.startsWith('C') ? fields[i++] : first;
-      const oldPath = st === 'A' ? '' : first, newPath = st === 'D' ? '' : second;
-      const before = oldPath ? (spawnSync('git', ['show', `${baseSha}:${oldPath}`], { cwd: realRoot, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).stdout ?? '') : '';
-      const after = newPath ? (readSafeUtf8(realRoot, newPath) ?? '') : '';
-      entries.push({ status: st, oldPath, newPath, before, after });
-      if (newPath) seenPaths.add(newPath); if (oldPath) seenPaths.add(oldPath);
-    }
+  const fields = diffRes.stdout.toString('utf8').replace(/\0$/, '').split('\0').filter(Boolean);
+  for (let i = 0; i < fields.length;) {
+    const st = fields[i++], first = fields[i++], second = st.startsWith('R') || st.startsWith('C') ? fields[i++] : first;
+    const oldPath = st === 'A' ? '' : first, newPath = st === 'D' ? '' : second;
+    const before = oldPath ? (spawnSync('git', ['show', `${baseSha}:${oldPath}`], { cwd: realRoot, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).stdout ?? '') : '';
+    const after = newPath ? (readSafeUtf8(realRoot, newPath) ?? '') : '';
+    entries.push({ status: st, oldPath, newPath, before, after });
+    if (newPath) seenPaths.add(newPath); if (oldPath) seenPaths.add(oldPath);
   }
   const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: realRoot, maxBuffer: 16 * 1024 * 1024 });
   if (untracked.status === 0) {
@@ -309,5 +338,5 @@ export function runDiffSpotlight({ cwd, baseRef } = {}) {
       }
     }
   }
-  return { ...analysis, baseRef: resolvedBase, baseSha, touchedFiles: [...seenPaths].sort() };
+  return { ...analysis, baseAvailable: true, baseRef: resolvedBase, baseSha, touchedFiles: [...seenPaths].sort() };
 }

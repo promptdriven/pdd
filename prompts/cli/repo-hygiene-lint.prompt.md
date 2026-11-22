@@ -8,7 +8,7 @@ Own `src/repo-hygiene-lint.mjs` (thin facade) and `src/core/lint/*.mjs`. Run 100
 - **Workspace scope and safety:** Resolve `realRoot = realpathSync(root)`, list Git-visible paths once via `gitFiles(realRoot)` unless `files` is supplied, resolve `workspacePolicy` from `workspacePolicy` / `workspaceRoot` / `realRoot`, exclude secret paths (`isSecretPath`) and paths outside `workspace.allows`, and skip `fixtures/` unless explicitly selected. Open regular in-root files with `O_NOFOLLOW | O_NONBLOCK` and verify `dev`/`ino` parity without throwing on unreadable, escaping, symlinked, binary, or oversized files.
 - **Single-pass I/O:** Read only the 4 KiB header window of eligible production code files to check `broken-prompt-header` and resolve prompt ownership; read full code file text lazily only for prompt-owned files or files matched by explicit custom rules.
 - **4-part agent-teaching diagnostics:** Every `'error'` finding includes location (`path:line [code]`), invariant violated, a concrete 1-line `Fix:`, and a `Rerun:` command.
-- **Offline CLI handler (`runLocalLint`):** Runs `lintRepoProject`, optional `.ui.svg` layout checks (`svg-layout`), optional `--diff [BASE]` spotlight (`test-inventory`), and optional base-trusted `lint.commands`. Clean repositories print `Local lint: 0 errors, 0 warnings. (0 AI/network calls)` to `stdout` with empty `stderr` and exit `0`; errors print to `stderr` and exit `1`. `--json` emits `{schema_version: 'pdd.local-lint.v1', ok, exit_code, local_only: true, summary_line, problems, warnings, findings, diff?, commands?}`.
+- **Offline CLI handler (`runLocalLint`):** Runs `lintRepoProject`, optional `.ui.svg` layout checks (`svg-layout`), optional `--diff [BASE]` spotlight (`test-inventory`), and optional base-trusted `lint.commands` loaded strictly from `git show <baseSha>:pdd.json` (skipping untrusted working-tree command edits unless `--trust-working-tree` is explicitly requested). Clean repositories print `Local lint: 0 errors, 0 warnings. (0 AI/network calls)` to `stdout` with empty `stderr` and exit `0`; errors print to `stderr` and exit `1`. `--json` emits `{schema_version: 'pdd.local-lint.v1', ok, exit_code, local_only: true, summary_line, problems, warnings, findings, diff?, commands?}`.
 
 ## Built-in deterministic rules
 
@@ -25,14 +25,14 @@ Own `src/repo-hygiene-lint.mjs` (thin facade) and `src/core/lint/*.mjs`. Run 100
 ## Extensible project config and ReDoS / glob safety
 
 `loadProjectLintConfig` loads workspace-local `rules/lint/*.json` before `pdd.json` `"lint"`:
-- `disable`, `rules`, `custom_rules` (capped at 100, deduplicated by `id` so later rules override cleanly), and `commands` (up to 16 base-trusted repo-native linter commands such as `oxlint`, `eslint`, `ruff`, `go vet`, or `cargo clippy`).
-- `parseRegexSafe` rejects backreferences, nested quantifiers, lookarounds with unbounded quantifiers, non-literal escapes (`\x`, `\u`, `\c`, `\0`) in repeated alternations, repeated alternations under `/iu` Unicode case folding, and chained/adjacent unbounded quantifiers.
+- `disable`, `rules`, `custom_rules` (capped at 100, deduplicated by `id` so later rules override cleanly; `include`/`exclude` globs filter paths before disk reads), and `commands` (up to 16 repo-native linter commands allowed only in merge-base `pdd.json`, never in `rules/lint/*.json`).
+- `parseRegexSafe` rejects backreferences, nested quantifiers, lookarounds with unbounded quantifiers, non-literal escapes (`\x`, `\u`, `\c`, `\0`) in repeated alternations, nested overlapping alternations under enclosing quantifiers, repeated alternations under `/iu` Unicode case folding, and chained/adjacent unbounded quantifiers.
 - `compileGlobMatcher` matches paths with a strictly linear DP matcher (zero regex compilation, max 12 wildcards, max 256 chars).
 
 ## Polyglot `--diff [BASE]` spotlight (`src/core/lint/test-inventory.mjs`)
 
-- Diffs `BASE..WORKTREE` (tracked changes plus untracked non-ignored files), excludes `helpers/`, `fixtures/`, and `mocks/` utility files, supports JS/TS (Prettier `semi: false`, Vitest timeouts, multi-line `expect()`), Python (`def test_*`, `pytest.raises`, `@pytest.mark.skip*`, `@unittest.skip*`, `@pytest.mark.parametrize`), and Go (`func Test*`, `t.Run`, `t.Skip*`, `t.Error*`/`t.Fatal*`).
-- Reclassifies cross-file moved tests separately from genuinely removed tests, and reports advisories for removed tests, moved tests, new skips, dropped assertions, dropped table-driven cases, `*.snap` edits, and test-harness / `scripts.test` / CI edits.
+- Diffs `BASE..WORKTREE` (failing closed when base comparison is unavailable; includes tracked changes plus untracked non-ignored files), excludes `helpers/`, `fixtures/`, and `mocks/` utility files, catches `.only` / `.only.each` / multiline `.only` and any leftover conflict marker line, and supports JS/TS (Prettier `semi: false`, Vitest timeouts, multi-line chained `expect()` matchers), Python (`def test_*`, `pytest.raises`, `@pytest.mark.skip*`, `@unittest.skip*`, `@pytest.mark.parametrize`), and Go (`func Test*`, `t.Run`, `t.Skip*`, `t.Error*`/`t.Fatal*`).
+- Reclassifies cross-file moved tests and Git `R...` file renames separately from genuinely removed tests, and reports advisories for removed tests, moved tests, new skips, dropped assertions, dropped table-driven cases, `*.snap` edits, and test-harness / `scripts.test` / CI edits.
 
 ## Dependencies
 

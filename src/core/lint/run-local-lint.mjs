@@ -5,6 +5,7 @@ import { posix } from 'node:path';
 import { isLintableStoryPath } from '../../story-lint.mjs';
 import { lintSvgLayouts as defaultLintSvgLayouts } from '../../svg-layout.mjs';
 import { gitFiles } from '../../shared/git-context.mjs';
+import { loadBaseTrustedLintCommands } from './project-config.mjs';
 import { lintRepoProject, runConfiguredLintCommands } from './project-lint.mjs';
 import { runDiffSpotlight } from './test-inventory.mjs';
 
@@ -59,7 +60,9 @@ export function runLocalLint(
     words = [],
     json = false,
     diff = undefined,
+    baseRef = undefined,
     runCommands = false,
+    trustWorkingTree = false,
     includeSvg = true,
     config,
     workspaceRoot,
@@ -99,17 +102,30 @@ export function runLocalLint(
   }
 
   let diffResult = null;
+  const resolvedDiffBase = typeof diff === 'string' && diff.trim() ? diff.trim() : (typeof baseRef === 'string' && baseRef.trim() ? baseRef.trim() : undefined);
   if (diff !== undefined && diff !== false) {
-    const baseRef = typeof diff === 'string' && diff.trim() ? diff.trim() : undefined;
-    diffResult = (ports.runDiffSpotlight ?? runDiffSpotlight)({ cwd: root, baseRef });
+    diffResult = (ports.runDiffSpotlight ?? runDiffSpotlight)({ cwd: root, baseRef: resolvedDiffBase });
   }
 
   let commandResult = null;
-  if (runCommands && project.commands.length > 0) {
-    commandResult = (ports.runConfiguredLintCommands ?? runConfiguredLintCommands)(
-      { root, commands: project.commands, env },
-      ports,
-    );
+  const commandWarnings = [];
+  if (runCommands) {
+    let cmdsToRun = [];
+    if (trustWorkingTree) {
+      cmdsToRun = project.commands;
+    } else {
+      const trusted = loadBaseTrustedLintCommands(root, { baseRef: resolvedDiffBase });
+      cmdsToRun = trusted.commands;
+      if (trusted.skippedUntrusted) {
+        commandWarnings.push('Warning: lint config: pdd.json:1 [lint-commands-untrusted] Working-tree changes to "lint.commands" were skipped because only merge-base pdd.json commands are trusted by default (pass --trust-working-tree to run locally).');
+      }
+    }
+    if (cmdsToRun.length > 0) {
+      commandResult = (ports.runConfiguredLintCommands ?? runConfiguredLintCommands)(
+        { root, commands: cmdsToRun, env },
+        ports,
+      );
+    }
   }
 
   const problems = [
@@ -121,6 +137,7 @@ export function runLocalLint(
     ...new Set([
       ...svgWarnings,
       ...project.warnings,
+      ...commandWarnings,
       ...(diffResult ? diffResult.advisories.map(a => `Warning: ${a}`) : []),
     ]),
   ];

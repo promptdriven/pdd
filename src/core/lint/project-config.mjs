@@ -1,7 +1,8 @@
-// Project lint configuration loader (`pdd.json` "lint" + `rules/lint/*.json`), 100-rule cap, id dedup, lint.commands.
+// Project lint configuration loader (`pdd.json` "lint" + `rules/lint/*.json`), 100-rule cap, id dedup, base-trusted lint.commands.
+import { spawnSync } from 'node:child_process';
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildLineStarts, lineNumberAt, readSafeUtf8 } from './diagnostics.mjs';
+import { buildLineStarts, lineNumberAt, readSafeUtf8, resolveDefaultBaseRef } from './diagnostics.mjs';
 import { countFileLines, countPromptProseLines, stripPromptMetadataPreservingLines } from './prompt-metadata.mjs';
 import { compileGlobMatcher, parseRegexSafe } from './regex-safety.mjs';
 
@@ -11,7 +12,7 @@ const RULE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const VALID_TARGETS = new Set(['prompt', 'story', 'test', 'code', 'all']);
 const VALID_SEVERITIES = new Set(['off', 'warn', 'error']);
 
-function mergeLintConfigSection(rawLint, { sourcePath, disabledRules, ruleSeverities, customRuleMap, commandMap, configErrors }) {
+function mergeLintConfigSection(rawLint, { sourcePath, allowCommands = true, disabledRules, ruleSeverities, customRuleMap, commandMap, configErrors }) {
   const addConfigError = detail => configErrors.push({
     filePath: sourcePath,
     line: 1,
@@ -51,7 +52,9 @@ function mergeLintConfigSection(rawLint, { sourcePath, disabledRules, ruleSeveri
   }
 
   if (rawLint.commands !== undefined) {
-    if (!Array.isArray(rawLint.commands)) {
+    if (!allowCommands) {
+      addConfigError(`"lint.commands" is only permitted in merge-base pdd.json, not ${sourcePath}.`);
+    } else if (!Array.isArray(rawLint.commands)) {
       addConfigError(`"lint.commands" in ${sourcePath} must be an array of shell command strings or {id, command} objects.`);
     } else {
       for (let idx = 0; idx < rawLint.commands.length; idx++) {
@@ -223,7 +226,7 @@ function loadWorkspaceLintRuleFiles(realRoot, target) {
         && !Object.hasOwn(parsed, 'disable') && !Object.hasOwn(parsed, 'rules') && !Object.hasOwn(parsed, 'custom_rules')
         ? { custom_rules: [parsed] }
         : parsed);
-    mergeLintConfigSection(section, { sourcePath: relPath, ...target });
+    mergeLintConfigSection(section, { sourcePath: relPath, allowCommands: false, ...target });
   }
   return loadedAny;
 }
@@ -283,6 +286,57 @@ function headingMatches(contentText, requiredHeading) {
       const m = /^ {0,3}#{1,6}\s+(.+)$/.exec(line);
       if (m && m[1].trim().toLowerCase() === lower) return true;
     }
+  }
+  return false;
+}
+
+export function loadBaseTrustedLintCommands(root, { baseRef } = {}) {
+  let realRoot;
+  try { realRoot = realpathSync(root); } catch { return { baseSha: null, source: null, commands: [], skippedUntrusted: false }; }
+  const ref = baseRef || resolveDefaultBaseRef(realRoot);
+  if (!ref) return { baseSha: null, source: null, commands: [], skippedUntrusted: false };
+  const resolved = spawnSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const commit = resolved.status === 0 && resolved.stdout.trim() ? resolved.stdout.trim() : null;
+  if (!commit) return { baseSha: null, source: null, commands: [], skippedUntrusted: false };
+  const mb = spawnSync('git', ['merge-base', 'HEAD', commit], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const baseSha = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : commit;
+
+  const show = spawnSync('git', ['show', `${baseSha}:pdd.json`], { cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+  const baseCommands = [];
+  if (show.status === 0 && typeof show.stdout === 'string') {
+    try {
+      const parsed = JSON.parse(show.stdout);
+      if (parsed?.lint && typeof parsed.lint === 'object' && !Array.isArray(parsed.lint)) {
+        const t = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), configErrors: [] };
+        mergeLintConfigSection({ commands: parsed.lint.commands }, { sourcePath: `${baseSha}:pdd.json`, allowCommands: true, ...t });
+        baseCommands.push(...t.commandMap.values());
+      }
+    } catch {}
+  }
+
+  let skippedUntrusted = false;
+  const wtRaw = readSafeUtf8(realRoot, 'pdd.json');
+  if (wtRaw !== null) {
+    try {
+      const wtParsed = JSON.parse(wtRaw);
+      const wtTarget = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), configErrors: [] };
+      if (wtParsed?.lint?.commands !== undefined) {
+        mergeLintConfigSection({ commands: wtParsed.lint.commands }, { sourcePath: 'pdd.json', allowCommands: true, ...wtTarget });
+      }
+      const wtCmds = [...wtTarget.commandMap.values()];
+      if (wtCmds.length > 0 && JSON.stringify(wtCmds) !== JSON.stringify(baseCommands)) skippedUntrusted = true;
+    } catch {}
+  }
+  return { baseSha, source: `${baseSha}:pdd.json`, commands: baseCommands, skippedUntrusted };
+}
+
+export function matchesAnyCustomRule(customRules, kind, filePath) {
+  for (const rule of customRules) {
+    if (rule.severity === 'off') continue;
+    if (!rule.targets.has('all') && !rule.targets.has(kind)) continue;
+    if (rule.includeMatchers.length && !rule.includeMatchers.some(m => m.test(filePath))) continue;
+    if (rule.excludeMatchers.some(m => m.test(filePath))) continue;
+    return true;
   }
   return false;
 }

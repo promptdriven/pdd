@@ -8,10 +8,10 @@ import { isLintableStoryPath, lintStory } from '../../story-lint.mjs';
 import { gitFiles } from '../../shared/git-context.mjs';
 import { causeText, isSecretPath } from '../../shared/safe-read.mjs';
 import { workspace } from '../../shared/workspace-policy.mjs';
-import { HEAD_BYTES, canonicalRepoPath, formatDiagnosticLine, formatTeachingDetail, readSafeHeadUtf8, readSafeUtf8 } from './diagnostics.mjs';
+import { HEAD_BYTES, canonicalRepoPath, formatDiagnosticLine, formatTeachingDetail, readSafeHeadUtf8, readSafeUtf8, scrubChildEnv } from './diagnostics.mjs';
 import { collectNativeOnlyContractFindings } from './native-only-contract.mjs';
 import { collectNativeOnlyPortParityFindings } from './native-port-parity.mjs';
-import { evaluateCustomRulesOnFile, loadProjectLintConfig } from './project-config.mjs';
+import { evaluateCustomRulesOnFile, loadProjectLintConfig, matchesAnyCustomRule } from './project-config.mjs';
 import { extractDependencyLinkTargets, hasNativeOnlyFrontmatter, isNativeOnlyPrompt } from './prompt-metadata.mjs';
 import { collectPromptCodeBlockFindings, collectPromptDependencyFindings, collectPromptSizeFindings, collectPromptStructureFindings } from './prompt-rules.mjs';
 
@@ -84,8 +84,7 @@ export function runConfiguredLintCommands({ root, commands = [], timeoutMs = 120
   const results = [], errors = [];
   if (!Array.isArray(commands) || !commands.length) return { ok: true, results, errors };
   const runner = ports.spawnSync ?? spawnSync;
-  const scrubbedEnv = { ...env };
-  for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GITHUB_PAT', 'GH_PAT', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'NPM_TOKEN', 'PDD_CLOUD_TOKEN']) delete scrubbedEnv[key];
+  const scrubbedEnv = scrubChildEnv(env);
   for (const item of commands) {
     const id = item?.id ?? 'lint-command', command = item?.command;
     if (typeof command !== 'string' || !command.trim()) continue;
@@ -239,12 +238,14 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
   const promptFilterSet = Array.isArray(promptPaths) ? new Set(targetPrompts) : null;
   if (!promptFilterSet && lintConfig.customRules.some(r => r.severity !== 'off' && (r.targets.has('test') || r.targets.has('all')))) {
     for (const testPath of scopedFiles.filter(isCustomRuleTestFile)) {
+      if (!matchesAnyCustomRule(lintConfig.customRules, 'test', testPath)) continue;
       const content = getFull(testPath);
       if (typeof content === 'string') rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: testPath, kind: 'test', rawText: content }));
     }
   }
   if (lintConfig.customRules.some(r => r.severity !== 'off' && (r.targets.has('code') || r.targets.has('all')))) {
     for (const codePath of promptFilterSet ? prodCodePaths.filter(p => (ownersByCode.get(p) ?? []).some(o => promptFilterSet.has(o))) : prodCodePaths) {
+      if (!matchesAnyCustomRule(lintConfig.customRules, 'code', codePath)) continue;
       const content = getFull(codePath);
       if (typeof content === 'string') rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: codePath, kind: 'code', rawText: content }));
     }

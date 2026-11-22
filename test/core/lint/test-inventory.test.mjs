@@ -159,3 +159,55 @@ test('runDiffSpotlight compares BASE..WORKTREE, excludes helpers/fixtures/mocks,
     assert.match(err.formatted, /Fix:.*Rerun: `pdd lint --diff`/);
   }
 });
+
+test('Astra #1 + #12: invalid base ref fails closed, .only.each & multiline .only caught, orphan conflict markers caught, Git R100 rename reported as Moved, and bare expect() drops caught', t => {
+  // #12a: .only.each and multiline test\n  .only(...)
+  const focusSrc = [
+    "test.only.each([1, 2])('case %i', n => expect(n).toBe(n));",
+    "it.only.each([1])('it case', n => expect(n).toBe(n));",
+    "describe.only.each([1])('suite', () => {});",
+    'test',
+    "  .only('multiline focus', () => {});",
+  ].join('\n');
+  const onlyHits = findExecutableOnlyMarkers(focusSrc, 'test/only-variants.test.mjs');
+  assert.equal(onlyHits.length, 4, JSON.stringify(onlyHits));
+  assert.deepEqual(onlyHits.map(h => h.line), [1, 2, 3, 4]);
+
+  // #12b: orphan/partial conflict markers (not just full 3-marker blocks)
+  assert.equal(findConflictMarkers('const a = 1;\n=======\nconst b = 2;\n', 'src/partial.mjs').length, 1);
+  assert.equal(findConflictMarkers('<<<<<<< HEAD\nconst a = 1;\n', 'src/unclosed.mjs').length, 1);
+  assert.equal(findConflictMarkers('const a = 1;\n>>>>>>> main\n', 'src/tail.mjs').length, 1);
+
+  // #12d: bare expect(value) with stripped .toBe(...) MUST NOT count as an assertion!
+  const beforeTest = "test('checks total', () => {\n  expect(total).toBe(42);\n  expect(name).not.toBeNull();\n});\n";
+  const strippedTest = "test('checks total', () => {\n  expect(total);\n  expect(name).not.toBeNull();\n});\n";
+  assert.equal(extractTestCases(beforeTest, 'js').cases[0].assertions.length, 2);
+  assert.equal(extractTestCases(strippedTest, 'js').cases[0].assertions.length, 1);
+
+  // #1 + #12c: invalid base ref fails closed (`baseAvailable: false`) & Git R100 rename reported as Moved!
+  const repo = initGitRepo(t, 'pdd-diff-astra12-');
+  mkdirSync(join(repo, 'test'), { recursive: true });
+  writeFileSync(join(repo, 'test', 'alpha.test.mjs'), beforeTest);
+  commitAll(repo, 'base');
+
+  const badBase = runDiffSpotlight({ cwd: repo, baseRef: 'refs/heads/does-not-exist' });
+  assert.equal(badBase.ok, false);
+  assert.equal(badBase.baseAvailable, false);
+  assert.ok(badBase.errors.some(e => e.code === 'diff-base-unavailable'));
+
+  execFileSync('git', ['checkout', '-q', '-b', 'rename-and-drop'], { cwd: repo });
+  execFileSync('git', ['mv', 'test/alpha.test.mjs', 'test/beta.test.mjs'], { cwd: repo });
+  commitAll(repo, 'pure R100 rename');
+
+  const renamed = runDiffSpotlight({ cwd: repo, baseRef: 'main' });
+  assert.equal(renamed.ok, true);
+  assert.equal(renamed.baseAvailable, true);
+  assert.deepEqual(renamed.movedTests, [{ name: 'checks total', from: 'test/alpha.test.mjs', to: 'test/beta.test.mjs' }]);
+
+  // Now strip `.toBe(42)` leaving bare `expect(total);` -> caught as assertion drop!
+  writeFileSync(join(repo, 'test', 'beta.test.mjs'), strippedTest);
+  const dropped = runDiffSpotlight({ cwd: repo, baseRef: 'main' });
+  assert.equal(dropped.assertionDrops.length, 1);
+  assert.equal(dropped.assertionDrops[0].before, 2);
+  assert.equal(dropped.assertionDrops[0].after, 1);
+});

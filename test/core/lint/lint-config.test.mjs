@@ -25,6 +25,11 @@ test('ReDoS safety fixes all 4 proven bypass classes: non-literal escapes, /iu U
     assert.equal(isSafeRegexPattern(pat), false, `chained unbounded quantifiers must be rejected: ${pat}`);
   }
 
+  // 3b. Nested unquantified alternation inside an enclosing quantifier MUST be rejected (Astra #10).
+  for (const [pat, flags] of [['((a|a))+', ''], ['(((a|ab)))+', ''], ['(?:(?:s|ſ))+', 'iu'], ['(?:(?:a|b))+', 'iu']]) {
+    assert.equal(isSafeRegexPattern(pat, flags), false, `nested alternation ReDoS must be rejected: /${pat}/${flags}`);
+  }
+
   // Safe practical patterns remain allowed.
   for (const safe of ['\\bTODO:', '^##\\s+Rules\\s+to\\s+check$', 'node:assert', '(?:foo|bar)']) {
     assert.equal(isSafeRegexPattern(safe), true, `safe pattern should pass: ${safe}`);
@@ -115,4 +120,10 @@ test('project-config loads rules/lint/*.json + pdd.json with id dedup, 100-rule 
   symlinkSync(outside, join(dir, 'rules', 'lint', 'evil.json'));
   const symCfg = loadProjectLintConfig(dir);
   assert.ok(symCfg.configErrors.some(e => e.detail.includes('symlink')));
+
+  // rules/lint/*.json MUST NOT register executable lint.commands (Astra #9).
+  writeFileSync(join(dir, 'rules', 'lint', 'cmd-inject.json'), JSON.stringify({ commands: ['echo pwned'] }));
+  const injectCfg = loadProjectLintConfig(dir);
+  assert.ok(injectCfg.configErrors.some(e => e.detail.includes('only permitted in merge-base pdd.json')));
+  assert.equal(injectCfg.commands.some(c => c.command === 'echo pwned'), false);
 });

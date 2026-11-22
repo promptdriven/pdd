@@ -6,6 +6,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { lintRepoProject } from '../../../src/core/lint/project-lint.mjs';
+import { formatDiagnosticLine } from '../../../src/core/lint/diagnostics.mjs';
+import { matchesAnyCustomRule, loadProjectLintConfig } from '../../../src/core/lint/project-config.mjs';
+import { lintRepoAntiPatterns } from '../../../src/repo-hygiene-lint.mjs';
 import { lintPromptSize } from '../../../src/core/lint/prompt-rules.mjs';
 import { lintTestFixedSleeps, lintTestUnexcusedSkips } from '../../../src/autopilot/lint-sleep-skip.mjs';
 
@@ -185,4 +188,31 @@ test('Layer-2 autopilot/lint-sleep-skip catches unexcused JS/Python skips and At
   assert.equal(sleepWarns.length, 2, sleepWarns.join('\n'));
   assert.match(sleepWarns[0], /:4 \[test-fixed-sleep\]/);
   assert.match(sleepWarns[1], /:5 \[test-fixed-sleep\]/);
+});
+
+test('Astra #13: custom-rule glob pre-filter, lintRepoAntiPatterns compat export, and 4-part fallback with separate Rerun:', t => {
+  const cfg = loadProjectLintConfig({
+    lint: {
+      custom_rules: [
+        { id: 'only-billing', target: 'code', include: ['src/billing/*.mjs'], exclude: ['src/billing/ignored.mjs'], severity: 'error', forbid_pattern: 'BAD', message: 'No BAD token' },
+      ],
+    },
+  });
+  assert.equal(matchesAnyCustomRule(cfg.customRules, 'code', 'src/billing/tax.mjs'), true);
+  assert.equal(matchesAnyCustomRule(cfg.customRules, 'code', 'src/billing/ignored.mjs'), false);
+  assert.equal(matchesAnyCustomRule(cfg.customRules, 'code', 'src/unrelated/huge.mjs'), false);
+
+  const line = formatDiagnosticLine(
+    { filePath: 'src/billing/tax.mjs', line: 9, code: 'only-billing', category: 'custom rule', detail: 'No BAD token' },
+    'error',
+  );
+  assert.match(line, /^Error: custom rule: src\/billing\/tax\.mjs:9 \[only-billing\] No BAD token\. Fix: Update src\/billing\/tax\.mjs:9 to satisfy custom rule "only-billing"\. Rerun: `pdd lint --local`\.$/);
+
+  const repo = initGitRepo(t, 'pdd-compat-export-');
+  mkdirSync(join(repo, 'prompts'), { recursive: true });
+  writeFileSync(join(repo, 'prompts', 'thin.prompt.md'), '---\nkind: native-only\nreason: Stub.\n---\n\n# Thin\n\nOwn `src/thin.mjs`.\n\n## Dependencies\nNone.\n');
+  commitAll(repo);
+  const compatWarns = lintRepoAntiPatterns({ root: repo });
+  assert.deepEqual(compatWarns, lintRepoProject({ root: repo }).warnings);
+  assert.ok(compatWarns.some(w => w.includes('[native-only-contract-incomplete]')));
 });

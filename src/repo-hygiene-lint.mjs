@@ -1,10 +1,12 @@
 // Prompt: prompts/cli/repo-hygiene-lint.prompt.md
 // Thin backwards-compatible Layer-1 facade delegating strictly to `src/core/lint/*.mjs`.
 // Zero `autopilot/` imports, zero `runtime-seam` imports, zero JS code-test regex noise.
+import { lintRepoProject } from './core/lint/project-lint.mjs';
 export {
   lintRepoProject,
   runConfiguredLintCommands,
 } from './core/lint/project-lint.mjs';
+export const lintRepoAntiPatterns = (opts = {}) => lintRepoProject(opts).warnings;
 export {
   MAX_CUSTOM_RULES,
   evaluateCustomRulesOnFile,
