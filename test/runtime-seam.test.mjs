@@ -1970,8 +1970,8 @@ test('SEAM14 (Should-fix 1 & 5): single shared defaultLineReader in src/runtime 
   assert.equal(await reader.ask(), 'yes');
   reader.close();
 
-  // (5) createAgentBridge loads src/agent-adapters.mjs before "Connecting your agent..." and GET /model.
-  const loader = "export async function resolve(s, c, n) { const r = await n(s, c); if (r.url.endsWith('/agent-adapters.mjs')) throw new Error('ADAPTERS_LOAD_FAILURE'); return r; }";
+  // (5) createAgentBridge loads src/shared/agent-process.mjs before "Connecting your agent..." and GET /model.
+  const loader = "export async function resolve(s, c, n) { const r = await n(s, c); if (r.url.endsWith('/agent-process.mjs')) throw new Error('ADAPTERS_LOAD_FAILURE'); return r; }";
   const reg = `import { register } from 'node:module'; register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(loader)}`)});`;
   const script = `
     const seam = await import(${JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href)});

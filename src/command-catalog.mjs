@@ -1,7 +1,8 @@
 // Generated from prompts/cli/command-catalog.prompt.md (sha256: cecf3cbea83fe385a315d58d34958791c9e414f366ca3ad625eb232e5ffb4b5e).
+import { NAMES } from './shared/command-names.mjs';
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
-export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
+export { NAMES };
 const { test, lint, simulate, run, requestUptake = 'ack' } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const group = (title, lines) => Object.freeze({ title, lines: Object.freeze(lines) });

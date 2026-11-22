@@ -1,7 +1,7 @@
 // Generated from prompts/cli/login-pool.prompt.md.
 // Thin compatibility facade for the accounts & cloud login pool subsystem under src/accounts/.
 import * as codexLimitsModule from './codex-limits.mjs';
-import { parse as parseToml } from './vendor/smol-toml/parse.js';
+import { parse as parseToml } from './shared/toml/parse.js';
 import { registerTomlParser } from './accounts/toml-codec.mjs';
 
 registerTomlParser(parseToml);

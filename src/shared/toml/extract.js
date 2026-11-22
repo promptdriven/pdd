@@ -26,7 +26,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 import { parseString } from './primitive.js';
-import { parseArray, parseInlineTable } from './struct.js';
+import { parseArray, parseInlineTable, registerExtractValue } from './struct.js';
 import { TomlError } from './error.js';
 import { TomlDate } from './date.js';
 function isDigit(char, base = 10) {
@@ -291,3 +291,4 @@ function readDate(ctx, str, type, unsafeDelim, errPtr, temporalSuffix) {
         TomlError.x(e instanceof Error ? e.message : '' + e, ctx, errPtr);
     }
 }
+registerExtractValue(extractValue);

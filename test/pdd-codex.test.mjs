@@ -47,7 +47,7 @@ import {
   stopCodexAppServerDaemon,
   writeCloudAccountsState,
 } from '../src/login-pool.mjs';
-import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
+import { parse as parseToml } from '../src/shared/toml/parse.js';
 
 function makeSandbox(t) {
   const root = mkdtempSync(join(tmpdir(), 'pdd-codex-test-'));

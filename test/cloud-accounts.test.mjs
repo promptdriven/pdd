@@ -57,7 +57,7 @@ import {
   stopCodexAppServerDaemon,
   sweepActiveCodexOverlays,
 } from '../src/login-pool.mjs';
-import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
+import { parse as parseToml } from '../src/shared/toml/parse.js';
 import { redactSecrets } from '../src/secret-redaction.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 import { tickAutopilot, runAutopilotLauncher } from '../src/autopilot-launcher.mjs';

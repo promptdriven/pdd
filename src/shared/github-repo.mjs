@@ -1,12 +1,32 @@
 // Layer-0 GitHub repository identifier and URL parsing primitives.
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
+import { nativeGithubCounter } from '../github-calls.mjs';
 
 const execFileAsync = promisify(execFileCallback);
 
 const REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const REPO_LAX_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const CONTROLS = /[\x00-\x1f\x7f]/g;
+const nonEmptyText = value => typeof value === 'string' && value.length > 0 && !/[\u0000-\u001f\u007f]/u.test(value);
+const fail = code => { throw Object.assign(new Error(code), { code }); };
+
+const executeRaw = (file, args, options) => new Promise((resolveResult, reject) => {
+  const { input, ...execOptions } = options;
+  const child = execFileCallback(file, args, execOptions, (error, stdout, stderr) => {
+    if (error) { error.stdout = stdout; error.stderr = stderr; reject(error); }
+    else resolveResult({ stdout, stderr });
+  });
+  if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input); }
+});
+
+const countedExec = nativeGithubCounter((file, args, { cwd, input }) => executeRaw(file, args, {
+  cwd,
+  input,
+  encoding: 'utf8',
+  shell: false,
+  maxBuffer: 8 * 1024 * 1024,
+}));
 
 /**
  * Case-insensitive comparison of two `owner/repo` strings.
@@ -113,4 +133,55 @@ export async function resolveRepository({ cwd = process.cwd(), repository = null
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve and verify the GitHub repository and default branch for `cwd` via `git remote get-url origin`
+ * and `gh repo view`, matching strict repository-mismatch diagnostics.
+ */
+export async function resolveWorkflowRepository({ cwd } = {}, ports = {}) {
+  if (!nonEmptyText(cwd)) fail('workflow_github_cwd_required');
+  const run = ports.execFile ?? countedExec;
+  const command = async (file, args) => {
+    let result;
+    try {
+      result = await run(file, args, { cwd });
+    } catch (error) {
+      if (!Number.isInteger(error?.code) || error.code === 0) fail('workflow_github_command_unavailable');
+      result = { code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
+    }
+    if (!result || typeof result.stdout !== 'string'
+      || (result.code !== undefined && !Number.isInteger(result.code))) {
+      fail('workflow_github_command_invalid');
+    }
+    const code = result.code ?? 0;
+    if (code !== 0) {
+      throw Object.assign(new Error('workflow_github_command_failed'), {
+        code: 'workflow_github_command_failed',
+        detail: typeof result.stderr === 'string' ? result.stderr : '',
+      });
+    }
+    return result.stdout;
+  };
+  const remote = (await command('git', ['remote', 'get-url', 'origin'])).trim();
+  const repository = githubOriginRepository(remote);
+  if (!repository) fail('workflow_github_origin_invalid');
+  let actual;
+  try {
+    actual = JSON.parse(await command('gh', ['repo', 'view', repository, '--json', 'nameWithOwner,defaultBranchRef,url']));
+  } catch (error) {
+    if (error?.code?.startsWith('workflow_github_')) throw error;
+    fail('workflow_github_json_invalid');
+  }
+  if (
+    !actual
+    || !nonEmptyText(actual.nameWithOwner)
+    || !REPO_PATTERN.test(actual.nameWithOwner)
+    || !sameRepo(actual.nameWithOwner, repository)
+    || !nonEmptyText(actual.defaultBranchRef?.name)
+    || actual.url !== `https://github.com/${actual.nameWithOwner}`
+  ) {
+    fail('workflow_github_repository_mismatch');
+  }
+  return { repository: actual.nameWithOwner, defaultBranch: actual.defaultBranchRef.name };
 }

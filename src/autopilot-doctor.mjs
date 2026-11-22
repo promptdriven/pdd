@@ -7,7 +7,7 @@ import {runAgentProcess, parseAgentAuthStatus} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
 import {isCloudAccountsActive, managedClaudeSettingsPath, managedCodexAuthPath, pddManagedCodexHome} from './login-pool.mjs';
-import {checkWorkflowAgents} from './workflow-agents.mjs';
+import {checkWorkflowAgents} from './shared/agent-readiness.mjs';
 import {githubOriginRepository} from './shared/github-repo.mjs';
 import {health as runtimeHealthCheck, runtimeClientSlice} from './runtime-seam.mjs';
 

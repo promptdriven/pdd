@@ -10,7 +10,7 @@ import { cpSync, chmodSync } from 'node:fs';
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const pinned = { command: process.execPath, args: [join(packageRoot, 'bin/pdd.mjs'), 'mcp'] };
 import { join } from 'node:path';
-import { parse } from '../src/vendor/smol-toml/parse.js';
+import { parse } from '../src/shared/toml/parse.js';
 import { setupAgentMcp } from '../src/agent-mcp-setup.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 

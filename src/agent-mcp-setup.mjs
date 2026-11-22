@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { writeAtomicPrivate } from './shared/atomic-fs.mjs';
-import { parse } from './vendor/smol-toml/parse.js';
+import { parse } from './shared/toml/parse.js';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const same = (actual, wanted) => object(actual) && Object.entries(wanted).every(([key, value]) => JSON.stringify(actual[key]) === JSON.stringify(value));

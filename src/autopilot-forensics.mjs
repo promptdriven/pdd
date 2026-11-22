@@ -11,7 +11,7 @@ import { isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs
 import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
 const isRotatablePoolFailure = text => isQuotaExhaustionMessage(text) || isAuthFailureMessage(text);
 import { redactSecrets, rememberSecrets } from './secret-redaction.mjs';
-import { parse as parseToml } from './vendor/smol-toml/parse.js';
+import { parse as parseToml } from './shared/toml/parse.js';
 
 export const EXTERNAL_REPO_LABELS = Object.freeze(['external', 'other-repo', 'elsewhere', 'pdd:elsewhere']);
 const EXTERNAL_LABEL_SET = new Set(EXTERNAL_REPO_LABELS);

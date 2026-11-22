@@ -3,7 +3,7 @@ import * as nodeFs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { parse } from './vendor/smol-toml/parse.js';
+import { parse } from './shared/toml/parse.js';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const namePattern = /^[a-z][a-z0-9_-]{0,24}$/;

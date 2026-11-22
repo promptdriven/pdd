@@ -26,9 +26,13 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 import { parseString } from './primitive.js';
-import { extractValue } from './extract.js';
 import { skipVoid } from './util.js';
 import { TomlError } from './error.js';
+let _extractValue;
+/** @internal */
+export function registerExtractValue(fn) {
+    _extractValue = fn;
+}
 /** @internal */
 export function parseKey(ctx, end = 0x3d /* = */) {
     // States:
@@ -121,7 +125,7 @@ export function parseInlineTable(ctx) {
             TomlError.x('trying to redefine an already defined value', ctx, errPtr);
         }
         skipVoid(ctx, true, true);
-        let value = extractValue(ctx, 0x7d /* } */);
+        let value = _extractValue(ctx, 0x7d /* } */);
         if (t && typeof (t[k] = value) === 'object')
             seen.add(value);
         skipVoid(ctx);
@@ -144,7 +148,7 @@ export function parseArray(ctx) {
             ctx.p++;
             return res;
         }
-        res.push(extractValue(ctx, 0x5d /* ] */));
+        res.push(_extractValue(ctx, 0x5d /* ] */));
         skipVoid(ctx);
         if ((c = ctx.s.charCodeAt(ctx.p++)) === 0x5d /* ] */) {
             return res;

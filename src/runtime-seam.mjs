@@ -2202,7 +2202,7 @@ export function runContracts(input, ports = {}) {
 }
 
 export async function runJobs(input = {}, ports = {}) {
-  const { NAMES } = await import('./command-catalog.mjs');
+  const { NAMES } = await import('./shared/command-names.mjs');
   const commands = input?.client?.commands ?? { test: NAMES.test, lint: NAMES.lint, simulate: NAMES.simulate };
   const client = { ...(input?.client ?? {}), commands };
   return runtimeRunJobs({ ...input, client }, ports);
@@ -2424,7 +2424,7 @@ async function runCheckReconcileCommand(input = {}, ports = {}) {
     if (rawOptions['--json'] === true) {
       stdout.write(`${JSON.stringify(result)}\n`);
     } else {
-      const { formatCheckReconciliation } = await import('./workflow-results.mjs');
+      const { formatCheckReconciliation } = await import('./core/reconcile-format.mjs');
       stdout.write(`${formatCheckReconciliation(result)}\n`);
     }
     return result?.available === true ? 0 : 3;
@@ -2773,7 +2773,7 @@ export async function runCheck(input = {}, ports = {}) {
 
 export async function askAgent(input = {}, ports = {}) {
   const explicitRun = input?.run ?? ports.run ?? ports.runAgentProcess ?? ports.agents?.run;
-  const run = explicitRun ?? (await import('./agent-adapters.mjs')).runAgentProcess;
+  const run = explicitRun ?? (await import('./shared/agent-process.mjs')).runAgentProcess;
   return runtimeAskAgent({ ...input, run }, ports);
 }
 
@@ -3055,14 +3055,17 @@ export async function runTry(input = {}, ports = {}) {
     ,
     { loadAgentDefinitions },
     { parseProductDocuments, parseProductWorldWriters },
-    { askApproval, lineReader, promptPath },
+    { lineReader },
+    { createPromptApproval },
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
     import('./product-documents.mjs'),
-    import('./prompt-approve.mjs'),
+    import('./shared/line-reader.mjs'),
+    import('./core/approve-prompt.mjs'),
   ]);
-  const defaultDiscoverAgents = async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args);
+  const { askApproval, promptPath } = createPromptApproval(runtimePreflightSlice());
+  const defaultDiscoverAgents = async (...args) => (await import('./shared/agent-process.mjs')).discoverAgents(...args);
   const defaultAskAgent = async (turnInput, ...rest) => askAgent(turnInput, ...rest);
   const defaultAgentBridge = (context, test, tryId, opts, link) =>
     createAgentBridge(context, test, tryId, opts, link, {
@@ -3160,7 +3163,7 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
   const [, { loadAgentDefinitions }, { discoverAgents, runAgentProcess }] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
-    import('./agent-adapters.mjs'),
+    import('./shared/agent-process.mjs'),
   ]);
   const boundRun = seamPorts.runAgentProcess ?? seamPorts.agents?.run ?? runAgentProcess;
   const defaultAsk = turnInput =>
@@ -3203,7 +3206,7 @@ export async function openServe(context, test, sessionId, options) {
 export async function runShim(descriptorPath, argv, ports = {}) {
   const [, { lineReader }] = await Promise.all([
     import('./secret-redaction.mjs'),
-    import('./prompt-approve.mjs'),
+    import('./shared/line-reader.mjs'),
   ]);
   const shimPorts = seamRuntimePorts(
     withPortDefaults(ports, {
@@ -3216,7 +3219,7 @@ export async function runShim(descriptorPath, argv, ports = {}) {
 }
 
 export async function saveLast(input) {
-  const { lineReader } = await import('./prompt-approve.mjs');
+  const { lineReader } = await import('./shared/line-reader.mjs');
   const nextInput =
     input && typeof input === 'object'
       ? {
@@ -3289,7 +3292,7 @@ export async function reconcileCheckReceipt(input = {}, ports = {}) {
 export async function runProgram(input = {}, ports = {}) {
   const [, { lineReader }] = await Promise.all([
     import('./secret-redaction.mjs'),
-    import('./prompt-approve.mjs'),
+    import('./shared/line-reader.mjs'),
   ]);
   const cwd = input?.cwd ?? process.cwd();
   return runtimeRunProgram(

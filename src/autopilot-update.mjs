@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isNewerRelease, parseReleaseVersion, pickLatestRelease } from './release-notice.mjs';
-import * as defaultSkillsInstall from './skills-install.mjs';
+import * as defaultSkillsInstall from './shared/skills-install.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 

@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { githubReply } from './github-calls.mjs';
-import { githubOriginRepository } from './workflow-worktree.mjs';
+import { githubOriginRepository } from './shared/github-repo.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);

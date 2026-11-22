@@ -65,7 +65,7 @@ import {
   summarizeTestEnvMetadata,
 } from './autopilot/gates/test-env.mjs';
 import { lintRepoProject, loadProjectLintConfig } from './repo-hygiene-lint.mjs';
-import { collectTestInventory } from './workflow-inventory.mjs';
+import { collectTestInventory } from './autopilot/test-inventory.mjs';
 import { appendBoundedFlakeEntries, formatRecurringFlakesLine, parseFlakeLedger, summarizeRecurringFlakes } from './autopilot-regressions.mjs';
 
 const MAX_LOCAL_TEST_REPAIRS = MAX_VALIDATION_REPAIRS;

@@ -34,8 +34,9 @@ const ALLOWED_IMPORTS = {
 
 const FLAT_LAYER_MAP = new Map([
   ['pdd-cli.mjs', 'cli'], ['command-catalog.mjs', 'cli'], ['argument-parser.mjs', 'cli'], ['completion.mjs', 'cli'], ['try-doors.mjs', 'cli'],
-  ['skills-install.mjs', 'setup'], ['agent-mcp-setup.mjs', 'setup'], ['project-setup.mjs', 'setup'], ['project-files.mjs', 'setup'],
-  ['setup-interaction.mjs', 'setup'], ['interpreter-version.mjs', 'setup'], ['cli-upgrade.mjs', 'setup'],
+  ['skills-install.mjs', 'setup'], ['agent-mcp-setup.mjs', 'setup'], ['project-setup.mjs', 'setup'],
+  ['setup-interaction.mjs', 'setup'], ['cli-upgrade.mjs', 'setup'],
+  ['interpreter-version.mjs', 'core'], ['project-files.mjs', 'core'],
   ['toml-string.mjs', 'shared'], ['secret-redaction.mjs', 'shared'], ['process-lifecycle.mjs', 'shared'], ['runtime-exit.mjs', 'shared'],
   ['path-diagnostic.mjs', 'shared'], ['release-notice.mjs', 'shared'], ['github-calls.mjs', 'shared'], ['agent-config.mjs', 'shared'],
   ['validation-evidence.mjs', 'shared'], ['machine-resources.mjs', 'shared'],
