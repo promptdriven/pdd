@@ -22,7 +22,13 @@ const canonicalStoryPath = value => typeof value === 'string' && value.trim().le
 export function isLintableStoryPath(path) {
   if (!canonicalStoryPath(path) || !/\.md$/i.test(path)) return false;
   const parts = path.split('/'), base = parts.at(-1).toLowerCase();
-  return base !== 'plan.md' && base !== 'readme.md' && parts.slice(0, -1).includes('user_stories');
+  if (base === 'plan.md' || base === 'readme.md') return false;
+  const dirs = parts.slice(0, -1);
+  if (dirs.includes('user_stories')) return true;
+  for (let i = 0; i < dirs.length - 1; i++) {
+    if (dirs[i] === 'pdd' && dirs[i + 1] === 'stories') return true;
+  }
+  return false;
 }
 
 const trimExcerpt = line => {
@@ -146,7 +152,8 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
         excerpt: trimExcerpt(seventh.raw),
       });
     }
-    const lineCount = rawLines.length > 0 && rawLines.at(-1) === '' ? rawLines.length - 1 : rawLines.length;
+    let lineCount = rawLines.length;
+    while (lineCount > 0 && rawLines[lineCount - 1].trim() === '') lineCount--;
     if (lineCount > 35) {
       problems.push({
         path,
