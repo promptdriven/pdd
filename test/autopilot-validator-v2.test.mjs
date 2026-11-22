@@ -9,16 +9,17 @@ import {
   detectChangedSurfaces,
   detectRealE2eKindsInTest,
   evaluateValidationOutcome,
+  lintBoundaryMockOnlyTests,
+  lintRepoValidationBackside,
   lintValidationCode,
+  lintValidationSkips,
   planValidationResume,
   scanJsPreserveLines,
   shouldClaimWithCooldowns,
 } from '../src/autopilot-validator.mjs';
 import { coreStatus, runDefaultPreflightCheck } from '../src/autopilot-core.mjs';
 import {
-  lintBoundaryMockOnlyTests,
   lintRepoProject,
-  lintValidationSkips,
   loadProjectLintConfig,
 } from '../src/repo-hygiene-lint.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
@@ -393,7 +394,7 @@ test('Planted Trap 7: backside deterministic lint (silent-validation-skip, bound
   assert.equal(cfg.ruleSeverities.get('boundary-mock-only-test'), 'error');
   assert.equal(cfg.disabledRules.has('silent-validation-skip'), false, 'symlinked rule file ignored');
 
-  const report = lintRepoProject({ root: repo });
+  const report = lintRepoValidationBackside({ root: repo });
   assert.equal(report.ok, false, 'promoted error rules fail closed');
   const codes = new Set(report.findings.map((f) => f.code));
   assert.ok(codes.has('silent-validation-skip'), 'flags silent validation skip in production code');
@@ -408,7 +409,7 @@ test('Planted Trap 7: backside deterministic lint (silent-validation-skip, bound
   writeFile(repo, 'src/bad-validator.mjs', 'export function clean() { return true; }\n');
   commitAll(repo, 'add real e2e');
 
-  const cleanReport = lintRepoProject({ root: repo });
+  const cleanReport = lintRepoValidationBackside({ root: repo });
   assert.equal(cleanReport.ok, true, `expected clean lint after adding real E2E, got: ${cleanReport.errors.join('; ')}`);
   assert.equal(cleanReport.findings.some((f) => f.code === 'boundary-mock-only-test'), false);
   assert.equal(cleanReport.findings.some((f) => f.code === 'silent-validation-skip'), false);
@@ -549,7 +550,7 @@ test('MF-2: boundary-mock-only-test enforces per-target real E2E coverage even i
   );
   commitAll(repo, 'mature repo with one untested boundary module');
 
-  const before = lintRepoProject({ root: repo });
+  const before = lintRepoValidationBackside({ root: repo });
   const mockFindings = before.findings.filter((f) => f.code === 'boundary-mock-only-test');
   assert.equal(mockFindings.length, 1, 'unrelated api/other.mjs E2E must NOT hide mock-only test for api/billing.mjs');
   assert.equal(mockFindings[0].path, 'test/billing-mock.test.mjs');
@@ -561,7 +562,7 @@ test('MF-2: boundary-mock-only-test enforces per-target real E2E coverage even i
     "import http from 'node:http';\nimport { charge } from '../api/billing.mjs';\nconst s = http.createServer((_q, r) => r.end(charge())).listen(0);\nawait fetch(`http://127.0.0.1:${s.address().port}`);\n",
   );
   commitAll(repo, 'add billing real e2e');
-  const after = lintRepoProject({ root: repo });
+  const after = lintRepoValidationBackside({ root: repo });
   assert.equal(after.findings.some((f) => f.code === 'boundary-mock-only-test'), false, 'finding clears once api/billing.mjs has its own real E2E test');
 });
 
@@ -871,8 +872,8 @@ test('MF-8 & Minor Notes: empty changedFiles fail closed, word-boundary surfaces
   // Minor Note 1: `pdd lint --local` detects workspace-local rules/lint/*.json even without `"lint"` in pdd.json
   const repo = makeTempGitRepo(t, 'pdd-mf8-cli-rules-');
   writeFile(repo, 'pdd.json', JSON.stringify({ name: 'demo' }));
-  writeFile(repo, 'src/skip.mjs', "export function bad(err) { if (err === 'real-binding-unavailable') return { ok: true, skipped: true }; }\n");
-  writeFile(repo, 'rules/lint/10-strict.json', JSON.stringify({ rules: { 'silent-validation-skip': 'error' } }));
+  writeFile(repo, 'prompts/adapter.prompt.md', '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Adapter\n\nMinimal stub.\n\n## Dependencies\n\nNone.\n');
+  writeFile(repo, 'rules/lint/10-strict.json', JSON.stringify({ rules: { 'native-only-contract-incomplete': 'error' } }));
   commitAll(repo, 'rules without pdd.json lint key');
 
   let exitCode = 0;
@@ -888,7 +889,7 @@ test('MF-8 & Minor Notes: empty changedFiles fail closed, word-boundary surfaces
     combined = `${err.stdout ?? ''}\n${err.stderr ?? ''}`;
   }
   assert.notEqual(exitCode, 0, 'pdd lint --local must enforce rules/lint/*.json error even without lint key in pdd.json');
-  assert.match(combined, /silent-validation-skip/);
+  assert.match(combined, /native-only-contract-incomplete/);
 });
 
 test('R2-1a (MF-1 base control): links node_modules into controlTree and treats missing non-changed package as not-run', async (t) => {
@@ -1135,12 +1136,13 @@ test('R2-3 (MF-4): resume cleans stale not-run line after bindingRerun, preserve
       ? [{ story: 'user_stories/live.md', pass: true, current: true, at: '2026-11-18T11:00:00Z', passed: 3, total: 3 }]
       : [{ story: 'user_stories/live.md', pass: false, current: true, at: '2026-11-18T10:00:00Z', reason: 'real-binding-unavailable', codes: ['real-binding-unavailable'] }],
     storyFiles: ['user_stories/live.md'],
-    tests: [],
+    tests: [{ path: 'test/runtime/live.json', stories: ['user_stories/live.md'], files: ['user_stories/live.md', 'test/runtime/live.json'] }],
   });
   w.issue(47, { title: 'Clean stale not-run line on resume' });
   await w.tick();
   const cwd47 = w.job(47, 'build').cwd;
-  writeIn(cwd47, 'user_stories/live.md', '# Live\n');
+  writeIn(cwd47, 'user_stories/live.md', '# Live\n\nI can verify the live operation.\n\n## Acceptance criteria\n\n1. The live operation returns ok.\n');
+  writeIn(cwd47, 'test/runtime/live.json', JSON.stringify({ story: 'user_stories/live.md', criteria: [{ id: 'AC1', text: 'The live operation returns ok.' }], steps: [] }) + '\n');
   writeIn(cwd47, 'src/live-op.mjs', 'export const liveOp = () => 1;\n');
   writeIn(cwd47, 'test/live-op.test.mjs', "import test from 'node:test';\nimport { liveOp } from '../src/live-op.mjs';\ntest('live', () => { if (liveOp() !== 1) throw new Error(); });\n");
   const built47 = w.build(47, {

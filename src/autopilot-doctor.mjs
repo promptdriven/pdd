@@ -8,15 +8,15 @@ import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
 import {isCloudAccountsActive, managedClaudeSettingsPath, managedCodexAuthPath, pddManagedCodexHome} from './login-pool.mjs';
 import {checkWorkflowAgents} from './workflow-agents.mjs';
-import {githubOriginRepository} from './workflow-worktree.mjs';
+import {githubOriginRepository} from './shared/github-repo.mjs';
 import {health as runtimeHealthCheck, runtimeClientSlice} from './runtime-seam.mjs';
 
 const {runtimeOrigin} = runtimeClientSlice();
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
-const skills = ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph'];
-const retiredSkills = ['pdd-autopilot','pdd-check','pdd-merge'];
+const skills = ['pdd','pdd-prompting','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph'];
+const retiredSkills = ['pdd-autopilot','pdd-check','pdd-merge','pdd-setup'];
 const ready = value => value?.code === 0;
 
 const PROVIDER_CONFIG_VARS = {codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME',agy:'ANTIGRAVITY_APP_DATA_DIR'};

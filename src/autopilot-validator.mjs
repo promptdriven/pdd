@@ -1,4 +1,8 @@
 // Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 018c8e6b0791b1584546828de6e955e4b4bd0dc2ffa4a2f8538512cb118f3de2).
+import { execFileSync } from 'node:child_process';
+import { lstatSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { loadProjectLintConfig } from './core/lint/project-config.mjs';
 
 export const MAX_VALIDATION_REPAIRS = 3;
 export const MIN_REALISTIC_PAYLOAD_BYTES = 4096;
@@ -2889,4 +2893,92 @@ export function lintValidationCode({ path = '', kind = 'test', text = '', hasRea
 
   const codes = [...codeSet].sort();
   return { ok: codes.length === 0, codes, warnings };
+}
+
+export function lintValidationSkips(text, { path = 'src/module.mjs', kind = 'code' } = {}) {
+  return lintValidationCode({ path, kind, text, hasRealE2eCoverage: true })
+    .warnings.filter(warning => warning.includes('[silent-validation-skip]'));
+}
+
+export function lintBoundaryMockOnlyTests(
+  text,
+  { path = 'test/example.test.mjs', hasRealE2eCoverage = false, nativeOnlyTargets } = {},
+) {
+  return lintValidationCode({ path, kind: 'test', text, hasRealE2eCoverage, nativeOnlyTargets })
+    .warnings.filter(warning => warning.includes('[boundary-mock-only-test]'));
+}
+
+const BACKSIDE_CODE_EXT_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift)$/i;
+const BACKSIDE_TEST_FILE_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$)/i;
+const BACKSIDE_SKIP_SUBDIR_RE = /(?:^|\/)(?:fixtures|helpers)\//i;
+
+export function lintRepoValidationBackside({ root, files, config, workspaceRoot } = {}) {
+  const relFiles = Array.isArray(files) ? files : (() => {
+    try {
+      const out = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return out.split('\0').filter(Boolean);
+    } catch { return []; }
+  })();
+  const cfg = config && typeof config === 'object' && config.ruleSeverities instanceof Map
+    ? config
+    : (typeof config === 'string' || root ? loadProjectLintConfig(typeof config === 'string' ? config : root, { workspaceRoot: workspaceRoot ?? root }) : null);
+  const disabled = cfg?.disabledRules ?? new Set();
+  const severities = cfg?.ruleSeverities ?? new Map();
+  const isOff = code => disabled.has(code) || severities.get(code) === 'off';
+  const severityOf = code => (isOff(code) ? 'off' : (severities.get(code) === 'error' ? 'error' : 'warn'));
+
+  const readRel = rel => {
+    try {
+      const full = join(root, rel);
+      const st = lstatSync(full);
+      if (st.isSymbolicLink() || !st.isFile() || st.size > 512 * 1024) return null;
+      return readFileSync(full, 'utf8');
+    } catch { return null; }
+  };
+
+  // First pass: discover which concrete target modules have real E2E coverage.
+  const realCoveredTargets = new Set();
+  const testEntries = [];
+  const codeEntries = [];
+  for (const rel of relFiles) {
+    if (typeof rel !== 'string' || !BACKSIDE_CODE_EXT_RE.test(rel)) continue;
+    const isTest = BACKSIDE_TEST_FILE_RE.test(rel) && !BACKSIDE_SKIP_SUBDIR_RE.test(rel);
+    const text = readRel(rel);
+    if (text === null) continue;
+    if (isTest) {
+      const { codeNoStrings, stringLiteralsByOpenPos } = scanJsWithMetrics(text);
+      const { hasAnyRealExec } = detectRealExecutionSignals(codeNoStrings, stringLiteralsByOpenPos);
+      const boundary = inspectTestBoundaryTargets(rel, text);
+      if (hasAnyRealExec) {
+        for (const t of boundary.boundaryTargets ?? []) realCoveredTargets.add(t);
+      }
+      testEntries.push({ rel, text, targets: boundary.boundaryTargets ?? [] });
+    } else if (!BACKSIDE_SKIP_SUBDIR_RE.test(rel)) {
+      codeEntries.push({ rel, text });
+    }
+  }
+
+  const findings = [];
+  const warnings = [];
+  const errors = [];
+  const record = (rel, val) => {
+    for (const warning of val.warnings ?? []) {
+      const m = /:(\d+)\s+\[([a-z0-9-]+)\]\s*(.*)$/.exec(warning);
+      const line = m ? Number(m[1]) : 1;
+      const code = m ? m[2] : 'validation-lint';
+      const detail = m ? m[3] : warning;
+      const sev = severityOf(code);
+      if (sev === 'off') continue;
+      const msg = sev === 'error' ? warning.replace(/^Warning:/, 'Error:') : warning;
+      findings.push({ path: rel, line, code, severity: sev, detail, warning: msg });
+      if (sev === 'error') errors.push(msg);
+      else warnings.push(msg);
+    }
+  };
+  for (const { rel, text } of codeEntries) record(rel, lintValidationCode({ path: rel, kind: 'code', text, hasRealE2eCoverage: true }));
+  for (const { rel, text, targets } of testEntries) {
+    const hasRealE2eCoverage = targets.length > 0 && targets.every(t => realCoveredTargets.has(t));
+    record(rel, lintValidationCode({ path: rel, kind: 'test', text, hasRealE2eCoverage }));
+  }
+  return { ok: errors.length === 0, errors, warnings, findings };
 }

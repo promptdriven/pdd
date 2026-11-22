@@ -41,6 +41,6 @@ Own `src/autopilot-update.mjs`. Export `validAutoUpdateMode(mode)`, `detectGloba
 
 ## Dependencies
 
-- Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring.
+- Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before authoring.
 - [Cached CLI release notice](release-notice.prompt.md) for release tag version parsing and comparison.
 - [Skills install](skills-install.prompt.md) for refreshing user-folder PDD skills after a self-update.

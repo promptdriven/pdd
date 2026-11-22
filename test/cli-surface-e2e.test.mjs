@@ -966,25 +966,25 @@ const REGISTERED_E2E_ROUTES = Object.freeze([
   // Discovery, help, version, completion
   'help', 'version', 'version.detailed', 'completion',
   // Core PDD workflow
-  'setup', 'init', 'status', 'check', 'lint', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade',
+  'setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade',
   // Cloud accounts
   'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use',
   'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause',
   'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log',
   // Product
-  'product.status', 'product.next', 'product.start',
+  'product.status', 'product.next', 'product.start', 'product.contracts',
   // Workflows
   'workflow.list', 'workflow.run', 'workflow.status', 'workflow.view', 'workflow.card', 'workflow.approve',
   'workflow.changes', 'workflow.open', 'workflow.prove', 'workflow.suite', 'workflow.done', 'workflow.publish',
   'workflow.ask', 'workflow.request-uptake', 'workflow.resend', 'workflow.park', 'workflow.yield',
   'workflow.tidy', 'workflow.cancel', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate',
-  // Graph & dependencies
-  'graph', 'dependencies.prepare', 'dependencies.complete',
+  // Graph
+  'graph',
   // Autopilot
   'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop',
   'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust',
-  'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.report', 'autopilot.regressions',
-  'autopilot.alerts', 'autopilot.alert', 'autopilot.audit', 'autopilot.check-base',
+  'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.graph', 'autopilot.report', 'autopilot.regressions',
+  'autopilot.alerts', 'autopilot.alert', 'autopilot.check-base',
   // Metrics
   'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off',
 ]);
@@ -1317,6 +1317,17 @@ test('test, lint, and simulate commands exercise local modes and flag combinatio
   assert.notEqual(codexLint.code, 2, `valid lint --codex flags failed parser: ${codexLint.stderr}`);
   assert.doesNotMatch(codexLint.stderr, /ReferenceError|TypeError|SyntaxError/);
   markExecuted('lint');
+
+  // pdd prove --json (stateless offline proof against base ref)
+  const proveLocal = await fx.cli(['prove', '--json']);
+  assert.ok([0, 1, 3].includes(proveLocal.code), `unexpected pdd prove exit ${proveLocal.code}: ${proveLocal.stderr}`);
+  assert.equal(JSON.parse(proveLocal.stdout).schema_version, 'pdd.prove.v1');
+  markExecuted('prove');
+
+  // pdd product contracts (alias for pdd contracts)
+  const prodContracts = await fx.cli(['product', 'contracts']);
+  assert.equal(prodContracts.code, 0, prodContracts.stderr);
+  markExecuted('product.contracts');
 
   // pdd simulate (and quiet alias pdd sim): offline --stop and --save-last
   const simStop = await fx.cli(['simulate', '--stop', 'demo']);
@@ -1839,39 +1850,10 @@ test('graph and dependencies commands execute end-to-end safely offline', async 
   assert.match(graphSeeded.stdout, /no recorded open blocker/);
   markExecuted('graph');
 
-  // pdd dependencies prepare [--issue N]
-  const prepRes = await fx.cli(['dependencies', 'prepare', '--issue', '1'], {
-    extraEnv: { PDD_E2E_FAKE_GH: 'ok' },
-  });
-  assert.equal(prepRes.code, 0, prepRes.stderr);
-  const prepared = JSON.parse(prepRes.stdout);
-  assert.ok(prepared && typeof prepared === 'object');
-  markExecuted('dependencies.prepare');
-
-  // pdd dependencies complete --input -
-  const completeRequest = prepared.request ?? {
-    id: 'e2e-req-1',
-    repository: 'example/cli-fixture',
-    issues: [],
-    snapshotJson: JSON.stringify({
-      repository: 'example/cli-fixture',
-      capturedAt: '2026-11-18T12:00:00Z',
-      complete: true,
-      issues: [],
-      edges: [],
-      reviews: [],
-      impacts: [],
-      inputs: [],
-    }),
-    contextJson: JSON.stringify({ inputs: [], conditions: [], execution: [] }),
-  };
-  const completeRes = await fx.cli(['dependencies', 'complete', '--input', '-'], {
-    stdin: JSON.stringify({ request: completeRequest, analysis: { reviews: [], impactJson: '' } }),
-    extraEnv: { PDD_E2E_FAKE_GH: 'ok' },
-  });
-  assert.equal(completeRes.code, 0, completeRes.stderr);
-  assert.doesNotThrow(() => JSON.parse(completeRes.stdout));
-  markExecuted('dependencies.complete');
+  const apGraphSeeded = await fx.cli(['autopilot', 'graph', '--repo', 'example/cli-fixture', '--issue', '1']);
+  assert.equal(apGraphSeeded.code, 0, apGraphSeeded.stderr);
+  assert.match(apGraphSeeded.stdout, /Root E2E issue/);
+  markExecuted('autopilot.graph');
 });
 
 test('all 19 autopilot commands execute end-to-end safely in isolated temp HOME and repo', async () => {
@@ -2054,12 +2036,6 @@ test('all 19 autopilot commands execute end-to-end safely in isolated temp HOME 
   assert.equal(updateAlert.code, 0, `autopilot alert --update failed: ${updateAlert.stderr}\n${updateAlert.stdout}`);
   markExecuted('autopilot.alert');
 
-  // 18-19. autopilot audit & check-base (cleanly report missing run rather than crashing)
-  const auditRes = await fx.cli(['autopilot', 'audit', '999', '55'], { extraEnv: ghEnv });
-  assert.equal(auditRes.code, 1);
-  assert.doesNotMatch(auditRes.stderr, /ReferenceError|TypeError|SyntaxError/);
-  markExecuted('autopilot.audit');
-
   const checkBaseRes = await fx.cli(['autopilot', 'check-base', '999', '55'], { extraEnv: ghEnv });
   assert.equal(checkBaseRes.code, 1);
   assert.doesNotMatch(checkBaseRes.stderr, /ReferenceError|TypeError|SyntaxError/);
@@ -2145,8 +2121,7 @@ test('removed commands, quiet aliases, and invalid flag/operand errors return ex
     { args: ['autopilot', 'logs', 'not-an-issue'], match: /valid issue number/ },
     { args: ['autopilot', 'alert', '--issue', '42', '--kind', 'stuck'], match: /--input -/ },
     { args: ['autopilot', 'alerts', 'clear', '--discord-channel', '123456789012345678'], match: /only with pdd autopilot alerts set/ },
-    { args: ['dependencies', 'complete'], match: /--input -/ },
-    { args: ['dependencies', 'prepare', '--issue', 'abc'], match: /positive issue number/ },
+    { args: ['lint', '--local', '--remote'], match: /either --local or --remote/ },
     { args: ['workflow', 'suite'], match: /--command COMMAND/ },
     { args: ['workflow', 'prove', '42', '--test', 'npm test'], match: /requires nonblank --test and --expect/ },
     { args: ['workflow', 'cost', '42', '--input', 'file.json'], match: /Use --input -/ },

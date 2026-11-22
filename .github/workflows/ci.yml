@@ -134,19 +134,24 @@ jobs:
           cd "$smoke_dir/harbor"
           git init --quiet
           git add .
-          "$installed" lint --local place-order | tee "$smoke_dir/lint.log"
+          "$installed" lint --local --json place-order > "$smoke_dir/lint.json"
+          node --input-type=module - "$smoke_dir/lint.json" "$PDD_STATE_DIR" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { existsSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          assert.equal(result.exit_code, 0);
+          assert.equal(result.local_only, true);
+          assert.deepEqual(result.problems, []);
+          assert.equal(existsSync(join(process.argv[3], 'batches')), false, 'offline lint writes zero batch state');
+          NODE
           checks=$((checks + 1))
-          "$installed" test --read --json > "$smoke_dir/saved-read.json"
-          node --input-type=module - "$smoke_dir/saved-read.json" <<'NODE'
+          "$installed" status --json > "$smoke_dir/status.json"
+          node --input-type=module - "$smoke_dir/status.json" <<'NODE'
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
           const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-          assert.equal(result.exit_code, 0);
-          assert.equal(result.state, 'partial');
-          assert.equal(result.lint_state, 'partial');
-          assert.equal(result.local_only, true);
-          assert.equal(result.reason?.code, 'local-only');
-          assert.deepEqual(result.rows, []);
+          assert.ok(result && typeof result === 'object');
           NODE
           checks=$((checks + 1))
           mkdir -p "$smoke_dir/empty-state"

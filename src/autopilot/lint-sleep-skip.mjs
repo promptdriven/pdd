@@ -1,6 +1,6 @@
 // Layer-2 Autopilot test hygiene checks (#3562): O(N) `test-fixed-sleep` & `test-unexcused-skip` (JS/TS + Python).
 import { isTestOwnedPath } from '../file-owner.mjs';
-import { buildLineStarts, canonicalRepoPath, lineNumberAt } from '../core/lint/diagnostics.mjs';
+import { buildLineStarts, canonicalRepoPath, lineNumberAt, readSafeUtf8 } from '../core/lint/diagnostics.mjs';
 
 const TEST_CODE_EXT = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift)$/i;
 const SKIP_SUBDIR = /(?:^|\/)(?:fixtures|helpers)\//i;
@@ -168,6 +168,7 @@ function collectPositiveVars(skel, hash, d) {
     for (const m of skel.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*(?:[+\-*/%&|^]?=(?![=>])|\+\+|--)/g)) if (!/\b(?:const|let|var)\s+$/.test(skel.slice(Math.max(0, m.index - 12), m.index))) disq.add(m[1]);
   } else {
     for (const m of skel.matchAll(/\bdef\b/g)) { let k = m.index + 3, lim = Math.min(skel.length, k + 80); while (k < lim && skel[k] !== '(' && skel[k] !== '\n') k++; if (k < lim && skel[k] === '(' && d.cp[k] > k && d.cp[k] - k <= 300) addIds(skel.slice(k + 1, d.cp[k]), disq); }
+    for (const m of skel.matchAll(/\blambda\b/g)) { const head = skel.slice(m.index + 6, m.index + 207), colon = head.indexOf(':'), nl = head.indexOf('\n'); if (colon > 0 && (nl < 0 || colon < nl) && colon <= 194) addIds(head.slice(0, colon), disq); }
     for (const m of skel.matchAll(/(?:^|\n)[ \t]*([A-Za-z_]\w*)[ \t]*=(?!=)[ \t]*([^\n;]+)/g)) { decls.set(m[1], (decls.get(m[1]) ?? 0) + 1); const v = evalNum(m[2]); if (v !== null && v > 0) cands.add(m[1]); else disq.add(m[1]); }
   }
   return new Set([...cands].filter(id => decls.get(id) === 1 && !disq.has(id)));
@@ -364,3 +365,24 @@ export function collectTestUnexcusedSkipFindings(text, { path = 'test/example.te
 }
 
 export const lintTestUnexcusedSkips = (text, opts = {}) => collectTestUnexcusedSkipFindings(text, opts).map(i => i.warning);
+
+export function lintAutopilotTestHygiene({ root, files = [], config = {} } = {}) {
+  const disabled = new Set(Array.isArray(config?.disable) ? config.disable : []);
+  const rules = config?.rules && typeof config.rules === 'object' ? config.rules : {};
+  const severityOf = code => (disabled.has(code) || rules[code] === 'off' ? 'off' : (rules[code] === 'error' ? 'error' : 'warn'));
+  const warnings = [], errors = [], findings = [];
+  for (const rel of files) {
+    if (!canonicalRepoPath(rel) || !isInspectableTestCodePath(rel)) continue;
+    const text = readSafeUtf8(root, rel);
+    if (text === null) continue;
+    for (const item of [...collectTestFixedSleepFindings(text, { path: rel }), ...collectTestUnexcusedSkipFindings(text, { path: rel })]) {
+      const sev = severityOf(item.code);
+      if (sev === 'off') continue;
+      const line = sev === 'error' ? item.warning.replace(/^Warning:/, 'Error:') : item.warning;
+      findings.push({ ...item, path: rel, severity: sev });
+      if (sev === 'error') errors.push(line);
+      else warnings.push(line);
+    }
+  }
+  return { ok: errors.length === 0, errors, warnings, findings };
+}

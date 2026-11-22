@@ -48,6 +48,6 @@ test('2755 MERGE-RACE showGate: a concurrent writer that clears the open gate do
 test('2755 help path lines keep $ patterns in the package root literally', () => {
   const root="/opt/a$&b$$c$'d$`e";
   const help=renderHelp([],root).split('\n');
-  assert.ok(help.includes(`Prompting guide: ${root}/docs/prompting-guide.md`),help.join('\n'));
-  assert.ok(help.includes(`RUNBOOK: ${root}/RUNBOOK.md`),help.join('\n'));
+  assert.ok(help.includes(`Skill: ${root}/skills/pdd/SKILL.md`),help.join('\n'));
+  assert.ok(help.includes(`Prompting guide: ${root}/skills/pdd/references/prompting.md`),help.join('\n'));
 });

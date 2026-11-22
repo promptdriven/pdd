@@ -22,11 +22,7 @@ import {
 } from '../src/autopilot-regressions.mjs';
 import { calculateAutopilotMetrics, formatMetricsText, renderMetricsHtml } from '../src/metrics-model.mjs';
 import { runMetrics } from '../src/metrics-command.mjs';
-import {
-  lintRepoProject,
-  lintTestFixedSleeps,
-  lintTestUnexcusedSkips,
-} from '../src/repo-hygiene-lint.mjs';
+import { lintAutopilotTestHygiene, lintTestFixedSleeps, lintTestUnexcusedSkips } from '../src/autopilot/lint-sleep-skip.mjs';
 
 const DAY_MS = 86_400_000;
 
@@ -479,16 +475,16 @@ test('3562 Part 2A: test-fixed-sleep detects JS/TS and Python fixed sleeps while
     'test/sample.test.mjs': "test('x', async () => {\n  await new Promise(r => setTimeout(r, 400));\n});\n",
     'src/prod.mjs': 'export const wait = () => new Promise(r => setTimeout(r, 400));\n',
   });
-  const defRes = lintRepoProject({ root, files: ['test/sample.test.mjs', 'src/prod.mjs'], config: {} });
+  const defRes = lintAutopilotTestHygiene({ root, files: ['test/sample.test.mjs', 'src/prod.mjs'], config: {} });
   assert.equal(defRes.ok, true);
   assert.equal(defRes.warnings.filter(w => w.includes('[test-fixed-sleep]')).length, 1);
   assert.equal(defRes.errors.length, 0);
 
-  const errRes = lintRepoProject({ root, files: ['test/sample.test.mjs', 'src/prod.mjs'], config: { rules: { 'test-fixed-sleep': 'error' } } });
+  const errRes = lintAutopilotTestHygiene({ root, files: ['test/sample.test.mjs', 'src/prod.mjs'], config: { rules: { 'test-fixed-sleep': 'error' } } });
   assert.equal(errRes.ok, false);
   assert.equal(errRes.errors.filter(e => e.includes('[test-fixed-sleep]')).length, 1);
 
-  const offRes = lintRepoProject({ root, files: ['test/sample.test.mjs', 'src/prod.mjs'], config: { rules: { 'test-fixed-sleep': 'off' } } });
+  const offRes = lintAutopilotTestHygiene({ root, files: ['test/sample.test.mjs', 'src/prod.mjs'], config: { rules: { 'test-fixed-sleep': 'off' } } });
   assert.equal(offRes.ok, true);
   assert.equal(offRes.warnings.filter(w => w.includes('[test-fixed-sleep]')).length, 0);
   assert.equal(offRes.errors.length, 0);
@@ -584,15 +580,15 @@ test('3562 Part 2B: test-unexcused-skip detects JS/TS and Python unexcused skips
   const root = makeTempRepo(t, {
     'test/skip-sample.test.mjs': "test.skip('forgotten test', () => {});\n",
   });
-  const defRes = lintRepoProject({ root, files: ['test/skip-sample.test.mjs'], config: {} });
+  const defRes = lintAutopilotTestHygiene({ root, files: ['test/skip-sample.test.mjs'], config: {} });
   assert.equal(defRes.ok, true);
   assert.equal(defRes.warnings.filter(w => w.includes('[test-unexcused-skip]')).length, 1);
 
-  const errRes = lintRepoProject({ root, files: ['test/skip-sample.test.mjs'], config: { rules: { 'test-unexcused-skip': 'error' } } });
+  const errRes = lintAutopilotTestHygiene({ root, files: ['test/skip-sample.test.mjs'], config: { rules: { 'test-unexcused-skip': 'error' } } });
   assert.equal(errRes.ok, false);
   assert.equal(errRes.errors.filter(e => e.includes('[test-unexcused-skip]')).length, 1);
 
-  const offRes = lintRepoProject({ root, files: ['test/skip-sample.test.mjs'], config: { disable: ['test-unexcused-skip'] } });
+  const offRes = lintAutopilotTestHygiene({ root, files: ['test/skip-sample.test.mjs'], config: { disable: ['test-unexcused-skip'] } });
   assert.equal(offRes.ok, true);
   assert.equal(offRes.warnings.filter(w => w.includes('[test-unexcused-skip]')).length, 0);
 });

@@ -13,9 +13,9 @@ const help = prefix => Object.freeze({ commandId: 'help', local: 'help', helpPre
 // A help topic (`help prompting`) is exactly two words; any word after the topic, also a help flag, refuses.
 const TOPICS = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'help')?.topics ?? [];
 const topicHelp = words => words.length === 1 ? Object.freeze({ ...help([]), topic: words[0] }) : fail();
-// A plan whose options hold every flag that another route of the same local always has works like that route (`test --lint` = `lint`).
-const routeLike = (route, options) => routes.find(other => other !== route && other.local === route.local && other.implies
-  ?.every(flag => options[flag] === true)) ?? route;
+// A plan whose options hold every flag that another route always implies works like that route (`test --lint` = `lint`).
+const routeLike = (route, options) => routes.find(other => other !== route && other.implies?.length
+  && other.implies.every(flag => options[flag] === true)) ?? route;
 // A removed word (`check`, `try`) runs nothing: one line names the new command. A removed entry with a flag
 // (`check --lint`) wins when that flag is one of the words after the command word.
 const REMOVED = routes.filter(route => route.removed).map(route => ({ route,
@@ -96,9 +96,10 @@ function parseRoute(route, words, allowHelp = false) {
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();
   }
-  if (helpRequested) return help(routeLike(route, options).prefix);
+  const effective = routeLike(route, options);
+  if (helpRequested) return help(effective.prefix);
   const implied = Object.fromEntries((route.implies ?? []).map(flag => [flag, true]));
-  return Object.freeze({ commandId: route.id, local: route.local,
+  return Object.freeze({ commandId: route.id, local: effective.local,
     operands: Object.freeze(operands), options: Object.freeze({ ...implied, ...options }) });
 }
 // A quiet word (`sim`, `workflow start`) is rewritten to the prefix of its route, with nothing added.

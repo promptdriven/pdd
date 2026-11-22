@@ -31,7 +31,7 @@ function optionSamples() {
     const route = PUBLIC_COMMAND_ROUTES.find(item => words(item.prefix) === words(prefix));
     assert.ok(route, `route ${words(prefix)}`);
     for (const option of route.options) {
-      const values = { flag: [], text: ['place-order', '--json'], uuid: ['0b5a1f2e-1c2d-4e5f-8a9b-0c1d2e3f4a5b', 'nope'],
+      const values = { flag: [], text: ['place-order', '--json'], 'optional-text': ['main', '--json'], uuid: ['0b5a1f2e-1c2d-4e5f-8a9b-0c1d2e3f4a5b', 'nope'],
         integer: [String(option.min), String(option.max), '0', String(option.max + 1), 'x'], 'optional-integer': ['8123', '0', '70000'],
         value: [...(option.choices ?? []), 'other'] }[option.kind];
       assert.ok(values, `kind ${option.kind}`);

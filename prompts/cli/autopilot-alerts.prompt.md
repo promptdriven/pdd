@@ -341,7 +341,7 @@ An open `unconfirmed` incident still counts without resending.
 
 ## Dependencies
 
-- [Prompting guide](../../docs/prompting-guide.md): authoring.
+- [Prompting guide](../../skills/pdd/references/prompting.md): authoring.
 - [CLI](pdd-cli.prompt.md#autopilot-dispatch): generation and testing of dispatch, stdin and streams.
 - [Autopilot launcher](autopilot-launcher.prompt.md#stop-status-and-the-other-commands): status calls
   `alertStatusLine` with its saved repository and state root.

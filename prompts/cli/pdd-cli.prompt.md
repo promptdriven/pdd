@@ -71,19 +71,9 @@ Read the entire [Prompting guide](../../skills/pdd/references/prompting.md) befo
 
 Dispatch catalog dispositions `autopilot.off`, `autopilot.observe`, `autopilot.auto`, `autopilot-trust` and `autopilot-untrust` to [Autopilot settings](autopilot.prompt.md) `runAutopilot`, with action mode and the named mode, or trust/untrust and parsed names respectively. For settings writes, supply the launcher’s native `withAutopilotModeLock({cwd,env}, action, ports)` as the settings write boundary. Preserve the settings result and non-repository behavior. Print its message once to stdout on exit 0, stderr otherwise, and return its exit code. After a `mode` action with exit 0, best-effort invoke the launcher's `resetAutopilotCircuitBreaker({cwd, env, mode}, {...autopilotPorts, ...autopilotLauncherPorts})` (#3484) so `pdd autopilot auto`, `observe` and `off` clear any tripped circuit breaker and stale machine `observe` override. Autopilot workers start from the default branch on GitHub and read `pdd.json` there. So after a mode, trust or untrust action with exit 0, call [Autopilot settings on GitHub](autopilot-github.prompt.md) `publishAutopilotSettings({cwd, action, mode, names, retry}, autopilotGithubPorts)` with the parsed names and with retry the same command (`pdd autopilot MODE`, or `pdd autopilot trust|untrust NAMES`), and print its nonempty message to stdout. Tests may inject `dependencies.autopilotGithub` (the module) and `autopilotGithubPorts`. When that call throws, print `pdd.json on GitHub was not updated. To retry, run RETRY.` This line never changes the exit code, and the local write stays. Permit injected module and ports; a thrown error yields one finite diagnostic and exit 1. No Autopilot settings route starts a workflow or interpreter.
 
-Dispatch `issue-dependency-graph` to injected `issueGraph` (default `src/issue-dependency-graph.mjs`) module function `runIssueGraph({cwd,repository,issue,open}, issueGraphPorts)`, mapping repository and issue from the corresponding options and open to a Boolean. Print its message to stdout on exit 0, stderr otherwise, and return its exitCode. On a throw, print a finite diagnostic and return 1.
+Dispatch `issue-dependency-graph` (both `pdd graph` and `pdd autopilot graph`) to injected `issueGraph` (default `src/issue-dependency-graph.mjs`) module function `runIssueGraph({cwd,repository,issue,open}, issueGraphPorts)`, mapping repository and issue from the corresponding options and open to a Boolean. Print its message to stdout on exit 0, stderr otherwise, and return its exitCode. On a throw, print a finite diagnostic and return 1.
 
-Dispatch `dependencies-prepare` and `dependencies-complete` to an injected
-`dependencyIntake` module (default src/issue-dependencies-intake.mjs), using separate
-`dependencyIntakePorts`. Before reading stdin or importing a mutation path, require
-complete's --input to be exactly `-` and prepare's optional --issue to be a positive
-issue number. Pass prepare `{command:"prepare",cwd,issue}`; pass complete
-`{command:"complete",cwd,stdin}` with the exact UTF-8 stdin payload. The intake
-owner validates JSON. No command wakes an Autopilot coordinator: Autopilot has no coordinator chat.
-Print the intake message once to stdout on exitCode 0, stderr otherwise, and
-return its exitCode unchanged. A finite intake import or call throw returns 1 with one
-safe line and no automatic retry. No route silently chooses or calls an AI model.
-Preserve every existing evidence-associate route and --test text-list behavior.
+Dispatch `lint` offline by default (`pdd lint [STORY...] [--local] [--diff [BASE]] [--json]`) directly to `src/core/lint/run-local-lint.mjs` (`runLocalLint`) with 0 AI calls, 0 network calls, and 0 batch-state writes; forward `--codex` to [Codex lint](codex-lint.prompt.md) and `--remote`, `--emit-v1`, `--write`, or `--bind-criteria` to [Runtime seam](runtime-seam.prompt.md) `lint`. Dispatch `prove` directly to [Stateless proof](prove.prompt.md) `runProve`. Preserve every existing evidence-associate route and --test text-list behavior.
 
 Dispatch `autopilot-suite` directly to `runTestSuite` in `src/test-suite-queue.mjs` with `cwd`, `env`, `command` from `--command`, optional integer `timeout` from `--timeout`, and `{ say }` writing live queue lines to stdout; require a nonblank `--command` (exit 2 otherwise) before importing execution, with zero workflow-runner dependency. For `autopilot-start`, forward `--issues` as `allowedIssues` and `--issue` as `issue` to `runAutopilotLauncher`.
 
@@ -168,8 +158,7 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 - [Metrics command](metrics-command.prompt.md): required native generation/verification context for local metrics dispatch.
 
 - [Issue dependency graph](issue-dependency-graph.prompt.md): required generation and verification context for graph dispatch.
-
-- [Structured dependency intake](issue-dependencies-intake.prompt.md): required generation and verification context for prepare/complete dispatch.
+- [Stateless proof](prove.prompt.md): required generation and verification context for `pdd prove` dispatch.
 
 - [Autopilot launcher](autopilot-launcher.prompt.md): required native generation/verification context for launch, tick, stop, status and backlog selection. These native effects are not bound by the existing syntax transport. Launcher ports are separate from the settings module's `autopilotPorts`.
 

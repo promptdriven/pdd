@@ -1,4 +1,27 @@
 {
+  "verify": {
+    "test": "npm test",
+    "paths": [
+      {
+        "id": "cli-surface",
+        "name": "CLI parser, help catalog, status, setup and init",
+        "when": ["bin/pdd.mjs", "src/pdd-cli.mjs", "src/command-catalog.mjs", "src/argument-parser.mjs", "src/core/status.mjs", "src/setup/**"],
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/cli.test.mjs test/docs-commands.test.mjs test/status.test.mjs"
+      },
+      {
+        "id": "lint-and-prove",
+        "name": "Offline PDD lint, verify.paths and pdd prove",
+        "when": ["src/core/lint/**", "src/core/prove.mjs", "src/core/verify-paths.mjs", "src/repo-hygiene-lint.mjs", "src/story-lint.mjs"],
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/core/lint/*.test.mjs test/core/prove.test.mjs"
+      },
+      {
+        "id": "architecture",
+        "name": "Module layering and dependency boundary rules",
+        "when": ["scripts/check-architecture.mjs", "scripts/architecture-ratchet.json"],
+        "run": "npm run check:arch"
+      }
+    ]
+  },
   "autopilot": {
     "mode": "auto",
     "trust": [],

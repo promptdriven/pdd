@@ -1,12 +1,10 @@
 // Prompt: prompts/cli/pdd-cli.prompt.md
-import { execFileSync, spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, join } from 'node:path';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
-import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
-import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { gitContext as defaultGitContext } from './shared/git-context.mjs';
 import { PACKAGE_ROOT } from './shared/package-root.mjs';
 import { causeText } from './shared/safe-read.mjs';
@@ -53,86 +51,36 @@ function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
     for (const row of rows) {
       if (row.native_only?.length) {
         const nativePaths = new Set(row.native_only.map(item => item.path));
-        const checkableEntries = (row.steps ?? [])
-          .map(step => step?.entry_path)
-          .filter(entry => typeof entry === 'string' && !nativePaths.has(entry));
-        if (checkableEntries.length) {
-          const entryPath = checkableEntries[0];
-          const adapter = row.native_only[0];
-          return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: adapter.path, native_only_reason: adapter.reason };
-        }
+        const entryPath = (row.steps ?? []).map(s => s?.entry_path).find(e => typeof e === 'string' && !nativePaths.has(e));
+        if (entryPath) return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: row.native_only[0].path };
       }
-      // Plain-Markdown prompts without embedded interfaces may still link kind: native-only adapters
-      // via Markdown links; walk their dependency closure using runtime's prompt/link readers.
-      const nativeInfoFor = prompt => {
-        if (!prompt) return null;
-        if (prompt.interface?.kind === 'native-only') return { reason: prompt.interface.reason ?? '' };
-        const fm = prompt.frontmatter ?? (typeof prompt.text === 'string' ? runtime.parsePromptFrontmatter?.(prompt.text)?.frontmatter : null);
-        if (fm?.kind === 'native-only') return { reason: fm.reason ?? '' };
-        return null;
-      };
-      const entryPaths = [...new Set((row.steps ?? []).map(step => step?.entry_path).filter(p => typeof p === 'string' && p.endsWith('.prompt.md')))];
+      const isNative = p => p?.interface?.kind === 'native-only' || (p?.frontmatter ?? (typeof p?.text === 'string' ? runtime.parsePromptFrontmatter?.(p.text)?.frontmatter : null))?.kind === 'native-only';
+      const entryPaths = [...new Set((row.steps ?? []).map(s => s?.entry_path).filter(p => typeof p === 'string' && p.endsWith('.prompt.md')))];
       for (const entryPath of entryPaths) {
         if (!found.visible?.has(entryPath)) continue;
         let entryPrompt;
         try { entryPrompt = runtime.readPrompt(cwd, found.visible, entryPath, found.workspace); } catch { continue; }
-        if (nativeInfoFor(entryPrompt)) continue;
-        const visited = new Set([entryPath]);
-        const queue = [];
-        const enqueueTargets = (prompt, fromPath) => {
-          for (const call of Array.isArray(prompt?.interface?.calls) ? prompt.interface.calls : []) {
-            if (typeof call?.target === 'string' && !visited.has(call.target)) queue.push(call.target);
-          }
-          if (typeof prompt?.text === 'string' && typeof runtime.promptMarkdownTargets === 'function') {
-            for (const target of runtime.promptMarkdownTargets(prompt.text, fromPath, found.visible)) {
-              if (typeof target === 'string' && !visited.has(target)) queue.push(target);
-            }
-          }
+        if (isNative(entryPrompt)) continue;
+        const visited = new Set([entryPath]), queue = [];
+        const enqueue = (p, from) => {
+          for (const c of Array.isArray(p?.interface?.calls) ? p.interface.calls : []) if (typeof c?.target === 'string' && !visited.has(c.target)) queue.push(c.target);
+          if (typeof p?.text === 'string' && typeof runtime.promptMarkdownTargets === 'function')
+            for (const t of runtime.promptMarkdownTargets(p.text, from, found.visible)) if (typeof t === 'string' && !visited.has(t)) queue.push(t);
         };
-        enqueueTargets(entryPrompt, entryPath);
+        enqueue(entryPrompt, entryPath);
         while (queue.length > 0 && visited.size < 64) {
           const depPath = queue.shift();
           if (visited.has(depPath) || !found.visible?.has(depPath)) continue;
           visited.add(depPath);
           let depPrompt;
           try { depPrompt = runtime.readPrompt(cwd, found.visible, depPath, found.workspace); } catch { continue; }
-          const nativeInfo = nativeInfoFor(depPrompt);
-          if (nativeInfo) {
-            return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: depPath, native_only_reason: nativeInfo.reason };
-          }
-          enqueueTargets(depPrompt, depPath);
+          if (isNative(depPrompt)) return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: depPath };
+          enqueue(depPrompt, depPath);
         }
       }
     }
-  } catch { /* delegate workspace/selection errors to runtime[action] */ }
+  } catch {}
   return null;
-}
-function resolveProjectLintRoot(cwd) {
-  try {
-    const gitTop = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 10_000,
-    }).trim();
-    return gitTop ? realpathSync(gitTop) : null;
-  } catch { return null; }
-}
-async function collectProjectLintErrors(runtime, root, words, options) {
-  try {
-    const { lintRepoProject } = await import('./repo-hygiene-lint.mjs');
-    if (!words.length) return lintRepoProject({ root }).errors;
-    const found = runtime.findTests({ root });
-    const { selected, unknown } = runtime.selectTests(found, words, options);
-    if (unknown?.length || !selected?.length) return [];
-    const { rows } = runtime.preflight({ root, found, selected, allowMissingInterfaces: true });
-    const promptSet = new Set();
-    for (const row of rows) {
-      for (const step of row.steps ?? []) if (typeof step?.entry_path === 'string') promptSet.add(step.entry_path);
-      for (const p of row.prompts ?? []) if (typeof p === 'string') promptSet.add(p);
-    }
-    return lintRepoProject({ root, promptPaths: [...promptSet], tests: selected }).errors;
-  } catch { return []; }
 }
 const line = (stream, text) => stream.write(`${text}\n`);
 // The real reason of an unexpected error, after the fixed safe line.
@@ -200,8 +148,8 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
-  autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills,
-  setupProject, initProject, projectStatus, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic,
+  autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents, workflowAgentPorts = {}, setupSkills,
+  setupProject, initProject, projectStatus, localLint, localLintPorts = {}, proveRunner, proveRunnerPorts = {}, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic,
   readPackageVersion = defaultReadPackageVersion, findSkills, syncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
@@ -209,7 +157,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
-  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'status', 'init', 'update-sync', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
+  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'status', 'init', 'lint', 'prove', 'update-sync', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
     && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
     && plan.options['--json'] !== true
     && !argv.includes('--json')) {
@@ -243,19 +191,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const result = await module.runIssueGraph({cwd, repository:plan.options['--repo'], issue:plan.options['--issue'], open:!!plan.options['--open']}, issueGraphPorts);
         (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
       } catch (error) { line(stderr, `Graph failed.${reason(error)}`); return 1; }
-    }
-    case 'dependencies-prepare': case 'dependencies-complete': {
-      if (plan.local === 'dependencies-complete' && plan.options['--input'] !== '-') { line(stderr, 'Use pdd dependencies complete --input -.'); return 2; }
-      if (plan.local === 'dependencies-prepare' && plan.options['--issue'] !== undefined && !/^[1-9]\d*$/.test(plan.options['--issue'])) { line(stderr, 'Use pdd dependencies prepare --issue N with a positive issue number.'); return 2; }
-      try { const module = dependencyIntake ?? await import('./issue-dependencies-intake.mjs');
-        let payload = stdin;
-        if (plan.local === 'dependencies-complete' && typeof stdin !== 'string' && stdin?.[Symbol.asyncIterator]) {
-          const chunks = []; for await (const chunk of stdin) chunks.push(Buffer.from(chunk));
-          payload = Buffer.concat(chunks).toString('utf8');
-        }
-        const result = await module.runDependencyIntake(plan.local === 'dependencies-prepare' ? {command:'prepare',cwd,issue:plan.options['--issue']} : {command:'complete',cwd,stdin:payload},dependencyIntakePorts);
-        (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
-      } catch(error) { line(stderr, `Dependency intake failed.${reason(error)}`); return 1; }
     }
     case 'autopilot-regressions': {
       try {
@@ -326,7 +261,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return result.exitCode;
       } catch (error) { line(stderr, `Autopilot suite failed.${reason(error)}`); return 1; }
     }
-    case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
+    case 'autopilot-doctor': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
         const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], ...(plan.options['--issues'] !== undefined ? { allowedIssues: plan.options['--issues'] } : {}), ...(plan.options['--issue'] !== undefined ? { issue: plan.options['--issue'] } : {}), runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), ...(plan.options['--agent'] !== undefined ? { agent: plan.options['--agent'] } : {}), ...(plan.options['--pool'] !== undefined ? { pool: plan.options['--pool'] } : {}), ...(plan.options['--auto-update'] ? { autoUpdate: plan.options['--auto-update'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
@@ -454,7 +389,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       const [name, input] = RUNNER_ROUTES[plan.local](plan);
       if (plan.local === 'workflow-run') {
         let selected;
-        try { selected = await workflowAgents.checkWorkflowAgents({ cwd, env, ...(plan.options['--agent'] !== undefined ? { requested: plan.options['--agent'] } : {}) }, workflowAgentPorts); }
+        try {
+          const agentsMod = workflowAgents ?? await import('./workflow-agents.mjs');
+          selected = await agentsMod.checkWorkflowAgents({ cwd, env, ...(plan.options['--agent'] !== undefined ? { requested: plan.options['--agent'] } : {}) }, workflowAgentPorts);
+        }
         catch { line(stderr, 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
         if (!selected?.ok) { line(stderr, selected?.message || 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
         if (typeof selected.hint === 'string' && selected.hint) line(stderr, selected.hint);
@@ -620,14 +558,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const { contracts: run } = await import('./runtime-seam.mjs');
         return await run(input, ports);
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
-    case 'runtime-check':
-    case 'runtime-try':
-      if (plan.local === 'runtime-check' && plan.options['--issue'] !== undefined && plan.options['--codex'] !== true) {
+    case 'lint': {
+      if (plan.options['--issue'] !== undefined && plan.options['--codex'] !== true) {
         line(stderr, `Use --issue only with pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`);
         return 2;
       }
-      if (plan.local === 'runtime-check' && plan.options['--codex'] === true) {
-        if (plan.options['--lint'] !== true) { line(stderr, `Use pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`); return 2; }
+      if (plan.options['--codex'] === true) {
         if (Object.keys(plan.options).some(key => !['--lint', '--codex', '--issue', '--json', '--timeout'].includes(key))) {
           line(stderr, `pdd ${NAMES.lint} --codex accepts only Story or prompt paths, --json, and --timeout MIN, plus optional --issue N|FILE.`); return 2;
         }
@@ -646,6 +582,67 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           return 1;
         }
       }
+      const needsRemoteOrCompiler = Boolean(
+        plan.options['--remote'] === true
+        || plan.options['--emit-v1'] === true
+        || plan.options['--write'] === true
+        || plan.options['--bind-criteria'] === true,
+      );
+      if (needsRemoteOrCompiler) {
+        if (plan.options['--remote'] === true && plan.options['--local'] === true) {
+          line(stderr, `Use either --local or --remote with pdd ${NAMES.lint}, not both.`);
+          return 2;
+        }
+        try {
+          const runtime = await import('./runtime-seam.mjs');
+          const { '--remote': _remote, '--diff': _diff, '--base': _base, ...forwardOptions } = plan.options;
+          const opts = { ...forwardOptions, '--lint': true };
+          const inverted = findInvertedNativeOnlyStory(runtime, cwd, [...plan.operands], opts);
+          if (inverted) line(stderr, `Advisory [inverted-native-only-dependency]: Story test ${inverted.test} enters checkable prompt ${inverted.entry_path}, which links kind: native-only prompt ${inverted.native_only_path} under ## Dependencies. Invert the dependency so ${inverted.native_only_path} depends on ${inverted.entry_path} and inject a <port>.<op> port.`);
+          return await runtime.lint({ words: [...plan.operands], options: opts, cwd }, { stdout, stderr, env });
+        } catch (error) {
+          line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
+          return 3;
+        }
+      }
+      try {
+        const mod = localLint ?? await import('./core/lint/run-local-lint.mjs');
+        const diffOpt = plan.options['--diff'];
+        return await mod.runLocalLint({
+          cwd,
+          words: [...plan.operands],
+          json: plan.options['--json'] === true,
+          ...(diffOpt !== undefined ? { diff: diffOpt } : {}),
+          ...(plan.options['--base'] !== undefined ? { baseRef: plan.options['--base'] } : {}),
+          env,
+        }, { stdout, stderr, ...localLintPorts });
+      } catch (error) {
+        line(stderr, `Local lint failed.${reason(error)}`);
+        return 2;
+      }
+    }
+    case 'prove': {
+      try {
+        const mod = proveRunner ?? await import('./core/prove.mjs');
+        const res = await mod.runProve({
+          cwd,
+          ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}),
+          ...(plan.options['--test'] !== undefined ? { test: plan.options['--test'] } : {}),
+          ...(plan.options['--expect'] !== undefined ? { expect: plan.options['--expect'] } : {}),
+          ...(plan.options['--overlay'] !== undefined ? { overlay: plan.options['--overlay'] } : {}),
+          ...(plan.options['--setup'] !== undefined ? { setup: plan.options['--setup'] } : {}),
+          ...(plan.options['--timeout'] !== undefined ? { timeoutMinutes: Number(plan.options['--timeout']) } : {}),
+          json: plan.options['--json'] === true,
+          env,
+        }, { stdout, stderr, ...proveRunnerPorts });
+        return typeof res === 'number' ? res : (Number.isInteger(res?.exitCode) ? res.exitCode : 1);
+      } catch (error) {
+        line(stderr, `pdd prove failed.${reason(error)}`);
+        return 2;
+      }
+    }
+    case 'runtime-check':
+    case 'runtime-try':
       if (plan.local === 'runtime-check' && plan.options['--reconcile'] !== undefined) {
         if (plan.operands.length > 0 || Object.keys(plan.options).some(key => !['--reconcile', '--json'].includes(key))) {
           line(stderr, `Use pdd ${NAMES.test} --reconcile REQUEST_ID [--json] without other options or Stories.`);
@@ -685,52 +682,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const runtime = await import('./runtime-seam.mjs');
         if (plan.local === 'runtime-check') {
           const inverted = findInvertedNativeOnlyStory(runtime, cwd, [...plan.operands], { ...plan.options });
-          if (inverted) {
-            line(stderr, `Advisory [inverted-native-only-dependency]: Story test ${inverted.test} enters checkable prompt ${inverted.entry_path}, which links kind: native-only prompt ${inverted.native_only_path} under ## Dependencies. Invert the dependency so ${inverted.native_only_path} depends on ${inverted.entry_path} and inject a <port>.<op> port.`);
-          }
+          if (inverted) line(stderr, `Advisory [inverted-native-only-dependency]: Story test ${inverted.test} enters checkable prompt ${inverted.entry_path}, which links kind: native-only prompt ${inverted.native_only_path} under ## Dependencies. Invert the dependency so ${inverted.native_only_path} depends on ${inverted.entry_path} and inject a <port>.<op> port.`);
         }
-        const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
-        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--reconcile', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => plan.options[flag]);
-        const lintRoot = isLintCheckMode ? resolveProjectLintRoot(cwd) : null;
-        let seamProjectErrors = null;
-        const onProjectLintResult = lintRoot && !plan.operands.length && plan.options['--local'] === true
-          ? result => {
-              if (!result || !Array.isArray(result.errors)) return;
-              if (!seamProjectErrors) seamProjectErrors = [];
-              for (const err of result.errors) {
-                if (!seamProjectErrors.includes(err)) seamProjectErrors.push(err);
-              }
-            }
-          : undefined;
-        if (lintRoot && plan.options['--json'] === true) {
-          let captured = '';
-          const bufferedStdout = { write: chunk => { captured += String(chunk); return true; } };
-          const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout: bufferedStdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
-          if (runtimeCode === 0 || runtimeCode === 1) {
-            const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
-            if (projectErrors.length > 0) {
-              try {
-                const parsed = JSON.parse(captured.trim());
-                parsed.problems = [...(Array.isArray(parsed.problems) ? parsed.problems : []), ...projectErrors];
-                parsed.ok = false;
-                parsed.exit_code = 1;
-                stdout.write(`${JSON.stringify(parsed)}\n`);
-                return 1;
-              } catch { /* fall through to write raw output */ }
-            }
-          }
-          if (captured) stdout.write(captured);
-          return runtimeCode;
-        }
-        const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
-        if (lintRoot && (runtimeCode === 0 || runtimeCode === 1)) {
-          const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
-          if (projectErrors.length > 0) {
-            for (const errLine of projectErrors) line(stderr, errLine);
-            return 1;
-          }
-        }
-        return runtimeCode;
+        const action = plan.local === 'runtime-try' ? 'simulate' : 'check';
+        return await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
@@ -767,14 +722,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'workflow-list':
       try {
-        const areas = workflowAreas ?? { listWorkflowAreas, formatWorkflowList };
+        const areas = workflowAreas ?? await import('./workflow-areas.mjs');
         const workflows = await areas.listWorkflowAreas({ packageRoot, cwd, home: env.HOME });
         if (!Array.isArray(workflows)) throw Error('Invalid workflow listing');
         line(stdout, areas.formatWorkflowList(workflows, { json: plan.options['--json'] === true }));return 0;
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'init', 'status'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'init', 'status', 'lint', 'prove'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

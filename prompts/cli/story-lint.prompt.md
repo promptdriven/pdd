@@ -39,5 +39,5 @@ Each problem is `{path, line, code, message, excerpt}`, where `excerpt` is the t
 
 ## Callers and context
 
-- [Story guide](../../docs/story-guide.md): authoring rules that this check enforces locally.
+- [Story guide](../../skills/pdd/references/stories.md): authoring rules that this check enforces locally.
 - [Prompt approve](prompt-approve.prompt.md) and [workflow runner](workflow-runner.prompt.md): run `lintStories` on changed Story files at approval and pre-PR gates.

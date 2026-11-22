@@ -229,7 +229,7 @@ test('3459 preflight: checkable Story linking kind: native-only adapter emits no
   assert.equal(localExit, 0, 'pdd lint --local stays non-blocking (exit 0)');
   assert.match(`${localStreams.out}\n${localStreams.err}`, /prompts\/storage\.prompt\.md/);
 
-  for (const argv of [['lint'], ['test'], ['test', '--json']]) {
+  for (const argv of [['lint', '--remote'], ['test'], ['test', '--json']]) {
     const streams = captureStreams();
     const exitCode = await runPdd(argv, { cwd: root, env: { ...process.env, PDD_RUNTIME_TOKEN: 'test-token' }, stdout: streams.stdout, stderr: streams.stderr });
     assert.doesNotMatch(`${streams.out}

@@ -36,7 +36,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   put(w.env.XDG_CONFIG_HOME,'pdd/autopilot-alerts.json',{v:1,service:'slack',url:'https://hooks.slack.com/services/synthetic/test/fixture'});
   w.alertDeliveries=[];w.alertReplies=[];
   w.git=(cwd,...a)=>execFileSync('git',a,{cwd,env:w.env,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
-  for (const skill of ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph','pdd-autopilot','pdd-check','pdd-merge']) put(w.home,`.agents/skills/${skill}/SKILL.md`,'Factory skill entrypoint.');
+  for (const skill of ['pdd','pdd-prompting','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph','pdd-autopilot','pdd-check','pdd-merge']) put(w.home,`.agents/skills/${skill}/SKILL.md`,'Factory skill entrypoint.');
   const tpl=gitTemplateDir(`factory-${repository}-${codeOnly?1:0}`,d=>{
     const tplRepo=join(d,'repo'),tplRemote=join(d,'origin.git'),tplMerge=join(d,'merge');
     mkdirSync(tplRepo,{recursive:true});

@@ -120,14 +120,13 @@ test('sim runs like simulate and test --lint like lint, in local modes', async t
   const summaries = lint.map(result => {
     assert.equal(result.code, 0, result.stderr); assert.equal(result.stderr, '');
     const summary = JSON.parse(result.stdout);
-    assert.match(summary.batch, /^\d{8}-\d{6}-[a-z0-9]{4}$/);
-    const folder = join(setup.state, 'batches', summary.batch);
-    assert.equal(JSON.parse(readFileSync(join(folder, 'batch.json'), 'utf8')).batch, summary.batch);
-    assert.deepEqual(JSON.parse(readFileSync(join(folder, 'summary.json'), 'utf8')), summary);
+    assert.equal(summary.schema_version, 'pdd.local-lint.v1');
+    assert.equal(summary.local_only, true);
+    assert.equal(summary.exit_code, 0);
     return summary;
   });
-  // Each completed local lint saves an independent batch; only its identity differs between aliases.
-  assert.notEqual(summaries[0].batch, summaries[1].batch);
+  assert.deepEqual(summaries[0], summaries[1]);
+  assert.equal(existsSync(join(setup.state, 'batches')), false, 'offline lint writes zero batch state');
   const stable = summaries.map(({ batch, ...fields }) => fields);
   assert.deepEqual(stable[0], stable[1]);
   const story = await sameRun([[SIMULATE, 'no-such-story'], ['sim', 'no-such-story']], options);

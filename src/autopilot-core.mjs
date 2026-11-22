@@ -38,6 +38,7 @@ import {
   evaluateValidationOutcome,
   formatHumanVerificationCard,
   inspectTestBoundaryTargets,
+  lintRepoValidationBackside,
   planValidationResume,
   shouldClaimWithCooldowns,
 } from './autopilot-validator.mjs';
@@ -6994,14 +6995,16 @@ function collectBacksideLint(headTree, changed, baseTree) {
     };
   }
   const lintOut = lintRepoProject({ root: headTree, config: baseTree, workspaceRoot: baseTree });
+  const backsideOut = lintRepoValidationBackside({ root: headTree, config: baseTree, workspaceRoot: baseTree });
   const changedSet = new Set(changed);
   const codeSet = new Set();
   const details = [];
-  for (const f of lintOut.findings ?? []) {
+  for (const f of [...(lintOut.findings ?? []), ...(backsideOut.findings ?? [])]) {
     const isValRule = f.code === 'silent-validation-skip' || f.code === 'boundary-mock-only-test';
     if (f.severity === 'error' || (isValRule && changedSet.has(f.path))) {
       codeSet.add(f.code);
-      details.push(`${f.path}:${f.line ?? 1} [${f.code}] ${f.message ?? f.detail ?? f.warning ?? f.code}`);
+      const lineText = `${f.path}:${f.line ?? 1} [${f.code}] ${f.message ?? f.detail ?? f.warning ?? f.code}`;
+      if (!details.includes(lineText)) details.push(lineText);
     }
   }
   return { codes: [...codeSet].sort(), details: details.slice(0, 10) };
