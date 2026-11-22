@@ -1262,7 +1262,7 @@ export async function checkPostMergeRegressions(ports) {
           });
           for (const ev of events) {
             if (ev.event !== 'reopened' || time(ev.created_at) === null) continue;
-            if (time(ev.created_at) <= time(mergedAt) || time(ev.created_at) > now) continue;
+            if (time(ev.created_at) < time(mergedAt) || time(ev.created_at) > now) continue;
             const marked = ev.marked || events.some(c =>
               c.event === 'commented'
               && c.marked

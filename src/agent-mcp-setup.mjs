@@ -8,12 +8,13 @@ import { parse } from './vendor/smol-toml/parse.js';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const same = (actual, wanted) => object(actual) && Object.entries(wanted).every(([key, value]) => JSON.stringify(actual[key]) === JSON.stringify(value));
+const isDarwinSystemRootLink = p => process.platform === 'darwin' && (p === '/var' || p === '/tmp' || p === '/etc');
 function safePath(file) {
   let current = resolve(file);
   while (true) {
     try {
       const stat = lstatSync(current);
-      if (stat.isSymbolicLink()) throw Object.assign(Error(`${current} is a symlink; register PDD manually or use a regular config path.`), { code: 'PDD_MCP_SYMLINK' });
+      if (stat.isSymbolicLink() && !isDarwinSystemRootLink(current)) throw Object.assign(Error(`${current} is a symlink; register PDD manually or use a regular config path.`), { code: 'PDD_MCP_SYMLINK' });
       if (current === resolve(file) && !stat.isFile()) throw Error(`${file} is not a regular file.`);
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const parent = dirname(current); if (parent === current) break; current = parent;

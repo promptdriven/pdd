@@ -759,12 +759,14 @@ function judgeNativeContext(selectors, context) {
 
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const nativeError = message => Object.assign(Error(message),{code:'native-evidence-invalid'});
+const isDarwinSystemRootLink = (p, index) => process.platform === 'darwin' && index === 2 && (p === '/var' || p === '/tmp' || p === '/etc');
 function nativeBytes(path, files = {}) {
   const fs = files;
   const full = resolve(path), parts = full.split(sep);
   for(let index=2;index<=parts.length;index++) {
-    const stat=(fs.lstatSync ?? lstatSync)(parts.slice(0,index).join(sep));
-    if(stat.isSymbolicLink() || index===parts.length&&(!stat.isFile() || stat.size>10*1024*1024))throw nativeError('Original evidence must be a regular local file of at most 10 MiB, without symlinks.');
+    const prefix = parts.slice(0,index).join(sep);
+    const stat=(fs.lstatSync ?? lstatSync)(prefix);
+    if((stat.isSymbolicLink() && !isDarwinSystemRootLink(prefix, index)) || index===parts.length&&(!stat.isFile() || stat.size>10*1024*1024))throw nativeError('Original evidence must be a regular local file of at most 10 MiB, without symlinks.');
   }
   return Buffer.from((fs.readFileSync ?? readFileSync)(full));
 }
