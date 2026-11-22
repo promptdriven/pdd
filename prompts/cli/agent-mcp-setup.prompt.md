@@ -1,38 +1,32 @@
-# Register Try tools with the person's agents
+# Register PDD Simulator MCP tools with coding agents
 
-Own `src/agent-mcp-setup.mjs`; export async module function `setupAgentMcp({env, packageRoot}, {stdin, stdout, stderr, confirm, interactive})`, returning exit code 0 or 1. Setup discovers installed Codex, Claude Code and Gemini through executables on PATH or their configuration homes. It offers this package's `pdd mcp` stdio server named `pdd`. Pin the running package: command is `process.execPath`, args are `[absolute packageRoot/bin/pdd.mjs, "mcp"]`. Never resolve `pdd` through PATH: an older installation may shadow this package. Keep each argument separate, preserving spaces. Preserve every unrelated setting and existing server; never alter global approval policy.
+Own `src/agent-mcp-setup.mjs`. Export async `setupAgentMcp({env, packageRoot}, {stdin, stdout, stderr, confirm, interactive, yes})`, returning exit code `0` or `1`.
 
-## Consent and safe writes
+## Domain decisions
 
-```mermaid
-flowchart TD
-    D[Discover and read configs] --> V{All candidates safe?}
-    V -->|Symlink| W[Warn; write nothing; exit 0]
-    V -->|Other unsafe config| E[Explain error; write nothing; exit 1]
-    V -->|Yes| C{Any changes?}
-    C -->|No| N[Report no change]
-    C -->|Yes| P[Show exact config patch for each file]
-    P --> Y{Explicit y?}
-    Y -->|No| N
-    Y -->|Yes| R[Recheck files; apply shown patches]
-```
-
-A preview identifies each absolute filename and exact added JSON pointer/value or appended TOML text, and explains JSON formatting. Ask once `Register these PDD Try tools? [y/N] `. Only trimmed case-insensitive `y` consents; other answers, EOF and noninteractive input default to no. An injected async `confirm` receives that question and may supply an answer for callers/tests; normal input requires stdin and stdout TTY. The optional `interactive` port defaults to whether confirm is supplied or both streams are terminals. Explicit false suppresses all questions, including confirm, and selects no registration; inspection and previews may still run. No config directories or files are created before consent. The project's PDD block and skills are outside this module.
-
-Reject malformed JSON/TOML, non-object JSON roots/mcpServers and existing conflicting `pdd` entries with a clear filename diagnostic. Any symlink in a candidate target path skips the entire optional registration action before consent or writes: print a finite `pdd setup: warning:` diagnostic naming that path and manual registration recovery, and return 0. Recheck-time symlinks also skip with warning before any write. Matching existing server fields are idempotent, retaining additional settings. Recheck the original bytes and path safety after consent; if changed meanwhile, write nothing and ask for setup again. Create missing directories privately and files with mode 0600; preserve an existing file's mode. Never overwrite unrelated config entries. Errors return 1 with a finite `pdd setup:` diagnostic.
-
-## Agent registrations
-
-| Agent | User config file | Added registration |
-|---|---|---|
-| Codex | `$CODEX_HOME/config.toml`, else `$HOME/.codex/config.toml` | `[mcp_servers.pdd]`, `command = NODE`, `args = [ABSOLUTE_ENTRY, "mcp"]`, `default_tools_approval_mode = "approve"`, `tool_timeout_sec = 600` |
-| Claude Code | `$CLAUDE_CONFIG_DIR/.claude.json` when set, else `$HOME/.claude.json` | `/mcpServers/pdd`: `{"type":"stdio","command":NODE,"args":[ABSOLUTE_ENTRY,"mcp"]}` |
-| Gemini | `$HOME/.gemini/settings.json` | `/mcpServers/pdd`: `{"command":NODE,"args":[ABSOLUTE_ENTRY,"mcp"],"trust":true,"timeout":600000}` |
-
-Home defaults to os.homedir(). Detection honors the selected agent home and also detects its executable (`codex`, `claude`, `gemini`) without executing it. Codex approval applies only to this server; Gemini trust likewise. Explain that runs use the Try budget and appear on its page. Claude's normal tool approval controls remain in force; no broad permissions allowlist is added. Existing incompatible pdd configuration needs manual resolution instead of replacement. Use a proper TOML parser before appending so malformed or inline namespace collisions cannot corrupt the config. JSON may be serialized with two-space indentation and final newline while retaining all unrelated values.
+- **Supported agents and honest detection (zero subprocesses):**
+  - **Codex:** `$CODEX_HOME/config.toml` (else `$HOME/.codex/config.toml`), TOML `[mcp_servers.pdd]` (`command`, `args`, `default_tools_approval_mode = "approve"`, `tool_timeout_sec = 600`). Detected by existing config dir/file or `codex` executable on `PATH`.
+  - **Claude Code:** `$CLAUDE_CONFIG_DIR/.claude.json` (else `$HOME/.claude.json`), JSON `/mcpServers/pdd` (`type: "stdio"`, `command`, `args`). Detected by existing config dir/file or `claude` executable on `PATH`.
+  - **Gemini CLI:** `$HOME/.gemini/settings.json`, JSON `/mcpServers/pdd` (`command`, `args`, `trust: true`, `timeout: 600000`). Detected **only** by existing `$HOME/.gemini/settings.json` or `gemini` executable on `PATH` — never by bare `$HOME/.gemini/` alone (which Antigravity also creates).
+  - **Antigravity (`agy`):** `$HOME/.gemini/config/mcp_config.json`, JSON `/mcpServers/pdd` (`command`, `args`). Detected by existing `$HOME/.gemini/config/mcp_config.json`, `$HOME/.gemini/config`, or `agy` executable on `PATH`.
+- **Pinned command:** `command = process.execPath`, `args = [resolve(packageRoot, 'bin/pdd.mjs'), 'mcp']`.
+- **Stale PDD entry refresh vs unrelated conflict:**
+  - If an existing `pdd` entry already matches `wanted`, skip it (no change).
+  - If an existing `pdd` entry is a stale PDD MCP registration (references `pdd` / `pdd.mjs` with `'mcp'` arg, e.g. from an older Node or package location), plan an in-place update (JSON replace or TOML `[mcp_servers.pdd]` table update validated through the TOML parser).
+  - If an existing `pdd` entry is an unrelated server, fail that agent cleanly without modifying it.
+- **Per-agent error & symlink isolation:**
+  - Check symlinks strictly on the config file and its agent config directory (stopping before `$HOME` / OS roots so symlinked `/var` or home mounts never false-fail).
+  - A symlink on one agent emits `pdd setup: warning: ...` to stderr and skips only that agent (exit stays `0` if no hard error occurred).
+  - A malformed config or conflicting non-PDD entry on one agent emits a clear `pdd setup:` diagnostic to stderr, sets `hadError = true`, and still proceeds for healthy agents.
+- **Consent (`--yes` means YES) and atomic writes:**
+  - Show exact per-agent previews for all planned PDD Simulator MCP tool changes.
+  - When `yes === true`, apply previewed changes without asking.
+  - When `!yes && !interactive`, skip without writing.
+  - When `!yes && interactive`, ask once `Register these PDD Simulator MCP tools? [y/N] `; only trimmed case-insensitive `y` consents.
+  - Re-verify path safety and unchanged original bytes immediately before writing; write atomically (`0o600` for new files, preserving existing mode) into `0o700` parent directories.
 
 ## Dependencies
 
-Read the [Prompting guide](../../docs/prompting-guide.md) for authoring. [CLI](pdd-cli.prompt.md) owns sequencing with existing setup actions; [Runtime seam](runtime-seam.prompt.md#public-contract) (`mcp`) owns tool execution. Runtime uses Node filesystem/path/os/readline and the BSD-3-Clause `smol-toml` 1.9.1 parser vendored with its license under `src/vendor/smol-toml/`. Official registration references: [Codex](https://developers.openai.com/codex/mcp/), [Claude Code](https://code.claude.com/docs/en/mcp), [Gemini](https://geminicli.com/docs/tools/mcp-server/).
-
-NODE is the absolute running Node executable; ABSOLUTE_ENTRY is the absolute package-root bin/pdd.mjs path. Default packageRoot comes from this module’s own package location when omitted. TOML strings use valid escaped basic-string literals for both paths.
+- Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before changing this prompt.
+- Uses Layer-0 `src/shared/atomic-fs.mjs` and the vendored TOML parser `src/vendor/smol-toml/parse.js`.
+- [CLI](pdd-cli.prompt.md) invokes `setupAgentMcp` during `pdd setup`.

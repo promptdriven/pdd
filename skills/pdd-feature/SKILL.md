@@ -1,6 +1,7 @@
 ---
 name: pdd-feature
 description: Use when the person asks for a new feature or new behavior in a PDD project.
+disable-model-invocation: true
 metadata:
   pdd-skills: 0.1.41
 ---

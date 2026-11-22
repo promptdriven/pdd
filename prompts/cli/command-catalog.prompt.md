@@ -5,7 +5,7 @@ The `pdd test --files` usage form also accepts optional `--json` for its manifes
 
 The public command catalog also includes `pdd autopilot off`, `pdd autopilot observe`, `pdd autopilot auto`, `pdd autopilot trust <name>...`, and `pdd autopilot untrust <name>`. Expose these forms in help and completion; reject missing or extra operands through the existing parser contract.
 
-Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version (also -V), -VV, completion bash|zsh, workflow list [--json], setup (`pdd setup [--yes]`, local `setup`, no operands, optional flag `--yes` selecting safe defaults without questions; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode) and upgrade (`pdd upgrade [--main]`, local `upgrade`, no operands, optional Boolean flag `--main`; its help says that it upgrades a user-owned global pdd installation from the latest GitHub release, or pinned main commit with `--main`, and refreshes installed user PDD skills). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
+Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version (also -V), -VV, completion bash|zsh, workflow list [--json], setup (`pdd setup [--yes] [--skills-dir PATH]`, local `setup`, no operands, optional flag `--yes` applying previewed PDD Simulator MCP tool registrations without prompting and optional text `--skills-dir`; one-time laptop setup that syncs global skills and MCP without editing repository files), init (`pdd init`, local `init`, no operands or options; per-repository setup that upserts the 4-line PDD block in CLAUDE.md/AGENTS.md and detects project stack/test command), status (`pdd status [PATH...] [--changed] [--json]`, local `status`, optional repeated text operand `path`, optional Boolean flags `--changed` and `--json`; offline repository status merging files, ownership, PDD block, and `pdd.json` `verify.paths` Feature Map), and upgrade (`pdd upgrade [--main]`, local `upgrade`, no operands, optional Boolean flag `--main`; upgrades a user-owned global `@promptdriven/pdd` installation from npm with GitHub tag fallback, or pinned main commit with `--main`, and refreshes installed user PDD skills). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
 
 Catalog `dependencies prepare` (local `dependencies-prepare`, optional text `--issue`), `dependencies complete` (local `dependencies-complete`, text `--input`), and `workflow yield` (local `workflow-yield`, run reference). Show their forms `pdd dependencies prepare [--issue N]`, `pdd dependencies complete --input -`, and `pdd workflow yield N`.
 
@@ -27,7 +27,7 @@ The `workflow.done` route additionally accepts Boolean flag `--no-publish`. Its 
 
 ## Authoring
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow the [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. These authoring obligations do not add runtime facts: the complete catalog route declarations below own what the pure data module exposes.
+Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before authoring prompts or Stories. Follow the [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. These authoring obligations do not add runtime facts: the complete catalog route declarations below own what the pure data module exposes.
 
 ## Names
 
@@ -234,10 +234,10 @@ Export the frozen `PUBLIC_HELP_TEXT` object with `heading`, `usageLine`, `quickS
 The closing lines are wrapped to at most 80 columns and are exactly:
 
 ```text
-Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex,
-/pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
+Open Codex or Claude as usual and call the PDD skill: $pdd in Codex,
+/pdd in Claude Code (routes product, bug, feature, and small-change work).
 workflow run opens the first area chat in Herdr session pdd and exits.
-Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.
+Manual workflows keep person gates before code; pdd opens a real PR.
 The CLI has no merge command. In auto mode, Autopilot merges its own pull
 request after CI, a fresh review and the full test suite pass; required
 human approvals still apply.
@@ -252,9 +252,9 @@ The catalog owns these help text templates; the CLI substitutes its package root
 Help tells a person or an agent with no PDD skills where to learn PDD. PACKAGE_ROOT is the absolute path of the folder that holds the package.json of this pdd: the `packageRoot` of the CLI dispatcher's `runPdd`, by default the parent folder of `src/`. It is never the cwd or the person's repo. Both files ship in the package (`files` in package.json), so both paths exist in every install. Help reads no file to print them. The learn line and the two path lines are exactly:
 
 ```text
-Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.
-Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md
-RUNBOOK: PACKAGE_ROOT/RUNBOOK.md
+Learn PDD: run pdd help prompting, or read the PDD skill and Prompting guide.
+Skill: PACKAGE_ROOT/skills/pdd/SKILL.md
+Prompting guide: PACKAGE_ROOT/skills/pdd/references/prompting.md
 ```
 
 `pdd help prompting` is a help topic, not a command ([help topics](argument-parser.prompt.md#help-topics)). It prints the first help line, one empty line, the lines below, one empty line, then the two path lines. It exits 0, writes nothing to stderr and is local, as all help is.

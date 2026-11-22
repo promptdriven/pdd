@@ -1,7 +1,9 @@
-// Generated from prompts/cli/release-notice.prompt.md (sha256: dc2889c71c052d8a7bb7c33585c9be247b1dd1cd9996c978c6c8977cc405296a).
+// Prompt: prompts/cli/release-notice.prompt.md
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { writeAtomicPrivate } from './shared/atomic-fs.mjs';
+import { resolvePddStateBase } from './shared/state-dir.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ERROR_BACKOFF_MS = 23 * 60 * 60 * 1000;
@@ -14,21 +16,37 @@ export function parseReleaseVersion(value) {
   return `${Number(match[1])}.${Number(match[2])}.${Number(match[3])}`;
 }
 
+function compareSemverDesc(aVersion, bVersion) {
+  const a = aVersion.split('.').map(Number);
+  const b = bVersion.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return b[i] - a[i];
+  return 0;
+}
+
 export function isNewerRelease(candidate, current) {
   const next = parseReleaseVersion(candidate), base = parseReleaseVersion(current);
   if (!next || !base) return false;
-  const [a, b] = [next.split('.').map(Number), base.split('.').map(Number)];
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
-  return false;
+  return compareSemverDesc(base, next) > 0;
+}
+
+function isSemverPrereleaseTag(tag) {
+  return /^(?:v)?\d+\.\d+\.\d+-[\w.-]+$/.test(String(tag ?? '').trim());
 }
 
 export function pickLatestRelease(payload) {
   const list = Array.isArray(payload) ? payload : (payload && typeof payload === 'object' ? [payload] : []);
-  const valid = list
-    .filter(item => item && item.draft !== true && typeof item.tag_name === 'string' && parseReleaseVersion(item.tag_name))
-    .sort((a, b) => (Date.parse(b.published_at || '') || 0) - (Date.parse(a.published_at || '') || 0));
-  if (!valid.length) return null;
-  const tag = valid[0].tag_name.trim();
+  const nonDraft = list
+    .filter(item => item && item.draft !== true && typeof item.tag_name === 'string' && parseReleaseVersion(item.tag_name));
+  if (!nonDraft.length) return null;
+  // Filter prereleases whenever stable releases exist; fall back to prerelease-only repos (e.g. alpha-v*).
+  const stable = nonDraft.filter(item => item.prerelease !== true && !isSemverPrereleaseTag(item.tag_name));
+  const pool = stable.length ? stable : nonDraft;
+  const sorted = [...pool].sort((a, b) => {
+    const cmp = compareSemverDesc(parseReleaseVersion(a.tag_name), parseReleaseVersion(b.tag_name));
+    if (cmp !== 0) return cmp;
+    return (Date.parse(b.published_at || '') || 0) - (Date.parse(a.published_at || '') || 0);
+  });
+  const tag = sorted[0].tag_name.trim();
   return { tag, version: parseReleaseVersion(tag) };
 }
 
@@ -41,11 +59,7 @@ function readCache(file, fs) {
 
 function writeCache(file, data, fs) {
   try {
-    const dir = dirname(file);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmp, `${JSON.stringify(data)}\n`, { mode: 0o600 });
-    fs.renameSync(tmp, file);
+    writeAtomicPrivate(fs, file, `${JSON.stringify(data)}\n`, 0o700, 0o600);
   } catch { /* Read-only state folders never disrupt CLI execution. */ }
 }
 
@@ -54,7 +68,7 @@ async function defaultFetchLatestRelease() {
     headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'pdd-cli' },
     signal: AbortSignal.timeout(1000),
   });
-  if (!response.ok) throw Error(`HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }
 
@@ -64,10 +78,11 @@ export async function checkReleaseNotice({ currentVersion, isVersionCommand = fa
   if (env.PDD_NO_UPDATE_CHECK === '1' || env.PDD_PATH_PROBE === '1' || env.CI || env.PDD_AGENT_SESSION || env.PDD_AUTOPILOT_CONTEXT) return null;
   const fs = ports.fs ?? nativeFs;
   const now = (ports.now ?? Date.now)();
-  const home = env.HOME || (ports.homedir ?? homedir)();
-  const stateHome = ports.stateHome ?? (env.XDG_STATE_HOME || (home ? join(home, '.local', 'state') : null));
-  if (!stateHome) return null;
-  const cacheFile = join(stateHome, 'pdd', 'release-check.json');
+  const resolvedHome = env.HOME || (ports.homedir ?? homedir)();
+  const effectiveEnv = resolvedHome ? { ...env, HOME: resolvedHome } : env;
+  const stateDir = ports.stateHome ? join(ports.stateHome, 'pdd') : resolvePddStateBase(effectiveEnv);
+  if (!stateDir) return null;
+  const cacheFile = join(stateDir, 'release-check.json');
   let cache = readCache(cacheFile, fs);
   const staleCache = !cache || !Number.isFinite(cache.checkedAt) || now - cache.checkedAt >= DAY_MS;
   const mayFetch = typeof ports.fetchLatestRelease === 'function' || (interactive === true && !env.NODE_TEST_CONTEXT);
@@ -75,7 +90,7 @@ export async function checkReleaseNotice({ currentVersion, isVersionCommand = fa
     try {
       const release = await (ports.fetchLatestRelease ?? defaultFetchLatestRelease)();
       const picked = pickLatestRelease(release);
-      if (!picked) throw Error('Invalid release tag');
+      if (!picked) throw new Error('Invalid release tag');
       cache = { checkedAt: now, latestTag: picked.tag, latestVersion: picked.version, notifiedAt: cache?.notifiedAt ?? null };
       writeCache(cacheFile, cache, fs);
     } catch {

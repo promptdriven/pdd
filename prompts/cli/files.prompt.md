@@ -49,7 +49,7 @@ writes its reason to stderr and returns its exit code (default 4). Otherwise
 print JSON plus newline with --json, or a text list of every prompt, Story, test,
 orphan, refusal reason and warning. Text prints `Prompt: <path>` (with `(native-only)`
 for native-only prompts or `(unreadable)` when reading fails). Inspection returns 0 even when listed files have refusals; this is
-an inventory, not a pass verdict. Use injected stdout/stderr ports for output.
+an inventory, not a pass verdict. Use injected stdout/stderr ports for output and exit 0 cleanly on `EPIPE` when stdout closes early (for example when piped to `head`).
 
 ## Dependencies
 

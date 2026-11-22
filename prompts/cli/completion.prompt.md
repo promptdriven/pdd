@@ -6,7 +6,7 @@ Own `src/completion.mjs`; export `renderCompletion(shell)`. Derive suggestions o
 
 - [Command catalog](command-catalog.prompt.md): required authoring/generation/verification/testing context for canonical command/option suggestions.
 
-Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
+Read the entire [Prompting guide](../../skills/pdd/references/prompting.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
 
 The words test, lint, simulate and run are the [NAMES](command-catalog.prompt.md#names) words. Offer only these words, never a removed or quiet word (`check`, `try`, `sim`, `workflow start`).
 

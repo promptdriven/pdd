@@ -1,66 +1,34 @@
-# Find or install the PDD skills for each agent
+# Global PDD skill installation and automatic sync
 
-Own `src/skills-install.mjs`. Export `PDD_SKILL_NAMES` (`pdd-prompting`, `pdd-setup`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`), `RETIRED_SKILL_NAMES` (`pdd-autopilot`, `pdd-check`, `pdd-merge`: skills that the package does not ship), `setupSkills({packageRoot, cwd, home, claudeConfigDir, codexHome})`, `syncOwnedUserSkills({packageRoot, home, claudeConfigDir, codexHome, stateRoot, force, onError})` and `findSkills({packageRoot, cwd, home, claudeConfigDir, codexHome})`. [pdd setup](pdd-cli.prompt.md) calls `setupSkills`; [pdd upgrade and Autopilot self-update](autopilot-update.prompt.md) refresh skills through `setupSkills` and `syncOwnedUserSkills`; normal [CLI commands](pdd-cli.prompt.md) call `syncOwnedUserSkills` to refresh existing marker-owned user skill folders once per CLI version (#3424). Discovery and machine-output routes write nothing. `pdd --version` calls `findSkills`: it does step 2 and the stale check below with no writes, returns `{agent, found, stale, staleSkills}` for each agent (Codex first), and also appends one stale row for each additional folder (`<cwd>/.agents/skills`, `<cwd>/.codex/skills`, `<home>/.agents/skills`, `<codexHome>/skills` when `codexHome` is an absolute path, `<home>/.codex/skills`, `<cwd>/.claude/skills` and Claude's user folder, deduplicated and excluding any folder already returned as `found`) that holds at least one older `PDD_SKILL_NAMES` skill, even when fewer than all seven skills exist in that folder (#3324).
+Own `src/skills-install.mjs`. Export `PDD_SKILL_NAMES`, `RETIRED_SKILL_NAMES`, `hasClaudePluginInstall({home, claudeConfigDir})`, `setupSkills({packageRoot, cwd, home, claudeConfigDir, codexHome, skillsDir})`, `syncOwnedUserSkills({packageRoot, home, claudeConfigDir, codexHome, stateRoot, force, onError})`, and `findSkills({packageRoot, cwd, home, claudeConfigDir, codexHome})`.
 
-The PDD skills ship in `<packageRoot>/skills/<name>/`. People often install them with `npx skills add`, which copies or symlinks them into the project or the user folder. pdd setup must not add a second copy then. It copies the skills only when an agent cannot find them.
+## Domain decisions
 
-## Where each agent reads skills
-
-| Agent | Read folders, in order | User folder (where pdd installs) |
-| --- | --- | --- |
-| Codex | `<cwd>/.agents/skills`, `<home>/.agents/skills` | `<home>/.agents/skills` |
-| Claude | `<cwd>/.claude/skills`, then its user folder | `<claudeConfigDir>/skills` when `claudeConfigDir` is an absolute path, else `<home>/.claude/skills` |
-
-Claude started with `CLAUDE_CONFIG_DIR` reads `<CLAUDE_CONFIG_DIR>/skills` and not `<home>/.claude/skills` (checked with `claude -p`), so a copy in `~/.claude/skills` does not count then.
-
-## What setupSkills does, for each agent
-
-1. Update: in the user folder, replace each PDD skill folder that carries the pdd marker and is older or changed (see the table below).
-2. Find: the first read folder where all seven `<folder>/<name>/SKILL.md` files exist. A symlinked skill folder counts. A retired skill does not count.
-3. If no read folder has all seven skills, copy each skill that is missing from the user folder.
-4. Remove retired copies: in the user folder, remove each `RETIRED_SKILL_NAMES` folder that carries the pdd marker file (a pdd-owned copy, with any marker content). Never touch a retired folder without the marker, a symlink or a file: it belongs to the person or to another installer. Never remove a retired folder in a project folder.
-
-Return one result per agent, Codex first: `{agent, root, found, stale, staleSkills, installed, updated, removed}`. Also inspect secondary Codex user folders (`<home>/.codex/skills`, and `<codexHome>/skills` when `codexHome` is an absolute path, deduplicated by resolved path against earlier user folders). Do not create a secondary Codex folder when it is missing or holds no marker-owned `PDD_SKILL_NAMES` or `RETIRED_SKILL_NAMES` folder; when an existing secondary folder holds at least one marker-owned `PDD_SKILL_NAMES` or `RETIRED_SKILL_NAMES` folder, run steps 1 to 4 on that folder (reading `[secondaryRoot]`) and append its `{agent: 'Codex', root, found, stale, staleSkills, installed, updated, removed}` result row (#3424). `root` is the user folder, `found` is the found read folder or null, `installed` and `updated` are the absolute folders that were copied, and `removed` holds the absolute retired folders that were removed, in `RETIRED_SKILL_NAMES` order. `stale` says how the found skills compare with the package (0.1.6 tester: setup said "found" for npx skills copies older than pdd): `'older'` when every found skill that is not current is older: a pdd marker with an older version, or (without a marker) files that are not the package's and a version line that is older or missing. `'differs'` when one differs in another way (a folder without a marker whose files, hashed like the digest, are not the package's and whose version line is the package version; a marker of the same version with another digest; a marker that is not valid JSON), else null (the same files, a newer marker or version line, or unreadable). Compare the files first, so a version line that a release forgot to change never warns about current files. setupSkills never changes a found folder that it does not own. A failure in one agent does not stop the other: put `error` in that agent's result instead of throwing. It never writes into the person's repo.
-
-`staleSkills` is an array in `PDD_SKILL_NAMES` order, with one row for each noncurrent found skill: `{name, version, state}`. `name` is the skill folder name, `version` is the installed marker version (or the frontmatter version when there is no marker), or null when unavailable, and `state` is `'older'` or `'differs'`. Current, newer and unreadable skills are omitted. No found folder gives an empty array. Keep the aggregate `stale` classification above.
-
-## Automatic sync of owned user skills
-
-`syncOwnedUserSkills({packageRoot, home, claudeConfigDir, codexHome, stateRoot, force, onError})` refreshes existing marker-owned user skill folders once per CLI version (#3424):
-
-1. When `home` or `packageRoot` is missing or `<packageRoot>/package.json` has no readable `version`, return `{updated: []}` with no writes.
-2. Read `<stateRoot>/skills-sync.json` first (`stateRoot` defaults to `<home>/.local/state/pdd`). Unless `force` is true, return `{updated: []}` immediately with no writes when `skills-sync.json` already records `{version}` equal to the package version.
-3. Inspect deduplicated user skill roots (`<home>/.agents/skills`, `<home>/.codex/skills`, `<codexHome>/skills` when `codexHome` is an absolute path, and Claude's user folder) and keep only roots that already hold at least one marker-owned real folder (`.pdd-skill.json` regular file inside a non-symlink skill folder) in `PDD_SKILL_NAMES` or `RETIRED_SKILL_NAMES`.
-4. When zero user skill roots hold a marker-owned skill folder, write nothing anywhere (do not create `stateRoot` or `skills-sync.json`) and return `{updated: []}`.
-5. For each marker-owned user skill root, replace older or changed marker-owned `PDD_SKILL_NAMES` folders, copy missing `PDD_SKILL_NAMES` folders (keeping unmarked folders, files and symlinks untouched), and remove marker-owned `RETIRED_SKILL_NAMES` folders (never touching unmarked folders, files or symlinks). Add each root where a folder changed to `updated`. Catch per-root errors and pass `(root, error)` to optional `onError` so one root never blocks another.
-6. When no root threw an error, write `{"version": VERSION}` atomically to `<stateRoot>/skills-sync.json` (mode `0600`, folder mode `0700`) fail-open, and return `{updated}`.
-
-## The version line
-
-Every bundled `SKILL.md` frontmatter must be valid YAML, with top-level keys `name`, `description` and `metadata`. Keep description words when quoting YAML scalars; a plain scalar must not contain a colon followed by whitespace or the end of the scalar, or begin with a YAML indicator.
-
-Each packaged `SKILL.md` names its version in its frontmatter, under `metadata:` (the Agent Skills field for extra keys, so Codex and Claude Code still load the skill): `  pdd-skills: VERSION`, the package version. A person or an agent can read it in the installed copy. Copies from before 0.1.9 have no such line, so a missing line counts as older. Read it with a line match inside the frontmatter; any read error means no line.
-
-## The marker
-
-Each folder that pdd copies holds a marker file `.pdd-skill.json`: `{"package":"pdd","version","digest"}`. `version` is the package version from `<packageRoot>/package.json`. `digest` is the sha256 of the skill's packaged files: each relative path (sorted, `/` separators) and its bytes.
-
-| Folder in the user folder | Action |
-| --- | --- |
-| Missing | Copy, but only in step 3. |
-| Has a marker with an older version | Replace. |
-| Has a marker with the same version and another digest | Replace. A new build of the same version must reach the person. |
-| Has a marker with the same version and digest | Keep. Do no writes. |
-| Has a marker with a newer version | Keep. Never downgrade. |
-| Has a marker that is not valid JSON | Replace. The marker name shows that pdd owns it. |
-| Has no marker, or is a symlink or a file | Keep. It belongs to the person or to another installer. |
-
-Compare versions by their numeric `major.minor.patch` parts.
-
-## How to copy
-
-Replace the whole folder, so files that a new version removed do not stay. Copy the package folder to a temporary sibling folder, write the marker into it, remove the old folder, then rename the temporary folder into place. Create the user folder when it is missing. Never follow a symlink when you remove a folder. Read the package files and compute the digests before any write.
+- **Shipped and retired skills:**
+  - `PDD_SKILL_NAMES`: `['pdd', 'pdd-prompting', 'pdd-small-change', 'pdd-bug', 'pdd-feature', 'pdd-product', 'pdd-graph']` (single visible `/pdd` router plus transition folders carrying `disable-model-invocation: true`).
+  - `RETIRED_SKILL_NAMES`: `['pdd-autopilot', 'pdd-check', 'pdd-merge', 'pdd-setup']`. Setup and sync remove only `.pdd-skill.json`-marked real folders of retired skills in user skill roots; unmarked folders, symlinks, files, and project folders are never modified.
+- **Laptop-wide global targets (`setupSkills`):**
+  - Default targets:
+    1. `Codex` (`<home>/.agents/skills`) — open agentskills.io standard (Codex, Gemini, Cursor, etc.).
+    2. `Claude` (`<claudeConfigDir>/skills` when `claudeConfigDir` is absolute, else `<home>/.claude/skills`).
+    3. `Antigravity` (`<home>/.gemini/config/skills`).
+  - When `skillsDir` is provided, target only `[resolve(cwd, skillsDir)]` (`agent: 'Custom'`).
+  - **Never skip global setup because `cwd` has project skills:** `setupSkills` reads only each target's own global root, never `<cwd>/.agents/skills` or `<cwd>/.claude/skills`.
+  - **Plugin-aware Claude install:** before writing into Claude's skills folder, inspect `<claudeBase>/plugins/installed_plugins.json` (`<claudeConfigDir>` if absolute, else `<home>/.claude`). If a PDD plugin (`pdd` / `promptdriven`) is already installed, skip copying into Claude's skills folder and return `{agent: 'Claude', root, found: pluginPath, pluginManaged: true, stale: null, staleSkills: [], installed: [], updated: [], removed: []}` to avoid duplicate `/pdd` entries.
+  - Also refresh existing marker-owned secondary Codex user folders (`<home>/.codex/skills` and absolute `<codexHome>/skills`) without creating absent ones.
+- **Marker ownership & atomic replacement:**
+  - Marker file `.pdd-skill.json` holds `{"package":"pdd","version","digest"}` where `digest` is the SHA-256 of sorted relative paths and file bytes.
+  - Replace only real directories with `.pdd-skill.json` whose version is older, whose same-version digest differs, or whose marker JSON is invalid. Never overwrite newer versions, unmarked folders, symlinks, or regular files.
+  - Copy into a temporary sibling directory, write the marker, remove the old directory, and rename atomically.
+- **Automatic once-per-version sync (`syncOwnedUserSkills`):**
+  - Cache `<stateRoot>/skills-sync.json` (`{"version": VERSION}`, `stateRoot` defaults to `resolvePddStateBase` / `<home>/.local/state/pdd`).
+  - When `!force` and `skills-sync.json` already matches `version`, return `{updated: []}` immediately with zero directory scans.
+  - Inspect deduplicated user roots (`<home>/.agents/skills`, secondary Codex roots, Claude's user root, `<home>/.gemini/config/skills`) for existing marker-owned folders.
+  - When zero marker-owned roots exist, write zero skill folders, record `skills-sync.json` for `version` (fail-open, preventing infinite rescans on subsequent CLI invocations), and return `{updated: []}`.
+- **Read-only discovery (`findSkills`):**
+  - Performs zero writes; checks project and user folders (canonicalized and deduplicated), tagging each returned row with `scope: 'project' | 'user'`, plus stale partial folders across `.agents/skills`, `.codex/skills`, `$CODEX_HOME/skills`, `.claude/skills`, and `.gemini/config/skills`.
 
 ## Dependencies
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md).
+- Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before changing this prompt.
+- Follow the [public boundary](public-boundary.prompt.md).

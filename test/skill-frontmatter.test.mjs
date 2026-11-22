@@ -34,15 +34,24 @@ function frontmatter(text) {
       assert.ok(!Object.hasOwn(result.metadata, field[1]), 'duplicate metadata key');
       result.metadata[field[1]] = scalar(field[2]);
     } else {
-      const field = /^(name|description|metadata):(.*)$/.exec(line);
+      const field = /^(name|description|metadata|disable-model-invocation):(.*)$/.exec(line);
       assert.ok(field, 'unsupported frontmatter field');
       assert.ok(!Object.hasOwn(result, field[1]), 'duplicate frontmatter key');
       metadata = field[1] === 'metadata';
       if (metadata) { assert.equal(field[2], ''); result.metadata = {}; }
-      else { assert.ok(field[2].startsWith(' ')); result[field[1]] = scalar(field[2].trim()); }
+      else if (field[1] === 'disable-model-invocation') {
+        assert.ok(field[2].startsWith(' '));
+        const raw = field[2].trim();
+        assert.ok(raw === 'true' || raw === 'false', 'disable-model-invocation must be a YAML boolean');
+        result[field[1]] = raw === 'true';
+      } else { assert.ok(field[2].startsWith(' ')); result[field[1]] = scalar(field[2].trim()); }
     }
   }
-  assert.deepEqual(Object.keys(result).sort(), ['description', 'metadata', 'name']);
+  const keys = Object.keys(result).sort();
+  const expectedKeys = Object.hasOwn(result, 'disable-model-invocation')
+    ? ['description', 'disable-model-invocation', 'metadata', 'name']
+    : ['description', 'metadata', 'name'];
+  assert.deepEqual(keys, expectedKeys);
   assert.deepEqual(Object.keys(result.metadata), ['pdd-skills']);
   return result;
 }
@@ -52,7 +61,13 @@ for (const entry of readdirSync(skills, { withFileTypes: true }).filter(entry =>
     const result = frontmatter(readFileSync(join(skills, entry.name, 'SKILL.md'), 'utf8'));
     assert.equal(result.name, entry.name);
     assert.equal(typeof result.description, 'string');
+    assert.ok(result.description.length <= 1024);
     assert.match(result.metadata['pdd-skills'], /^\d+\.\d+\.\d+$/);
+    if (entry.name === 'pdd') {
+      assert.notEqual(result['disable-model-invocation'], true, 'pdd must remain model-invocable');
+    } else {
+      assert.equal(result['disable-model-invocation'], true, `${entry.name} transition folder must set disable-model-invocation: true`);
+    }
   });
 }
 

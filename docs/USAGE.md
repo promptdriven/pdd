@@ -56,9 +56,9 @@ Do these steps in this order:
 
 | Step | Command | When |
 |---|---|---|
-| 1. Install the skills | `npx skills add promptdriven/pdd` | Always. Add `-g` for all your projects |
-| 2. Set up the repo | The `pdd-setup` skill in Codex or Claude Code | Once for each repo |
-| 3. Install the pdd command | `npm install -g github:promptdriven/pdd` | Only for runs with PRs, and for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve` |
+| 1. Install the pdd command | `npm install -g @promptdriven/pdd` (or `github:promptdriven/pdd`) | Once on your machine |
+| 2. Set up your machine | `pdd setup` (or `npx skills add promptdriven/pdd -g`) | Once on your machine: installs the `/pdd` skill globally and registers PDD Simulator MCP tools |
+| 3. Set up a repo | `pdd init` | Once in the top folder of each repository |
 
 ### 2.1 Install the skills
 
@@ -150,71 +150,74 @@ The agents that PDD starts always get the full path of this pdd. They are not af
 
 ## 4. The PDD skills
 
-PDD is seven skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
+PDD exposes one visible skill: [`pdd`](../skills/pdd/SKILL.md), with co-located references in `skills/pdd/references/`. Call it with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name); it routes product planning, features, bugs, and small changes and loads only the reference needed for the task.
 
-| Skill | What it is |
+| Reference | What it covers |
 |---|---|
-| [`pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), the [Story guide](story-guide.md) (`story-guide.md`), its core rules, how to review a prompt, and `RUNBOOK.md` for checks on the PDD interpreter |
-| `pdd-feature` | A workflow for new behavior |
-| `pdd-product` | Map a whole product and plan small feature runs |
-| `pdd-bug` | A workflow for something that is broken |
-| `pdd-small-change` | A workflow for changes outside PDD (docs, config, CI, packages or tests) |
-| `pdd-setup` | Add the repo's PDD block and ignore rule in your chat |
-| `pdd-graph` | Read the saved issue dependency graph and explain blockers |
+| [`skills/pdd/SKILL.md`](../skills/pdd/SKILL.md) | The single PDD workflow router (`product`, `bug`, `feature`, `small-change`), `pdd status --json` orientation, pre-code review, and real-path verification |
+| [`references/prompting.md`](../skills/pdd/references/prompting.md) | How to write, split, and review module prompts (`*.prompt.md`) |
+| [`references/stories.md`](../skills/pdd/references/stories.md) | How to write Stories (`user_stories/*.md`) and scenario test files (`tests/*.json`) |
+| [`references/product.md`](../skills/pdd/references/product.md) | How to plan multi-part products with shared contracts |
+| [`references/ports-and-cli.md`](../skills/pdd/references/ports-and-cli.md) | Ports, interfaces, CLI programs, HTTP routes, and persistence |
+| [`references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md) | Screens, HTML rendering, app maps, and interactive simulation |
+| [`references/verification.md`](../skills/pdd/references/verification.md) | Real-path verification, `pdd.json` `verify.paths` Feature Map, `pdd prove`, and deliberate-break checks |
 
 Where the skills go:
 
-| You run | Codex gets them in | Claude Code gets them in |
-|---|---|---|
-| `npx skills add promptdriven/pdd` | `.agents/skills/` in your project | `.claude/skills/` in your project |
-| `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
-| `pdd setup`, when the skills are missing | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when that variable is an absolute path |
+| You run | Codex & Gemini CLI | Claude Code | Antigravity |
+|---|---|---|---|
+| `npx skills add promptdriven/pdd` | `.agents/skills/` in your project | `.claude/skills/` in your project | — |
+| `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` | — |
+| `pdd setup` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` (skipped when the Claude Code plugin is installed) | `~/.gemini/config/skills/` |
 
-`pdd setup` installs missing skills in user folders and says where. It also updates eligible marked copies there. A complete copy installed by `npx skills` needs no extra copy. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies the skills into your repo.
+`pdd setup` installs missing skills in user folders and says where. Pass `--skills-dir PATH` to sync an additional folder. It also updates eligible marked copies there. A complete copy installed by `npx skills` needs no extra copy. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies the skills into your repo.
 
-Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces a marked copy when its version is older, when the same version has different files, or when its marker is invalid. It keeps a copy with a newer marker version. It also removes a marked copy of `pdd-autopilot`, `pdd-check` or `pdd-merge`, because pdd does not ship these skills. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
+Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces a marked copy when its version is older, when the same version has different files, or when its marker is invalid. It keeps a copy with a newer marker version. It also removes a marked copy of `pdd-autopilot`, `pdd-check`, `pdd-merge`, or `pdd-setup`, because pdd does not ship these skills. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.41`.
+`npx skills add promptdriven/pdd --skill pdd` installs the skill directly. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.41`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
-The skills work in any Codex or Claude Code chat.
+The skill works in any Codex, Claude Code, Gemini CLI, or Antigravity chat.
 
 ## 5. Set up a repo and use the skills
 
-Set up each repo once. Open Codex or Claude Code in the top folder of the repo and call the `pdd-setup` skill:
+Run `pdd setup` once on your machine to install the `/pdd` skill globally and preview PDD Simulator MCP tool registration (`--yes` applies MCP registration without prompting; non-interactive runs without `--yes` skip MCP safely). `pdd setup` edits no repository files.
+
+Set up each repo once from its top folder:
+
+```sh
+pdd init
+```
+
+`pdd init` makes these local edits:
+
+1. It picks `CLAUDE.md` if it exists, else `AGENTS.md`. If neither exists, it makes `AGENTS.md`.
+2. It adds one short 4-line block between `<!-- pdd:start -->` and `<!-- pdd:end -->`. The block says that this project uses PDD, that prompts change before code, to run `pdd status` to orient, and to invoke `/pdd` before editing.
+3. It keeps all other text and preserves existing line endings (LF or CRLF). A second run changes nothing. It never pastes the guide or edits root `.gitignore` (`.pdd/.gitignore` is written automatically when `.pdd/` is created).
+4. It detects the project's language and test command so your agent can verify changes right away.
+
+Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on each machine. To turn on Autopilot for the repo, run `pdd autopilot observe` or `pdd autopilot auto`. Autopilot workers read `pdd.json` on the default branch on GitHub, so these commands also update `pdd.json` there, or open a PR when the branch needs one. Each command changes only its own part of the copy on GitHub. See [Repository Autopilot settings](cli.md#repository-autopilot-settings).
+
+Then open Codex or Claude Code as usual, in your project, and call `/pdd` (or `$pdd` in Codex):
 
 ```
-$pdd-setup          # in Codex
-/pdd-setup          # in Claude Code
-```
-
-The `pdd-setup` skill does the following local edits. If you installed the pdd command, `pdd setup` in the top folder also checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP changes for approval in a terminal. With `--yes` or without terminal input and output, optional MCP registration is declined without a question. Both make these project edits:
-
-1. They pick `CLAUDE.md` if it exists, else `AGENTS.md`. If neither exists, they make `AGENTS.md`.
-2. They add one short block (7 lines) between `<!-- pdd:start -->` and `<!-- pdd:end -->`. The block says that this project uses PDD and that the prompt that owns a file changes before the file. It names the skills and `pdd workflow run`. It tells the agent to read `RUNBOOK.md` before writing prompts or tests.
-3. They keep all other text. A second run changes nothing. They never paste the guide.
-4. In a Git repo, they add the line `.pdd/` to the root `.gitignore` when no line there ignores that folder. `pdd test` keeps its local cache in `.pdd/`. They only append that line. When a `!` line keeps the folder or a path in it in Git (such as `!.pdd/config.json`), they change nothing and tell you.
-
-Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on each machine. To turn on Autopilot for the repo, run `pdd autopilot observe` or `pdd autopilot auto`. Autopilot workers read `pdd.json` on the default branch on GitHub, so these commands also update `pdd.json` there, or open a PR when the branch needs one. Each command changes only its own part of the copy on GitHub. `pdd setup` saves a first mode only in your checkout. See [Repository Autopilot settings](cli.md#repository-autopilot-settings).
-
-Then open Codex or Claude Code as usual, in your project, and call a skill. In Codex:
-
-```
-$pdd-feature Add a CSV export button to the orders page.
-$pdd-bug The export button does nothing on Safari.
-$pdd-small-change Fix the typo in the footer.
-$pdd-prompting Review my prompts against the Prompting guide.
+$pdd Add a CSV export button to the orders page.
+$pdd The export button does nothing on Safari.
+$pdd Fix the typo in the footer.
+$pdd Review my prompts against the Prompting guide.
 ```
 
 In Claude Code:
 
 ```
-/pdd-feature Add a CSV export button to the orders page.
-/pdd-bug The export button does nothing on Safari.
-/pdd-small-change Fix the typo in the footer.
-/pdd-prompting Review my prompts against the Prompting guide.
+/pdd Add a CSV export button to the orders page.
+/pdd The export button does nothing on Safari.
+/pdd Fix the typo in the footer.
+/pdd Review my prompts against the Prompting guide.
 ```
+
+You can also inspect repository state offline at any time with `pdd status` (or `pdd status --changed --json`).
 
 You can also ask for a skill by name, for example "Use the pdd-bug skill for this."
 
@@ -443,7 +446,7 @@ Without one valid block, pdd keeps the full dependency closure and gives a named
 `boundary-not-applied` note. Duplicate blocks or an unreadable path also keep the
 full closure.
 
-Your agent reads [RUNBOOK.md](../RUNBOOK.md) in the pdd package: the three files (prompt, Story, test), their rules and what to do with each result.
+Your agent reads [`skills/pdd/references/stories.md`](../skills/pdd/references/stories.md) in the pdd package: the three files (prompt, Story, test), their rules and what to do with each result.
 
 The interpreter address is set in one place in pdd. You do not need to set it.
 
@@ -477,7 +480,7 @@ Use `--no-open` to get the link without opening a browser. Use `--no-wait` to re
 
 | pdd prints | What to do |
 |---|---|
-| `No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.` | pdd also says why for each near miss: a Story with no test (with the path it expects), a `.json` file in a test folder that matches no Story, or a prompt that ends in `.prompt` instead of `.prompt.md`. Fix the files that it names. See RUNBOOK.md section 2. |
+| `No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder.` | pdd also says why for each near miss: a Story with no test (with the path it expects), a `.json` file in a test folder that matches no Story, or a prompt that ends in `.prompt` instead of `.prompt.md`. Fix the files that it names. See [`skills/pdd/references/stories.md`](../skills/pdd/references/stories.md). |
 | `Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.` | PDD Cloud has not approved your GitHub account. Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses. After the approval, access starts within 1 minute. Exit code 5. |
 | `Your GitHub login NAME is not on the PDD interpreter invite list yet. Ask the PDD team to add you.` | Ask the PDD team to add your GitHub login. Exit code 5. |
 | `PDD Cloud could not confirm your access. Try again in a minute.` | PDD Cloud did not answer. Run the same command again in a minute. Exit code 5. |
@@ -554,23 +557,24 @@ pdd setup
 Uninstall the skills that `npx skills` installed:
 
 ```sh
-npx skills remove pdd-prompting pdd-setup pdd-feature pdd-bug pdd-small-change pdd-product pdd-graph      # add -g for the global ones
+npx skills remove pdd pdd-prompting pdd-feature pdd-bug pdd-small-change pdd-product pdd-graph      # add -g for the global ones
 ```
 
 Uninstall the pdd command, the skills that `pdd setup` copied, and its state:
 
 ```sh
 npm uninstall -g @promptdriven/pdd pdd
-rm -rf ~/.agents/skills/pdd-{prompting,setup,feature,bug,small-change,product,graph}
-rm -rf ~/.claude/skills/pdd-{prompting,setup,feature,bug,small-change,product,graph}
-# If you set CLAUDE_CONFIG_DIR, also remove the seven pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
+rm -rf ~/.agents/skills/pdd ~/.agents/skills/pdd-{prompting,feature,bug,small-change,product,graph}
+rm -rf ~/.claude/skills/pdd ~/.claude/skills/pdd-{prompting,feature,bug,small-change,product,graph}
+rm -rf ~/.gemini/config/skills/pdd ~/.gemini/config/skills/pdd-{prompting,feature,bug,small-change,product,graph}
+# If you set CLAUDE_CONFIG_DIR, also remove the pdd skill folders in "$CLAUDE_CONFIG_DIR/skills"
 rm -rf ~/.local/state/pdd
 rm -rf ~/.pdd
 ```
 
 Look before you run `rm -rf`: if `npx skills -g` installed these folders, use `npx skills remove -g` instead.
 
-If setup added MCP registration, remove only its `pdd` entry from `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`), `$CLAUDE_CONFIG_DIR/.claude.json` (default `~/.claude.json`) and `~/.gemini/settings.json`. Leftovers can stay in your clones: `.pdd/`, `.git/pdd`, the `*.pdd-worktrees` folders and the `pdd/...` branches. See [Clean up after a run](#clean-up-after-a-run).
+If setup added MCP registration, remove only its `pdd` entry from `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`), `$CLAUDE_CONFIG_DIR/.claude.json` (default `~/.claude.json`), `~/.gemini/settings.json`, and `~/.gemini/config/mcp_config.json`. Leftovers can stay in your clones: `.pdd/`, `.git/pdd`, the `*.pdd-worktrees` folders and the `pdd/...` branches. See [Clean up after a run](#clean-up-after-a-run).
 
 ## 12. Known limits
 
@@ -643,7 +647,7 @@ For HTTP, give the prompt entry an input schema title such as `HTTP GET /api/boo
 `pdd simulate <story> --serve 8080`. Call `curl 'http://127.0.0.1:8080/api/books?read=false'`. The prompt returns the
 HTTP status, headers and body. Unknown routes return 404. The listener stays on loopback; Ctrl-C closes it.
 When the Story has an app map, open `http://127.0.0.1:8080/` to use its real Screen. Click **Open the app**
-if needed; opening and taps use the same simulation budget and saved data. See RUNBOOK.md §19 for details.
+if needed; opening and taps use the same simulation budget and saved data. See [`skills/pdd/references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md) for details.
 
 
 ## Ask your agent in the PDD Simulator

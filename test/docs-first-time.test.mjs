@@ -5,11 +5,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 
 // The docs describe pdd as it is now, as if this were the first version. History goes only in the GitHub release notes.
 // "New in" is case-sensitive, so that "a new install" or "new information" do not match.
-const HISTORY = [/\bno longer\b/i, /\bused to\b/i, /\bwas renamed\b/i, /\bmoved to\b/i, /\bsince 0\.1/i, /\bNew in\b/, /\(new\)/i,
-  /There is no `pdd session`/i];
+const HISTORY = [/\bno longer\b/i, /\bused to\b/i, /\bwas renamed\b/i, /\bmoved to\b/i, /\bsince 0\.1/i, /\bNew in\b/, /\(new\)/i];
 const root = new URL('../', import.meta.url);
 const docs = ['README.md', 'AGENTS.md',
-  ...readdirSync(new URL('docs/', root)).filter(name => name.endsWith('.md') && name !== 'prompting-guide.md').map(name => `docs/${name}`)];
+  ...readdirSync(new URL('docs/', root)).filter(name => name.endsWith('.md')).map(name => `docs/${name}`)];
 
 // Wrong: a doc says what changed ("no longer", "since 0.1.4", "(new)") instead of only how pdd works today.
 test('README, AGENTS and docs contain no history or change notes', () => {

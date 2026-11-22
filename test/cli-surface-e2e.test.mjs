@@ -966,7 +966,7 @@ const REGISTERED_E2E_ROUTES = Object.freeze([
   // Discovery, help, version, completion
   'help', 'version', 'version.detailed', 'completion',
   // Core PDD workflow
-  'setup', 'check', 'lint', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade',
+  'setup', 'init', 'status', 'check', 'lint', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade',
   // Cloud accounts
   'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use',
   'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause',
@@ -1074,24 +1074,45 @@ test('discovery, help, version, and shell completion commands work end-to-end', 
   markExecuted('completion');
 });
 
-test('core local authoring commands: setup, files, owner, contracts, jobs, mcp, approve, upgrade', async () => {
+test('core local authoring commands: setup, init, status, files, owner, contracts, jobs, mcp, approve, upgrade', async () => {
   const fx = makeIsolatedFixture('core-local');
 
-  // setup --yes: installs skills to temp HOME, creates AGENTS.md block, appends .pdd/ to .gitignore
+  // setup --yes: laptop-only — installs global skills to temp HOME without touching repo files
   const setup1 = await fx.cli(['setup', '--yes']);
   assert.equal(setup1.code, 0, setup1.stderr);
   assert.match(setup1.stdout, /Installed 7 PDD skills/);
-  assert.ok(existsSync(join(fx.home, '.agents', 'skills', 'pdd-feature', 'SKILL.md')));
-  assert.ok(existsSync(join(fx.home, '.agents', 'skills', 'pdd-feature', '.pdd-skill.json')));
-  assert.ok(existsSync(join(fx.home, '.claude', 'skills', 'pdd-bug', 'SKILL.md')));
-  const agentsMd = readFileSync(join(fx.repo, 'AGENTS.md'), 'utf8');
-  assert.match(agentsMd, /<!-- pdd:start -->[\s\S]*<!-- pdd:end -->/);
-  assert.match(readFileSync(join(fx.repo, '.gitignore'), 'utf8'), /(?:^|\n)\.pdd\/(?:\n|$)/);
+  assert.ok(existsSync(join(fx.home, '.agents', 'skills', 'pdd', 'SKILL.md')));
+  assert.ok(existsSync(join(fx.home, '.agents', 'skills', 'pdd', '.pdd-skill.json')));
+  assert.ok(existsSync(join(fx.home, '.claude', 'skills', 'pdd', 'SKILL.md')));
+  assert.ok(existsSync(join(fx.home, '.gemini', 'config', 'skills', 'pdd', 'SKILL.md')));
+  assert.equal(existsSync(join(fx.repo, 'AGENTS.md')), false, 'setup never writes repo AGENTS.md');
   // Repeat setup is idempotent
   const setup2 = await fx.cli(['setup', '--yes']);
   assert.equal(setup2.code, 0, setup2.stderr);
-  assert.match(setup2.stdout, /already has this PDD block\. No change\./);
+  assert.match(setup2.stdout, /PDD skills found in/);
   markExecuted('setup');
+
+  // init: per-repo setup adds the 4-line PDD block to AGENTS.md without editing root .gitignore
+  const init1 = await fx.cli(['init']);
+  assert.equal(init1.code, 0, init1.stderr);
+  const agentsMd = readFileSync(join(fx.repo, 'AGENTS.md'), 'utf8');
+  assert.match(agentsMd, /<!-- pdd:start -->[\s\S]*<!-- pdd:end -->/);
+  const init2 = await fx.cli(['init']);
+  assert.equal(init2.code, 0, init2.stderr);
+  assert.match(init2.stdout, /already has this PDD block\. No change\./);
+  markExecuted('init');
+
+  // status & status --json (offline repo overview + pdd.json verify.paths Feature Map)
+  const statusText = await fx.cli(['status']);
+  assert.equal(statusText.code, 0, statusText.stderr);
+  assert.match(statusText.stdout, /PDD status: \d+ prompts?, \d+ Stor(?:y|ies), \d+ tests?/);
+  const statusJson = await fx.cli(['status', 'app.mjs', '--json']);
+  assert.equal(statusJson.code, 0, statusJson.stderr);
+  const statusData = JSON.parse(statusJson.stdout);
+  assert.equal(statusData.schema_version, 'pdd.status.v1');
+  assert.equal(statusData.has_pdd_block, true);
+  assert.equal(statusData.files[0].owner, 'prompts/app.prompt.md');
+  markExecuted('status');
 
   // files & files --json
   const filesText = await fx.cli(['files']);
@@ -1107,7 +1128,7 @@ test('core local authoring commands: setup, files, owner, contracts, jobs, mcp, 
   assert.ok(filesData.tests.some(t => t.path === 'tests/demo.json'));
   markExecuted('files');
 
-  // owner & owner --json (binding, header, prose, and unowned)
+  // owner & owner --json (binding, header, prose-advisory, and unowned)
   const ownerRes = await fx.cli(['owner', 'bound.mjs', 'app.mjs', 'prose-owned.mjs', 'README.md', '--json']);
   assert.equal(ownerRes.code, 0, ownerRes.stderr);
   const ownerData = JSON.parse(ownerRes.stdout);
@@ -1117,8 +1138,10 @@ test('core local authoring commands: setup, files, owner, contracts, jobs, mcp, 
   assert.equal(byPath['bound.mjs'].owner, 'prompts/app.prompt.md');
   assert.equal(byPath['app.mjs'].source, 'header');
   assert.equal(byPath['app.mjs'].headers[0].state, 'current');
-  assert.equal(byPath['prose-owned.mjs'].source, 'prose');
-  assert.equal(byPath['prose-owned.mjs'].certain, false);
+  assert.equal(byPath['prose-owned.mjs'].owner, null);
+  assert.equal(byPath['prose-owned.mjs'].source, null);
+  assert.equal(byPath['prose-owned.mjs'].certain, true);
+  assert.match(byPath['prose-owned.mjs'].note, /\/\/ Prompt:/);
   assert.equal(byPath['README.md'].owner, null);
   const ownerText = await fx.cli(['owner', 'app.mjs']);
   assert.equal(ownerText.code, 0, ownerText.stderr);
@@ -1204,7 +1227,7 @@ test('core local authoring commands: setup, files, owner, contracts, jobs, mcp, 
   for (const args of [['upgrade'], ['upgrade', '--main']]) {
     const res = await fx.cli(args);
     assert.equal(res.code, 1);
-    assert.match(res.stderr, /updates only a user-owned global npm installation/);
+    assert.match(res.stderr, /user-owned global npm installation/);
   }
   markExecuted('upgrade');
 });

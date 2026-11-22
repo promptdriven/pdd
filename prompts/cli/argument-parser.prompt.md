@@ -6,7 +6,7 @@ Empty argv, root --help/-h/-help/help, a [help topic](#help-topics), and known e
 
 ## Authoring
 
-Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. The [public alpha boundary](public-boundary.prompt.md) remains required native authoring/generation context for scope. These authoring instructions are not inputs to runtime parsing; the pure parser uses the catalog and the validation rules owned here.
+Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before authoring prompts or Stories. The [public alpha boundary](public-boundary.prompt.md) remains required native authoring/generation context for scope. These authoring instructions are not inputs to runtime parsing; the pure parser uses the catalog and the validation rules owned here.
 
 ## Removed names
 

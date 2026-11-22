@@ -7,4 +7,4 @@
 - For a screen, read its linked `.ui.svg` as the layout spec; build its parts, words, order, ids and state. Follow RUNBOOK §13 and rebuild until the screen matches.
 
 - In your `done` summary add the PR 2 fields of RUNBOOK §15: `Title:`, `Cause:`, `Fix:`, `Result:`, `Case:` rows and `File:` notes.
-- Prepare and run the affected behavior using `verification-setup.md` in the pdd-prompting skill; keep any needed recipe and controlled fixtures in project source.
+- Prepare and run the affected real user path using `skills/pdd/references/verification.md`; keep any needed Feature Map entry and controlled fixtures in project source.
