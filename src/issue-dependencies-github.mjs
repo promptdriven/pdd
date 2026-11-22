@@ -1,7 +1,5 @@
 import {parkingSummary} from './autopilot-parking.mjs';
 import {readSuiteProgress} from './test-suite-queue.mjs';
-import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
-import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
 // Prompt: prompts/cli/issue-dependencies-github.prompt.md
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -10,7 +8,7 @@ import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { runAutopilot } from './autopilot.mjs';
-import { resolveWorkflowRepository } from './workflow-github.mjs';
+import { githubOriginRepository } from './shared/github-repo.mjs';
 import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
@@ -69,8 +67,31 @@ const blockedByRemoval = event => {
 // A pdd command outside the Autopilot tick records its gh calls in the ledger of the repository that each call names.
 const execute = nativeGithubCounter(spawnRead, { purpose: 'dependencies' });
 const uniqueRows = rows => [...new Map(rows.map(r => [canonical(r.key), { key: canonical(r.key), revision: r.revision }])).values()];
-const bookkeeping = body => sortBookkeeping(body) || /<!--\s*pdd(?:-dependency-(?:review|impact)|[: -](?:autopilot|claim|working|sync))/i.test(body ?? '')
+const retiredSortBookkeeping = body => /<!--\s*pdd-issue-(?:sort|route):v1\s*-->/.test(body ?? '');
+const bookkeeping = body => retiredSortBookkeeping(body) || /<!--\s*pdd(?:-dependency-(?:review|impact)|[: -](?:autopilot|claim|working|sync))/i.test(body ?? '')
   || /"coordinatorId"\s*:/.test(body ?? '') && /"labelEventId"\s*:/.test(body ?? '');
+
+async function resolveLocalRepository({ cwd } = {}, ports = {}) {
+  if (typeof cwd !== 'string' || !cwd || /[\u0000-\u001f\u007f]/u.test(cwd)) fail('workflow_github_cwd_required');
+  const exec = ports.execFile ?? execute;
+  const runCmd = async (file, args) => {
+    const res = await exec(file, args, { cwd });
+    if (!res || typeof res.stdout !== 'string' || (res.code !== undefined && res.code !== 0)) {
+      throw Object.assign(new Error('workflow_github_command_failed'), { code: 'workflow_github_command_failed', detail: res?.stderr ?? '' });
+    }
+    return res.stdout;
+  };
+  const remote = (await runCmd('git', ['remote', 'get-url', 'origin'])).trim();
+  const repository = githubOriginRepository(remote);
+  if (!repository) fail('workflow_github_origin_invalid');
+  const actual = parse(await runCmd('gh', ['repo', 'view', repository, '--json', 'nameWithOwner,defaultBranchRef,url']));
+  if (!repositoryName(actual?.nameWithOwner) || !sameRepo(actual.nameWithOwner, repository)
+    || typeof actual.defaultBranchRef?.name !== 'string' || !actual.defaultBranchRef.name
+    || actual.url !== `https://github.com/${actual.nameWithOwner}`) {
+    fail('workflow_github_repository_mismatch');
+  }
+  return { repository: actual.nameWithOwner, defaultBranch: actual.defaultBranchRef.name };
+}
 
 function spawnRead(file, args, options = {}) {
   return new Promise((resolveResult, reject) => {
@@ -244,7 +265,7 @@ function rawGithub(cwd, ports) {
       const existing = await allPages(github, repository, 'comments', issue, undefined, true);
       const equal = row => {
         const other = parseRecord(row.body);
-        return sortBookkeeping(body) ? row.body === body : record && other && record.type === other.type && JSON.stringify(record.value) === JSON.stringify(other.value);
+        return retiredSortBookkeeping(body) ? row.body === body : record && other && record.type === other.type && JSON.stringify(record.value) === JSON.stringify(other.value);
       };
       let row = existing.find(equal);
       if (!row) {
@@ -259,87 +280,6 @@ function rawGithub(cwd, ports) {
       const readback = (await s.api(`repos/${repository}/issues/comments/${row.id}`, 'GET', undefined, undefined, undefined, true)).value;
       if (readback.id !== row.id || !equal(readback)) throw Error('Comment append readback is unresolved');
       return { json: JSON.stringify(readback) };
-    },
-    // #3053: one native update; the sort owner paces every write.
-    ensureSortLabel: async ({ repository, label, write }) => {
-      try { await s.api(`repos/${repository}/labels/${encodeURIComponent(label)}`); }
-      catch (error) { if (error.status !== 404) throw error; await write(() => s.api(`repos/${repository}/labels`, 'POST', JSON.stringify({ name: label, color: 'ededed' }))); }
-    },
-    sortUpdate: async ({ repository, issue, label, assignee, close, checkOwnership }) => {
-      const endpoint = `repos/${repository}/issues/${issue}`;
-      const before = label ? (await s.api(endpoint)).value : null;
-      if (label && before.labels?.some(x => (typeof x === 'string' ? x : x.name) === label)) return { ok: true };
-      if (label) await s.api(`${endpoint}/labels`, 'POST', JSON.stringify({ labels: [label] }), undefined, undefined, checkOwnership);
-      else await s.api(endpoint, 'PATCH', JSON.stringify(assignee ? { assignees: [assignee] } : { state: 'closed' }), undefined, undefined, checkOwnership);
-      const observed = (await s.api(endpoint)).value;
-      if (label ? !observed.labels?.some(x => x.name === label) : assignee ? !observed.assignees?.some(x => x.login === assignee) : observed.state !== 'closed') throw Error('sort-write-pending');
-      return { ok: true };
-    },
-    withSortGroupAdmission: async ({ repository, rootCause, write }, action) => {
-      if (!repositoryName(repository) || !/^[a-z\d]+(?:-[a-z\d]+)*$/.test(rootCause)) throw Error('sort-groups-unavailable');
-      const ref = `refs/heads/pdd/issue-groups/${createHash('sha256').update(rootCause).digest('hex')}`;
-      const endpoint = `repos/${repository}/git/refs/${ref.slice(5)}`;
-      if (write.remaining !== undefined && write.remaining < 3) throw Error('sort-budget-pending');
-      const head = (await s.api(`repos/${repository}/commits/HEAD`)).value;
-      if (!/^[a-f\d]{40,64}$/.test(head.sha ?? '')) throw Error('sort-groups-unavailable');
-      let reserved;
-      try { reserved = await write(() => s.api(`repos/${repository}/git/refs`, 'POST', JSON.stringify({ ref, sha: head.sha }))); }
-      catch (error) {
-        // A positive read of an existing reservation means busy, including a lost
-        // creation response. Never steal it based on age or local coordinator state.
-        const observed = (await s.api(`repos/${repository}/git/ref/${ref.slice(5)}`)).value;
-        if (observed.ref === ref) return '';
-        throw error;
-      }
-      if (reserved.value?.ref !== ref || reserved.value?.object?.sha !== head.sha) throw Error('sort-write-pending');
-      // No finally: an uncertain issue POST must retain admission. Its visible
-      // marker can still recover the group without authorizing another creation.
-      const result = await action();
-      await write(() => s.api(endpoint, 'DELETE'));
-      return result;
-    },
-    createSortUmbrella: async ({ repository, title, body }) => {
-      const created = (await s.api(`repos/${repository}/issues`, 'POST', JSON.stringify({ title, body }))).value;
-      if (!Number.isSafeInteger(created.number) || created.number < 1) throw Error('sort-write-pending');
-      const observed = (await s.api(`repos/${repository}/issues/${created.number}`)).value;
-      if (observed.html_url !== created.html_url || observed.title !== title || observed.body !== body) throw Error('sort-write-pending');
-      return { json: JSON.stringify(observed) };
-    },
-    createSortPart: async ({ repository, title, body, assignee, checkOwnership }) => {
-      const created = (await s.api(`repos/${repository}/issues`, 'POST', JSON.stringify({ title, body, ...(assignee ? { assignees: [assignee] } : {}) }), undefined, undefined, checkOwnership, true)).value;
-      if (!Number.isSafeInteger(created.number) || created.number < 1) throw Error('sort-write-pending');
-      let observed;
-      try { observed = (await s.api(`repos/${repository}/issues/${created.number}`)).value; }
-      catch (error) { error.sortUnsent = false; throw error; }
-      if (observed.html_url !== created.html_url || observed.title !== title || observed.body !== body || assignee && !observed.assignees?.some(x => x.login === assignee)) throw Error('sort-write-pending');
-      return { json: JSON.stringify(observed) };
-    },
-    ensureSortLink: async ({ repository, issue, childId, kind, checkOwnership }) => {
-      if (!/^[1-9]\d*$/.test(childId) || !['sub','blocker'].includes(kind)) throw Error('sort-write-pending');
-      const endpoint = `repos/${repository}/issues/${issue}/${kind === 'sub' ? 'sub_issues' : 'dependencies/blocked_by'}`;
-      const linked = async () => {
-        let cursor = `${endpoint}?per_page=100`; const seen = new Set(); let found = false;
-        while (cursor) {
-          if (seen.has(cursor)) throw Error('sort-write-pending'); seen.add(cursor);
-          const page = await s.api(cursor);
-          if (!Array.isArray(page.value)) throw Error('sort-write-pending');
-          found ||= page.value.some(x => String(x.id) === childId); cursor = page.next;
-        }
-        return found;
-      };
-      if (await linked()) return { ok: true };
-      await s.api(endpoint, 'POST', `{"${kind === 'sub' ? 'sub_issue_id' : 'issue_id'}":${childId}}`, undefined, undefined, checkOwnership);
-      if (!await linked()) throw Error('sort-write-pending');
-      return { ok: true };
-    },
-    sortMergedFix: async ({ repository, issue }) => {
-      const [owner, name] = repository.split('/');
-      const query = `query($owner:String!,$name:String!,$issue:Int!) { repository(owner:$owner,name:$name) { issue(number:$issue) { state timelineItems(last:1,itemTypes:[CLOSED_EVENT]) { nodes { ... on ClosedEvent { closer { __typename ... on PullRequest { url merged } } } } } } } }`;
-      const result = (await s.api('graphql', 'POST', JSON.stringify({ query, variables: { owner, name, issue } }), undefined, repository)).value;
-      const row = result.data?.repository?.issue, closer = row?.timelineItems?.nodes?.[0]?.closer;
-      if (result.errors?.length || row?.state !== 'CLOSED' || closer?.__typename !== 'PullRequest' || closer.merged !== true
-        || !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/[1-9]\d*$/.test(closer.url ?? '')) return { url: '' };
-      return { url: closer.url };
     },
     addBlocker: async ({ repository, issue, blockerId }) => {
       if (!/^[1-9][0-9]*$/.test(blockerId)) throw Error('Invalid REST issue identity');
@@ -741,8 +681,6 @@ function sessionGithub(raw, session) {
       return reply;
     },
     appendComment: async args => { session.invalidate(args.repository, numberOf(args.issue)); try { return await raw.appendComment(args); } finally { session.invalidate(args.repository, numberOf(args.issue)); } },
-    sortUpdate: async args => { session.invalidate(args.repository, numberOf(args.issue)); try { return await raw.sortUpdate(args); } finally { session.invalidate(args.repository, numberOf(args.issue)); } },
-    ensureSortLink: async args => { session.invalidate(args.repository, numberOf(args.issue)); try { return await raw.ensureSortLink(args); } finally { session.invalidate(args.repository, numberOf(args.issue)); } },
     addBlocker: async args => { session.invalidate(args.repository, numberOf(args.issue)); try { return await raw.addBlocker(args); } finally { session.invalidate(args.repository, numberOf(args.issue)); } },
   };
   Object.defineProperty(github, NATIVE_GITHUB, { value: true });
@@ -758,7 +696,7 @@ async function selectedCheckout(cwd, repository, ports) {
   if (!scope.checkouts.has(key)) scope.checkouts.set(key, (async () => {
     try {
       let selected = scope.repositories.get(at);
-      if (!selected) { selected = await resolveWorkflowRepository({ cwd }, ports); scope.repositories.set(at, selected); }
+      if (!selected) { selected = await resolveLocalRepository({ cwd }, ports); scope.repositories.set(at, selected); }
       if (!sameRepo(selected.repository, repository)) return null;
       return (await gitContext(cwd, ports))?.toplevel ?? null;
     } catch { return null; }
@@ -1206,16 +1144,16 @@ function normalizedRecord(comment, issue, authority) {
 
 export async function readDependencySnapshot(input = {}, supplied = {}) {
   const scope = nativeReadScope(), ports = createDependencyReadPorts({ cwd: input?.cwd ?? '' }, supplied, scope);
-  try { return await observeSnapshot(input ?? {}, ports, scope, Boolean(supplied.sortContext || !supplied.github || supplied.github[NATIVE_GITHUB])); } finally { flushCache(ports); }
+  try { return await observeSnapshot(input ?? {}, ports, scope); } finally { flushCache(ports); }
 }
 
-async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, scope, sorting) {
+async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, scope) {
   const reads = ports.dependencyReads;
   // The claim scan of one snapshot reads through the snapshot's own reads; the default owners port stays live.
   if (ports.owners[NATIVE_OWNERS]) ports.owners = nativeOwners(cwd, ports, { live: false });
   const readContext = args => ports.context[NATIVE_CONTEXT] ? ports.context.read({ ...args, [NATIVE_READ_SCOPE]: scope }) : ports.context.read(args);
   if (!repository) {
-    const selected = await resolveWorkflowRepository({ cwd }, ports);
+    const selected = await resolveLocalRepository({ cwd }, ports);
     repository = selected.repository;
     if (cwd) scope.repositories.set(resolve(cwd), selected);
   }
@@ -1250,8 +1188,7 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
     rootIndex.set(key, raw);
   }
   if (invalidIndex) warn('Open issue index is incomplete');
-  const sortGroups = sorting ? await readSortGroups({ cwd, repository }, ports) : [];
-  const queue = [...rootIndex.keys(), ...sortGroups.map(x => x.umbrella).filter(Boolean)];
+  const queue = [...rootIndex.keys()];
   // Supplied GitHub ports retain the exact existing contract and call behavior.
   // With a saved snapshot, the batch reads only the roots whose saved reads are not current.
   const batched = stored ? roots.filter(row => !reads.liveIssue(repository, row.number) && !reads.current(repository, row.number)) : roots;
@@ -1290,7 +1227,7 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
     if (labels.includes('pdd:working')) holds.push('Claimed');
     if (labels.includes('pdd:stuck')) holds.push('Stuck');
     if (labels.includes('pdd:code-pending')) holds.push('Code pending');
-    const issue = { key, sortCompleted: raw.state === 'closed' && raw.state_reason === 'completed', sorts: [], sortRouteNotes: [], labels, sortText: authority.authority === 'trusted' ? raw.body ?? '' : '', nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
+    const issue = { key, labels, nodeId: /^[1-9][0-9]*$/.test(String(raw.id)) ? String(raw.id) : '', title: raw.title ?? '', revision: requirementRevision,
       state: !detailKnown ? 'unknown' : raw.state === 'open' ? 'open' : raw.state === 'closed' ? raw.state_reason === 'not_planned' ? 'not_planned' : 'completed' : 'unknown',
       authority: authority.authority === 'trusted' ? 'trusted' : authority.authority === 'outsider' ? 'untrusted' : 'unknown',
       conditions: conditionRows.map(c => c.text ?? c.condition).filter(Boolean), execution: execution?.execution ?? execution?.state ?? (labels.includes('pdd:working') ? 'running' : context.nativeExecution ? 'unknown' : 'idle'), holds: [...new Set(holds)],
@@ -1298,27 +1235,15 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
       ...(conditionRows.length ? { conditionSources: conditionRows.filter(c => c.source).map(c => ({ text: c.text ?? c.condition, source: c.source, inputs: c.inputs ?? [{ key, revision: requirementRevision }] })) } : {}),
       ...(execution?.executionClaim ? { executionClaim: execution.executionClaim } : {}), ...(execution?.runIds ? { runIds: execution.runIds } : {}) };
     issues.push(issue);
-    let ownerComments = [], ownerTimeline = [];
-    const splits = [];
     for (const kind of ['comments', 'blockedBy', 'blocking', 'timeline']) {
       let items;
       let read = true;
       try { items = await allPages(ports.github, i.repository, kind, i.issue); } catch (e) { read = false; items = e.partialItems ?? []; missing(kind, `Incomplete ${kind}: ${key}`); }
       // The comment bodies of these pages serve the review rows that name them: no read for each comment.
       if (kind === 'comments') reads?.noteComments(key, items, read);
-      if (kind === 'comments') ownerComments = items;
-      if (kind === 'timeline') ownerTimeline = items;
-      if (kind === 'timeline') { issue.pastAssignees = sortPastAssignees(items); issue.sortOpenPr = items.some(x => x.event === 'cross-referenced' && x.source?.issue?.pull_request && x.source.issue.state === 'open'); } // #3053: draft evidence only.
       if (kind === 'comments') for (const comment of items) {
         const current = await authorityFor(i.repository, comment.user?.login ?? '');
         if (!['trusted','outsider'].includes(current.authority)) missing('comments', `Comment authority unavailable: ${key}`);
-        // #3053: reuse the comments already observed for dependencies.
-        const split = readSplitComment(comment, current.authority);
-        if (split) splits.push(split);
-        const sort = readSortComment(comment, current.authority);
-        if (sort) { issue.sorts.push(sort); continue; }
-        const routeNote = /<!-- pdd-issue-route:v1 -->\s*<!-- ([a-f\d]{64}) -->/.exec(comment.body ?? '');
-        if (routeNote && current.authority === 'trusted' && comment.created_at && comment.created_at === comment.updated_at) issue.sortRouteNotes.push(routeNote[1]);
         const record = normalizedRecord(comment, key, current.authority);
         if (record) {
           if (record.type === 'review') { reviews.push(record.value); for (const d of record.value.dependencies) if (info(d.key)) queue.push(info(d.key).key); }
@@ -1334,16 +1259,6 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
         edges.push(edge); queue.push(other);
       }
     }
-    issue.sortOwnerChoice = await readOwnerChoice({ labels, comments: ownerComments, timeline: ownerTimeline }, author => authorityFor(i.repository, author));
-    if (splits.length) {
-      const split = splits[0];
-      if (splits.every(x => JSON.stringify(x) === JSON.stringify(split)) && split.parts.every(x => x.issue.startsWith(`https://github.com/${repository}/issues/`) && x.issue !== key)) {
-        issue.sortSplit = split;
-        queue.push(...split.parts.map(x => x.issue));
-      } else issue.sortOwnerChoice = 'conflict';
-    }
-    issue.sortPart = authority.authority === 'trusted' ? partIdentity(raw.body) : null;
-    if (issue.sortPart) queue.push(issue.sortPart.parent);
   }
   for (let at = 0; at < queue.length; at++) await read(queue[at]);
   if (context.nativeExecution) {
@@ -1372,7 +1287,7 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
     } catch { warn('Execution observations are unavailable'); }
     for (const issue of local) if (issue.execution === 'unknown') { const row = coverageByKey.get(issue.key); row.execution = false; row.missing.push('Execution observation unavailable'); }
   }
-  const required = uniqueRows([...inputs, ...reviews.flatMap(r => nonIssueRows(r.inputs)), ...impacts.flatMap(i => nonIssueRows(i.inputs)), ...issues.flatMap(i => (i.sorts ?? []).flatMap(s => s.intact ? nonIssueRows(s.record.inputs).filter(x => !/#(?:autopilot-areas|sort-labels)$/.test(x.key)) : []))]);
+  const required = uniqueRows([...inputs, ...reviews.flatMap(r => nonIssueRows(r.inputs)), ...impacts.flatMap(i => nonIssueRows(i.inputs))]);
   const observedComments = new Set((context.inputs ?? []).filter(x => /#issuecomment-/.test(x.key)).map(x => x.key));
   const reread = required.filter(x => !observedComments.has(x.key));
   if (reread.length) {
@@ -1383,23 +1298,16 @@ async function observeSnapshot({ cwd = '', repository, inputs = [] }, ports, sco
   }
   const currentInputs = new Map((context.inputs ?? []).map(row => [row.key, row.revision]));
   for (const row of coverage.issues) {
-    // This row records whether this candidate's own issue and comment source
-    // can support impact discovery. The graph checks the row for each actual
-    // revision deficit, then still requires a trusted complete impact record.
     row.reviewImpact = row.issue && row.authority && row.comments;
     if (!row.reviewImpact) row.missing.push('Relevant impact discovery unavailable');
     const requiredForIssue = (issues.find(issue => issue.key === row.key)?.conditionSources ?? []).flatMap(condition => nonIssueRows(condition.inputs));
     if (!contextKnown || requiredForIssue.some(input => !currentInputs.has(input.key))) { row.context = false; row.missing.push('Required context unavailable'); }
-    // Execution is observed only for root issues. A linked issue in another
-    // repository matters only as a prerequisite, where its native state decides.
     if (info(row.key)?.repository === repository && issues.find(issue => issue.key === row.key)?.execution === 'unknown') { row.execution = false; if (!row.missing.includes('Execution observation unavailable')) row.missing.push('Execution observation unavailable'); }
   }
   const dedupEdges = [...new Map(edges.map(e => [`${e.dependent}\n${e.blocker}`, e])).values()];
   const capturedAt = (await ports.clock.now({})).iso;
   if (stored) reads.commit(repository);
-  // #3053: local sort configuration is read once with this snapshot.
   const snapshot = { repository, capturedAt, complete, issues, edges: dedupEdges, reviews, impacts, inputs: uniqueRows(context.inputs ?? []), coverage, warnings };
-  if (sorting) await addSortContext(snapshot, await selectedCheckout(cwd, repository, ports) || '', ports, sortGroups);
   return { snapshot, warnings };
 }
 

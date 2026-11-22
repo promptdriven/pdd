@@ -4,9 +4,9 @@ Own `src/autopilot-launcher.mjs`. Export module functions `runAutopilotLauncher(
 `tickAutopilot(stateFile, ports)`, `withAutopilotModeLock({cwd, env}, action, ports)` and `resetAutopilotCircuitBreaker({cwd, env, mode}, ports)`. This launcher connects a
 repository on this machine to the [core engine](autopilot-core.prompt.md): headless agent jobs with no coordinator
 chat, no Herdr session, no parking and no AI scheduling. The core engine owns the jobs, claims, merge check, repair
-and END. The launcher owns the machine state, the user timer, the tick lock, doctor at start, status, the commands
-below, and the one-time [move from the removed full engine](#the-move-from-the-full-engine). It adds no approval,
-merge, quota-reset or interactive route of its own. Preserve existing setup, workflow and interpreter behavior.
+and END. The launcher owns the machine state, the user timer, the tick lock, doctor at start, status, and the commands
+below. It adds no approval,
+merge, quota-reset or interactive route of its own. Preserve existing setup and interpreter behavior.
 
 `runAutopilotLauncher` accepts command doctor, start, stop, status, add, release, report, intake or check-base, cwd, packageRoot,
 env, issues (argv operands), and optional runs, checks, engine, label, share, autoUpdate, mode, report, decisions, intake, agent,
@@ -17,11 +17,9 @@ ports; native defaults implement them on macOS and Linux. Tests may inject `chec
 ## One engine
 
 Autopilot has one engine, the core. `--engine core` is accepted and changes nothing. `--engine full` returns exit
-code 2 with exactly `FULL_ENGINE_REMOVED` of [the move](autopilot-retire.prompt.md): `The full Autopilot engine is
-removed; Autopilot runs only the core engine. Run pdd autopilot start without --engine.` Any other `--engine` value
+code 2 with `The full Autopilot engine is removed; Autopilot runs only the core engine. Run pdd autopilot start without --engine.` Any other `--engine` value
 returns exit code 2 with `Leave out --engine: Autopilot runs only the core engine.` Both refusals come before any read
-or change. `autopilot.engine` in `pdd.json` changes nothing, except that the move reads it to know which engine a
-machine ran before.
+or change. `autopilot.engine` in `pdd.json` changes nothing.
 
 ## Machine state and options
 
@@ -196,37 +194,6 @@ message}`.
 Each `gh` call goes through `countGithubCalls` into this repository's ledger in `ROOT/github/`, with its purpose
 (`issues`, `claims` or the purpose of its arguments).
 
-## The move from the full engine
-
-A machine whose saved state has no complete move journal (`retiredFull.done`) moves once, inside its next tick
-(start runs a tick, so a start moves too). The tick lock is held for the whole move, and the core starts no job until
-the move is complete. [The move owner](autopilot-retire.prompt.md) runs the steps and keeps the step journal; the
-launcher gives it these ports:
-
-- `gh`: the counted `gh` port (purpose `claims`, 2-minute limit); `herdr`: the old coordinator session
-  `pdd-autopilot` (`ports.herdr` when injected; a missing Herdr is `herdr_missing`, so it has nothing to close).
-- `listRuns(cancelled)`: the run records of this checkout ([run records](workflow-runs.prompt.md)).
-- `cancelRun(run)`: `cancelRun` of the [workflow runner](workflow-runner.prompt.md) with the workflow cleanup ports
-  (the `pdd` Herdr session), `claimReleased: true` and `skipMetricsDelivery: true`, so it closes the run's worker chats
-  and records the run as cancelled, the move releases the claim itself, and the run's metrics events stay in its outbox:
-  the tick leaves no background work behind. `releaseLocal(run)`: `releaseIssueClaim` of the
-  [worktree allocator](workflow-worktree.prompt.md) for the run's local issue allocation.
-- `releaseSlots()`: `releaseCheckCapacity` of the [shared queue](test-suite-queue.prompt.md) for this state file.
-- `processes()`: one local read of this machine's process table (`ps -A -ww -o pid= -o ppid= -o pgid= -o rss= -o uid= -o
-  lstart= -o args=`; on Linux without `ps`, `procTable` of the move owner reads `/proc`); `signal(pid, name)`: `process.kill`, where an ended process is no error; `sleep(ms)`.
-- `commonDir`: the real path of this checkout's Git common folder; `coreJobs()`: the issue numbers of the core's job
-  files; `cwdOf(pid)`: exact local process working-directory evidence (`/proc/PID/cwd` on Linux — falling back to `readlinkSync` with trailing ` (deleted)` stripped when the directory was unlinked — or `lsof` on macOS),
-  null where it cannot be read. The worker move asks it only for rows owned by `process.getuid()` and rechecks a null
-  result against the same PID/start/command identity; `save(journal)`: saves `retiredFull` in the state file under the admission lock; `samePath`; `now`.
-  Tests may replace any of them with `ports.movePorts`, or the whole step with `ports.moveToCore`.
-
-When the move is complete, save `movedState` of the move owner (engine core, the journal with its line, no
-full-engine key) under the admission lock, and print the move line once through `ports.notice` (default: stderr,
-which is the timer's log). A move that is not complete returns its message as the tick result. Status shows `Moved
-from the full engine at ISO: LINE` for 7 days after the move; before it, for a machine that ran the full engine,
-`This machine moves from the full engine to the core engine at its next tick` with the last error or the waited
-ticks, and `no new work starts before that.`
-
 ## Stop, status and the other commands
 
 Export `requestAutopilotCompletion({ cwd, env }, ports)` for capacity handoff ticks: resolve the Git checkout root and its saved launcher state file; return `{ state: "inactive" }` when Autopilot is not enabled, run one guarded `runTick` otherwise, and return `{ state: "busy" }`, `{ state: "reconciled" }` or `{ state: "unknown" }`.
@@ -244,17 +211,16 @@ memory and pressure, disk, load, priority and `new work: ok` or `held (REASON)`)
 report sources (`machine` or `pdd.json`), then `No opt-in label: Autopilot takes no issue. Run pdd autopilot start
 --label pdd:autopilot, then mark issues with pdd autopilot add N.` when no label is set, then the line of
 `alertStatusLine` of [Autopilot alerts](autopilot-alerts.prompt.md#status-line) with the saved repository and state root
-(an alert that was not delivered; an error adds nothing), then the move line, then the last tick message.
+(an alert that was not delivered; an error adds nothing), then the last tick message.
 
 **Status --all** works from any folder, also outside a Git repository. It prints one line for each saved state on this
 machine: repository, folder, base, mode (the machine mode with `(this machine)`, else the mode of that folder's
 settings, read only when the folder exists and is its Git root; else `unknown (no folder saved)`, `unknown (folder
 missing)`, `unknown (not a Git repository)` or `unknown (settings unreadable)`), enabled or disabled, and timer active,
-inactive or unknown; a state that has not moved yet adds `moves from the full engine to the core engine at its next
-tick`. Without saved state it prints `No Autopilot on this machine.` A state file that is not a JSON object prints
+inactive or unknown. Without saved state it prints `No Autopilot on this machine.` A state file that is not a JSON object prints
 `FILE: saved state unreadable`. Each line is independent, and the timer reads run from the caller's folder. `runAutopilotLauncher` itself performs zero file writes on disk across all `status` forms (`status`, `status --all`,
-`status --json`, and `status --all --json`, computing run costs in memory with `captureCosts`; at the outer
-[CLI entrypoint](pdd-cli.prompt.md), `--json` also bypasses `#3424` pre-dispatch `syncOwnedUserSkills`). Both
+`status --json`, and `status --all --json`; at the outer
+[CLI entrypoint](pdd-cli.prompt.md), `--json` also bypasses pre-dispatch `syncOwnedUserSkills`). Both
 **Status --all** (text, which checks saved repository modes and user timers) and **Status --json** (JSON, with or without
 `--all`, which reads local state files and local OS/Git observations only — making zero `gh`, Herdr, OAuth, agent, or
 network calls, and skipping `systemctl` and `launchctl` timer probes) include read-only machine observability: (1) one
@@ -266,32 +232,24 @@ known `readyLogins` and active `share`/`runs`/`machineRuns` identically with `co
 and `readyLogins: 0` when an explicit or default local pool file fails `loadLoginPool` validation, and returning
 `not-configured` with `readyLogins: null` only when no pool file is configured: `ready`, `cooling`, `paused`,
 `reauth_required`, `5H`/`7D` usage and reset times with `null` shown as `?` and never fabricated `0%`, or `unavailable`
-when no local Cloud cache exists), and (4) read-only core `conversion` summary wired from `summarizeConversionDrops()` over saved
-`*-core/history.jsonl`, `*-core/intake`, and `core-reports` drafts, and (5) read-only `recurringFlakes` summary aggregated from saved `*-core/flakes.jsonl` ledgers via `summarizeRecurringFlakes` of [Autopilot regression detection](autopilot-regressions.prompt.md) (symlink-safe, fail-safe when absent; included as `recurringFlakes` in **Status --json** and rendered as a concise `Recurring flakes (7d, >=3): ...` line in **Status --all** text only when `recurring.length > 0`). **Status --json** preserves top-level local cost
-report fields alongside `costs` and `repositories`, exiting `0`.
+when no local Cloud cache exists), (4) read-only core `conversion` summary wired from `summarizeConversionDrops()` over saved
+`*-core/history.jsonl`, `*-core/intake`, and `core-reports` drafts, and (5) read-only `recurringFlakes` summary aggregated from saved `*-core/flakes.jsonl` ledgers via `summarizeRecurringFlakes` of [Autopilot regression detection](autopilot-regressions.prompt.md) (symlink-safe, fail-safe when absent; included as `recurringFlakes` in **Status --json** and rendered as a concise `Recurring flakes (7d, >=3): ...` line in **Status --all** text only when `recurring.length > 0`). **Status --json** preserves top-level `pdd.cost-report.v1` report fields alongside `costs` and `repositories`, exiting `0`.
 
 **Add** creates the `pdd:autopilot` label when it is missing and adds it to each named issue of this repository (an
 issue of another repository returns exit 2): `Marked N issue(s) with pdd:autopilot.`
 
 **Release** delegates `pdd autopilot release ISSUE` to `releaseCoreJob` of the [core engine](autopilot-core.prompt.md#release)
 with this repository's state file, resolved `state` (`machine` defaulting to the host name when unsaved), counted
-`gh` and `git` ports (purpose `claims`), `ports.corePorts`, and a `releaseClaim(machine, ref = ISSUE, onMutate)` callback to `releaseRunClaim` of the
-workflow runner (keeping the workflow run lock, worker and check-custody guard, Herdr chat cleanup and local allocation
-release with the runner), and returns its `{exitCode, message}` unchanged. Under the shared `STATE.lock` tick lock,
+`gh` and `git` ports (purpose `claims`), and `ports.corePorts`, and returns its `{exitCode, message}` unchanged. Under the shared `STATE.lock` tick lock,
 release checks ownership across `machineIdOf(state)` and `state.machine`, immediately stops any live local core job
 processes without waiting for a later tick, frees any held `pdd:merge-lane` label without closing PRs or deleting
 worktrees, logs or branches, removes `pdd:working` and `pdd:stuck`, appends one `released` history record and removes
 `jobs/N.json`.
 
-**Audit** (`pdd autopilot audit RUN PR`) resolves the saved run with `resolveRun` and calls `auditMerge` of the
-[audit owner](autopilot-audit.prompt.md) with that run and PR, through this launcher's counted process port (purpose
-`audit`), and returns its result. The core engine starts no audit by itself; #3182 plans to run it after core merges.
-
-**Check base** (`pdd autopilot check-base RUN PR`) resolves the saved run with `resolveRun`, then calls
+**Check base** (`pdd autopilot check-base RUN PR`) reads the saved run record from `<git-common-dir>/pdd/runs/<RUN>/status.json` (or matching `runId`), then calls
 `checkAutopilotBase` of the [automatic base](autopilot-base.prompt.md) with the saved run and PR through this
 launcher's counted process port and its full reply (`{code, stdout, stderr}`), so a refused read names the tool's own
-error. It is read-only, does not require a running timer or agent, and supplies the pre-merge guard and post-merge
-base audit.
+error. It is read-only and does not require a running timer or agent.
 
 **Report** lists the machine's local report drafts (`FINGERPRINT: title; seen N time(s), last TIME`, then `Send one with
 pdd autopilot report send FINGERPRINT.`, or `No local Autopilot report drafts.`); `report send FINGERPRINT` sends one
@@ -310,10 +268,6 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
 - [Autopilot core](autopilot-core.prompt.md), [Autopilot reports](autopilot-reports.prompt.md) and
   [intake cards](autopilot-intake.prompt.md): required native generation and verification context for the core tick,
   core status, release, and the report and intake commands.
-- [Post-merge audit](autopilot-audit.prompt.md): required native generation and verification context for the audit
-  command.
-- [The move from the full engine](autopilot-retire.prompt.md): required native generation and verification context
-  for the move steps, the journal and the refusal line.
 - [Doctor](autopilot-doctor.prompt.md): required native generation and verification context for first-start checks
   and the shared agent selection.
 - [Autopilot settings](autopilot.prompt.md): required native generation and verification context for read-only
@@ -322,12 +276,7 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
   and merge safety.
 - [Machine guard](machine-guard.prompt.md): required native generation and verification context for the core slots, the
   room and priority ports, the status machine line and the timer priority keys.
-- [Workflow runner](workflow-runner.prompt.md): required native generation and verification context for the admission
-  lock, `releaseRunClaim` and `cancelRun`.
-- [Run records](workflow-runs.prompt.md) and [cost ledger](cost-ledger.prompt.md): required native generation and
-  verification context for run listing and the local cost report.
-- [Worktree allocator](workflow-worktree.prompt.md): required native generation and verification context for
-  `releaseIssueClaim`.
+- Layer-0 `src/shared/file-lock.mjs`: required native context for `acquireRunLock` admission locking.
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for `releaseCheckCapacity` and `readCheckStatus`.
 - [Codex limits](codex-limits.prompt.md) and [multi-harness login pool](login-pool.prompt.md): required native
   generation and verification context for the read-only usage read and ordered multi-harness login rotation.
@@ -335,8 +284,6 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
   the budget and the ETag cache.
 - [Autopilot alerts](autopilot-alerts.prompt.md): required native generation and verification context for the core's
   alert port.
-- [Herdr workspace identity](workflow-herdr-layout.prompt.md): required native generation and verification context
-  for `samePath`.
 - [Agent adapters](agent-adapters.prompt.md): required native generation and verification context for non-model
   process execution.
 - [PATH diagnostics](path-diagnostic.prompt.md): required native generation and verification context for the version

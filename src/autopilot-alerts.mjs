@@ -6,7 +6,7 @@ import { hostname as osHostname, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { acquireRunLock } from './workflow-runner.mjs';
+import { acquireRunLock } from './shared/file-lock.mjs';
 
 const execute = promisify(execFile);
 export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'interpreter', 'interpreter-access', 'access', 'decision', 'stuck', 'test-suite', 'long-running', 'recovered']);

@@ -20,19 +20,16 @@ import { fileURLToPath } from 'node:url';
 const RUN_REVIEW_EVAL_SCRIPT = fileURLToPath(new URL('../scripts/benchmark/run-review-eval.mjs', import.meta.url));
 
 import {
-  CliUsageError,
-  REVIEW_EVAL_TARGETS,
-  assertCleanPublicText,
-  computeNorthStarScorecard,
-  computeReviewEvalScorecard,
-} from '../scripts/benchmark/scorecard.mjs';
-import {
   ALLOWED_FIXTURE_EVIDENCE_KEYS,
+  CliUsageError,
   DEFAULT_MANIFEST_PATH,
   FORBIDDEN_SCRATCH_PATHS,
+  REVIEW_EVAL_TARGETS,
+  assertCleanPublicText,
   assertPromptIsolation,
   assertSafeCheckedOutSymlink,
   buildReviewerPrompt,
+  computeReviewEvalScorecard,
   createCliReviewerRunner,
   inspectFixtureDiffReadOnly,
   loadReviewEvalManifest,
@@ -432,15 +429,6 @@ test('scoring computes bug_recall, clean_fp_rate, signal_recall, and handles edg
   const boundaryCard = computeReviewEvalScorecard(rawBoundaryCases);
   assert.equal(boundaryCard.bug_recall, 80);
   assert.equal(boundaryCard.meets_target, false);
-
-  // North-Star scorecard compatibility (opt-in reviewEval does not alter default callers)
-  const defaultNs = computeNorthStarScorecard();
-  assert.equal('review_eval' in defaultNs, false);
-  const withReviewNs = computeNorthStarScorecard({ reviewEval: [caughtCase, cleanPass] });
-  assert.equal(withReviewNs.review_eval.bug_recall, 100);
-  assert.equal(withReviewNs.review_eval.clean_fp_rate, 0);
-  assert.equal(withReviewNs.review_eval.meets_target, true);
-  assert.deepEqual(withReviewNs.review_eval.targets, REVIEW_EVAL_TARGETS);
 });
 
 test('strict fixture isolation excludes expected_signals, label, fixture id, and manual guide from reviewer prompt and context', async () => {

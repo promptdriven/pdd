@@ -4,21 +4,241 @@
 
 import * as nativeFs from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, basename, sep } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import {
-  CliUsageError,
-  REVIEW_EVAL_TARGETS,
-  assertCleanPublicText,
-  computeReviewEvalScorecard,
-  parsePositiveNumberFlag,
-  readCliFlagValue,
-  roundNum,
-  sanitizePublicData,
-  sanitizePublicText,
-} from './scorecard.mjs';
-import { STRIPPED_AGENT_AUTH_VARS, resolveIsolatedCodexHome } from './run-release-benchmark.mjs';
+
+export const REVIEW_EVAL_TARGETS = Object.freeze({
+  bug_recall_min_pct: 80.0,
+  clean_fp_rate_max_pct: 10.0,
+});
+
+export function roundNum(value, digits = 2) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+export class CliUsageError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'CliUsageError';
+    this.exitCode = 2;
+  }
+}
+
+function readCliFlagValue(argv, index, flag, { allowLeadingDash = false } = {}) {
+  const next = argv[index + 1];
+  if (
+    next === undefined
+    || next === ''
+    || next === '-h'
+    || next === '--help'
+    || (allowLeadingDash ? next.startsWith('--') : next.startsWith('-'))
+  ) {
+    throw new CliUsageError(`Missing value for ${flag}`);
+  }
+  return next;
+}
+
+function parsePositiveNumberFlag(rawValue, flag, { integer = false } = {}) {
+  const num = Number(rawValue);
+  if (!Number.isFinite(num) || num <= 0 || (integer && !Number.isInteger(num))) {
+    throw new CliUsageError(
+      `Invalid value for ${flag}: expected a positive ${integer ? 'integer' : 'number'}, got "${rawValue}"`,
+    );
+  }
+  return num;
+}
+
+const GITHUB_TOKEN_RE = /\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b/g;
+const SK_TOKEN_RE = /\bsk-[A-Za-z0-9_-]{12,}\b/g;
+const BEARER_TOKEN_RE = /\bBearer\s+(?!redacted-token\b)\S+/gi;
+const UUID_RE = /(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])/gi;
+const SHA40_RE = /(?<![0-9a-f])[0-9a-f]{40,64}(?![0-9a-f])/gi;
+const COMMIT_URL_RE = /\/commits?\/[0-9a-f]{7,64}(?![0-9a-f])/gi;
+const HEAD_HEX_RE = /\b(head|at|commit|rev|revision|sha)(\s*[:=]\s*|\s+)[0-9a-f]{7,64}(?![0-9a-f])/gi;
+const BARE_SHORT_HEX_RE = /(?<![#0-9a-z_.-])(?=[0-9a-f]*[a-f])(?=[0-9a-f]*[0-9])[0-9a-f]{7,64}(?![0-9a-z_.-])/gi;
+const SENSITIVE_REF_KEY_RE = /(?:^|[_-])(?:commit|commits|sha|rev|revision|head|hash|receipt|run_id|runid|version)(?:$|[_-])/i;
+const SENSITIVE_SECRET_KEY_RE = /(?:^|[_-])(?:auth_token|access_token|github_token|gh_token|secret|password|authorization|api_key|apikey)(?:$|[_-])/i;
+const SHORT_HEX_VALUE_RE = /^[0-9a-f]{7,64}$/i;
+
+function sanitizePublicText(value) {
+  return String(value ?? '')
+    .replace(GITHUB_TOKEN_RE, 'redacted-token')
+    .replace(SK_TOKEN_RE, 'redacted-token')
+    .replace(BEARER_TOKEN_RE, 'Bearer redacted-token')
+    .replace(UUID_RE, 'redacted-id')
+    .replace(SHA40_RE, 'redacted-ref')
+    .replace(COMMIT_URL_RE, '/commit/redacted-ref')
+    .replace(HEAD_HEX_RE, '$1$2current-ref')
+    .replace(BARE_SHORT_HEX_RE, 'redacted-ref');
+}
+
+function sanitizePublicData(node, parentKey = '') {
+  if (typeof node === 'string') {
+    const norm = String(parentKey).replace(/([a-z0-9])([A-Z])/g, '$1_$2');
+    if (parentKey && SENSITIVE_SECRET_KEY_RE.test(norm) && node.trim()) return 'redacted-token';
+    if (parentKey && SENSITIVE_REF_KEY_RE.test(norm) && SHORT_HEX_VALUE_RE.test(node.trim())) return 'redacted-ref';
+    return sanitizePublicText(node);
+  }
+  if (Array.isArray(node)) return node.map(item => sanitizePublicData(item, parentKey));
+  if (node && typeof node === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(node)) out[sanitizePublicText(k)] = sanitizePublicData(v, k);
+    return out;
+  }
+  return node;
+}
+
+export function assertCleanPublicText(value, label = 'output') {
+  const text = String(value ?? '');
+  for (const [kind, re] of [
+    ['credential token', GITHUB_TOKEN_RE],
+    ['API secret key', SK_TOKEN_RE],
+    ['Bearer token', BEARER_TOKEN_RE],
+    ['commit/receipt hash', SHA40_RE],
+    ['commit URL hash', COMMIT_URL_RE],
+    ['UUID', UUID_RE],
+  ]) {
+    re.lastIndex = 0;
+    const match = re.exec(text);
+    if (match) throw new Error(`Forbidden ${kind} in ${label}: ${match[0]}`);
+  }
+  return text;
+}
+
+function summarizeReviewEvalGroup(cases = [], targets = REVIEW_EVAL_TARGETS) {
+  let badTotal = 0, badCaught = 0, badFailedWithoutSignal = 0, badMissedPass = 0, badErrors = 0;
+  let cleanTotal = 0, cleanFalsePositives = 0, cleanTrueNegatives = 0, cleanErrors = 0;
+  let expectedSignalsTotal = 0, matchedSignalsTotal = 0, errorCount = 0, durationSum = 0, durationCount = 0;
+  for (const row of Array.isArray(cases) ? cases : []) {
+    if (!row || typeof row !== 'object') continue;
+    const label = String(row.label || '').toLowerCase();
+    const verdict = String(row.verdict || '').toUpperCase();
+    const isKnownVerdict = verdict === 'PASS' || verdict === 'FAIL';
+    const isError = verdict === 'ERROR' || row.outcome === 'error' || ((label === 'bad' || label === 'clean') && !isKnownVerdict);
+    if (isError) errorCount += 1;
+    if (typeof row.duration_ms === 'number' && Number.isFinite(row.duration_ms) && row.duration_ms >= 0) {
+      durationSum += row.duration_ms;
+      durationCount += 1;
+    }
+    if (label === 'bad') {
+      badTotal += 1;
+      const expectedCount = Number.isInteger(row.expected_signals_count) && row.expected_signals_count >= 0
+        ? row.expected_signals_count
+        : (Array.isArray(row.expected_signals) ? row.expected_signals.length : 0);
+      expectedSignalsTotal += expectedCount;
+      const matchedCount = Array.isArray(row.matched_signals) ? row.matched_signals.length : 0;
+      if (!isError && verdict === 'FAIL' && expectedCount > 0) matchedSignalsTotal += Math.min(expectedCount, matchedCount);
+      if (isError) badErrors += 1;
+      else if (row.caught === true && verdict === 'FAIL') badCaught += 1;
+      else if (verdict === 'FAIL') badFailedWithoutSignal += 1;
+      else badMissedPass += 1;
+    } else if (label === 'clean') {
+      cleanTotal += 1;
+      if (isError) cleanErrors += 1;
+      else if (verdict === 'FAIL' || row.false_positive === true) cleanFalsePositives += 1;
+      else if (verdict === 'PASS') cleanTrueNegatives += 1;
+    }
+  }
+  const rawBugRecall = badTotal > 0 ? (badCaught / badTotal) * 100 : null;
+  const rawCleanFpRate = cleanTotal > 0 ? (cleanFalsePositives / cleanTotal) * 100 : null;
+  const rawSignalRecall = expectedSignalsTotal > 0 ? (matchedSignalsTotal / expectedSignalsTotal) * 100 : null;
+  const minRecall = Number.isFinite(targets?.bug_recall_min_pct) ? targets.bug_recall_min_pct : REVIEW_EVAL_TARGETS.bug_recall_min_pct;
+  const maxFp = Number.isFinite(targets?.clean_fp_rate_max_pct) ? targets.clean_fp_rate_max_pct : REVIEW_EVAL_TARGETS.clean_fp_rate_max_pct;
+  const meetsTarget = badTotal > 0 && cleanTotal > 0 && errorCount === 0
+    && rawBugRecall !== null && rawCleanFpRate !== null && rawBugRecall >= minRecall && rawCleanFpRate <= maxFp;
+  return {
+    total_cases: badTotal + cleanTotal, bad_total: badTotal, bad_caught: badCaught,
+    bad_failed_without_signal: badFailedWithoutSignal, bad_missed_pass: badMissedPass, bad_errors: badErrors,
+    bug_recall: roundNum(rawBugRecall, 1), clean_total: cleanTotal, clean_false_positives: cleanFalsePositives,
+    clean_true_negatives: cleanTrueNegatives, clean_errors: cleanErrors, clean_fp_rate: roundNum(rawCleanFpRate, 1),
+    expected_signals_total: expectedSignalsTotal, matched_signals_total: matchedSignalsTotal,
+    signal_recall: roundNum(rawSignalRecall, 1), error_count: errorCount,
+    avg_duration_ms: durationCount > 0 ? roundNum(durationSum / durationCount, 1) : null, meets_target: meetsTarget,
+  };
+}
+
+export function computeReviewEvalScorecard(cases = [], { targets = REVIEW_EVAL_TARGETS } = {}) {
+  const list = Array.isArray(cases) ? cases : (Array.isArray(cases?.cases) ? cases.cases : []);
+  const effectiveTargets = {
+    bug_recall_min_pct: Number.isFinite(targets?.bug_recall_min_pct) ? targets.bug_recall_min_pct : REVIEW_EVAL_TARGETS.bug_recall_min_pct,
+    clean_fp_rate_max_pct: Number.isFinite(targets?.clean_fp_rate_max_pct) ? targets.clean_fp_rate_max_pct : REVIEW_EVAL_TARGETS.clean_fp_rate_max_pct,
+  };
+  const overall = summarizeReviewEvalGroup(list, effectiveTargets);
+  const groups = new Map();
+  for (const row of list) {
+    if (!row || typeof row !== 'object') continue;
+    const model = String(row.model || 'default');
+    const promptVersion = String(row.prompt_version || 'autopilot-v1');
+    const key = `${model}\u0000${promptVersion}`;
+    if (!groups.has(key)) groups.set(key, { model, prompt_version: promptVersion, rows: [] });
+    groups.get(key).rows.push(row);
+  }
+  const comparison = [...groups.values()].map(g => ({
+    model: g.model, prompt_version: g.prompt_version, ...summarizeReviewEvalGroup(g.rows, effectiveTargets),
+  }));
+  return { targets: effectiveTargets, ...overall, comparison };
+}
+
+export const STRIPPED_AGENT_AUTH_VARS = Object.freeze([
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+]);
+
+function runSyncCommand(cmd, args, { cwd, env, timeoutMs = 5_000 } = {}) {
+  const res = spawnSync(cmd, args, { cwd, env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
+  return { code: typeof res.status === 'number' ? res.status : 1, stdout: res.stdout || '', stderr: res.stderr || '' };
+}
+
+export function resolveIsolatedCodexHome({
+  pddBin,
+  baseEnv = process.env,
+  fallbackDir = null,
+  requireMaterialized = false,
+  fs = nativeFs,
+  run = runSyncCommand,
+} = {}) {
+  const userHome = baseEnv.HOME || baseEnv.USERPROFILE || homedir();
+  const rawDefaultCodexHome = resolve(userHome, '.codex');
+  const isValidIsolatedHome = (candidate, trustAuthFlag = false) => {
+    if (typeof candidate !== 'string' || !candidate.trim()) return false;
+    const resolved = resolve(candidate.trim());
+    if (!resolved || resolved === rawDefaultCodexHome) return false;
+    return trustAuthFlag || fs.existsSync(join(resolved, 'auth.json'));
+  };
+  if (pddBin) {
+    const syncRes = run(
+      process.execPath,
+      [pddBin, 'accounts', 'sync', '--provider', 'codex', '--quiet', '--timeout-ms', '2500'],
+      { env: { ...baseEnv, PDD_PRINT_CODEX_HOME: '1' }, timeoutMs: 5_000 },
+    );
+    if (syncRes.code === 0) {
+      const printed = String(syncRes.stdout || '').trim().split('\n').map(l => l.trim()).filter(Boolean).at(-1);
+      if (isValidIsolatedHome(printed)) return resolve(printed);
+    }
+    const statusRes = run(process.execPath, [pddBin, 'accounts', 'status', '--json'], { env: baseEnv, timeoutMs: 5_000 });
+    if (statusRes.code === 0) {
+      try {
+        const parsed = JSON.parse(statusRes.stdout || '{}');
+        const ch = parsed?.codex_home ?? parsed?.codexHome;
+        const chPath = typeof ch === 'string' ? ch : ch?.path;
+        const hasAuth = Boolean(ch?.auth_present || ch?.materialized);
+        if (isValidIsolatedHome(chPath, hasAuth)) return resolve(chPath.trim());
+      } catch { /* Ignore malformed status JSON and check explicit isolated CODEX_HOME next. */ }
+    }
+  }
+  if (isValidIsolatedHome(baseEnv.CODEX_HOME)) return resolve(baseEnv.CODEX_HOME.trim());
+  if (requireMaterialized) {
+    throw new Error('Refusing to run codex without an isolated PDD-managed CODEX_HOME (will not fall back to ~/.codex/auth.json). Run "pdd accounts status" or provide an isolated CODEX_HOME.');
+  }
+  const emptyHome = join(fallbackDir || tmpdir(), 'isolated-codex-home');
+  fs.mkdirSync(emptyHome, { recursive: true, mode: 0o700 });
+  return emptyHome;
+}
 
 const DEFAULT_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const DEFAULT_MANIFEST_PATH = fileURLToPath(new URL('./review-eval-manifest.json', import.meta.url));
@@ -2064,8 +2284,6 @@ const USAGE = `Usage: node scripts/benchmark/run-review-eval.mjs [options]
   --keep-workdir            Keep temporary scratch directories for inspection
   --json                    Print structured JSON scorecard to stdout (default prints Markdown)
 `;
-
-export { REVIEW_EVAL_TARGETS, computeReviewEvalScorecard };
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {

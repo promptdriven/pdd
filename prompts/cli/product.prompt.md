@@ -1,505 +1,59 @@
 # Product plans and progress
 
-Own `src/product.mjs`: read a product plan, show progress and ready runs, and
-start one normal feature run. Product commands never call the PDD runtime,
-control child runs, approve gates, merge, or commit evidence. Preserve existing
-feature workflow behavior by delegating startup to its public runner.
+Own the Layer-1 core product modules under `src/core/product/` (`markdown-utils.mjs`, `documents.mjs`, `plan-audit.mjs`, `pr-matching.mjs`, `github-state.mjs`, `progress.mjs`, `product-cli.mjs`) together with thin compatibility facades at `src/product.mjs` and `src/product-documents.mjs`. Read a product plan, audit prompt inventory and boundary wiring, compute topological waves and Story progress, and prepare scoped GitHub issues with workflow-free `/pdd` handoff. Product commands never call the PDD interpreter, import legacy `src/workflow-*.mjs` modules, approve gates, merge, or commit evidence.
 
-Export module functions `readProduct({cwd}, ports)`,
-`productStatus({cwd, through}, ports)`, `productNext({cwd, through}, ports)`,
-`productStart({cwd, run, noRun=false, agent='codex', through, base, packageRoot}, ports)` and
-`runProduct({command, run, noRun, agent, through, base, json, cwd, packageRoot}, ports)`.
-The result structures of the first four are declared below. `runProduct` returns
-`{exitCode,message}` for the CLI, catches finite input/dependency failures, and
-formats the same structured results. It never retries a mutation automatically.
+Export `parseProductDocuments({ mapText, planText = '' })`, `parseProductWorldWriters({ worldText })`, `computeProductWaves(runs)`, `auditProductPlan({ mapText, planText, promptFiles })`, `resolveProductRepository({ cwd }, ports)`, `recordedRuntimeLines(text)`, `sourceFingerprint(root)`, `storyEvidence(run, options)`, `readProduct({ cwd }, ports)`, `productStatus({ cwd, through, base }, ports)`, `productNext({ cwd, through, base }, ports)`, `productStart({ cwd, run, noRun = false, agent = 'codex', through, base, packageRoot }, ports)` and `runProduct({ command, run, noRun, agent, through, base, json, cwd, packageRoot }, ports)`. `runProduct` returns `{ exitCode, message }` for the CLI, catches finite input/dependency failures, and never retries a mutation automatically.
 
-## Read the durable plan
+## Read the durable plan (`src/core/product/documents.mjs`, `markdown-utils.mjs`, `plan-audit.mjs`)
 
-For these module functions, cwd is the explicit product repository root (or the
-logical root supplied by an injected filesystem). The CLI resolves an invoking
-subdirectory to that root before calling this module. Read `product/map.md` and
-optional `product/plan.md` beneath cwd through the injected readFile callback
-(the default native reader opens only regular in-root files without following
-symlinks and enforces a bounded size, refusing symlinked map/plan files with
-`invalid-product` instead of following them or treating a symlinked plan as
-missing). Missing plan is allowed for the small path. Parse
-Markdown tables by heading and column name, trimming cells, ignoring separator
-rows and preserving row order. Single-backtick-wrapped cell values (or
-comma-list tokens) are plain values; inline multi-backtick prose stays intact.
-Split comma lists; empty or `-` is an empty list. Ignore unrelated headings.
-The map heading supplies name without its `: map` suffix; its Size line supplies
-the chosen small, medium or large path. Do not override the person's chosen size.
-An optional `Through: prompt-pr|code` line in `product/plan.md` before its first
-`## ` heading (case-insensitive key/value, optional backticks or trailing note)
-declares the rollout's default completion target (`prompt-pr` or `code`). Reject
-duplicate or invalid `Through:` values with `invalid-product` naming
-`product/plan.md`. Include `through` on the returned `product` object only when
-`product/plan.md` declares it; omitting it keeps the default `code` target.
+For these functions, `cwd` is the explicit product repository root (or the logical root supplied by an injected `readFile` callback). The default native reader opens only regular in-root files without following symlinks (`O_NOFOLLOW`), enforces a bounded size (`2 MiB`), and refuses symlinked map/plan files with `invalid-product`. Missing `product/plan.md` is allowed for the `small` single-part path.
 
-Parts, Stories, Journeys and Questions use the columns in the required file
-format. Keep CORE and LATER Stories distinct. Return only unanswered question
-IDs. Runs come from the plan; their slice is a string. Optional plan and map
-extensions keep existing files backwards-compatible (omit empty optional fields):
+Parse Markdown tables by heading and column name, trimming cells, handling escaped pipes (`\|`), ignoring separator rows, unwrapping single-backtick-wrapped cell tokens while keeping inline multi-backtick prose intact, and preserving row order. Split comma lists (`-` or empty is `[]`). Ignore unrelated headings.
 
-| Section / Field | Accepted forms & validation |
-|---|---|
-| `product/map.md` `## Rules to check` | Structured table(s) (`Id`, `Owner`, `Rule`, `Verified By`, case-insensitive; reject missing columns, empty/`-`/duplicate `Id`, or empty/`-` `Owner`/`Rule`) or legacy bullet/prose fallback (`{id:"",owner:"all",rule,verifiedBy:""}`); exposed as `product.rulesToCheck`. |
-| `product/plan.md` `## Runs` shared surfaces | Optional `Shared surfaces` / `Shared surface` / `Updates` / `Also updates` column, comma-separated secondary parts in `Part` (`ledger, cli`), or per-run `Shared surfaces (RUN): ...` / `Also updates (RUN): ...` / `RUN: Shared surfaces: ...` / `### RUN` subheading lines (ignoring unattached lines with no active run heading or run prefix); deduplicate, drop primary part, validate against `## Parts`, allow Stories from primary or shared surfaces, expose as `run.sharedSurfaces`. |
-| `product/plan.md` `## Prompts` | Table (scanning prompt-path columns when present), bullets, or `### <part>` subheadings naming `.prompt.md` files (resolving `../` links relative to `product/` and bare names against part folder); exposed as `product.prompts`. |
-| `product/plan.md` `## Boundaries` operations | Dotted `<part>/<prompt>.<op>` or `<prompt>.<op>` tokens in `What crosses` / `Operations` (skipping file extensions, versions and `Never crosses` lines/blocks) used for consumer wiring audits. |
+- Map heading supplies `name` without `: map`; `Size:` supplies `small`, `medium`, or `large`.
+- Optional `product/plan.md` preamble lines (before the first `## ` heading):
+  - `Through: prompt-pr|code`: default completion target (reject duplicate or invalid values with `invalid-product`).
+  - `Base: <branch>`: default integration base branch (reject duplicates with `invalid-product`).
+  - `Issue: #<N>`: optional parent product issue number for `Part of #N (product).`.
+- Required tables: `Parts`, `Stories` (`CORE` vs `LATER`), `Journeys`, `Questions` (return unanswered IDs), `Runs`, and `Boundaries`.
+- Optional sections:
+  - `product/map.md` `## Rules to check`: structured table(s) (`Id`, `Owner`, `Rule`, `Verified By`) or bullet/prose fallback, exposed as `product.rulesToCheck`.
+  - `product/plan.md` `## Runs` shared surfaces: optional `Shared surfaces` / `Updates` / `Also updates` column, secondary comma parts in `Part`, or per-run `Shared surfaces (RUN): ...` / `### RUN` lines; deduplicated, validated against `## Parts`, exposed as `run.sharedSurfaces`.
+  - `product/plan.md` `## Prompts`: table, bullet, or `### <part>` prompt inventory, exposed as `product.prompts`.
+  - `product/plan.md` `## Boundaries` operations: dotted `<part>/<prompt>.<op>` or `<prompt>.<op>` tokens in `What crosses` / `Operations` (skipping file extensions, versions, and `Never crosses` blocks).
+- `computeProductWaves(runs)` groups runs into deterministic topological waves (`Wave 1`, `Wave 2`, ...), ignoring the special `plan PR` need and appending any cyclic tail with `cyclic: true`.
+- `parseProductWorldWriters({ worldText })` selects the single non-fenced table containing `Key` and `Writer`, rejects duplicate tables or conflicting writers (`world-writer-conflict`), and returns ordered `{ key, writer }` records.
+- `auditProductPlan({ mapText, planText, promptFiles })` deterministically checks `## Prompts` inventory drift (`product-prompt-inventory-drift`) under tracked part folders (skipping `examples/` unless tracked) and checks `## Boundaries` dotted operations (`product-boundary-unwired`) using strictly linear scans.
 
-Missing map, unreadable
-required input, duplicate part/Story/run IDs or references to unknown parts,
-Stories or needs give `invalid-product` with the file and offending ID. Do not
-reject an oversized run. An `all` run may name journey IDs. A small map without
-a plan has one implicit run named for its sole part, slice `1`, all its CORE
-Stories, and no needs. Its guidance says "run one feature run". No map/plan file
-is changed by these module functions.
+Reject missing maps, missing required columns, duplicate part/Story/journey/run/rule IDs, or unknown part/Story/need references with `invalid-product` naming the file and offending token. Never reject an oversized run (>12 Stories emits an advisory warning).
 
-## Current progress
+## GitHub state, PR matching, and progress (`src/core/product/github-state.mjs`, `pr-matching.mjs`, `progress.mjs`)
 
-Use the shared repository run listing, Story evidence and Runtime-line parser.
-The product module chooses which planned issue and PRs belong to a run; the
-shared evidence owner decides whether a saved local result matches its files.
-All three commands use the same trusted issue selection below.
+Resolve repository identity from `git remote get-url origin` (via Layer-0 `src/shared/github-repo.mjs`) and `gh repo view`, counting native `gh` calls via `nativeGithubCounter`.
 
-Combine workflow evidence with `savedStoryEvidence` from the runtime client,
-including standalone checks made before any workflow step completes. For the
-default saved-evidence binding, create one runtime-client
-`createSavedStoryEvidenceReader` per status, next or start invocation and share
-it across that invocation's saved-evidence reads. A later invocation creates a
-fresh reader so edited files are observed. Existing injected
-`savedStoryEvidence` callbacks and the `savedChecks.evidence` Runtime binding
-remain unchanged; source-capture keys and hash comparisons belong to the
-runtime client.
-Saved checks are progress only: they never complete a run, approve a prompt or satisfy
-Needs. Read saved checks rooted in product cwd for planned Stories even when no
-workflow record exists. A verified local workflow additionally authorizes its
-saved run.root, with the same comparison root as workflow evidence, including
-the merged-run base rules below. For a merged run, compare all local saved
-evidence considered for its Stories against that current base, including
-evidence located through cwd; cwd is not a freshness bypass. Attach saved rows
-only to the planned run whose Story IDs they exactly match under the token
-rule below. A different unmerged run must not reintroduce a merged Story
-as current through its own cwd evidence.
-An unverified issue or local link never
-authorizes another root; cwd-only saved evidence remains eligible without
-changing that run's unverified state. Missing evidence is notRun; a failed
-local cache read adds a finite warning and must not invent a pass. Deduplicate
-Story results across both sources using the current-before-stale, newest-row
-precedence below: the newest current failure or unknown result suppresses an
-older current pass across both local sources. Preserve remote-only PR attribution.
+- **Trusted issue lookup:** Read version-2 repository-scoped state under `<git-common-dir>/pdd/products/<sha256(repo)>.json` (migrating version-1 folder-keyed files once, using an observed exclusive `.lock` with dead-PID `ESRCH` and 30s stale recovery that never unlinks a successor's lock). Validate saved bindings directly via `issueByNumber`; isolate bad hints to their own run (`unverified` + repair action). Confirm 404/foreign/untrusted hints drop the binding; transient failures retain it and fail closed on `start`. Search unresolved runs with one bounded paginated query (`per_page <= 10`) for `<!-- pdd-product: run=`, caching complete snapshots for `60,000 ms`, refreshing once before creation from a cached negative. Trust only `OWNER`/`MEMBER`/`COLLABORATOR` or the authenticated `currentActor` login (case-insensitive). Prefer an issue with a matching local run record under `<git-common-dir>/pdd/runs/*/status.json`, then oldest `created_at`, then lowest issue number.
+- **Same-repo PR eligibility & completion:** Read bounded timeline pages (`cross-referenced` events only) and inspect each PR's metadata. Reject forks, foreign head owners/repositories, and mismatched canonical URLs. Accept PRs carrying an unambiguous own-run marker (`<!-- pdd-product: run=<RUN> -->` or `<!-- pdd-product: run=<RUN> stage=prompt-pr|prompt|code -->`), matching a saved local branch, or carrying a GitHub closing reference (`Closes/Fixes/Resolves #<issue>` outside code spans/fences) without a foreign `pdd-product:` marker.
+- **Completion target:** Resolve target as explicit `--through` ?? `product.through` ?? `'code'`.
+  - Under `code`, a merged eligible PR completes the run when matched by canonical `<!-- pdd-product: run=<RUN> stage=code -->`, a normal closing reference (`Closes #<issue>`) without a prompt-only stage marker, read-only legacy `<!-- pdd-workflow:<id>:code -->`, or local `stage: 'code'` + matching `headRefName`. Prose alone never completes a run.
+  - Under `prompt-pr`, a merged eligible prompt PR (`stage=prompt-pr|prompt`, legacy `:prompt-pr|:prompt`, or local `prompt-pr`/`prompt` stage + matching branch) or any merged `code` PR completes the run.
+- **Story evidence & base-source comparison:** Combine local `storyEvidence` (matching `git-content-v1` via Layer-0 `gitFiles` or `runtime-capture-v1` via `runtime-seam.mjs`), `savedStoryEvidence` from `createSavedStoryEvidenceReader()` (one reader per invocation), and `recordedRuntimeLines` from the most recently updated eligible PR with named `Prompt tests` / `Runtime check` lines (reading only the top block / details block, never agent notes). For merged runs, compare local evidence against the current base branch view (`openBaseSource` / `closeBaseSource` in `finally`), preferring a checked-out worktree then local ref then `origin/<base>` without fetching. Pin the integration base commit SHA (`baseSha`) when a real Git checkout is present.
+- **Closed-unbuilt recovery:** When a trusted issue is `CLOSED` while the run is not merged, has no active local run, has no open or merged same-repo PR, has incomplete Story passes, and lacks its planned Story files on `cwd` or `baseBranch`, report `issue closed (PASS of TOTAL pass)` and treat the run as unstarted so `productStart` can reopen it.
+- **Cycle diagnostics:** Detect `Needs` cycles (excluding `plan PR`) and surface a closed path warning (`Needs form a cycle: A → B → A`) without blocking unrelated ready runs or explicit starts.
 
-<details>
-<summary>Find a trusted planned issue without loading the repository history</summary>
+## Start and CLI formatting (`src/core/product/product-cli.mjs`)
 
-Use the [planned-run marker grammar](../../skills/pdd-product/references/files.md#planned-run-identity).
-Before any search, read local product state and directly look up this run's saved
-issue binding, or an issue named by a local feature record with this exact
-`productMarker`. Validate the actual issue's repository, positive number, exact
-single marker and author trust below. A binding is a lookup hint, never authority.
-A bad saved binding or local feature hint affects only its planned run. Status
-marks that run `unverified`, with the issue number, a reason and the action
-"Run `pdd product start RUN` to link it again"; next carries the same warning.
-If another valid trusted link is selected for that run, diagnostics may still
-identify discarded bad hints but omit the now-misleading repair action. Keep
-the reason and repair action for runs that remain unverified.
-Do not read its PRs or use evidence authorized by that hint, offer it ready,
-or advance its dependents. Independent saved checks rooted in product cwd may
-still supply Story progress under the local-evidence rule above.
-Other planned runs remain usable, including explicit starts for other runs.
-
-A confirmed 404, foreign repository, wrong/missing marker, or author known to be
-untrusted invalidates the hint. Drop that persisted run/issue binding and exclude
-that same issue from local hints and cached selection in this command. Read
-commands leave the affected run unverified for this invocation. An explicit
-start of that run may discover and save a trusted replacement, or create after
-a complete fresh search proves no eligible issue; it must not repeatedly fail
-on the invalid local record. A transport failure, malformed lookup, non-404 HTTP
-failure, or unavailable actor identity leaves the issue unresolved: retain the
-hint, isolate the run, and fail its explicit start with the reason and repair
-action, without creation or workflow launch. Such uncertainty never proves
-absence. Apply the same distinction to direct revalidation of cached candidates.
-For start, resolve its target first: a valid binding returns/reuses that issue
-without searching unrelated runs.
-
-For unresolved runs, use one shared repository issue-search query for the prefix
-`<!-- pdd-product: run=` across this product's commands, then exact-match the
-planned markers locally, including closed issues. phone-1 never matches phone-10.
-One query may require several pages: read each bounded page separately with at
-most ten items, projecting only issue identity/body, author, association,
-creation time and state. Do not load all repository history or combine pages in
-one subprocess output buffer. Use gh argv arrays and a verified repository.
-
-Read the complete relevant search result. Transport failure, malformed pages,
-`incomplete_results`, or the search ceiling without completeness proof is a
-finite dependency error, never an empty search authorizing creation. Deduplicate
-responses by issue number. Persist only complete raw search snapshots for 60,000
-milliseconds, scoped by verified repository and Git common directory. A snapshot
-is usable only at age 0 through 59,999 milliseconds;
-malformed, future-dated, expired or foreign-scope snapshots are misses. Across
-separate CLI processes status, next and start reuse a valid snapshot. Before
-creating from a cached negative, refresh the shared query once; a query freshly
-completed in this command is already sufficient. Never issue a second fresh
-query in one command. Revalidate a cached selected issue by direct lookup before
-claiming it; cached association/body alone cannot establish trust.
-
-A candidate is trusted only when its `author_association` is OWNER, MEMBER or
-COLLABORATOR, or its `user.login` is the current authenticated person's login.
-Compare logins case-insensitively. Resolve the current actor only for that
-exception, once per command. A failed lookup or malformed/missing/blank login
-memoizes unavailable identity: candidates requiring that exception are untrusted,
-while repository-associated candidates remain eligible. Unavailable identity for
-a saved hint follows the unresolved-hint rule above; identity lookup failure
-itself never throws. Unbound candidates remain untrusted and do
-not prevent the commands from continuing.
-An outsider's marker cannot claim the run or cause its text to be run.
-
-Among trusted exact-marker issues, prefer one with an actual local feature run
-record for that issue number; an explicit foreign `productMarker` vetoes that
-record, while absent markers in legacy records are allowed after issue discovery.
-Never infer a planned-run assignment from branch shape or runId. Within the
-preferred group, or among all trusted issues when none has a local feature run,
-choose oldest creation time then lowest issue number. Warn about trusted
-duplicates and the selected issue, and ignored untrusted claims. Closed trusted
-issues remain eligible. Save the selected run-to-issue binding immediately when
-found and immediately after confirmed creation, before returning --no-run or
-launching a workflow. A state-write failure stops startup and reports the
-already-created issue rather than deleting it or retrying creation.
-
-</details>
-
-<details>
-<summary>Associate only this run's PRs, and retain its prompt results</summary>
-
-Read timeline pages separately and consider only `cross-referenced` events
-whose source is a canonical PR in the same repository. A comment containing a
-PR URL is not a PR association. Read each candidate's actual metadata. Reject
-fork heads and foreign repositories. The actual canonical PR URL and number
-must match the requested repository and PR. Any explicitly foreign head owner or
-repository name, or `isCrossRepository:true`, vetoes membership; a false flag
-cannot override contradicting head metadata. With no contradiction,
-same-repository proof is `isCrossRepository:false` or matching
-`headRepositoryOwner.login` plus `headRepository.name`. Missing proof stays
-unverified. Warn about rejected PR provenance only when its body claims this
-run with its exact own-line marker; ordinary references from other runs are quiet.
-
-An otherwise eligible PR belongs to this planned run when its body carries the
-exact product marker on its own line, or its actual head branch equals an own
-branch saved in this issue's local run record (`pr[].branch` or `branch`). Use
-actual saved assignments, not a branch-name pattern, title, `Unblocks`, a
-comment or `PR 2` prose. The allocation branch suffix and the workflow runId are
-independent. A legacy workflow marker plus branch shape alone is insufficient
-when no actual assignment binds it to this run. Preserve the workflow GitHub
-owner's canonical URL and metadata rules.
-
-Among this run's eligible PRs, use the most recently updated PR that has usable
-named Prompt tests lines (older PRs say `Runtime check`; both count), with the higher PR number for an equal update time.
-A later code PR without check lines cannot hide prompt-PR results. Parse the
-chosen body through the runner's `recordedRuntimeLines`, never an independent parser: it reads only the `pdd result:` lines and plain Prompt tests lines of the body's top block, never the Steps overview, full step summaries, Verify or any `Agent note — not checked by pdd` text, both for choosing the PR and for its evidence (#2921). Its `fromPr:N`
-and the text "from PR #N" name that evidence provider, not a later PR with no
-results. Remote passes are reported progress, not proof against local files.
-Retain missing evidence as notRun. Resolve the effective completion target as
-the explicit `through` input when supplied, otherwise `product.through`,
-otherwise `code`. Validate any supplied `through` as `prompt-pr` or `code`
-before any GitHub read or write; reject other values with `invalid-product`.
-When targeting `code`, only an eligible merged implementation PR completes a
-planned run: implementation stage is established by the saved run's `code`-stage
-assignment (`saved.stage === 'code'` with matching `headRefName`) or its
-canonical workflow marker's `code` stage, never by stage prose alone. When
-targeting `prompt-pr`, an eligible merged prompt PR (saved `prompt-pr` or
-`prompt` stage with matching `headRefName`, or canonical single workflow marker
-with stage `prompt-pr` or `prompt`, never stage prose alone) or an eligible
-merged implementation PR (`code`) completes the planned run.
-
-</details>
-
-A checked Story's basename starts with its map ID followed by `-`, `.`, or end
-of name, with case preserved; P01 does not match P010. Count each planned CORE
-Story once per part and once per slice. Journey IDs form a separate `journeys`
-part row. `pass` means a matching current saved pass; `stale` means only an
-older/unverified pass exists; `notRun` means neither, including explicit failures
-and unknown results. Thus total = pass + stale + notRun. Choose current evidence
-before stale evidence, and the newest named row within each category.
-
-<details>
-<summary>Compare merged work against the base, and report waiting needs</summary>
-
-For an unmerged local run, keep its existing own-worktree evidence comparison.
-For a run whose completion target is merged (an eligible implementation PR for
-`code`, or an eligible prompt or implementation PR for `prompt-pr`), call the
-shared `storyEvidence(run, {comparisonRoot})` against the current base source
-instead. Prefer an actual checkout of the local base branch, including its
-current edits. Otherwise use its current local base ref; use the origin-tracking
-base ref only when that local ref is absent. Never fetch or change the person's
-refs. The base is the run's saved baseBranch, otherwise any explicit `base`
-input, otherwise the resolved repository default.
-One read-only view may serve several runs with the same base within a command.
-The base-view lifecycle ports below supply files, not precomputed Story answers.
-Always close owned views in finally, including on errors, and never remove a
-person's existing checkout. If no base is available, pass explicit null to the
-shared comparison and warn; do not fall back to the finished run's old files or
-claim a current pass. A base contract/prompt edit can therefore make merged work
-stale while an unchanged base can verify it after the run worktree changes or
-is removed. Status text names each actual local comparison base, for example
-"Compared with your local main. Run `git pull` to see changes merged on GitHub."
-Use the actual branch name, including alpha when appropriate; never imply a fetch
-was performed. Remote-only counts retain their separate from-PR attribution.
-
-A dependency is done only when its eligible target PR is merged: an
-implementation PR when targeting `code` (the default), or a prompt PR (or
-implementation PR) when targeting `prompt-pr` (via `Through: prompt-pr` in
-`product/plan.md` or explicit `--through prompt-pr`). A completed workflow, an
-unmerged PR, a merged prompt-only PR under the default `code` target, a closed
-issue or a passing check alone is not completion. `plan PR` retains its separate
-existing lookup: product/plan.md must be on any explicit `base` input, otherwise
-the saved product workflow's baseBranch, otherwise the resolved defaultBranch,
-using the local origin-tracking ref first and local base only when that ref is
-absent. A missing plan on an existing tracking ref is not
-replaced by a local-only plan. Local refs may be stale and do not prove approval.
-A missing ref/plan leaves the need unresolved; a transport failure is finite.
-An existing trusted issue/workflow is tracked rather than offered as a new run.
-
-Needs between planned runs may form a cycle, including a self-cycle. Report a
-finite diagnostic with a real closed dependency path, for example
-"Needs form a cycle: server-1 → journeys → server-1", in status and next instead
-of silently leaving that group waiting forever. The special `plan PR` need is
-not a run edge. Preserve normal readiness for unrelated runs. This diagnosis is
-advice, not a new hard gate on an explicit start.
-
-</details>
-
-Optional `warnings` arrays in status/next carry these diagnostics only when
-nonempty; omit the field otherwise to preserve existing result shapes. When
-using the default native reader on a real local directory (not an injected
-`readFile` callback) and `product/plan.md` declares `## Prompts` or dotted
-`## Boundaries` operations, `productStatus` runs the shared `auditProductPlan`
-check across safe non-symlink bounded in-root `.prompt.md` files (skipping
-`examples/` unless tracked by `## Parts` or `## Prompts`, matching
-`lintRepoProject`) and appends concise drift/unwired-boundary warnings to
-`warnings`. Status and next include optional `sharedSurfaces` on runs/waiting
-rows when declared and display them in CLI text. CLI text shows each warning.
-Start includes its relevant warnings in its message.
-
-## Next and start
-
-```mermaid
-flowchart TD
-    R[Named planned run] --> B{Saved issue binding?}
-    B -->|Yes| V{Direct issue valid and trusted?}
-    V -->|Yes| U[Reuse issue]
-    V -->|Invalid| E
-    V -->|Unknown| X[Retain hint; target fails closed]
-    B -->|No| E{Trusted exact marker found?}
-    E -->|Yes| U
-    E -->|No after fresh search| C[Create one issue]
-    U --> S[Save issue binding]
-    C --> S
-    S --> N{Only create issue?}
-    N -->|Yes| D[Return issue]
-    N -->|No| F[Start normal feature run]
-```
-
-When a planned run's trusted issue is `CLOSED` on GitHub while the run is not `merged`, has no active local workflow (`running` or `waiting`), has no `OPEN` eligible PR, has no `MERGED` PR in `detail.prs` or cross-referenced non-foreign same-repo PR, its planned Stories do not all pass (`total === 0` or `pass < total`), and the planned Story files (`storyMatches` for every planned Story ID) do not already exist in the part folder or `user_stories` on `cwd` or `baseBranch` (avoiding false reopens on a cold local `savedStoryEvidence` cache after a single-PR merge), `productStatus` reports its `state` as `issue closed (PASS of TOTAL pass)` (printed as `RUN: issue closed (PASS of TOTAL pass) · issue #N`, while keeping `PR #N (merged)` ahead when a merged eligible PR exists) and treats the run as unstarted for `ready` and `waiting` (#3484).
-
-`productNext` lists unstarted runs (including closed-unbuilt runs above) whose Needs are satisfied and lists unresolved
-needs for waiting runs. Preserve plan order. When at least two runs are ready,
-its guidance says "These can run in parallel, or one person can start them in order."
-`runProduct` prints that guidance and the exact `pdd product start RUN` for each
-ready run (adding `--through VALUE` when `next` received an explicit `through`).
-For small products print their one-run guidance. It never starts anything.
-
-`productStart` rejects an unknown run before any mutation. For a new issue,
-name the product, run and each planned Story ID in its title when that fits
-GitHub's 256-character limit (Unicode code points). If it does not fit, use a
-clear count or first/last summary and warn. Shorten an overlong product/run
-label as needed rather than send an invalid title; the full run and every Story
-ID/text remain in the body. This compaction is not a refusal or a new Story
-limit.
-The body names the product issue when a product workflow record supplies it,
-plan path, run, slice, full Story IDs/texts, prompt folder, boundary contracts
-(covering the primary part and any declared secondary shared surfaces) and
-world contract. When the run declares secondary `sharedSurfaces`, list each
-shared surface with its folder and any declared `## Prompts` paths to update.
-When `product.rulesToCheck` has rules owned by the run's primary part, any
-declared secondary shared surface, or `*` / `all` / `shared` (matched
-case-insensitively), include them under
-a concise `## Rules to check` section in the body (excluding rules owned solely
-by other parts). Include actionable filename guidance: name every Story file with
-its map ID first, such as `P01-menu.md` (use the first planned ID for its example). When a product workflow record supplies the parent issue, include the body line `Part of #N (product).`, replacing N with that issue number. Say that other parts are
-fakes from contracts and `contracts/` must not change. Include exactly one run
-marker. Pass multiline text as data (a body argument or body file), never shell
-code. Repeated sequential starts reuse the issue, including a closed one; do not
-create another. When the reused issue is closed-unbuilt as above, `productStart` reopens it on GitHub via optional port `reopenIssue({cwd, repository, number})` (defaulting to `gh api repos/OWNER/REPO/issues/N -X PATCH -f state=open` through `execFile`) before returning `--no-run` or starting the feature run. Exactly-once issue creation by concurrent starts of the same
-run is outside this promise.
-
-After saving the issue binding, `--no-run` returns it. Otherwise invoke
-`startRun({name:'feature', issue:N, agent, cwd, ...})` once, forwarding
-`packageRoot` when supplied, `through` when supplied explicitly on the CLI or
-when `product/plan.md` declares `Through: prompt-pr` (so `Through: code` in
-`product/plan.md` matches omitting `Through:` instead of implicitly pre-authorizing
-auto-code or blocking strict/automatic starts), and `base` when supplied
-(validated before any GitHub read or write against Git branch ref-format rules:
-nonempty string without control characters, whitespace, `~`, `^`, `:`, `?`, `*`,
-`[`, `\`, `..`, `@{`, `//`, leading/trailing `/`, trailing `.`, single `@`,
-`HEAD`, leading `-`, leading `refs/`, or any `/`-segment starting with `.` or
-ending with `.lock`). Omit
-absent optional fields so existing runner call shapes stay unchanged. Keep the
-runner's reply and failure visible; a startup failure must not delete the issue.
-Default agent is codex; claude, gemini, agy and an agents.json entry name are supported. Check the agent with [workflow agents](workflow-agents.prompt.md#named-agentsjson-entries) `workflowAgentEntry(agent,{cwd,env})` (env from `ports.env`, default the process environment) before any GitHub read or write, so an unknown name refuses with its message before an issue exists. More than 12 Stories in a planned
-run produces a warning in status/next/start, never a refusal. No prerequisite is
-an added hard gate on an explicit start; show unmet needs as advice.
-
-## Ports and preservation
-
-Defaults use public local files, the existing workflow records/evidence, normal
-gh login and the public feature runner. Existing injected callbacks remain:
-`readFile(path)`, `listRuns({cwd})`, `storyEvidence(run, options?)`,
-`savedStoryEvidence({root, comparisonRoot?})`,
-`execFile(file,args,{cwd})`, `resolveRepository({cwd})`,
-`planOnBase({cwd,baseBranch})`, `createIssue({repository,title,body})` and
-`startRun`. `createIssue` returns `{url}`; its default still delegates to
-execFile with `gh issue create`, passing multiline body as data. ProductStart
-owns the issue contents and returned-URL validation.
-
-<details>
-<summary>Raw GitHub read ports and base-source view lifecycle</summary>
-
-The optional raw read callbacks below default to gh through the existing
-execFile callback; they do not return a selected issue, dependency verdict or
-Story result. Native callers receive service values. Runtime resources serialize
-those same raw values as `json` so closed transport schemas need not reproduce
-GitHub's changing record envelope.
-
-| Callback | Actual outside observation |
-|---|---|
-| `issuePage({cwd,repository,marker,page,perPage})` | Raw Search response `{items,total_count,incomplete_results}` for the shared product marker prefix, all states. Page is one-based; perPage is ten or less. |
-| `issueByNumber({cwd,repository,number})` | Raw issue identity/body, author, association, creation time and state from the requested repository issue endpoint, or the actual HTTP failure `{status,message}`; transport failure throws. No selection or trust verdict. |
-| `readProductState({cwd,repository})` | `{json}` containing raw saved JSON text, or null for absent state. |
-| `writeProductState({cwd,repository,json})` | `{}` after atomically replacing that product state with the supplied JSON text. |
-| `lockProductState({cwd,repository})` | `{handle}` after acquiring exclusive state access for this repository/common-directory scope; handle is an owned opaque string. |
-| `unlockProductState({handle})` | `{}` after releasing only that owned lock. |
-| `now()` | `{milliseconds}`: current Unix epoch milliseconds. |
-| `timelinePage({cwd,repository,issue,page,perPage})` | One raw issue-timeline event array, with the same bounded page size. |
-| `pullRequest({cwd,repository,number})` | Actual PR fields needed for number/URL, body, state/draft, updated time, head branch and same-repository/fork proof. |
-| `currentActor({cwd})` | `{login}` from the authenticated gh account. |
-| `openBaseSource({cwd,baseBranch})` | `{root,handle}`: an existing base checkout or a private read-only local snapshot; root and handle may be null when unavailable. |
-| `closeBaseSource({handle})` | `{}` after releasing only the view owned by that non-null handle. |
-
-State adapters store data beneath the Git common directory, keyed by verified
-repository, so every checkout of that repository shares bindings and snapshots.
-They never write product source files. The module uses these raw adapters;
-filesystem realpath of cwd is not a module decision or state-scope condition.
-The module owns decoding, validation and selection. Version-2 state contains
-`version:2`, `repository`, `bindings:[{run,issue}]` and optional
-`search:{at,items}` with raw projected issue records; no productRoot. Only
-well-formed positive-integer bindings for this repository are usable. Missing
-state is empty; malformed binding state is a finite error before creation,
-not absence. Cache corruption alone invalidates the snapshot.
-
-Native adapters retain compatible version-1 folder-keyed state from within the
-same Git common directory: its fields are `version:1`, `repository`,
-`productRoot`, `bindings` and optional `search`. A different productRoot does not
-discard that repository's links. Merge distinct run/issue hints; retain conflicting
-legacy hints for normal trust and local-run selection, never choose arbitrarily.
-Read both accepted versions; persist version 2. Foreign-repository state is not
-imported. Once repository-wide version-2 state exists, it is authoritative: do
-not reimport version-1 hints removed by committed version-2 updates or deletions.
-Migration and state replacement use the same coordination below.
-
-Every state mutation acquires lockProductState, rereads current state under the
-lock, and merges only this command's explicit changes. An upsert changes its
-run's binding; a deletion names both run and observed issue and removes only that
-pair, preserving a concurrent replacement. Untouched bindings survive. Replace
-the search snapshot only with a newer complete snapshot; a stale writer must
-not resurrect a deleted binding or overwrite a newer snapshot. Atomically write
-the merged state, then release the owned lock in finally, including on errors.
-Do not hold the state lock over GitHub or workflow operations. Atomic reads may
-be lock-free. This protects different-run updates and deletions; it does not
-promise exactly-once concurrent issue creation.
-
-The native lock adapter recovers an abandoned lock when its owner process is
-confirmed dead or its age exceeds 30 seconds. Reclamation and release must
-never remove a successor's lock; ownership of the observed lock is required
-before removing it. A busy lock or lock failure reports the actual lock file
-path so the person can locate the obstruction.
-
-The base adapter may allocate a private local Git snapshot from an existing
-local ref. It copies no credentials, performs no network fetch and changes no
-original repository ref, checkout or file. Its opaque handle is allocation
-ownership, not a path supplied by a caller; cleanup may never delete an existing
-base checkout. The product caller releases each non-null handle in finally,
-caches only for that invocation and reports a finite cleanup failure.
-
-</details>
-
-Runtime bindings: savedChecks.evidence serializes the runtime client callback
-reply as json; root and optional comparison_root bind its corresponding inputs.
-It supplies named evidence, never product totals or run completion.
-files.read returns content; runs.list and runs.evidence
-serialize the existing callback reply, with optional comparison_root passed to
-storyEvidence. github.repository binds resolveRepository; github.issuePage,
-github.timelinePage and github.pullRequest serialize their raw callbacks;
-github.currentActor returns its raw reply as json (including malformed replies).
-github.issueByNumber serializes its raw callback reply. productState.read/write
-bind the raw state callbacks; productState.lock/unlock bind their lock lifecycle,
-and clock.now binds now; none computes a verdict.
-repository.planOnBase returns present and
-is read only when a need names `plan PR`. repository.openBaseSource and
-repository.closeBaseSource bind the view lifecycle. github.run remains the
-legacy gh read transport through execFile; github.createIssue records the typed
-creation payload; workflow.start binds the normal runner. These raw service and
-file-view callbacks do not choose the issue, establish PR ownership or decide
-product progress; those decisions remain with their owners above.
-
-All successful CLI values go to stdout; finite errors go to stderr. Every emitted
-line ends with one newline. Invalid input and errors never call a model.
-
-The [command catalog](command-catalog.prompt.md) owns CLI syntax.
-
-The native gh runner records each `gh` call in the GitHub call ledger of the repository that the call names, through `nativeGithubCounter` of [GitHub calls](github-calls.prompt.md#ledger). Counting never changes a call or its result; an injected `execFile` is not wrapped.
+- Validate `--through` (`prompt-pr` | `code`), `--base` (strict Git branch ref-format rules), `--agent` (built-ins `codex`/`claude`/`gemini`/`agy` or `~/.config/pdd/agents.json` via Layer-0 `src/agent-config.mjs`, refusing shell-reserved env names), and run name before any GitHub read or write.
+- Issue body includes optional `Part of #N (product).`, plan path, run, slice, Story IDs/texts, leading Story-ID filename guidance, `Folder`, `Contracts` (covering primary part + `sharedSurfaces` + `contracts/world.md`, omitted for `small` products), `Shared surfaces to update`, matching `## Rules to check`, and exactly one `<!-- pdd-product: run=<RUN> -->`.
+- **Single-part vs cross-part journey integration guidance:** Emit `Other parts are fakes from their contracts. Do not change contracts/ in this run.` ONLY for single-part runs (`planned.part !== 'all'`) with contracts. For `planned.part === 'all'` (journey/integration runs), emit real unmocked cross-part integration guidance requiring `pdd sim --product` and no fake parts.
+- Shorten overlong titles to fit GitHub's 256 Unicode code-point limit while keeping every Story in the body and emitting a warning.
+- After persisting the issue binding (or reopening a closed-unbuilt issue):
+  - `--noRun` returns `{ exitCode: 0, issue, created, started: false }`.
+  - If an explicit `startRun` callback was injected via `ports`, invoke it once with `{ name: 'feature', issue, agent, cwd, ... }`.
+  - Otherwise (default workflow-free mode), return `{ exitCode: 0, issue, created, started: false, handoff: '/pdd' }` with a concise message showing wave, base branch/SHA, and `/pdd` / `pdd autopilot --issue N` next step.
+- `runProduct` prints waves (`Wave 1: ...`), ready runs, waiting needs, status tables, optional `Base: <branch> (<sha7>)`, local comparison base hints, and all warnings; `--json` emits structured JSON for `status`.
 
 ## Dependencies
 
-- [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
-
-- [Product file formats](../../skills/pdd-product/references/files.md): required authoring, generation and verification context for tables, size paths and contracts.
-- [Workflow runs](workflow-runs.prompt.md): required generation/runtime context for repository-scoped `listRuns`, which reuses runsIn.
-- [Workflow runner](workflow-runner.prompt.md): required generation/runtime context for startup, shared `storyEvidence`, `storyCount`, `matchesSource` and Runtime-line parsing. Export the parser for remote PR evidence rather than duplicate it.
-- [Runtime seam](runtime-seam.prompt.md#public-contract): required generation/runtime context for read-only `savedStoryEvidence`, its source matching and saved result identity.
-- [GitHub helpers](workflow-github.prompt.md): required generation/runtime context for repository identity and gh invocation.
-
-## Product composition readers and journey progress (#808)
-
-Export synchronous `parseProductDocuments({mapText,planText = ""})` and `auditProductPlan({mapText = "",planText = "",promptFiles = []})`, using the same existing table/parser policy as readProduct; readProduct delegates after its ordinary safe reads. `auditProductPlan` deterministically checks `## Prompts` inventory drift (`product-prompt-inventory-drift`) against supplied regular in-root prompt files under tracked part directories (skipping `examples/` unless tracked by `## Parts` or `## Prompts`) and checks `## Boundaries` dotted operations (`product-boundary-unwired`) for consumer references outside each operation's defining prompt (and outside the owning part for cross-part boundaries whose `From` names distinct known parts) using strictly linear string scans. This is a public extraction of the existing document parser, not a second parser. Preserve all existing document semantics and diagnostics.
-
-Export synchronous `parseProductWorldWriters({worldText})` returning ordered `{key,writer}` records. Select the single table whose heading columns include Key and Writer, outside fenced code; unrelated tables elsewhere are not writer declarations. No matching table returns an empty list. Multiple candidate writer tables refuse as ambiguous instead of silently combining ownership. Trim and unwrap cells by existing product-table policy. Reject empty Key/Writer declarations and two distinct writers for one key with a finite diagnostic. Never infer ownership from Notes or records/schema sections.
-
-In product status, report journeys as a separate `parts` row with `part: "journeys"`, counting each planned journey once through existing saved/PR evidence ownership. Match the complete Story ID token: J1 never absorbs J10. Keep current source-freshness, trust, newest-result and merged-base rules; stale or unknown evidence cannot become a current pass. These observations never complete feature runs or bypass Needs.
-
-<details><summary>Runtime interface</summary>
-
-```json
-{
-  "status": "approved", "prose_sha256": "84f4d71adccef5770d1033e3cea537c0eca8d762270e63d88880ed3d214ff3ac",
-  "entries": [
-    {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}},"sharedSurfaces":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}},"rulesToCheck":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"owner":{"type":"string"},"rule":{"type":"string"},"verifiedBy":{"type":"string"}},"required":["id","owner","rule","verifiedBy"],"additionalProperties":false}},"prompts":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"part":{"type":"string"}},"required":["path","part"],"additionalProperties":false}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
-    {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]},"sharedSurfaces":{"type":"array","items":{"type":"string"}}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},
-    {"operation":"productNext","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ready":{"type":"array","items":{"type":"string"}},"waiting":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"needs":{"type":"array","items":{"type":"string"}},"sharedSurfaces":{"type":"array","items":{"type":"string"}}},"required":["run","needs"],"additionalProperties":false}},"guidance":{"type":"string"},"warnings":{"type":"array","items":{"type":"string"}}},"required":["ready","waiting","guidance"],"additionalProperties":false},"errors":["invalid-product"]},
-    {"operation":"productStart","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"run":{"type":"string"},"noRun":{"type":"boolean"},"agent":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]},"base":{"type":"string"},"packageRoot":{"type":"string"}},"required":["cwd","run"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"created":{"type":"boolean"},"started":{"type":"boolean"}},"required":["exitCode","message","issue","created","started"],"additionalProperties":false},"errors":[]}
-  ],
-  "calls": [],
-  "resources": [
-    {"name":"files","kind":"blob","access":"read","operations":[{"name":"read","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}}]},
-    {"name":"runs","kind":"port","access":"read","operations":[{"name":"list","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"evidence","access":"read","arguments_schema":{"type":"object","properties":{"run_json":{"type":"string"},"comparison_root":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["run_json"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},
-    {"name":"github","kind":"port","access":"write","operations":[{"name":"run","access":"write","arguments_schema":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"}},"required":["stdout"],"additionalProperties":false}},{"name":"repository","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"defaultBranch":{"type":"string"}},"required":["repository","defaultBranch"],"additionalProperties":false}},{"name":"createIssue","access":"write","arguments_schema":{"type":"object","properties":{"repository":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}},"required":["repository","title","body"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}},{"name":"issuePage","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"page":{"type":"integer","minimum":1},"perPage":{"type":"integer","minimum":1,"maximum":10},"marker":{"type":"string"}},"required":["cwd","repository","page","perPage","marker"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"timelinePage","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"page":{"type":"integer","minimum":1},"perPage":{"type":"integer","minimum":1,"maximum":10},"issue":{"type":"integer","minimum":1}},"required":["cwd","repository","page","perPage","issue"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"pullRequest","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"number":{"type":"integer","minimum":1}},"required":["cwd","repository","number"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"currentActor","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"issueByNumber","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"number":{"type":"integer","minimum":1}},"required":["cwd","repository","number"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},
-    {"name":"repository","kind":"port","access":"read","operations":[{"name":"planOnBase","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"present":{"type":"boolean"}},"required":["present"],"additionalProperties":false}},{"name":"openBaseSource","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"root":{"oneOf":[{"type":"string"},{"type":"null"}]},"handle":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root","handle"],"additionalProperties":false}},{"name":"closeBaseSource","access":"read","arguments_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
-    {"name":"workflow","kind":"port","access":"write","operations":[{"name":"start","access":"write","arguments_schema":{"type":"object","properties":{"name":{"type":"string"},"issue":{"type":"integer"},"agent":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]},"base":{"type":"string"},"cwd":{"type":"string"},"packageRoot":{"type":"string"}},"required":["name","issue","agent","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}}]},
-    {"name":"productState","kind":"port","access":"write","operations":[{"name":"read","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"}},"required":["cwd","repository"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["json"],"additionalProperties":false}},{"name":"write","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"json":{"type":"string"}},"required":["cwd","repository","json"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}},{"name":"lock","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"}},"required":["cwd","repository"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false}},{"name":"unlock","access":"write","arguments_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
-    {"name":"clock","kind":"port","access":"read","operations":[{"name":"now","access":"read","arguments_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"milliseconds":{"type":"number"}},"required":["milliseconds"],"additionalProperties":false}}]},
-    {"name":"savedChecks","kind":"port","access":"read","operations":[{"name":"evidence","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"comparison_root":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]}
-  ],
-  "limits": {"max_steps":20,"max_model_calls":12}, "conventions": []
-}
-```
-</details>
+- Layer-0 `src/shared/git-context.mjs`, `src/shared/github-repo.mjs`, `src/shared/safe-read.mjs`, `src/github-calls.mjs`, `src/agent-config.mjs`.
+- Layer-1 `src/prompt-tests-words.mjs`, `src/runtime-seam.mjs` (read-only `savedStoryEvidence` and `captureSource`).
+- [Product file formats](../../skills/pdd-product/references/files.md) and [command catalog](command-catalog.prompt.md).

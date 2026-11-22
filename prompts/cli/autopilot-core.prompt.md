@@ -2069,8 +2069,10 @@ state.machine]` (with `state.machine` defaulting to the host name when unsaved) 
      or drafting any PR and without deleting the job's worktrees, logs, or branch. Any
      failure returns exit code 1 with `jobs/N.json` retained in `phase: "released"` so
      retry finishes remaining companion and main cleanup idempotently.
-   - **GitHub claim cleanup:** call `ports.releaseClaim` (default `releaseRunClaim` of
-     the [workflow runner](workflow-runner.prompt.md)) with the owned machine form
+   - **GitHub claim cleanup:** call `ports.releaseClaim` (default
+     `releaseAutopilotClaim`, built directly on `winningClaim` and
+     `createDependencyReadPorts` of [Autopilot issue claims](autopilot-claims.prompt.md))
+     with the owned machine form
      observed on GitHub or saved on `jobs/N.json` (retrying this machine's other owned
      form only when the first call made no mutating GitHub API request and refused
      because that other owned form holds a live claim), removing `pdd:working` and
@@ -2085,14 +2087,14 @@ state.machine]` (with `state.machine` defaulting to the host name when unsaved) 
      writing, flushing, confirming, or removing `jobs/N.json` fails, keep `jobs/N.json`
      intact and return exit code 1 so `sweepFiles` never deletes `worktrees/N`. Return exit code 0 with `Released the Autopilot claim for
      REPO#N. The worktree stays at WORKTREE (branch BRANCH).` (keeping `releaseClaim`'s
-     own worktree suffix when a workflow run already supplied one).
-2. When `jobs/N.json` does not exist (an orphan claim on GitHub, a workflow run claim,
-   or a repeat `release N`): if another local job carries `N` in `companions`, verify
+     own worktree suffix when supplied).
+2. When `jobs/N.json` does not exist (an orphan claim on GitHub or a repeat `release N`):
+   if another local job carries `N` in `companions`, verify
    read-only ownership on `N`, release `N` with the owned machine form observed on
    GitHub or saved on that companion, and drop `N` from that job's companions only
    after exit code 0; otherwise call `releaseClaim` with `state.machine` first
-   (omitting `machine` when unsaved so `releaseRunClaim` resolves any workflow run
-   origin or host name) and retry `machineIdOf(state)` only when the first call made no
+   (omitting `machine` when unsaved so `releaseAutopilotClaim` falls back to the local
+   host name) and retry `machineIdOf(state)` only when the first call made no
    mutating GitHub API request and refused because `machineIdOf(state)` holds a live
    claim, so a concurrent replacement claim appearing mid-release is never removed, and
    write no duplicate `history.jsonl` entry.
@@ -2178,9 +2180,8 @@ with the native defaults named above.
 - [Machine guard](machine-guard.prompt.md): required for `slotCount` (the slots) and
   `GUARD` (the cleanup limits).
 - [Autopilot issue claims](autopilot-claims.prompt.md): required for the
-  winning-claim read (`createDependencyReadPorts` owners port), `refreshClaimHeartbeat` and `takeoverLimited`.
+  winning-claim read (`winningClaim`, `createDependencyReadPorts`), `refreshClaimHeartbeat`, `takeoverLimited`, and default `releaseAutopilotClaim` in `releaseCoreJob`.
 - [Automatic base](autopilot-base.prompt.md): required for `checkAutopilotBase`.
-- [Workflow runner](workflow-runner.prompt.md): required for default `releaseRunClaim` in `releaseCoreJob`.
 - [Report owner](autopilot-reports.prompt.md): required for `fileReport` and drafts.
 - [Autopilot regression detection](autopilot-regressions.prompt.md): loaded on demand for bounded post-merge reopen, revert and CI regression checks (`#3182`).
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
