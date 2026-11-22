@@ -2624,7 +2624,13 @@ test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, sy
   const spyCodex = join(binDir, 'codex');
   writeFileSync(spyCodex, [
     `#!${nodeBin}`,
-    'console.log(JSON.stringify({ codexHome: process.env.CODEX_HOME ?? null, args: process.argv.slice(2) }));',
+    'console.log(JSON.stringify({ via: "codex", codexHome: process.env.CODEX_HOME ?? null, args: process.argv.slice(2) }));',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  const spyPddCodex = join(binDir, 'pdd-codex');
+  writeFileSync(spyPddCodex, [
+    `#!${nodeBin}`,
+    'console.log(JSON.stringify({ via: "pdd-codex", failOpen: process.env.PDD_CODEX_AUTO_FAIL_OPEN ?? null, codexHome: process.env.CODEX_HOME ?? null, args: process.argv.slice(2) }));',
     '',
   ].join('\n'), { mode: 0o755 });
   const wrapperPdd = join(binDir, 'pdd');
@@ -2639,6 +2645,7 @@ test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, sy
     PATH: `${binDir}:${process.env.PATH ?? '/usr/bin:/bin'}`,
   };
   delete shellEnvBase.CODEX_HOME;
+  const legacyShellEnv = { ...shellEnvBase, PDD_LEGACY_PTY_ROTATE: '1' };
 
   const shellsToTest = [
     { name: 'bash', bin: 'bash', runCmd: cmd => ['--norc', '--noprofile', '-c', `source ${JSON.stringify(bashrc)}; ${cmd}`] },
@@ -2666,12 +2673,25 @@ test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, sy
   );
 
   for (const sh of shellsToTest) {
-    // A) Healthy lease + normal command (including non-auth subcommands passing "logout" as prompt) -> CODEX_HOME points to pddManagedCodexHome!
+    // A0) Default unified mode delegates normal commands to `PDD_CODEX_AUTO_FAIL_OPEN=1 pdd-codex`!
     for (const [cmd, expectedArgs] of [
       ['codex exec "ship it"', ['exec', 'ship it']],
       ['codex exec logout', ['exec', 'logout']],
     ]) {
-      const execRun = await execShellAsync(sh.bin, sh.runCmd(cmd), { env: shellEnvBase });
+      const unifiedRun = await execShellAsync(sh.bin, sh.runCmd(cmd), { env: shellEnvBase });
+      assert.equal(unifiedRun.status, 0, `${sh.name} default ${cmd} failed: ${unifiedRun.stderr}`);
+      const unifiedParsed = JSON.parse(unifiedRun.stdout.trim());
+      assert.equal(unifiedParsed.via, 'pdd-codex', `${sh.name} ${cmd} delegates to pdd-codex by default`);
+      assert.equal(unifiedParsed.failOpen, '1', `${sh.name} ${cmd} sets PDD_CODEX_AUTO_FAIL_OPEN=1`);
+      assert.deepEqual(unifiedParsed.args, expectedArgs);
+    }
+
+    // A) Legacy opt-in (`PDD_LEGACY_PTY_ROTATE=1`): healthy lease + normal command -> CODEX_HOME points to pddManagedCodexHome!
+    for (const [cmd, expectedArgs] of [
+      ['codex exec "ship it"', ['exec', 'ship it']],
+      ['codex exec logout', ['exec', 'logout']],
+    ]) {
+      const execRun = await execShellAsync(sh.bin, sh.runCmd(cmd), { env: legacyShellEnv });
       assert.equal(execRun.status, 0, `${sh.name} ${cmd} failed: ${execRun.stderr}`);
       const execParsed = JSON.parse(execRun.stdout.trim());
       assert.equal(execParsed.codexHome, managedHome, `${sh.name} ${cmd} sets CODEX_HOME to managedHome`);
@@ -2683,6 +2703,7 @@ test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, sy
       const guardUnset = await execShellAsync(sh.bin, sh.runCmd(cmd), { env: shellEnvBase });
       assert.equal(guardUnset.status, 0, `${sh.name} ${cmd} failed: ${guardUnset.stderr}`);
       const parsed = JSON.parse(guardUnset.stdout.trim());
+      assert.equal(parsed.via, 'codex');
       assert.equal(parsed.codexHome, null, `${sh.name} ${cmd} does NOT point CODEX_HOME at managedHome`);
     }
 
@@ -2700,9 +2721,9 @@ test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, sy
     }
   }
 
-  // D) Fail-safe fallback when no valid active lease exists or Cloud is unreachable -> leaves/unsets CODEX_HOME so ~/.codex/auth.json works!
+  // D) Fail-safe fallback when no valid active lease exists or Cloud is unreachable (legacy mode) -> leaves/unsets CODEX_HOME so ~/.codex/auth.json works!
   const deadEnv = {
-    ...shellEnvBase,
+    ...legacyShellEnv,
     PDD_ACCOUNTS_URL: 'http://127.0.0.1:1',
     PDD_STATE_DIR: join(sb.root, 'offline-empty-state'),
   };

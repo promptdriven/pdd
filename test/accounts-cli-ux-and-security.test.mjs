@@ -893,9 +893,14 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
 });
 
 test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured live mid-session quota rotation without PTY stdout false positives', async t => {
-  // 1. Shell wrapper blocks (`sh` and `fish`) delegate interactive TTY codex sessions to `pdd accounts codex -- "$@"`!
+  // 1. Shell wrapper blocks (`sh` and `fish`) delegate `codex` to `pdd-codex` with fail-open by default
+  //    and preserve `pdd accounts codex --` behind the `PDD_LEGACY_PTY_ROTATE=1` opt-in switch!
   const shWrapper = renderAutoSwitchBlock('sh');
   const fishWrapper = renderAutoSwitchBlock('fish');
+  assert.match(shWrapper, /PDD_CODEX_AUTO_FAIL_OPEN=1 command pdd-codex "\$@"/);
+  assert.match(fishWrapper, /PDD_CODEX_AUTO_FAIL_OPEN=1 command pdd-codex \$argv/);
+  assert.match(shWrapper, /PDD_LEGACY_PTY_ROTATE/);
+  assert.match(fishWrapper, /PDD_LEGACY_PTY_ROTATE/);
   assert.match(shWrapper, /pdd accounts codex -- "\$@"/);
   assert.match(fishWrapper, /pdd accounts codex -- \$argv/);
 
@@ -2484,10 +2489,12 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   mkdirSync(fakeBin, { recursive: true });
   const managedHome = pddManagedCodexHome(sb.env);
   writeFileSync(join(fakeBin, 'pdd'), `#!/bin/sh\nif [ "\${PDD_PRINT_CODEX_HOME:-}" = "1" ]; then printf '%s\\n' ${JSON.stringify(managedHome)}; fi\nexit 0\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, 'pdd-codex'), `#!/bin/sh\nprintf 'VIA=pdd-codex FAIL_OPEN=%s CODEX_HOME=%s ARGS=%s\\n' "\${PDD_CODEX_AUTO_FAIL_OPEN:-UNSET}" "\${CODEX_HOME:-UNSET}" "$*"\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, 'codex'), `#!/bin/sh\nprintf 'CODEX_HOME=%s ARGS=%s\\n' "\${CODEX_HOME:-UNSET}" "$*"\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, 'pdd-claude'), `#!/bin/sh\nprintf 'VIA=pdd-claude ARGS=%s\\n' "$*"\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, 'claude'), `#!/bin/sh\nprintf 'VIA=stock-claude ARGS=%s\\n' "$*"\n`, { mode: 0o755 });
   chmodSync(join(fakeBin, 'pdd'), 0o755);
+  chmodSync(join(fakeBin, 'pdd-codex'), 0o755);
   chmodSync(join(fakeBin, 'codex'), 0o755);
   chmodSync(join(fakeBin, 'pdd-claude'), 0o755);
   chmodSync(join(fakeBin, 'claude'), 0o755);
@@ -2504,15 +2511,24 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
     encoding: 'utf8',
   });
 
-  // 3b-i: `codex "explain login" logout` inside managed CODEX_HOME stops at `"explain login"` (`*) break ;;`) and is NOT blocked by logout guard!
-  const promptWithLogoutWord = runBash('codex "explain login" logout', { CODEX_HOME: managedHome });
-  assert.equal(promptWithLogoutWord.status, 0, promptWithLogoutWord.stderr);
-  assert.match(promptWithLogoutWord.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=explain login logout`));
+  // 3b-i: Default unified auto-switch routes `codex "explain login" logout` and `codex login status` to `pdd-codex`
+  // with `PDD_CODEX_AUTO_FAIL_OPEN=1` (clearing stale managed `CODEX_HOME`) and does NOT trip the logout guard!
+  const defaultPromptWithLogoutWord = runBash('codex "explain login" logout', { CODEX_HOME: managedHome });
+  assert.equal(defaultPromptWithLogoutWord.status, 0, defaultPromptWithLogoutWord.stderr);
+  assert.match(defaultPromptWithLogoutWord.stdout, /VIA=pdd-codex FAIL_OPEN=1 CODEX_HOME=UNSET ARGS=explain login logout/);
 
-  // 3b-ii: `codex login status` runs WITH `CODEX_HOME="$_pdd_cx_home"`!
-  const loginStatusRun = runBash('codex login status');
-  assert.equal(loginStatusRun.status, 0, loginStatusRun.stderr);
-  assert.match(loginStatusRun.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=login status`));
+  const defaultLoginStatusRun = runBash('codex login status');
+  assert.equal(defaultLoginStatusRun.status, 0, defaultLoginStatusRun.stderr);
+  assert.match(defaultLoginStatusRun.stdout, /VIA=pdd-codex FAIL_OPEN=1 CODEX_HOME=UNSET ARGS=login status/);
+
+  // 3b-ii: Opt-in `PDD_LEGACY_PTY_ROTATE=1` preserves legacy `CODEX_HOME="$_pdd_cx_home"` routing!
+  const legacyPromptWithLogoutWord = runBash('codex "explain login" logout', { CODEX_HOME: managedHome, PDD_LEGACY_PTY_ROTATE: '1' });
+  assert.equal(legacyPromptWithLogoutWord.status, 0, legacyPromptWithLogoutWord.stderr);
+  assert.match(legacyPromptWithLogoutWord.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=explain login logout`));
+
+  const legacyLoginStatusRun = runBash('codex login status', { PDD_LEGACY_PTY_ROTATE: '1' });
+  assert.equal(legacyLoginStatusRun.status, 0, legacyLoginStatusRun.stderr);
+  assert.match(legacyLoginStatusRun.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=login status`));
 
   // While `codex logout` and `codex login` (without `status`) inside managedHome ARE still refused!
   assert.equal(runBash('codex logout', { CODEX_HOME: managedHome }).status, 1);

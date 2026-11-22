@@ -617,11 +617,13 @@ function stripAutoFailOpenEnv(env) {
 
 function isAutoFailOpenLeaseError(err) {
   const code = String(err?.code ?? '');
+  if (['unsafe_path', 'invalid_args', 'reauth_required'].includes(code)) return false;
   if (['timeout', 'network_error', 'missing_auth_token', 'no_ready_account', 'all_cooling'].includes(code)) {
     return true;
   }
   const status = Number(err?.status ?? 0);
-  if (status === 0 || status === 401 || status === 403 || status >= 500) return true;
+  if (status === 401 || status === 403 || status >= 500) return true;
+  if (status === 0 && !code) return true;
   return false;
 }
 
