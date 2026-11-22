@@ -10,8 +10,8 @@ import { loadProjectLintConfig } from '../../../src/core/lint/project-config.mjs
 import { runConfiguredLintCommands } from '../../../src/core/lint/project-lint.mjs';
 
 test('ReDoS safety fixes all 4 proven bypass classes: non-literal escapes, /iu Unicode folds, chained unbounded quantifiers, and linear DP glob', () => {
-  // 1. Hex / Unicode / control / NUL escapes inside repeated alternation MUST be rejected.
-  for (const pat of ['(?:\\x61|a)+$', '(?:\\u0061|a)+$', '(?:\\u{61}|a)+$', '(?:\\cA|A)+$', '(?:\\0|a)+$']) {
+  // 1. Hex / Unicode / control / NUL escapes inside repeated alternation MUST be rejected (including Astra R2 #7 tab/newline overlaps).
+  for (const pat of ['(?:\\x61|a)+$', '(?:\\u0061|a)+$', '(?:\\u{61}|a)+$', '(?:\\cA|A)+$', '(?:\\0|a)+$', '(?:\\t|\\x09)+', '(?:\\t|\t)+', '(?:\\n|\n)+', '(?:\\r|\r)+']) {
     assert.equal(isSafeRegexPattern(pat), false, `escape bypass must be rejected: ${pat}`);
   }
 

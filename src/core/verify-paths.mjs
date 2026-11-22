@@ -10,7 +10,7 @@ import { compileGlobMatcher } from './lint/regex-safety.mjs';
 const MAX_VERIFY_PATHS = 100;
 const PATH_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
 const CAPABILITY_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
-const NON_SURFACE_PATH_RE = /(?:^|\/)(?:docs?|user_stories|pdd\/stories|__pycache__|\.pytest_cache|node_modules)\/|\.prompt\.md$|\.(?:md|mdx|txt|rst|pyc|pyo)$|(?:^|\/)\.DS_Store$/i;
+const NON_SURFACE_PATH_RE = /^(?:docs|prompts|user_stories|pdd\/stories)\/|\.prompt\.md$|\.mdx?$|^(?:README|CHANGELOG|LICENSE)(?:\.[^/]+)?$|(?:^|\/)(?:__pycache__|\.pytest_cache|node_modules)\/|\.(?:pyc|pyo)$|(?:^|\/)\.DS_Store$/i;
 
 export const isProductionSurfaceFile = filePath =>
   canonicalRepoPath(filePath) && !isTestOwnedPath(filePath) && !NON_SURFACE_PATH_RE.test(filePath);

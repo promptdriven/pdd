@@ -1,8 +1,8 @@
 // Unified stateless `pdd prove` (G1): zero-flag merge-base verification + 5-bug-fixed bug-contrast mode.
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { isTestOwnedPath } from '../file-owner.mjs';
 import { causeText } from '../shared/safe-read.mjs';
 import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBaseRef, scrubChildEnv } from './lint/diagnostics.mjs';
@@ -39,7 +39,9 @@ function execShellCommand(command, { cwd, env, timeoutMs }, ports = {}) {
     ? causeText(proc.error.message)
     : (signal && !timedOut
         ? `Process terminated by signal ${signal}`
-        : ([126, 127].includes(exitCode) ? `Command exited ${exitCode}` : (setupMatch ? causeText(setupMatch[0]) : '')));
+        : (exitCode !== null && exitCode >= 129 && exitCode <= 192
+            ? `Command terminated by signal (exit ${exitCode})`
+            : ([126, 127].includes(exitCode) ? `Command exited ${exitCode}` : (setupMatch ? causeText(setupMatch[0]) : ''))));
   return {
     command, ok: exitCode === 0 && !proc.error && !signal, exitCode, signal, timedOut,
     durationMs: Math.max(0, Date.now() - started), stdout, stderr, setupError,
@@ -70,17 +72,26 @@ export function detectRepoTestCommand(root) {
 function listChangedFiles(root, ref) {
   const seen = new Set();
   if (ref) {
-    const diff = gitExec(root, ['diff', '--name-only', '-z', ref, '--']);
-    if (diff.status === 0 && diff.stdout) for (const p of diff.stdout.split('\0').filter(Boolean)) seen.add(p);
+    const diff = gitExec(root, ['diff', '--no-renames', '--name-only', '-z', ref, '--']);
+    if (diff.status !== 0) throw new Error(`git diff failed for ref "${ref}": ${causeText(diff.stderr || 'unknown error')}`);
+    if (diff.stdout) for (const p of diff.stdout.split('\0').filter(Boolean)) seen.add(p);
   }
   const untracked = gitExec(root, ['ls-files', '--others', '--exclude-standard', '-z']);
-  if (untracked.status === 0 && untracked.stdout) for (const p of untracked.stdout.split('\0').filter(Boolean)) seen.add(p);
+  if (untracked.status !== 0) throw new Error(`git ls-files failed: ${causeText(untracked.stderr || 'unknown error')}`);
+  if (untracked.stdout) for (const p of untracked.stdout.split('\0').filter(Boolean)) seen.add(p);
   return [...seen].filter(canonicalRepoPath).sort();
 }
 
 function lstatSafe(fullPath) {
   try { return lstatSync(fullPath); }
   catch (err) { if (err?.code === 'ENOENT') return null; throw err; }
+}
+
+function assertDirWithin(baseReal, fullPath, relPath) {
+  const dirReal = realpathSync(dirname(fullPath));
+  if (dirReal !== baseReal && !dirReal.startsWith(`${baseReal}${sep}`)) {
+    throw new Error(`Refused escaping parent directory for overlay path: ${relPath}`);
+  }
 }
 
 function walkCheckedSegments(baseReal, relPath, { createDirs = false } = {}) {
@@ -97,6 +108,7 @@ function walkCheckedSegments(baseReal, relPath, { createDirs = false } = {}) {
     if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`Refused symlink or non-directory path segment: ${parts.slice(0, i + 1).join('/')}`);
   }
   const fullPath = join(cur, parts.at(-1));
+  assertDirWithin(baseReal, fullPath, relPath);
   const leafStat = lstatSafe(fullPath);
   if (leafStat?.isSymbolicLink()) throw new Error(`Refused symlinked overlay path: ${relPath}`);
   return { fullPath, leafStat };
@@ -113,24 +125,34 @@ function copyWorkingTreeOverlay(root, worktree, relPaths, { deleteMissing = fals
         const dstInfo = walkCheckedSegments(wtReal, rel);
         if (dstInfo.leafStat) {
           if (!dstInfo.leafStat.isFile()) throw new Error(`Refused non-regular deletion target in worktree: ${rel}`);
+          assertDirWithin(wtReal, dstInfo.fullPath, rel);
           rmSync(dstInfo.fullPath, { force: true });
+          assertDirWithin(wtReal, dstInfo.fullPath, rel);
           mirrored.push(rel);
         }
       }
       continue;
     }
     if (!srcInfo.leafStat.isFile()) throw new Error(`Refused non-regular overlay file: ${rel}`);
+    assertDirWithin(rootReal, srcInfo.fullPath, rel);
     const rfd = openSync(srcInfo.fullPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    let bytes;
+    let bytes, mode;
     try {
-      if (!fstatSync(rfd).isFile()) throw new Error(`Overlay path changed to non-regular file: ${rel}`);
+      const rst = fstatSync(rfd);
+      if (!rst.isFile()) throw new Error(`Overlay path changed to non-regular file: ${rel}`);
+      assertDirWithin(rootReal, srcInfo.fullPath, rel);
+      mode = rst.mode & 0o777;
       bytes = readFileSync(rfd);
     } finally { closeSync(rfd); }
     const dstInfo = walkCheckedSegments(wtReal, rel, { createDirs: true });
     if (dstInfo.leafStat && !dstInfo.leafStat.isFile()) throw new Error(`Refused non-regular destination in worktree: ${rel}`);
-    const mode = srcInfo.leafStat.mode & 0o777;
+    assertDirWithin(wtReal, dstInfo.fullPath, rel);
     const wfd = openSync(dstInfo.fullPath, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0), mode);
-    try { writeFileSync(wfd, bytes); } finally { closeSync(wfd); }
+    try {
+      writeFileSync(wfd, bytes);
+      fchmodSync(wfd, mode);
+    } finally { closeSync(wfd); }
+    assertDirWithin(wtReal, dstInfo.fullPath, rel);
     mirrored.push(rel);
   }
   return mirrored;
@@ -161,17 +183,13 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
   const requestedBase = base || resolveDefaultBaseRef(root) || 'HEAD~1';
   const resolvedBaseCommit = resolveCommit(root, requestedBase);
   const mbRes = resolvedBaseCommit && headSha ? gitExec(root, ['merge-base', headSha, resolvedBaseCommit]) : null;
-  const baseSha = base
-    ? resolvedBaseCommit
-    : (mbRes?.status === 0 && mbRes.stdout.trim() && mbRes.stdout.trim() !== headSha
-        ? mbRes.stdout.trim()
-        : (resolveCommit(root, 'HEAD~1') ?? resolvedBaseCommit));
+  const baseSha = mbRes?.status === 0 && mbRes.stdout.trim() ? mbRes.stdout.trim() : null;
 
   if (!baseSha || !headSha) {
     const receipt = {
       schema_version: 'pdd.prove.v1', mode: 'bug-contrast', outcome: OUTCOME_NOT_PROVED, reason: 'base-unavailable',
       exit_code: EXIT_NOT_PROVED, baseRef: requestedBase, baseSha, headSha, overlayPaths: [], test, expect,
-      base: null, head: null, notProvedReasons: [`Offline base ref "${requestedBase}" or HEAD could not be resolved locally.`],
+      base: null, head: null, notProvedReasons: [`Offline merge-base between HEAD and "${requestedBase}" could not be resolved locally.`],
     };
     if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
     else stderr.write(`Not proved: offline base ref "${requestedBase}" not found locally.\n`);
@@ -184,8 +202,6 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
     return { exitCode: EXIT_USAGE, outcome: OUTCOME_FAILED, receipt: null };
   }
 
-  const changedFromBase = listChangedFiles(root, baseSha);
-  const overlayPaths = changedFromBase.filter(f => (overlayGlobs.length > 0 && overlayGlobs.some(m => m.test(f))) || COLOCATED_TEST_RE.test(f) || isTestOwnedPath(f));
   const timeoutMs = timeoutMinutes * 60_000;
   const worktreeParent = mkdtempSync(join(tmpdir(), 'pdd-prove-'));
   const baseWorktree = join(worktreeParent, 'base');
@@ -194,6 +210,8 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
   let basePhase = null, headPhase = null, setupError = '', copiedPaths = [];
 
   try {
+    const changedFromBase = listChangedFiles(root, baseSha);
+    const overlayPaths = changedFromBase.filter(f => (overlayGlobs.length > 0 && overlayGlobs.some(m => m.test(f))) || COLOCATED_TEST_RE.test(f) || isTestOwnedPath(f));
     const wtBase = gitExec(root, ['worktree', 'add', '--detach', baseWorktree, baseSha]);
     if (wtBase.status !== 0) throw new Error(wtBase.stderr || wtBase.stdout || 'git worktree add base failed');
     createdWorktrees.push(baseWorktree);
@@ -268,7 +286,7 @@ export function runProve(
   const baseRef = base || resolveDefaultBaseRef(root);
   const baseCommit = baseRef ? resolveCommit(root, baseRef) : null;
   const mb = baseCommit && headSha ? gitExec(root, ['merge-base', headSha, baseCommit]) : null;
-  const baseSha = mb?.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : baseCommit;
+  const baseSha = mb?.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : null;
   const timeoutMs = timeoutMinutes * 60_000;
 
   const lint = lintRepoProject({ root });

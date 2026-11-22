@@ -5,7 +5,7 @@ import { isAbsolute, join } from 'node:path';
 
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const HEAD_BYTES = 4096;
-export const SCRUBBED_CHILD_ENV_RE = /^(?:GH_.*|GITHUB_.*|CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|ANTHROPIC_.*|OPENAI_.*|CODEX_.*|HERDR_.*|PDD_.*|AWS_.*|NODE_TEST_CONTEXT|.*(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD))$/i;
+export const SCRUBBED_CHILD_ENV_RE = /^(?:GH_.*|GITHUB_.*|CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_CONFIG_DIR|CLAUDE_PID|ANTHROPIC_.*|OPENAI_.*|CODEX_.*|GEMINI_.*|GOOGLE_.*|ANTIGRAVITY_.*|HERDR_.*|PDD_.*|AWS_.*|SSH_AUTH_SOCK|SSH_AGENT_PID|GPG_AGENT_INFO|NPM_TOKEN|NODE_TEST_CONTEXT|.*(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD))$/i;
 
 export function scrubChildEnv(env = process.env) {
   const clean = {};
@@ -16,7 +16,7 @@ export function scrubChildEnv(env = process.env) {
 }
 
 export function resolveDefaultBaseRef(cwd) {
-  for (const candidate of ['origin/main', 'main', 'origin/master', 'master', 'HEAD']) {
+  for (const candidate of ['origin/HEAD', 'origin/main', 'origin/master', 'main', 'master']) {
     const check = spawnSync('git', ['rev-parse', '--verify', `${candidate}^{commit}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     if (check.status === 0 && check.stdout.trim()) return candidate;
   }

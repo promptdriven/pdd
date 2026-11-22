@@ -98,4 +98,14 @@ test('Astra #11: wiring cue prose line carries into immediately following bullet
   );
   assert.equal(errs.length, 1, errs.join('\n'));
   assert.match(errs[0], /prompts\/adapter\.prompt\.md:11 \[native-only-unknown-port\].*"mailer\.send"/);
+
+  // Astra R2 #8: cue line WITHOUT trailing colon still carries across optional blank line into bullet list.
+  const withoutColon = adapterWithCueList.replace('Wire the following ports:', 'Wire the following ports');
+  const errsNoColon = lintNativeOnlyPortParity(
+    withoutColon,
+    [{ path: 'prompts/order.prompt.md', text: dep, isPrompt: true }],
+    { path: 'prompts/adapter.prompt.md' },
+  );
+  assert.equal(errsNoColon.length, 1, errsNoColon.join('\n'));
+  assert.match(errsNoColon[0], /"mailer\.send"/);
 });

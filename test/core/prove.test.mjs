@@ -2,7 +2,7 @@ import '../helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -12,6 +12,8 @@ import {
   matchVerifyPaths,
   parseVerifyConfig,
 } from '../../src/core/verify-paths.mjs';
+import { resolveDefaultBaseRef } from '../../src/core/lint/diagnostics.mjs';
+import { loadBaseTrustedLintCommands } from '../../src/core/lint/project-config.mjs';
 import {
   EXIT_FAILED,
   EXIT_NOT_PROVED,
@@ -518,4 +520,90 @@ test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-a
   assert.equal(symRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(symRes.receipt));
   assert.equal(symRes.receipt.reason, 'setup-error');
   assert.equal(existsSync(join(outsideDir, 'escaped.txt')), false, 'dangling symlink destination MUST NEVER be written through');
+});
+
+test('Astra R2 #1-#6 regressions: no HEAD default base, merge-base required on orphan ref, --no-renames overlay parity + exec bits, shell signal exit 137/143, extra env scrubs, and requirements.txt/CMakeLists.txt/src/docs surfaces', t => {
+  const nodeBin = JSON.stringify(process.execPath);
+
+  // R2 #6: requirements.txt, CMakeLists.txt, and src/docs/route.ts MUST stay production surfaces!
+  assert.equal(isProductionSurfaceFile('requirements.txt'), true);
+  assert.equal(isProductionSurfaceFile('CMakeLists.txt'), true);
+  assert.equal(isProductionSurfaceFile('src/docs/route.ts'), true);
+  assert.equal(isProductionSurfaceFile('docs/guide.md'), false);
+  assert.equal(isProductionSurfaceFile('README.md'), false);
+  assert.equal(isProductionSurfaceFile('LICENSE'), false);
+
+  // R2 #1: Repo without main/master/origin/* -> resolveDefaultBaseRef returns null; prove returns Not proved; loadBaseTrustedLintCommands refuses working-tree commands!
+  const noMainRepo = mkdtempSync(join(tmpdir(), 'pdd-prove-nomain-'));
+  t.after(() => rmSync(noMainRepo, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', '-b', 'custom-dev'], { cwd: noMainRepo });
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: noMainRepo });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: noMainRepo });
+  writeFileSync(join(noMainRepo, 'pdd.json'), JSON.stringify({ lint: { commands: ['echo untrusted'] }, verify: { test: `${nodeBin} -e "process.exit(0)"` } }) + '\n');
+  commitAll(noMainRepo, 'only custom-dev');
+  assert.equal(resolveDefaultBaseRef(noMainRepo), null);
+  assert.equal(runProve({ cwd: noMainRepo, json: true }, { stdout: makeSink(), stderr: makeSink() }).exitCode, EXIT_NOT_PROVED);
+  const untrustedNoBase = loadBaseTrustedLintCommands(noMainRepo);
+  assert.deepEqual(untrustedNoBase.commands, []);
+  assert.equal(untrustedNoBase.skippedUntrusted, true);
+
+  // R2 #1b: Unrelated orphan branch -> merge-base fails -> prove & loadBaseTrustedLintCommands both fail closed!
+  const orphanRepo = initGitRepo(t, 'pdd-prove-orphan-');
+  writeFileSync(join(orphanRepo, 'a.mjs'), 'export const a = 1;\n');
+  commitAll(orphanRepo, 'main commit');
+  execFileSync('git', ['checkout', '-q', '--orphan', 'unrelated-base'], { cwd: orphanRepo });
+  execFileSync('git', ['rm', '-rf', '-q', '.'], { cwd: orphanRepo });
+  writeFileSync(join(orphanRepo, 'pdd.json'), JSON.stringify({ lint: { commands: ['echo unrelated'] } }) + '\n');
+  commitAll(orphanRepo, 'unrelated root');
+  execFileSync('git', ['checkout', '-q', 'main'], { cwd: orphanRepo });
+  assert.equal(runProve({ cwd: orphanRepo, base: 'unrelated-base', json: true }, { stdout: makeSink(), stderr: makeSink() }).exitCode, EXIT_NOT_PROVED);
+  assert.deepEqual(loadBaseTrustedLintCommands(orphanRepo, { baseRef: 'unrelated-base' }).commands, []);
+
+  // R2 #3: Renamed test file uses --no-renames (old path deleted from baseWorktree!) + executable script preserves +x mode bits + R2 #5 extra env scrubs!
+  const renameRepo = initGitRepo(t, 'pdd-prove-rename-exec-');
+  mkdirSync(join(renameRepo, 'test'), { recursive: true });
+  writeFileSync(join(renameRepo, 'test', 'old-fail.test.mjs'), "import assert from 'node:assert/strict';\nassert.fail('OLD_FAIL');\n");
+  writeFileSync(join(renameRepo, 'test', 'run-check.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o644 });
+  commitAll(renameRepo, 'base with old-fail');
+  execFileSync('git', ['checkout', '-q', '-b', 'rename-and-chmod'], { cwd: renameRepo });
+  // Pure rename + make it pass, plus make test/run-check.sh executable (0o755) checking R2 #5 scrubbed env vars!
+  execFileSync('git', ['mv', 'test/old-fail.test.mjs', 'test/new-pass.test.mjs'], { cwd: renameRepo });
+  writeFileSync(join(renameRepo, 'test', 'new-pass.test.mjs'), 'process.exit(0);\n');
+  writeFileSync(
+    join(renameRepo, 'test', 'run-check.sh'),
+    '#!/bin/sh\nfor v in "$CLAUDE_CONFIG_DIR" "$SSH_AUTH_SOCK" "$SSH_AGENT_PID" "$GPG_AGENT_INFO" "$NPM_TOKEN" "$GEMINI_API_KEY" "$GOOGLE_APPLICATION_CREDENTIALS" "$ANTIGRAVITY_TOKEN"; do\n  if [ -n "$v" ]; then echo "LEAK:$v" >&2; exit 2; fi\ndone\nexit 0\n',
+  );
+  chmodSync(join(renameRepo, 'test', 'run-check.sh'), 0o755);
+  const renameRes = runProve(
+    {
+      cwd: renameRepo,
+      base: 'main',
+      test: `./test/run-check.sh && ${nodeBin} test/new-pass.test.mjs && test ! -e test/old-fail.test.mjs`,
+      expect: 'OLD_FAIL',
+      json: true,
+      env: {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: '/tmp/c', SSH_AUTH_SOCK: '/tmp/s', SSH_AGENT_PID: '99', GPG_AGENT_INFO: 'g',
+        NPM_TOKEN: 'npm_x', GEMINI_API_KEY: 'gem_x', GOOGLE_APPLICATION_CREDENTIALS: '/tmp/g.json', ANTIGRAVITY_TOKEN: 'ag_x',
+      },
+    },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  // Both baseWorktree and headWorktree must execute ./test/run-check.sh (+x preserved!) and NOT contain test/old-fail.test.mjs -> base-passes!
+  assert.equal(renameRes.exitCode, EXIT_FAILED, JSON.stringify(renameRes.receipt));
+  assert.equal(renameRes.receipt.reason, 'base-passes', 'renamed test must delete old path from baseWorktree and preserve +x mode bits');
+
+  // R2 #4: POSIX shell signal exit codes (137 SIGKILL, 143 SIGTERM) classify as setup-error (Not proved, exit 3)!
+  const sigExitRepo = initGitRepo(t, 'pdd-prove-sigexit-');
+  writeFileSync(join(sigExitRepo, 'x.mjs'), 'export const bad = true;\n');
+  commitAll(sigExitRepo, 'base');
+  execFileSync('git', ['checkout', '-q', '-b', 'fix-sigexit'], { cwd: sigExitRepo });
+  writeFileSync(join(sigExitRepo, 'x.mjs'), 'export const bad = false;\n');
+  writeFileSync(join(sigExitRepo, 'x.test.mjs'), "import { bad } from './x.mjs';\nif (bad) { console.error('KILLED_MSG'); process.exit(137); }\n");
+  const sigExitRes = runProve(
+    { cwd: sigExitRepo, base: 'main', test: `${nodeBin} x.test.mjs`, expect: 'KILLED_MSG', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(sigExitRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(sigExitRes.receipt));
+  assert.equal(sigExitRes.receipt.reason, 'setup-error');
 });

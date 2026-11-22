@@ -161,27 +161,31 @@ test('runDiffSpotlight compares BASE..WORKTREE, excludes helpers/fixtures/mocks,
 });
 
 test('Astra #1 + #12: invalid base ref fails closed, .only.each & multiline .only caught, orphan conflict markers caught, Git R100 rename reported as Moved, and bare expect() drops caught', t => {
-  // #12a: .only.each and multiline test\n  .only(...)
+  // #12a + Astra R2 #9: .only.each, tagged-template .only.each`...`, and multiline test\n  .only(...)
   const focusSrc = [
     "test.only.each([1, 2])('case %i', n => expect(n).toBe(n));",
     "it.only.each([1])('it case', n => expect(n).toBe(n));",
     "describe.only.each([1])('suite', () => {});",
     'test',
     "  .only('multiline focus', () => {});",
+    "test.only.each`a | b`('tagged %i', () => {});",
+    "it.only.each`a`('tagged it', () => {});",
+    "describe.only.each`a`('tagged describe', () => {});",
   ].join('\n');
   const onlyHits = findExecutableOnlyMarkers(focusSrc, 'test/only-variants.test.mjs');
-  assert.equal(onlyHits.length, 4, JSON.stringify(onlyHits));
-  assert.deepEqual(onlyHits.map(h => h.line), [1, 2, 3, 4]);
+  assert.equal(onlyHits.length, 7, JSON.stringify(onlyHits));
+  assert.deepEqual(onlyHits.map(h => h.line), [1, 2, 3, 4, 6, 7, 8]);
 
-  // #12b: orphan/partial conflict markers (not just full 3-marker blocks)
+  // #12b + Astra R2 #9: orphan/partial conflict markers including diff3 `|||||||`
   assert.equal(findConflictMarkers('const a = 1;\n=======\nconst b = 2;\n', 'src/partial.mjs').length, 1);
   assert.equal(findConflictMarkers('<<<<<<< HEAD\nconst a = 1;\n', 'src/unclosed.mjs').length, 1);
   assert.equal(findConflictMarkers('const a = 1;\n>>>>>>> main\n', 'src/tail.mjs').length, 1);
+  assert.equal(findConflictMarkers('const a = 1;\n||||||| parent of abc\nconst b = 2;\n', 'src/diff3.mjs').length, 1);
 
-  // #12d: bare expect(value) with stripped .toBe(...) MUST NOT count as an assertion!
-  const beforeTest = "test('checks total', () => {\n  expect(total).toBe(42);\n  expect(name).not.toBeNull();\n});\n";
-  const strippedTest = "test('checks total', () => {\n  expect(total);\n  expect(name).not.toBeNull();\n});\n";
-  assert.equal(extractTestCases(beforeTest, 'js').cases[0].assertions.length, 2);
+  // #12d + Astra R2 #9: bare expect(x), expect(x).not, and expect(x).toBe (no call) MUST NOT count; Chai terminal props & invoked matchers DO count!
+  const beforeTest = "test('checks total', () => {\n  expect(total).toBe(42);\n  expect(name).not.toBeNull();\n  expect(flag).to.be.true;\n});\n";
+  const strippedTest = "test('checks total', () => {\n  expect(total);\n  expect(name).not;\n  expect(flag).toBe;\n  expect(flag).to.be.true;\n});\n";
+  assert.equal(extractTestCases(beforeTest, 'js').cases[0].assertions.length, 3);
   assert.equal(extractTestCases(strippedTest, 'js').cases[0].assertions.length, 1);
 
   // #1 + #12c: invalid base ref fails closed (`baseAvailable: false`) & Git R100 rename reported as Moved!
@@ -208,6 +212,6 @@ test('Astra #1 + #12: invalid base ref fails closed, .only.each & multiline .onl
   writeFileSync(join(repo, 'test', 'beta.test.mjs'), strippedTest);
   const dropped = runDiffSpotlight({ cwd: repo, baseRef: 'main' });
   assert.equal(dropped.assertionDrops.length, 1);
-  assert.equal(dropped.assertionDrops[0].before, 2);
+  assert.equal(dropped.assertionDrops[0].before, 3);
   assert.equal(dropped.assertionDrops[0].after, 1);
 });

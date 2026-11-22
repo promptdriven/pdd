@@ -5,6 +5,7 @@ const MAX_BRANCH_UNBOUNDED_QUANTIFIERS = 3;
 
 // Escapes whose decoded character can overlap ASCII literals or match character classes.
 const NON_LITERAL_ESCAPES = new Set(['d', 'D', 'w', 'W', 's', 'S', 'p', 'P', 'x', 'u', 'c', '0']);
+const CONTROL_ESCAPES = { t: '\t', n: '\n', r: '\r', f: '\f', v: '\v' };
 
 function matchSegmentLinear(pattern, text) {
   let pi = 0;
@@ -207,7 +208,7 @@ export function isSafeRegexPattern(pattern, cleanFlags = '') {
       i += step;
       const q = readRegexQuantifier(pattern, i);
       if (q) i += q.len;
-      const lit = NON_LITERAL_ESCAPES.has(esc) ? null : esc;
+      const lit = NON_LITERAL_ESCAPES.has(esc) ? null : (CONTROL_ESCAPES[esc] ?? esc);
       if (!recordAtom(lit, q)) return false;
       continue;
     }

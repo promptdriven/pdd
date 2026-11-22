@@ -187,7 +187,9 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
       continue;
     }
     inCueBullets = false;
-    cuePending = !inPorts && hasCue && /:\s*$/.test(line.trim());
+    const trimmedLine = line.trim();
+    const listIntroCue = /:\s*$/.test(trimmedLine) || /\b(?:following|below|these)\b/i.test(trimmedLine) || (!/[.!?]\s*$/.test(trimmedLine) && spans.length === 0);
+    cuePending = !inPorts && hasCue && listIntroCue;
     cueBlankLeft = cuePending ? 1 : 0;
     if (inPorts || hasCue) scanChunk(line, lineNo);
     else scanSpans(spans, lineNo, true);

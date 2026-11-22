@@ -293,13 +293,27 @@ function headingMatches(contentText, requiredHeading) {
 export function loadBaseTrustedLintCommands(root, { baseRef } = {}) {
   let realRoot;
   try { realRoot = realpathSync(root); } catch { return { baseSha: null, source: null, commands: [], skippedUntrusted: false }; }
+  let wtCommands = [];
+  const wtRaw = readSafeUtf8(realRoot, 'pdd.json');
+  if (wtRaw !== null) {
+    try {
+      const wtParsed = JSON.parse(wtRaw);
+      const wtTarget = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), configErrors: [] };
+      if (wtParsed?.lint?.commands !== undefined) {
+        mergeLintConfigSection({ commands: wtParsed.lint.commands }, { sourcePath: 'pdd.json', allowCommands: true, ...wtTarget });
+      }
+      wtCommands = [...wtTarget.commandMap.values()];
+    } catch {}
+  }
+
   const ref = baseRef || resolveDefaultBaseRef(realRoot);
-  if (!ref) return { baseSha: null, source: null, commands: [], skippedUntrusted: false };
+  if (!ref) return { baseSha: null, source: null, commands: [], skippedUntrusted: wtCommands.length > 0 };
   const resolved = spawnSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   const commit = resolved.status === 0 && resolved.stdout.trim() ? resolved.stdout.trim() : null;
-  if (!commit) return { baseSha: null, source: null, commands: [], skippedUntrusted: false };
+  if (!commit) return { baseSha: null, source: null, commands: [], skippedUntrusted: wtCommands.length > 0 };
   const mb = spawnSync('git', ['merge-base', 'HEAD', commit], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  const baseSha = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : commit;
+  if (mb.status !== 0 || !mb.stdout.trim()) return { baseSha: null, source: null, commands: [], skippedUntrusted: wtCommands.length > 0 };
+  const baseSha = mb.stdout.trim();
 
   const show = spawnSync('git', ['show', `${baseSha}:pdd.json`], { cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
   const baseCommands = [];
@@ -314,19 +328,7 @@ export function loadBaseTrustedLintCommands(root, { baseRef } = {}) {
     } catch {}
   }
 
-  let skippedUntrusted = false;
-  const wtRaw = readSafeUtf8(realRoot, 'pdd.json');
-  if (wtRaw !== null) {
-    try {
-      const wtParsed = JSON.parse(wtRaw);
-      const wtTarget = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), configErrors: [] };
-      if (wtParsed?.lint?.commands !== undefined) {
-        mergeLintConfigSection({ commands: wtParsed.lint.commands }, { sourcePath: 'pdd.json', allowCommands: true, ...wtTarget });
-      }
-      const wtCmds = [...wtTarget.commandMap.values()];
-      if (wtCmds.length > 0 && JSON.stringify(wtCmds) !== JSON.stringify(baseCommands)) skippedUntrusted = true;
-    } catch {}
-  }
+  const skippedUntrusted = wtCommands.length > 0 && JSON.stringify(wtCommands) !== JSON.stringify(baseCommands);
   return { baseSha, source: `${baseSha}:pdd.json`, commands: baseCommands, skippedUntrusted };
 }
 

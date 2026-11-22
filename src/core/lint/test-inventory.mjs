@@ -11,7 +11,27 @@ const UTILITY_TEST_DIR = /(?:^|\/)(?:helpers?|fixtures?|mocks?|__mocks__|__fixtu
 const DOC_OR_FIXTURE_PATH = /(?:^|\/)(?:docs?|fixtures?|__fixtures__)\/|\.md$/i;
 const SNAPSHOT_PATH = /\.snap$|(?:^|\/)__snapshots__\//i;
 const HARNESS_PATH = /(?:^|\/)(?:package\.json|vitest\.config\.[^/]+|jest\.config\.[^/]+|pytest\.ini|pyproject\.toml|conftest\.py|tox\.ini|setup\.cfg|\.github\/workflows\/[^/]+\.ya?ml)$/i;
-const EXPECT_CHAIN_RE = /^\s*\.\s*(?:not|resolves|rejects|to[A-Z]\w*|be|equal|eql|include|contain|match|throw|have|deep|nested|own|ordered|any|all|a|an|ok|true|false|null|undefined|NaN|exist|empty|above|below|least|most|within|lengthOf|property|members|keys|satisfy|closeTo|change|increase|decrease|respondTo|itself|instanceof|oneOf|finite|string|json|status|header|redirect|cookie|charset|type)\b/;
+const CHAI_MODIFIERS = new Set(['not', 'resolves', 'rejects', 'to', 'be', 'been', 'is', 'that', 'which', 'and', 'has', 'have', 'with', 'at', 'of', 'same', 'but', 'does', 'still', 'also', 'deep', 'nested', 'own', 'ordered', 'any', 'all']);
+const CHAI_TERMINAL_PROPS = new Set(['true', 'false', 'null', 'undefined', 'NaN', 'exist', 'empty', 'ok', 'arguments', 'finite', 'extensible', 'sealed', 'frozen']);
+
+function hasExpectAssertionChain(tail) {
+  let i = 0, segments = 0, lastIdent = '', allPriorModifiers = true;
+  const limit = Math.min(tail.length, 240);
+  while (i < limit) {
+    while (i < limit && /\s/.test(tail[i])) i++;
+    if (i < limit && tail[i] === '(' && segments > 0) return true;
+    if (i >= limit || tail[i] !== '.') break;
+    i++;
+    while (i < limit && /\s/.test(tail[i])) i++;
+    const start = i;
+    while (i < limit && /[A-Za-z0-9_$]/.test(tail[i])) i++;
+    if (i === start) break;
+    if (segments > 0 && !CHAI_MODIFIERS.has(lastIdent)) allPriorModifiers = false;
+    lastIdent = tail.slice(start, i);
+    segments++;
+  }
+  return segments >= 2 && allPriorModifiers && CHAI_TERMINAL_PROPS.has(lastIdent);
+}
 
 export function detectTestLanguage(path) {
   if (!path || UTILITY_TEST_DIR.test(path)) return null;
@@ -32,7 +52,8 @@ function maskJsNonCode(source) {
     if (ch === "'" || ch === '"' || ch === '`') {
       let j = i + 1;
       while (j < source.length) { if (source[j] === '\\') { j += 2; continue; } if (source[j] === ch) { j++; break; } j++; }
-      out += `q${source.slice(i + 1, j).replace(/[^\n]/g, ' ')}`; prev = 'q'; i = j; continue;
+      const marker = ch === '`' ? '`' : 'q';
+      out += `${marker}${source.slice(i + 1, j).replace(/[^\n]/g, ' ')}`; prev = 'q'; i = j; continue;
     }
     if (ch === '/' && next !== '/' && next !== '*' && canRegex()) {
       let j = i + 1, cls = false, closed = false;
@@ -66,12 +87,12 @@ export function findExecutableOnlyMarkers(source, filePath) {
   }
   if (lang !== 'js') return [];
   const masked = maskJsNonCode(source), ls = buildLineStarts(masked), hits = [], seen = new Set();
-  const onlyRe = /(?<![.\w$])((?:test|it|describe|suite|context)\s*\.\s*only(?:\s*\.\s*each)?|fit|fdescribe)\s*\(/g;
+  const onlyRe = /(?<![.\w$])(?:(?:test|it|describe|suite|context)\s*\.\s*only(?:\s*\.\s*each(?=\s*[(`])|(?=\s*\())|(?:fit|fdescribe)(?=\s*\())/g;
   for (const m of masked.matchAll(onlyRe)) {
     const line = lineNumberAt(ls, m.index);
     if (seen.has(line)) continue;
     seen.add(line);
-    hits.push({ path: filePath, line, marker: m[1].replace(/\s+/g, '') });
+    hits.push({ path: filePath, line, marker: m[0].replace(/\s+/g, '') });
   }
   return hits;
 }
@@ -83,6 +104,7 @@ export function findConflictMarkers(source, filePath) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (/^<{7}(?:\s|$)/.test(line)) { hits.push({ path: filePath, line: i + 1 }); inBlock = true; }
+    else if (/^\|{7}(?:\s|$)/.test(line)) { if (!inBlock) hits.push({ path: filePath, line: i + 1 }); }
     else if (/^={7}$/.test(line)) { if (!inBlock) hits.push({ path: filePath, line: i + 1 }); }
     else if (/^>{7}(?:\s|$)/.test(line)) { if (!inBlock) hits.push({ path: filePath, line: i + 1 }); inBlock = false; }
   }
@@ -108,7 +130,7 @@ function collectJsAssertions(maskedBlock) {
       if (maskedBlock[i] === '(') depth++;
       else if (maskedBlock[i] === ')' && --depth === 0) { closeIdx = i; break; }
     }
-    if (closeIdx > openIdx && EXPECT_CHAIN_RE.test(maskedBlock.slice(closeIdx + 1))) assertions.push(maskedBlock.slice(m.index, closeIdx + 1));
+    if (closeIdx > openIdx && hasExpectAssertionChain(maskedBlock.slice(closeIdx + 1))) assertions.push(maskedBlock.slice(m.index, closeIdx + 1));
   }
   return assertions;
 }
@@ -131,7 +153,7 @@ export function extractTestCases(source, lang) {
       const slice = lines.slice(at, end + 1), maskSlice = maskedLines.slice(at, end + 1);
       const assertions = collectJsAssertions(maskSlice.join('\n'));
       const skips = [];
-      if (/^\s*(?:(?:test|it)\.(?:skip|todo)|xit|xtest)\s*\(/.test(maskLine) || /\{\s*(?:skip|todo)\s*:\s*(?:true|q)/.test(maskLine)) skips.push(rawLine.trim());
+      if (/^\s*(?:(?:test|it)\.(?:skip|todo)|xit|xtest)\s*\(/.test(maskLine) || /\{\s*(?:skip|todo)\s*:\s*(?:true|q|`)/.test(maskLine)) skips.push(rawLine.trim());
       for (let j = 1; j < maskSlice.length; j++) {
         if (/\b(?:t|ctx)\.(?:skip|todo)\s*\(/.test(maskSlice[j])) skips.push(slice[j].trim());
       }
@@ -299,8 +321,11 @@ export function runDiffSpotlight({ cwd, baseRef } = {}) {
     return baseUnavailableResult(resolvedBase, `Base ref "${resolvedBase}" could not be resolved locally.`);
   }
   const resolvedCommit = revCheck.stdout.trim();
-  const mb = spawnSync('git', ['merge-base', 'HEAD', resolvedCommit], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  const baseSha = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : resolvedCommit;
+  const mb = spawnSync('git', ['merge-base', 'HEAD', resolvedCommit], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  if (mb.status !== 0 || !mb.stdout.trim()) {
+    return baseUnavailableResult(resolvedBase, `git merge-base between HEAD and "${resolvedBase}" failed: ${causeText(mb.stderr || 'no common ancestor')}`);
+  }
+  const baseSha = mb.stdout.trim();
 
   const diffRes = spawnSync('git', ['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', baseSha, '--'], { cwd: realRoot, maxBuffer: 32 * 1024 * 1024 });
   if (diffRes.status !== 0) {
@@ -317,12 +342,13 @@ export function runDiffSpotlight({ cwd, baseRef } = {}) {
     if (newPath) seenPaths.add(newPath); if (oldPath) seenPaths.add(oldPath);
   }
   const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: realRoot, maxBuffer: 16 * 1024 * 1024 });
-  if (untracked.status === 0) {
-    for (const rel of untracked.stdout.toString('utf8').split('\0').filter(Boolean)) {
-      if (seenPaths.has(rel)) continue;
-      seenPaths.add(rel);
-      entries.push({ status: 'A', oldPath: '', newPath: rel, before: '', after: readSafeUtf8(realRoot, rel) ?? '' });
-    }
+  if (untracked.status !== 0) {
+    return baseUnavailableResult(resolvedBase, `git ls-files failed while collecting untracked files: ${causeText(untracked.stderr?.toString('utf8') || 'unknown error')}`);
+  }
+  for (const rel of untracked.stdout.toString('utf8').split('\0').filter(Boolean)) {
+    if (seenPaths.has(rel)) continue;
+    seenPaths.add(rel);
+    entries.push({ status: 'A', oldPath: '', newPath: rel, before: '', after: readSafeUtf8(realRoot, rel) ?? '' });
   }
   const analysis = analyzeDiffEntries(entries);
   const checkRes = spawnSync('git', ['diff', '--check', baseSha, '--'], { cwd: realRoot, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
