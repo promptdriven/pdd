@@ -277,18 +277,19 @@ function publicText(text, machine, user) {
 const sentence = text => `${String(text ?? '').trim().replace(/[.\s]+$/, '')}.`;
 // Evidence for metrics: one fixed line, "Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)".
 // Only known fields and values are kept (an allowlist); a count is kept when it is "n/m" with n <= m.
-const EVIDENCE = { runtime: ['pass', 'fail', 'not-run'], vectors: ['pass', 'fail', 'not-run'], formal: ['proved', 'bounded', 'failed', 'not-run', 'not-applicable'], tests: ['pass', 'fail'] };
+const EVIDENCE = { runtime: ['pass', 'fail', 'not-run'], vectors: ['pass', 'fail', 'not-run'], formal: ['proved', 'bounded', 'proved_solver_code', 'proved_spec_model', 'failed', 'not-run', 'not-applicable'], tests: ['pass', 'fail'] };
+const POSITIVE_FORMAL_STATES = ['proved', 'bounded', 'proved_solver_code'];
 function parseEvidence(text) {
   for (const raw of String(text ?? '').split(/\r?\n/)) {
     const line = normalLine(raw);
     if (!/^evidence\s*:/i.test(line)) continue;
     const found = {};
     for (const part of line.replace(/^evidence\s*:/i, '').split(';')) {
-      const m = /^\s*([a-z]+)\s*=\s*([a-z-]+)(?:\s*\(\s*(\d{1,9})\s*\/\s*(\d{1,9})\s*\))?\s*$/i.exec(part);
+      const m = /^\s*([a-z]+)\s*=\s*([a-z_-]+)(?:\s*\(\s*(\d{1,9})\s*\/\s*(\d{1,9})\s*\))?\s*$/i.exec(part);
       const key = m?.[1].toLowerCase(), value = m?.[2].toLowerCase();
       if (!m || !EVIDENCE[key]?.includes(value) || found[key]) continue;
       found[key] = { state: value };
-      if (key !== 'formal' && m[3] !== undefined && Number(m[3]) <= Number(m[4])) Object.assign(found[key], { passed: Number(m[3]), total: Number(m[4]) });
+      if (m[3] !== undefined && Number(m[3]) <= Number(m[4])) Object.assign(found[key], { passed: Number(m[3]), total: Number(m[4]) });
     }
     return Object.keys(found).length ? found : null;
   }
@@ -5879,7 +5880,11 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
 // T04: the engine runs the replay (vector) and formal test files that the change touches, at the final head: each
 // changed *.vectors.test.* and *.formal.test.* file, each vector test file that names any changed scenario file,
 // and (#3556) changed ordinary node:test *.test.* / *.spec.* files on bug-fix PRs that change code files.
-const KINDS = ['vectors', 'formal'], KIND_FILE = { vectors: /\.vectors\.test\.[^/]+$/, formal: /\.formal\.test\.[^/]+$/ };
+const KINDS = ['vectors', 'formal'];
+const KIND_FILE = {
+  vectors: /\.vectors\.test\.[^/]+$|(?:^|\/)(?:test_vectors(?:_[^/]+)?|[^/]+_vectors_test)\.py$|_vectors_test\.go$|(?:^|\/)tests\/[^/]*vectors[^/]*\.rs$/i,
+  formal: /\.formal\.test\.[^/]+$|(?:^|\/)(?:test_formal_[^/]+|[^/]+_formal_test)\.py$|(?:^|\/)formal\/test_[^/]+\.py$|_formal_test\.go$|(?:^|\/)tests\/[^/]*formal[^/]*\.rs$/i,
+};
 const ORDINARY_TEST_FILE = /\.(?:test|spec)\.[cm]?js$/i, FIXTURE_PLACE = /(?:^|\/)fixtures\//i;
 // #3227 fix 2 + #3556: the run kinds. `linked` are replay files that import a changed code module (no claim counts them);
 // `tests` are changed ordinary JS node:test regression tests on bug-fix PRs; the control kinds run vectors, formal and
@@ -6219,7 +6224,7 @@ function engineEvidenceLines(job) {
 function engineEvidenceReds(ctx, job, body = '') {
   const v = job.vectors, e = job.evidence ?? {}, reds = [];
   if (!v || v.state === 'running' || (named(v.head) && named(job.head) && v.head !== job.head)) return reds;
-  const positive = { vectors: e.vectors?.state === 'pass', formal: ['proved', 'bounded'].includes(e.formal?.state) };
+  const positive = { vectors: e.vectors?.state === 'pass', formal: POSITIVE_FORMAL_STATES.includes(e.formal?.state) };
   for (const kind of HEAD_KINDS) {
     const files = v.files?.[kind] ?? [], skipped = (v.skipped ?? []).filter(row => row.kind === kind), where = someFiles(files), r = v.result?.[kind];
     if (!files.length && !skipped.length) {
@@ -6253,8 +6258,8 @@ function engineEvidenceReds(ctx, job, body = '') {
       reds.push(`The Evidence line says ${claimOf(e, kind)}, but Autopilot ran the changed replay files (${where}) at head ${short(v.head)}: ${counts} passed. Write vectors=pass (${counts}).`);
     else if (kind === 'vectors' && e.vectors?.total !== undefined && !r.skipped && (e.vectors.passed !== r.pass || e.vectors.total !== r.tests))
       reds.push(`The Evidence line says ${claimOf(e, kind)}, but Autopilot ran the replay tests that this change touches (${where}) at head ${short(v.head)}: ${counts} passed. Write vectors=pass (${counts}).`);
-    if (kind === 'formal' && e.formal?.state && !['proved', 'bounded'].includes(e.formal.state))
-      reds.push(`The Evidence line says formal=${e.formal.state}, but Autopilot ran the changed formal tests (${where}) at head ${short(v.head)}: they pass. Write formal=proved or formal=bounded.`);
+    if (kind === 'formal' && e.formal?.state && !POSITIVE_FORMAL_STATES.includes(e.formal.state))
+      reds.push(`The Evidence line says formal=${e.formal.state}, but Autopilot ran the changed formal tests (${where}) at head ${short(v.head)}: they pass. Write formal=proved, formal=proved_solver_code, or formal=bounded.`);
   }
   // #3227 fix 2 + #3556: per-head old-code failure proof for Path a/c/e behavior changes and Path b bug fixes
   // (pure structural refactors and non-bug Path b PRs stay exempt). Never bypassed by a one-shot latch or exhausted repairs.
@@ -6856,7 +6861,7 @@ async function syncStampedReplayEvidence(ctx, job, pr) {
   }
   const rf = v.result?.formal;
   const formalClean = rf?.state === 'pass' && !rf.skipped && Number.isInteger(rf.tests) && rf.tests > 0 && !rf.empty?.length && !(v.skipped ?? []).some(row => row.kind === 'formal');
-  if (formalClean && !['proved', 'bounded'].includes(next.formal?.state)) {
+  if (formalClean && !POSITIVE_FORMAL_STATES.includes(next.formal?.state)) {
     next.formal = { state: 'bounded' };
     changed = true;
   }

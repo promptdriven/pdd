@@ -456,3 +456,34 @@ test('discoverTestAndAppMaps parses each test JSON and app-map JSON in a single 
   assert.equal(discovered.parsedTests.size, 1);
   assert.equal(discovered.parsedAppMaps.size, 1);
 });
+
+test('extractControls avoids catastrophic ReDoS on long identifiers with "=" inside backtick spans', t => {
+  const root = temp(t);
+  mkdirSync(join(root, 'prompts/views'), { recursive: true });
+  writeFileSync(
+    join(root, 'prompts/views/workspace__stacked.ui.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 790"><title>Workspace</title><text id="title">Workspace</text></svg>',
+  );
+  writeFileSync(
+    join(root, 'prompts/workspace.prompt.md'),
+    [
+      '# Workspace',
+      '',
+      '![Workspace](views/workspace__stacked.ui.svg)',
+      '',
+      '## Appearance',
+      '',
+      '- `title` region shows Workspace.',
+      '',
+      '`StandardWorkspacePresentation(layout: WorkspaceLayout, content: WorkspaceContent, onPresentationIntent: (WorkspaceIntent) -> Unit, modifier: Modifier = Modifier): Unit`',
+    ].join('\n'),
+  );
+  const start = performance.now();
+  const warnings = lintSvgLayouts({
+    root,
+    files: ['prompts/workspace.prompt.md', 'prompts/views/workspace__stacked.ui.svg'],
+  });
+  const elapsedMs = performance.now() - start;
+  assert.deepEqual(warnings, []);
+  assert.ok(elapsedMs < 500, `expected linear-time SVG control extraction (<500ms), got ${Math.round(elapsedMs)}ms`);
+});

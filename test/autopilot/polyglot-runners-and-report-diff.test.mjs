@@ -515,3 +515,34 @@ test('test-suite-queue passes safe toolchain env without PYTEST_ADDOPTS (#14) an
   const overflowReceipt = JSON.parse(readFileSync(join(queue, `ticket-${ticketNum}.json`), 'utf8'));
   assert.equal(overflowReceipt.counts, null, 'truncated Go JSON lifecycle buffer must return null instead of wrong partial counts (#16)');
 });
+
+test('#3561/#3634 runPolyglotBaseControl isolates Python formal test files into separate pytest subprocesses (prevents Z3 main_ctx deadlocks)', async t => {
+  const { runPolyglotBaseControl } = await import('../../src/autopilot/core/live-evidence.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'pdd-py-formal-iso-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, 'pyproject.toml'), '[tool.pytest.ini_options]\ntestpaths = ["tests_py"]\n');
+
+  const calls = [];
+  const res = await runPolyglotBaseControl({
+    baseDir: root,
+    changedFiles: [
+      'src/ledger.py',
+      'tests_py/test_unit.py',
+      'tests_py/test_formal_a.py',
+      'tests_py/formal/test_b.py',
+    ],
+    changedProdFiles: ['src/ledger.py'],
+    execFn: async (bin, args) => {
+      calls.push([bin, ...args]);
+      const fail = args.includes('tests_py/formal/test_b.py');
+      return { exitCode: fail ? 1 : 0, stdout: fail ? '1 failed in 0.1s\n' : '1 passed in 0.1s\n', stderr: '', killed: false, code: null };
+    },
+  });
+  assert.equal(res.state, 'ran-and-failed-on-base');
+  assert.deepEqual(res.isolatedFiles, ['tests_py/test_formal_a.py', 'tests_py/formal/test_b.py']);
+  assert.deepEqual(calls, [
+    ['pytest', '-q', 'tests_py/test_unit.py'],
+    ['pytest', '-q', 'tests_py/test_formal_a.py'],
+    ['pytest', '-q', 'tests_py/formal/test_b.py'],
+  ]);
+});

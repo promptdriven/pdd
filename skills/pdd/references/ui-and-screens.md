@@ -40,6 +40,7 @@ Draw `.ui.svg` mockups (`views/<state>[--<variant>]__<layout-mode>.ui.svg`) only
 
 - Link under `## Appearance` using Markdown image syntax `![Alt text](views/...)` (never plain `[label](...)` outside `## Dependencies`).
 - SVG owns visual layout, visible labels, spatial order, and stable intent `id`s (`viewBox`, `<title>`, `<desc>`; mark surroundings `data-context-only="true"` or `class="context-only"`; no scripts, event handlers, external fonts, or base64 blobs). Prose owns behavior, responsive rules, focus order, and dynamic data.
+- **Local `pdd lint` alignment contract:** every layout `id="<name>"` in `.ui.svg` must be acknowledged in `## Appearance` via backticks (`` `<name>` ``) or `<name> region|box|bar|container|button|grid|heading|label` (avoid decorative `id`s on background rects/dividers); every non-numeric `<text>` label must appear in the prompt prose; and every interactive control declared in prose must have matching `<text>` or `id` in `.ui.svg`.
 - Declare **illustrative** vs **comparison reference** and fidelity (**Relational**, **Measured**, or **Exact**).
 - Verify layout alignment offline with `pdd lint` (`<150ms`, 0 AI calls); compare a live browser render with `pdd test --screen URL --drawing PATH [--look]`.
 

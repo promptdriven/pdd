@@ -41,20 +41,22 @@ Maintain the repository **Feature Map** inside `pdd.json` under `verify`:
 |---|---|
 | **Feature** | **Testing Trophy** interface/integration tests in the repo's native runner (`Node`/`Vitest`/`Jest`/`Pytest`/`Go`/`Cargo`/`Playwright`), translating every approved Story acceptance criterion **1-to-1** (with unchanged-state / `0`-write assertions on negative rules). Skip micro-TDD theater on greenfield features. |
 | **Bug fix** | **Mandatory Red→Green TDD:** write the failing regression test first against unpatched code → observe the real failure matching the bug's exact symptom → state `Defect:` and `Not caught because:` → apply root fix → observe pass. |
-| **Invariant-heavy logic** *(parsers, serializers, state machines, sorting/graphs, math/quotas, untrusted inputs)* | Add **>= 1 spec-derived property/fuzz test** (roundtrip, idempotency, conservation, monotonicity, or crash-freedom via `fast-check`, `Hypothesis`, or a deterministic seeded loop) derived from the prompt/Story *before* reading implementation details. |
-| **`kind: native-only` / OS-boundary code** | Executable, non-mocked real-host probes (nested OS sandbox child execution, real `/dev/tty` UID/permissions, multi-turn Turn 1 → Turn 2 CLI state, payloads `> 4 KiB`). Mocked-only shells never prove OS boundaries. |
+| **Invariant-heavy logic** *(parsers, serializers, state machines, sorting/graphs, math/quotas, untrusted inputs)* | Follow the **3-tier code-bound verification stack** below: default **Tier 1** strict typing + stateful property-based testing + real-store exhaustive grids; **Tier 2** code-bound SMT / trace-checked concurrency only when justified; **Tier 3** opt-in verified kernels. |
+| **`kind: native-only` / OS-boundary code** | Executable, non-mocked **adversarial & interactive real-host probes**: live HTTP auth/CSRF/path-traversal/SSRF/forged-body rejection, strict input coercion (rejecting e.g. `bool("false")`), real binary/document parsers, live CLI-to-server wiring, nested OS sandbox child execution, real `/dev/tty` UID/permissions, multi-turn Turn 1 → Turn 2 CLI state, and payloads `> 4 KiB`. Mocked-only shells never prove OS or transport boundaries. |
 | **CLI apps** | Native integration tests spawning the real entry binary (and optionally `pdd test --target code` only when the prompt declares a CLI runtime interface). |
 
-## 4. Deliberate-Break Probe ("1-to-3 Line Mutation Check")
+## 4. Three-tier code-bound formal verification & mutation control
 
-For medium/big changes (and Autopilot validation), the Fresh Verifier or Reviewer runs a fast, zero-dependency, polyglot mutation check:
+When verifying invariants, bind proofs to **real production code** — never standalone spec models:
 
-1. Pick **1–3 changed non-trivial logic conditions or return values** in the diff.
-2. Temporarily flip one condition/return in a scratch edit.
-3. Run the PR's tests and confirm **>= 1 assertion fails** (a syntax crash does not count).
-4. Immediately revert the scratch edit and re-verify green.
-
-If a repository already runs a mutation tool (`cargo mutants --in-diff`, `stryker --incremental`), configure optional `lint.mutation_command` in `pdd.json`.
+- **Tier 1 (Default mandatory for invariant-heavy code):** Strict static typing (`pyright`/`mypy --strict`, Pydantic `StrictBool`) + real-code stateful property-based testing (`Hypothesis` `RuleBasedStateMachine` over real SQLite/FastAPI for Python, `fast-check` `fc.commands` for JS/TS, `proptest` for Rust, `rapid` for Go) + finite exhaustive grids over real stores (never fake CAS, locks, or revocation in memory).
+- **Tier 2 (Code-bound solver / concurrency):** `CrossHair` (`hypothesis-crosshair` on pure integer minor-unit Python math; note CPython `_decimal`/`sqlite3` limits) or `Kani` (Rust) for genuine code-bound SMT (`proved_solver_code`); `Quint` / `TLA+` **strictly paired with ITF conformance replay or TLC trace validation** against production code for concurrent protocols.
+- **Tier 3 (Opt-in verified kernels):** `Dafny` (`--target:py`/`--target:js`) when verified-by-construction pure kernels are required. Avoid standalone Lean 4 or Bend 2 for general application codegen.
+- **Hard bans & Z3 CI safety:**
+  - **Never** claim `Proved (solver)` for hand-written Z3 spec models disconnected from production code or near-tautological `UNSAT(And(A, B) & Not(A))` restatements (`proved_spec_model` never satisfies code verification).
+  - Whenever Z3 is used in Python, isolate every test/file with `ctx = z3.Context()`, `z3.Solver(ctx=ctx)`, and an explicit `s.set("timeout", ...)` budget (prevents Z3 `main_ctx()` combined-CI deadlocks).
+- **Deliberate-Break Probe ("1-to-3 Line Mutation Check") & formal mutation control:** For medium/big changes (and Autopilot validation), pick **1–3 changed non-trivial logic conditions or return values** in production code, temporarily flip one condition/return in a scratch edit, run the PR's tests — and for formal claims, run the **formal suite itself** (never substitute `test_vectors`) — confirm **>= 1 assertion fails** (a syntax crash does not count), then revert and re-verify green. Optional repo-wide mutation tool: `lint.mutation_command` in `pdd.json`.
+- **Rule Coverage & `Not proved:` table:** For invariant-heavy or formal work, report every touched `.prompt.md` `## Domain decisions` rule and Story `## Rules to check` row with its concrete test/proof tier or explicit `Not proved: <rule> (<reason>)`.
 
 ## 5. Offline lint, live smoke, independent review & honest disclosure
 

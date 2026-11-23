@@ -24,6 +24,7 @@ const execFileAsync = promisify(cbExecFile);
 const TEST_FILE_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
 const JS_TEST_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx)$/i;
 const PY_TEST_RE = /(?:(?:^|\/)test_[^/]+\.py$|_test\.py$)/i;
+const PY_FORMAL_TEST_RE = /(?:(?:^|\/)(?:test_formal_[^/]+|[^/]+_formal_test)\.py$|(?:^|\/)formal\/test_[^/]+\.py$)/i;
 const GO_TEST_RE = /_test\.go$/i;
 const RUST_TEST_RE = /(?:(?:^|\/)tests\/[^/]+\.rs$|_test\.rs$)/i;
 const GIT_SHA_RE = /^[0-9a-f]{40}$/i;
@@ -126,7 +127,6 @@ export async function runPolyglotBaseControl({
   const baseEnv = { ...env, CI: 'true' };
   delete baseEnv.NODE_TEST_CONTEXT;
   delete baseEnv.NODE_OPTIONS;
-  const cmdDisplay = `${bin} ${args.join(' ')}`;
 
   const runExec = execFn ?? (async (command, cmdArgs, opts) => {
     try {
@@ -144,6 +144,40 @@ export async function runPolyglotBaseControl({
     }
   });
 
+  // #3561 / #3634: Run Python formal test files in per-file subprocess isolation to prevent Z3 main_ctx() cross-file deadlocks.
+  const pytestFiles = kind === 'pytest' ? args.slice(1) : [];
+  const isolateFormalPy = kind === 'pytest' && pytestFiles.length > 1 && pytestFiles.some(f => PY_FORMAL_TEST_RE.test(f));
+  if (isolateFormalPy) {
+    const formalFiles = pytestFiles.filter(f => PY_FORMAL_TEST_RE.test(f));
+    const regularFiles = pytestFiles.filter(f => !PY_FORMAL_TEST_RE.test(f));
+    const batches = [
+      ...(regularFiles.length ? [regularFiles] : []),
+      ...formalFiles.map(f => [f]),
+    ];
+    const commands = [];
+    const allCases = [];
+    let failedExit = null;
+    for (const batch of batches) {
+      const batchArgs = ['-q', ...batch];
+      commands.push(`${bin} ${batchArgs.join(' ')}`);
+      const res = await runExec(bin, batchArgs, { cwd: baseDir, env: baseEnv, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
+      const combined = `${res.stdout ?? ''}\n${res.stderr ?? ''}`;
+      const parsed = parseStandardTestReport(res.stdout ?? '', reportFormat);
+      const batchCases = parsed.ok ? parsed.cases : extractTestCases(combined, kind);
+      allCases.push(...batchCases);
+      if (res.killed || res.code === 'ENOENT' || isPolyglotEnvError(`${combined}\n${res.message ?? ''}`, changedProdFiles)) {
+        return { state: 'not-run', runnerKind: kind, command: commands.join(' && '), exitCode: res.exitCode ?? null, report: null, cases: allCases, isolatedFiles: formalFiles };
+      }
+      if (res.exitCode !== 0 && failedExit === null) failedExit = res.exitCode ?? 1;
+    }
+    const cmdDisplay = commands.join(' && ');
+    if (failedExit !== null) {
+      return { state: 'ran-and-failed-on-base', runnerKind: kind, command: cmdDisplay, exitCode: failedExit, report: null, cases: allCases, isolatedFiles: formalFiles };
+    }
+    return { state: 'passed-on-base', runnerKind: kind, command: cmdDisplay, exitCode: 0, report: null, cases: allCases, isolatedFiles: formalFiles };
+  }
+
+  const cmdDisplay = `${bin} ${args.join(' ')}`;
   const res = await runExec(bin, args, { cwd: baseDir, env: baseEnv, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
   const combined = `${res.stdout ?? ''}\n${res.stderr ?? ''}`;
   const parsed = parseStandardTestReport(res.stdout ?? '', reportFormat);

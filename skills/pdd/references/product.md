@@ -39,7 +39,11 @@ Start with `# <Product name>: plan` (optional `Through: prompt-pr|code` before t
 
 - Name cross-part boundary operations in `What crosses` using dotted `<part>/<prompt>.<op>` or `<prompt>.<op>` tokens so `pdd lint` and `pdd product status` catch unwired operations.
 - Planned-run issues carry `<!-- pdd-product: run=RUN -->` on its own line (case-sensitive).
-- Prove cross-part integration on the integrated branch with at least one unmocked end-to-end journey recipe in `pdd.json` `verify.paths`.
+- **Whole-product integration & wiring contracts:** Do not stop at siloed per-part modules or per-part KV stores. Specify in `product/plan.md` and `kind: native-only` integration prompts:
+  1. **Shared persistence schema:** unified relational schema, foreign keys, and migration ownership (never disconnected per-part ad-hoc KV databases).
+  2. **Transport & auth perimeter:** real HTTP/RPC authentication middleware, session/revocation enforcement, CSRF/`Origin` validation, and server-side clocks (never trusting forged auth decisions or caller-supplied timestamps).
+  3. **CLI-to-server wiring & Day-0 bootstrap:** real client-to-server transport (`--api-url` / HTTP calls, not pre-seeded local files) and a Day-0 startup/bootstrap command.
+  4. **Unmocked end-to-end journey recipe:** prove cross-part integration on the integrated branch with at least one unmocked end-to-end journey recipe in `pdd.json` `verify.paths`.
 
 ## 4. Shared contracts (`contracts/*.md`)
 
