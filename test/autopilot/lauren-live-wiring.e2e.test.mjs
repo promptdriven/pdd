@@ -1203,7 +1203,7 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
         {
           id: 'cd-gate',
           when: ['src/**', 'tools/**', 'scripts/**'],
-          run: 'cd tools && node gate.mjs && cd ../scripts && cd sub && node eval.mjs && cat MANIFEST',
+          run: 'cd tools && node gate.mjs && cd -- ../scripts && sh -c "cd sub && true" && cat sub/MANIFEST && cd sub && cd .. && cd - && node eval.mjs',
         },
         {
           id: 'untracked-case-probe',

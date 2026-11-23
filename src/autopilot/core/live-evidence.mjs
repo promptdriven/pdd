@@ -222,7 +222,12 @@ function tokenizeShellCommand(cmd) {
     }
     if (ch === '\'' || ch === '"') { quote = ch; continue; }
     if (ch === '\\' && i + 1 < src.length) { cur += src[i + 1]; i += 1; continue; }
-    if (/[\s;&|()<>`]/.test(ch)) {
+    if (ch === '(' || ch === ')') {
+      if (cur) { tokens.push(cur); cur = ''; }
+      tokens.push(ch);
+      continue;
+    }
+    if (/[\s;&|<>`]/.test(ch)) {
       if (cur) { tokens.push(cur); cur = ''; }
       continue;
     }
@@ -232,29 +237,108 @@ function tokenizeShellCommand(cmd) {
   return tokens;
 }
 
-function collectCommandCandidates(cmd, depth = 0, out = [], baseCtx = null) {
-  for (const token of tokenizeShellCommand(cmd)) {
-    out.push(token);
-    const eqIdx = token.indexOf('=');
-    if (eqIdx > 0 && eqIdx < token.length - 1) {
-      out.push(token.slice(eqIdx + 1));
+function recordScriptToken(raw, curDir, baseCtx, found) {
+  const trimmedRaw = typeof raw === 'string' ? raw.trim() : '';
+  if (!trimmedRaw || trimmedRaw.startsWith('-') || trimmedRaw.startsWith('/') || trimmedRaw.includes('\\') || trimmedRaw.includes('\0')) return;
+  const relCandidates = new Set();
+  if (curDir) {
+    const joined = normalizeCandidateRepoPath(`${curDir}/${trimmedRaw}`);
+    if (joined) relCandidates.add(joined);
+  }
+  const rootCand = normalizeCandidateRepoPath(trimmedRaw);
+  if (rootCand) relCandidates.add(rootCand);
+  for (const cand of relCandidates) {
+    if (TEST_FILE_RE.test(cand)) continue;
+    if (SCRIPT_EXT_RE.test(cand)) {
+      found.add(cand);
+      if (!cand.includes('/') && (!baseCtx.hasBaseLookup || !fileExistsInBase(cand, baseCtx))) {
+        found.add(`**/${cand}`);
+      }
+    } else if (baseCtx.hasBaseLookup && fileExistsInBase(cand, baseCtx)) {
+      found.add(cand);
     }
-    const cleanToken = token.replace(/^(?:\.\/)+/, '');
+  }
+}
+
+function scanCommandScripts(cmd, initialDir, depth, baseCtx, found) {
+  const tokens = tokenizeShellCommand(cmd);
+  let curDir = initialDir;
+  let prevDir = initialDir;
+  const dirStack = [];
+  const subshellStack = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tok = tokens[i];
+    if (tok === '(') {
+      subshellStack.push({ curDir, prevDir, dirStack: [...dirStack] });
+      continue;
+    }
+    if (tok === ')') {
+      if (subshellStack.length > 0) {
+        const saved = subshellStack.pop();
+        curDir = saved.curDir;
+        prevDir = saved.prevDir;
+        dirStack.length = 0;
+        dirStack.push(...saved.dirStack);
+      }
+      continue;
+    }
+    if ((tok === 'cd' || tok === 'pushd') && i + 1 < tokens.length) {
+      let j = i + 1;
+      while (j < tokens.length && (tokens[j] === '--' || tokens[j] === '-L' || tokens[j] === '-P')) {
+        const flag = tokens[j];
+        j += 1;
+        if (flag === '--') break;
+      }
+      if (j < tokens.length) {
+        const arg = String(tokens[j] ?? '').trim();
+        if (tok === 'pushd') dirStack.push(curDir);
+        if (arg === '-') {
+          const next = prevDir;
+          prevDir = curDir;
+          curDir = next;
+        } else if (arg && !arg.startsWith('-') && !arg.startsWith('/') && !arg.includes('\\') && !arg.includes('\0')) {
+          const rawDir = curDir ? `${curDir}/${arg}` : arg;
+          const normDir = posix.normalize(rawDir).replace(/^(?:\.\/)+/, '');
+          if (normDir === '.' || normDir === '') {
+            prevDir = curDir;
+            curDir = '';
+          } else if (!normDir.startsWith('..')) {
+            prevDir = curDir;
+            curDir = normDir;
+          }
+        }
+        i = j;
+        continue;
+      }
+    }
+    if (tok === 'popd') {
+      if (dirStack.length > 0) {
+        prevDir = curDir;
+        curDir = dirStack.pop();
+      }
+      continue;
+    }
+    recordScriptToken(tok, curDir, baseCtx, found);
+    const eqIdx = tok.indexOf('=');
+    if (eqIdx > 0 && eqIdx < tok.length - 1) {
+      recordScriptToken(tok.slice(eqIdx + 1), curDir, baseCtx, found);
+    }
+    const cleanToken = tok.replace(/^(?:\.\/)+/, '');
     const exactBaseFile = Boolean(
-      baseCtx?.hasBaseLookup
+      baseCtx.hasBaseLookup
       && cleanToken
       && !cleanToken.startsWith('-')
       && !cleanToken.startsWith('/')
       && !cleanToken.includes('..')
       && !cleanToken.includes('\\')
       && !cleanToken.includes('\0')
-      && fileExistsInBase(cleanToken, baseCtx),
+      && (fileExistsInBase(cleanToken, baseCtx) || (curDir && fileExistsInBase(normalizeCandidateRepoPath(`${curDir}/${cleanToken}`), baseCtx))),
     );
-    if (depth < 3 && !exactBaseFile && /[\s"'`=<>|&;()]/.test(token)) {
-      collectCommandCandidates(token, depth + 1, out, baseCtx);
+    // Recurse into nested shell commands (e.g. `sh -c '...'`) inheriting curDir without mutating parent curDir.
+    if (depth < 3 && !exactBaseFile && /[\s"'`=<>|&;()]/.test(tok)) {
+      scanCommandScripts(tok, curDir, depth + 1, baseCtx, found);
     }
   }
-  return out;
 }
 
 function readGitHeadSha(cwd) {
@@ -308,48 +392,7 @@ function extractRecipeScriptPaths(baseVerify, { headTree = null, baseTree = null
   const hasBaseLookup = Boolean((baseTipValid && (headTree || baseTree)) || (!baseTipValid && baseTree));
   const baseCtx = { hasBaseLookup, headTree, baseTree, baseTip, baseTipValid, fs };
   for (const cmd of commands) {
-    const tokens = collectCommandCandidates(cmd, 0, [], baseCtx);
-    let curDir = '';
-    const dirStack = [];
-    for (let i = 0; i < tokens.length; i += 1) {
-      const tok = tokens[i];
-      if ((tok === 'cd' || tok === 'pushd') && i + 1 < tokens.length) {
-        const arg = String(tokens[i + 1] ?? '').trim();
-        if (tok === 'pushd') dirStack.push(curDir);
-        if (arg && !arg.startsWith('-') && !arg.startsWith('/') && !arg.includes('\\') && !arg.includes('\0')) {
-          const rawDir = curDir ? `${curDir}/${arg}` : arg;
-          const normDir = posix.normalize(rawDir).replace(/^(?:\.\/)+/, '');
-          if (normDir === '.' || normDir === '') curDir = '';
-          else if (!normDir.startsWith('..')) curDir = normDir;
-        }
-        i += 1;
-        continue;
-      }
-      if (tok === 'popd') {
-        if (dirStack.length > 0) curDir = dirStack.pop();
-        continue;
-      }
-      const trimmedRaw = typeof tok === 'string' ? tok.trim() : '';
-      if (!trimmedRaw || trimmedRaw.startsWith('-') || trimmedRaw.startsWith('/') || trimmedRaw.includes('\\') || trimmedRaw.includes('\0')) continue;
-      const relCandidates = new Set();
-      if (curDir) {
-        const joined = normalizeCandidateRepoPath(`${curDir}/${trimmedRaw}`);
-        if (joined) relCandidates.add(joined);
-      }
-      const rootCand = normalizeCandidateRepoPath(trimmedRaw);
-      if (rootCand) relCandidates.add(rootCand);
-      for (const cand of relCandidates) {
-        if (TEST_FILE_RE.test(cand)) continue;
-        if (SCRIPT_EXT_RE.test(cand)) {
-          found.add(cand);
-          if (!cand.includes('/') && (!hasBaseLookup || !fileExistsInBase(cand, baseCtx))) {
-            found.add(`**/${cand}`);
-          }
-        } else if (hasBaseLookup && fileExistsInBase(cand, baseCtx)) {
-          found.add(cand);
-        }
-      }
-    }
+    scanCommandScripts(cmd, '', 0, baseCtx, found);
   }
   return [...found].sort();
 }
