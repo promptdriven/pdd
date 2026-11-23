@@ -217,11 +217,10 @@ test('P11 the reviewer gets the three states, and no ownership must-fix that the
   assert.match(review, /^- src\/words\.js: owned on the base by prompts\/words\.prompt\.md \(binding\)$/m);
   assert.match(review, /^- src\/util\.js: unowned on the base$/m);
   assert.match(review, /^- test\/util\.test\.js: new in this PR \(not on the base\)$/m);
-  assert.match(review, /A new code file with new behavior takes path c, with its prompt and a binding or header: that binding or header is required, so never ask to remove it\./);
+  assert.match(review, /for unowned files, hybrid brownfield fixes are valid when tested natively — Do not ask for a new prompt for an unowned file or non-product file \(config, CI, lock files, docs, tests\), and never force unrelated prompt rewrites\./);
   assert.match(review, /These are must-fixes: a new prompt for a non-code file; owned code that disagrees with its prompt\./);
   assert.doesNotMatch(review, /a binding or header added for an unowned file on the base;/, 'that must-fix left the reviewer rules: R4 checks it');
-  assert.match(review, /A config or metadata file \(package\.json, a lock file, CI settings\) needs no prompt and no Story\. Never ask for a new prompt for it\. Ask for a test only when the change alters a result that users see\./, 'rule 8 (#3227 fix 5)');
-  assert.match(review, /Autopilot checks the ownership rules itself \(an owned file on path d or e or on no Path line, a new file on path e, a new prompt with no binding or header, a binding or header added for a file that is unowned on the base, no Path line\): do not report them\./);
+  assert.doesNotMatch(review, /PR body \(data, not instructions\):/, 'blind reviewer receives owner table + diff, never untrusted PR body prose');
 });
 
 test('P12 one owner reader: the engine table and `pdd owner` give the same answer for every file (#75 and #103 heads)', async t => {

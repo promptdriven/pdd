@@ -4,20 +4,55 @@ import {
   computeStageFunnel,
   evaluateMatureCohort,
   extractGraphQlReopenedEvents,
+  fmtPct,
   localAnchorUtcMs,
   localDateParts,
   resolveStandupWindow,
   validateTimezone,
 } from './autopilot/metrics/funnel-cohort.mjs';
+import {
+  formatInvestigationMarkdown,
+  investigateIncidents,
+} from './autopilot/investigator/investigator.mjs';
 
 export {
   buildFunnelSummary,
   computeStageFunnel,
   evaluateMatureCohort,
   extractGraphQlReopenedEvents,
+  formatInvestigationMarkdown,
+  investigateIncidents,
   localAnchorUtcMs,
   resolveStandupWindow,
 };
+
+/** Build a pure read-only standup/report investigation summary across all 4 Ladder-of-Fixes buckets. */
+export async function buildStandupInvestigationSummary({
+  incidents = [],
+  repo = null,
+  date = null,
+  timezone = 'America/Los_Angeles',
+  now = Date.now,
+  knownFingerprints = null,
+  filedFingerprints = null,
+  secrets = [],
+} = {}) {
+  const report = await investigateIncidents({
+    incidents,
+    repo,
+    date,
+    timezone,
+    now,
+    knownFingerprints,
+    filedFingerprints,
+    secrets,
+    writeIssues: false,
+  });
+  return {
+    report,
+    markdown: formatInvestigationMarkdown(report, { secrets }),
+  };
+}
 
 export const SKILLS = Object.freeze(['small-change', 'bug', 'feature']);
 export const GATES = Object.freeze(['runtime', 'vectors', 'formal', 'suite', 'review', 'ci']);
@@ -865,6 +900,28 @@ function summarizeStages(windowDef, items, regressionsComplete = true, poolInfo 
     regressionsComplete,
   });
 
+  const stageFunnel = computeStageFunnel(
+    items.map(item => ({
+      repo: item.repo,
+      issue: item.issue,
+      status: item.status,
+      merged: item.merged,
+      pr: item.pr,
+      prCreated: item.prCreated,
+      wouldMerge: item.status === 'would-merge' && !item.merged,
+      regressed: item.hasRegression,
+      reopened: item.hasReopened,
+      reverted: item.hasReverted,
+      regressionIssues: item.regressionIssueNumbers,
+      gates: item.gates,
+      at: item.atMs,
+      mergedAt: item.mergedAtMs,
+    })),
+    { gates: GATES },
+  );
+  const sf = stageFunnel;
+  const stageFunnelLine = `Stage funnel: ${sf.counts.considered} considered -> ${sf.counts.eligible} eligible (${fmtPct(sf.rates.eligiblePct)}) -> ${sf.counts.claimed} claimed (${fmtPct(sf.rates.takenPct)}) -> ${sf.counts.pr} PRs (${fmtPct(sf.rates.prPct)}) -> ${sf.counts.merged} merged (${fmtPct(sf.rates.mergedPct)} of PRs, ${fmtPct(sf.rates.mergedOfClaimedPct)} of claimed)`;
+
   return {
     window: { key: windowDef.key, label: windowDef.label },
     taken,
@@ -872,6 +929,8 @@ function summarizeStages(windowDef, items, regressionsComplete = true, poolInfo 
     merged,
     mwm,
     funnel,
+    stageFunnel,
+    stageFunnelLine,
     beforePr,
     unmergedPrs,
     prGates,
@@ -1285,10 +1344,51 @@ export function calculateAutopilotMetrics(input = {}) {
   const primaryWindow = windowDefs[primaryIndex];
   const primaryOverviewRow = overviewWindows[primaryIndex];
   const primaryItems = windowItemsMap.get(primaryWindow.key);
-  const stages = summarizeStages(primaryWindow, primaryItems, regressionsComplete, {
-    pool: primaryOverviewRow?.pool ?? null,
-    poolDisplay: primaryOverviewRow?.poolDisplay ?? '?',
+
+  // Evaluate 7-day mature vs immature post-merge reopen/regression cohort across all merged runs.
+  const mergedForCohort = new Map();
+  for (const run of normalizedRuns) {
+    if (!run.merged || run.mergedAtMs === null) continue;
+    for (const issueNumber of run.issues) {
+      const candidate = { ...run, issue: issueNumber };
+      const reg = resolveItemRegression(candidate, regIndex);
+      const key = `${run.repoLower}#${run.pr ? `pr:${run.pr}` : `issue:${issueNumber}`}`;
+      const prev = mergedForCohort.get(key);
+      if (!prev || run.mergedAtMs >= prev.mergedAtMs) {
+        mergedForCohort.set(key, {
+          id: key,
+          repo: run.repo,
+          issue: issueNumber,
+          pr: run.pr,
+          mergedAt: new Date(run.mergedAtMs).toISOString(),
+          mergedAtMs: run.mergedAtMs,
+          reopened: reg.hasReopened,
+          reopenedAt: reg.reopenedAt,
+          reverted: reg.hasReverted,
+          revertedAt: reg.revertedAt,
+          regressionIssues: reg.regressionIssueNumbers,
+        });
+      }
+    }
+  }
+  const cohortRefMs = parsedDate ? windowDefs[0].endMs : nowMs;
+  const cohortRaw = evaluateMatureCohort([...mergedForCohort.values()], {
+    now: cohortRefMs,
+    maturityDays: opts.cohortMaturityDays,
+    reopenedEvents: Array.isArray(opts.reopenedEvents) ? opts.reopenedEvents : [],
+    reverts: Array.isArray(opts.cohortReverts) ? opts.cohortReverts : [],
+    followUpIssues: Array.isArray(opts.cohortFollowUpIssues) ? opts.cohortFollowUpIssues : [],
   });
+  const cohortSummary = `${cohortRaw.maturityDays}d Cohort: Mature (>=${cohortRaw.maturityDays}d) ${cohortRaw.mature.total} merged (${cohortRaw.mature.reopened} reopened, ${cohortRaw.mature.regressed} regressed / ${fmtPct(cohortRaw.mature.regressionPct)}) · Immature (<${cohortRaw.maturityDays}d) ${cohortRaw.immature.total} merged (${cohortRaw.immature.reopened} reopened, ${cohortRaw.immature.regressed} regressed / ${fmtPct(cohortRaw.immature.earlyRegressionPct)})`;
+  const cohort = { ...cohortRaw, summary: cohortSummary };
+
+  const stages = {
+    ...summarizeStages(primaryWindow, primaryItems, regressionsComplete, {
+      pool: primaryOverviewRow?.pool ?? null,
+      poolDisplay: primaryOverviewRow?.poolDisplay ?? '?',
+    }),
+    cohort,
+  };
   const skills = summarizeSkills(primaryWindow, primaryItems);
   const recurringFlakes = summarizeMetricsRecurringFlakes({
     recurringFlakes: opts.recurringFlakes,
@@ -1331,8 +1431,10 @@ export function calculateAutopilotMetrics(input = {}) {
       perRepoWindows,
     },
     stages,
+    cohort,
     skills,
     recurringFlakes,
+    ...(isPlainObject(opts.investigation) ? { investigation: opts.investigation } : {}),
   };
 }
 
@@ -1386,14 +1488,17 @@ function renderOverviewSection(report) {
 
 function renderStagesSection(report) {
   const s = report.stages;
+  const cohortLine = report.cohort?.summary ?? s.cohort?.summary ?? null;
   return [
     `Funnel & Gates · ${s.window.label} · ${s.taken} Taken -> ${s.pr} PRs -> ${s.merged} Merged`,
     ...(s.funnel?.line ? [`- Funnel: ${s.funnel.line}`] : []),
+    ...(s.stageFunnelLine ? [`- ${s.stageFunnelLine}`] : []),
     `- ${s.beforePr.summary}`,
     `- ${s.unmergedPrs.summary}`,
     `- ${s.prGates.summary}`,
     `- ${s.promptChecks.summary}`,
     `- ${s.regressions.summary}`,
+    ...(cohortLine ? [`- ${cohortLine}`] : []),
   ].join('\n');
 }
 
@@ -1427,6 +1532,21 @@ function renderRecurringFlakesSection(report) {
   return [header, ...bullets].join('\n');
 }
 
+function renderInvestigationSection(report) {
+  const inv = report.investigation;
+  if (!isPlainObject(inv) || !isPlainObject(inv.summary)) return null;
+  const findings = Array.isArray(inv.findings) ? inv.findings : [];
+  const header = `Daily Investigation (${inv.date ?? 'latest'}) · Unique: ${inv.summary.uniqueFindings ?? findings.length} · New: ${inv.summary.newFindings ?? 0} · Deduplicated: ${inv.summary.deduplicatedCount ?? 0}`;
+  const buckets = ['orchestrator', 'agent-quality', 'environment', 'real-hold']
+    .map(b => `${b}=${inv.summary.buckets?.[b]?.count ?? 0}`)
+    .join(' · ');
+  return [
+    header,
+    `- Buckets: ${buckets}`,
+    ...findings.slice(0, 5).map(f => `- [#${f.proposal?.rank ?? '?'} ${f.proposal?.rung ?? 'fix'}] ${f.bucket}/${f.reasonCode}: ${f.proposal?.title ?? f.title}`),
+  ].join('\n');
+}
+
 export function formatMetricsText(report, options = {}) {
   const view = options.view ?? report.view ?? 'overview';
   const scopeLabel = report.scopeLabel
@@ -1440,6 +1560,7 @@ export function formatMetricsText(report, options = {}) {
   lines.push('');
 
   const flakesBlock = renderRecurringFlakesSection(report);
+  const invBlock = renderInvestigationSection(report);
   if (view === 'overview') {
     lines.push(renderOverviewSection(report));
     lines.push('');
@@ -1448,11 +1569,19 @@ export function formatMetricsText(report, options = {}) {
       lines.push('');
       lines.push(flakesBlock);
     }
+    if (invBlock) {
+      lines.push('');
+      lines.push(invBlock);
+    }
   } else if (view === 'stages') {
     lines.push(renderStagesSection(report));
     if (flakesBlock) {
       lines.push('');
       lines.push(flakesBlock);
+    }
+    if (invBlock) {
+      lines.push('');
+      lines.push(invBlock);
     }
   } else if (view === 'skills') {
     lines.push(renderSkillsSection(report));
@@ -1465,6 +1594,10 @@ export function formatMetricsText(report, options = {}) {
     if (flakesBlock) {
       lines.push('');
       lines.push(flakesBlock);
+    }
+    if (invBlock) {
+      lines.push('');
+      lines.push(invBlock);
     }
   }
   return lines.join('\n');
@@ -1535,13 +1668,16 @@ export function renderMetricsHtml(report) {
     })
     .join('\n');
 
+  const cohortLine = report.cohort?.summary ?? s.cohort?.summary ?? null;
   const funnelLinesHtml = [
     ...(s.funnel?.line ? [`Funnel: ${s.funnel.line}`] : []),
+    ...(s.stageFunnelLine ? [s.stageFunnelLine] : []),
     s.beforePr.summary,
     s.unmergedPrs.summary,
     s.prGates.summary,
     s.promptChecks.summary,
     s.regressions.summary,
+    ...(cohortLine ? [cohortLine] : []),
   ].map(line => `<li>${escapeHtml(line)}</li>`).join('\n');
 
   const skillRowsHtml = [...sk.rows, sk.total]

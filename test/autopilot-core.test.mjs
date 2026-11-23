@@ -49,7 +49,7 @@ test('easy issue: claim, build, review, suite, CI and base check lead to one mer
   assert.equal(claim.coordinatorId, 'coord-a'); assert.equal(claim.machine, `m-${createHash('sha256').update('machine-a').digest('hex').slice(0, 12)}`, 'a machine id, not the host'); assert.equal(claim.lastSeen, '');
   assert.match(build.input, /Use value two/); assert.match(build.input, /The value must be 2\./);
   assert.match(build.input, /https:\/\/github\.com\/acme\/widgets\/issues\/17/);
-  assert.match(build.input, /npm test/); assert.match(build.input, /ONE PR/); assert.match(build.input, /Runtime: not run/);
+  assert.match(build.input, /npm test/); assert.match(build.input, /ONE (?:cohesive )?PR/); assert.match(build.input, /"\$PDD_CLI" prove/);
   assert.match(build.input, /never merge/i); assert.match(build.input, new RegExp(build.result.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.equal(build.cwd.includes('worktrees'), true);
   assert.equal(build.custodyRoot, build.cwd, 'the job runner gets the exact disposable worktree as its custody root');
@@ -803,7 +803,7 @@ test('R1 a Runtime FAIL line in a list, in bold or in any case blocks the merge,
   w.build(17, { body: 'Fixes #17', runtime: { state: 'FAIL', kind: 'runtime', component: 'pdd test', code: 'x', cause: 'y' } }); await w.tick();
   assert.equal(w.github.merges.length, 0); assert.ok(w.job(17, 'repair'));
   w.build(17, { role: 'repair', body: 'Fixes #17\n\nRuntime: PASS' }); await w.tick();
-  assert.match(w.job(17, 'review').input, /Runtime FAIL line.*FAIL/i, 'the reviewer prompt says a Runtime FAIL line is a FAIL verdict');
+  assert.match(w.job(17, 'review').input, /Harness verification evidence above shows no failing runtime check/i, 'the blind reviewer checks harness-owned verification evidence, not untrusted builder PR prose');
 });
 
 test('R2 takeover race: a stale expired-claim read does not take over a fresh claim, and a lost claim never merges', async t => {
@@ -2500,9 +2500,9 @@ test('O1 the build brief has the owner table (binding, header line in the first 
   assert.match(input, /- src\/words\.js: prompts\/words\.prompt\.md \(binding\)/);
   assert.match(input, /- src\/late\.js: prompts\/late\.prompt\.md \(header\)/, 'a header past the first 10 lines, in the first 4 KiB');
   assert.doesNotMatch(input, /- src\/(?:money|other|third)\.js:/, 'prose-only mentions are advisory hints, not ownership claims');
-  assert.match(input, /run the same lookup \(`pdd owner FILE`\)/); assert.match(input, /A file that you add is never path e/);
-  assert.match(input, /e\.[^\n]*\.prompt\.md/); assert.match(input, /Generated from/);
-  assert.match(input, /The prompt and the code may be in one commit\. Never rewrite history/);
+  assert.match(input, /"\$PDD_CLI" owner FILE/); assert.match(input, /Hybrid Brownfield PRs/);
+  assert.match(input, /e\.[^\n]*\.prompt\.md/); assert.match(input, /\/\/ Prompt: <path>/);
+  assert.match(input, /The prompt and code may be in one commit; never rewrite history/);
   assert.match(input, /"adopt":\[/);
 });
 
@@ -4060,7 +4060,7 @@ test('3154 & 3782 opt-in model tiering routes worker vs reviewer launches and re
   await w.tick({ env: { ...process.env, PDD_MODEL_TIERING: '1' } });
   const build = w.job(21, 'build');
   assert.deepEqual(build.args, [
-    'exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false',
+    'exec', '--json', '--dangerously-bypass-approvals-and-sandbox',
     '--model', 'gpt-5.4-mini', '-c', 'model_reasoning_effort="medium"', '-',
   ]);
 
@@ -4581,16 +4581,15 @@ test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt
 
   const input = w.job(17, 'build').input;
   const rule1 = input.split('\n').find(line => line.startsWith('1. Read the PDD skill')) ?? '';
-  assert.match(rule1, /pdd-small-change/);
-  assert.match(rule1, /path d/);
+  assert.match(rule1, /\$PDD_SKILLS\/pdd\/SKILL\.md/);
+  assert.match(rule1, /small-change/);
   assert.match(rule1, /never[^\n]*\*\.prompt\.md/);
-  assert.match(rule1, /pdd-bug/);
-  assert.match(rule1, /pdd-feature/);
-  assert.doesNotMatch(rule1, /pdd-small-change for a small contained change/);
+  assert.doesNotMatch(rule1, /\bpdd-(?:small-change|bug|feature)\b/);
 
-  assert.match(input, /e\.[^\n]*\.prompt\.md/);
-  assert.match(input, /Generated from/);
-  assert.doesNotMatch(input, /change it directly, with a regression test, and put the file in the result's "adopt" list/);
+  assert.match(input, /e\.[^\n]*Hybrid Brownfield PRs/);
+  assert.match(input, /\/\/ Prompt: <path>/);
+  assert.match(input, /"\$PDD_CLI" prove/);
+  assert.doesNotMatch(input, /RUNBOOK §15/);
 
   const promptText = '# Util\n\nOwn `src/util.js`: return 1 from `util()`.\n';
   const headerHash = promptHeaderHash(Buffer.from(promptText, 'utf8'));

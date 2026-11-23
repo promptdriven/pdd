@@ -203,9 +203,19 @@ export function detectConflictingVerdicts(candidates) {
   return new Set(candidates.map((c) => JSON.stringify([c?.verdict ?? null, c?.decision ?? null, c?.status ?? null, normStrArr(c?.flags), normStrArr(c?.missingPathIds), normStrArr(c?.unprovedAcIds)]))).size > 1;
 }
 
-/** Hardening 9: Strict schema validator (additionalProperties: false, closed enums, bounds). */
+/** Hardening 9: Strict schema validator (additionalProperties: false, closed enums, bounds, nullable union types). */
 export function validateAgainstSchema(value, schema) {
   if (!isPlainObj(schema)) return { ok: false, error: 'Missing schema definition.' };
+  if (Array.isArray(schema.type)) {
+    const errors = [];
+    for (const branchType of schema.type) {
+      const sub = validateAgainstSchema(value, { ...schema, type: branchType });
+      if (sub.ok) return sub;
+      errors.push(sub.error);
+    }
+    return { ok: false, error: errors[0] || `Value did not match union type [${schema.type.join(', ')}].` };
+  }
+  if (schema.type === 'null') return value === null ? { ok: true, error: null } : { ok: false, error: 'Expected null.' };
   if (schema.type === 'object') {
     if (!isPlainObj(value)) return { ok: false, error: 'Expected JSON object.' };
     const props = schema.properties ?? {};
@@ -248,20 +258,83 @@ export function unwrapStructuredEnvelope(parsed) {
   return { ok: true, value: parsed, error: null };
 }
 
-/** CLI native schema flag builders (`codex exec --output-schema`, `claude -p --json-schema`). */
-export function buildCodexSchemaArgs({ schemaPath, schema = null, fs = null } = {}) {
+const UNSUPPORTED_PROVIDER_SCHEMA_KEYS = new Set(['maxLength', 'minLength', 'maxItems', 'minItems', 'pattern', 'format', '$schema']);
+
+/** Convert a schema to strict Codex/Claude/Agy JSON-schema wire shape (`additionalProperties: false`, all keys required, no unsupported keywords). */
+export function toProviderStrictSchema(schema) {
+  if (!isPlainObj(schema)) throw new Error('toProviderStrictSchema requires a schema object.');
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (!isPlainObj(node)) return node;
+    const out = {};
+    for (const [k, v] of Object.entries(node)) {
+      if (UNSUPPORTED_PROVIDER_SCHEMA_KEYS.has(k)) continue;
+      if (k === 'properties' && isPlainObj(v)) {
+        const cleanProps = {};
+        for (const [pk, pv] of Object.entries(v)) cleanProps[pk] = walk(pv);
+        out.properties = cleanProps;
+      } else if (k === 'items' && isPlainObj(v)) {
+        out.items = walk(v);
+      } else {
+        out[k] = v;
+      }
+    }
+    if (out.type === 'object') {
+      out.additionalProperties = false;
+      const propKeys = isPlainObj(out.properties) ? Object.keys(out.properties) : [];
+      out.required = [...propKeys];
+    }
+    return out;
+  };
+  return walk(schema);
+}
+
+/** Strict wire schema for Autopilot Core's blind review JSON output (`codex --output-schema`, `claude --json-schema`, `agy --json-schema`). */
+export function buildCoreReviewSchema({ includeDecisionFields = false } = {}) {
+  const properties = {
+    verdict: { type: 'string', enum: ['PASS', 'FAIL'] },
+    head: { type: 'string' },
+    summary: { type: 'string' },
+    mustFix: { type: 'array', items: { type: 'string' } },
+    preExisting: { type: 'array', items: { type: 'string' } },
+    ...(includeDecisionFields
+      ? {
+          question: { type: ['string', 'null'] },
+          options: { type: 'array', items: { type: 'string' } },
+          recommended: { type: ['string', 'null'] },
+        }
+      : {}),
+  };
+  return Object.freeze({
+    type: 'object',
+    additionalProperties: false,
+    required: Object.keys(properties),
+    properties,
+  });
+}
+
+/** CLI native schema flag builders (`codex exec --output-schema`, `claude -p --json-schema`, `agy --json-schema`). */
+export function buildCodexSchemaArgs({ schemaPath, schema = null, fs = null, strictProvider = false } = {}) {
   if (typeof schemaPath !== 'string' || !schemaPath.trim()) throw new Error('codex --output-schema requires a non-empty schemaPath.');
-  if (schema !== null) writeAtomicPrivate(fs, schemaPath, `${JSON.stringify(schema, null, 2)}\n`, 0o700, 0o600);
+  const wireSchema = schema !== null ? (strictProvider ? toProviderStrictSchema(schema) : schema) : null;
+  if (wireSchema !== null) writeAtomicPrivate(fs, schemaPath, `${JSON.stringify(wireSchema, null, 2)}\n`, 0o700, 0o600);
   return ['--output-schema', schemaPath];
 }
-export function buildClaudeSchemaArgs({ schema } = {}) {
+export function buildClaudeSchemaArgs({ schema, strictProvider = false } = {}) {
   if (!isPlainObj(schema)) throw new Error('claude --json-schema requires a schema object.');
-  return ['--json-schema', JSON.stringify(schema)];
+  const wireSchema = strictProvider ? toProviderStrictSchema(schema) : schema;
+  return ['--json-schema', JSON.stringify(wireSchema)];
 }
-export function buildNativeSchemaArgs({ agentKind = '', schema, schemaPath = '', fs = null } = {}) {
+export function buildAgySchemaArgs({ schema, strictProvider = false } = {}) {
+  if (!isPlainObj(schema)) throw new Error('agy --json-schema requires a schema object.');
+  const wireSchema = strictProvider ? toProviderStrictSchema(schema) : schema;
+  return ['--json-schema', JSON.stringify(wireSchema)];
+}
+export function buildNativeSchemaArgs({ agentKind = '', schema, schemaPath = '', fs = null, strictProvider = false } = {}) {
   const kind = String(agentKind ?? '').trim().toLowerCase();
-  if (kind === 'codex') return buildCodexSchemaArgs({ schemaPath, schema, fs });
-  if (kind === 'claude') return buildClaudeSchemaArgs({ schema });
+  if (kind === 'codex') return buildCodexSchemaArgs({ schemaPath, schema, fs, strictProvider });
+  if (kind === 'claude') return buildClaudeSchemaArgs({ schema, strictProvider });
+  if (kind === 'agy') return buildAgySchemaArgs({ schema, strictProvider });
   return [];
 }
 
