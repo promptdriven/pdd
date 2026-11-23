@@ -160,20 +160,54 @@ function isFenceCloseLine(line, active) {
   return Boolean(close && close[1][0] === active.ch && close[1].length >= active.len);
 }
 
+function parseDiffHunkHeader(line) {
+  const m = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/.exec(line);
+  if (!m) return { counted: false, oldRem: 0, newRem: 0 };
+  return {
+    counted: true,
+    oldRem: m[2] === undefined ? 1 : Number(m[2]),
+    newRem: m[4] === undefined ? 1 : Number(m[4]),
+  };
+}
+
+function consumeDiffHunkLine(line, hunk) {
+  if (!hunk) return false;
+  if (line === '\\ No newline at end of file') return true;
+  if (hunk.counted) {
+    if (hunk.oldRem <= 0 && hunk.newRem <= 0) return false;
+    if (line.startsWith(' ') && hunk.oldRem > 0 && hunk.newRem > 0) {
+      hunk.oldRem -= 1;
+      hunk.newRem -= 1;
+      return true;
+    }
+    if (line.startsWith('-') && hunk.oldRem > 0) {
+      hunk.oldRem -= 1;
+      return true;
+    }
+    if (line.startsWith('+') && hunk.newRem > 0) {
+      hunk.newRem -= 1;
+      return true;
+    }
+    return false;
+  }
+  return /^[ +-]/.test(line);
+}
+
 /**
  * Hardening 6 (detailed): Single-pass O(N) injection container stripper.
  * Preserves visible top-level fenced code blocks verbatim (so JSON strings containing `<!--` survive
  * even after introductory prose), while stripping HTML comments (closed, nested, boundary-spliced,
  * abrupt-closing `<!-->`/`<!--->`, and unclosed to EOF), blockquotes, and unified diff hunks
- * (including unchanged leading-space context lines).
+ * (respecting `@@ -a,b +c,d @@` line counts so completed hunks never swallow following bullets/fences).
  */
 export function stripInjectionContainersDetailed(raw) {
   const src = sanitizeUntrustedText(raw).replace(/\r\n/g, '\n');
   const segments = [];
   let proseBuf = [];
   let unclosedComment = false;
-  let inDiffHunk = false;
+  let activeHunk = null;
   let pos = 0;
+  let nextCommentPos = src.indexOf('<!--', 0);
 
   const flushProse = () => {
     if (!proseBuf.length) return;
@@ -240,15 +274,19 @@ export function stripInjectionContainersDetailed(raw) {
 
     if (atLineStart) {
       const line = src.slice(pos, lineEnd);
-      if (inDiffHunk) {
-        if (/^[ +-]/.test(line) || line === '\\ No newline at end of file') {
+      if (activeHunk) {
+        if (consumeDiffHunkLine(line, activeHunk)) {
           pos = nextLinePos;
           continue;
         }
-        inDiffHunk = false;
+        activeHunk = null;
       }
-      if (/^(?:diff --git |@@ |--- [a-z/]|\+\+\+ [a-z/])/i.test(line)) {
-        inDiffHunk = true;
+      if (/^@@ /.test(line)) {
+        activeHunk = parseDiffHunkHeader(line);
+        pos = nextLinePos;
+        continue;
+      }
+      if (/^(?:diff --git |--- [a-z/]|\+\+\+ [a-z/])/i.test(line)) {
         pos = nextLinePos;
         continue;
       }
@@ -277,34 +315,37 @@ export function stripInjectionContainersDetailed(raw) {
       }
     }
 
-    const start = src.indexOf('<!--', pos);
-    if (start < 0 || start >= lineEnd) {
+    if (nextCommentPos >= 0 && nextCommentPos < pos) {
+      nextCommentPos = src.indexOf('<!--', pos);
+    }
+    if (nextCommentPos < 0 || nextCommentPos >= lineEnd) {
       proseBuf.push(src.slice(pos, nextLinePos));
       pos = nextLinePos;
       continue;
     }
-    if (start > pos) proseBuf.push(src.slice(pos, start));
-    consumeCommentAndSplices(start);
+    if (nextCommentPos > pos) proseBuf.push(src.slice(pos, nextCommentPos));
+    consumeCommentAndSplices(nextCommentPos);
   }
   flushProse();
 
   const outLines = [];
-  let postInDiffHunk = false;
+  let postHunk = null;
   for (const seg of segments) {
     if (seg.fence) {
-      postInDiffHunk = false;
+      postHunk = null;
       const cleanFence = seg.text.endsWith('\n') ? seg.text.slice(0, -1) : seg.text;
       outLines.push(cleanFence);
       continue;
     }
     const rawSeg = seg.text.endsWith('\n') ? seg.text.slice(0, -1) : seg.text;
     for (const line of rawSeg.split('\n')) {
-      if (/^\s*>/.test(line)) continue;
-      if (/^(?:diff --git |@@ |--- [a-z/]|\+\+\+ [a-z/])/i.test(line)) { postInDiffHunk = true; continue; }
-      if (postInDiffHunk) {
-        if (/^[ +-]/.test(line) || line === '\\ No newline at end of file') continue;
-        postInDiffHunk = false;
+      if (postHunk) {
+        if (consumeDiffHunkLine(line, postHunk)) continue;
+        postHunk = null;
       }
+      if (/^\s*>/.test(line)) continue;
+      if (/^@@ /.test(line)) { postHunk = parseDiffHunkHeader(line); continue; }
+      if (/^(?:diff --git |--- [a-z/]|\+\+\+ [a-z/])/i.test(line)) continue;
       if (/^[+-]\s*(?:\{|```|~~~)/.test(line)) continue;
       outLines.push(line);
     }
@@ -317,25 +358,27 @@ export function stripInjectionContainers(raw) {
   return stripInjectionContainersDetailed(raw).text;
 }
 
-/** Hardening 7: Extract strictly closed JSON fences and detect unclosed/truncated fence attacks. */
+/** Hardening 7: Extract strictly closed JSON fences, prose outside all fences, and detect unclosed/truncated fence attacks. */
 export function extractClosedJsonFences(raw) {
   const blocks = [];
+  const outsideLines = [];
   let active = null;
   for (const line of String(raw ?? '').split(/\r?\n/)) {
     if (active) {
-      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
-      if (close && close[1][0] === active.ch && close[1].length >= active.len) {
+      if (isFenceCloseLine(line, active)) {
         if (active.lang === 'json' || active.lang === '') blocks.push(active.lines.join('\n').trim());
         active = null;
       } else active.lines.push(line);
       continue;
     }
-    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
-      active = { ch: open[1][0], len: open[1].length, lang: (open[2].trim().split(/[\s{`~]/)[0] ?? '').toLowerCase(), lines: [] };
+    const open = parseFenceOpenLine(line);
+    if (open) {
+      active = { ...open, lines: [] };
+      continue;
     }
+    outsideLines.push(line);
   }
-  return { blocks, unclosedFence: Boolean(active) };
+  return { blocks, outsideText: outsideLines.join('\n'), unclosedFence: Boolean(active) };
 }
 
 function scanBalancedJsonStrings(text, maxObjects = 32) {
@@ -520,11 +563,12 @@ export function parseTypedOrLegacyOutput(raw, { schemaName = null, schema = null
 
   const { text: stripped, unclosedComment } = stripInjectionContainersDetailed(text);
   if (unclosedComment) return fail('legacy-fallback', 'Unclosed HTML comment rejected.', true);
-  const { blocks, unclosedFence } = extractClosedJsonFences(stripped);
+  const { blocks, outsideText, unclosedFence } = extractClosedJsonFences(stripped);
   if (unclosedFence) return fail('legacy-fallback', 'Unclosed fenced block rejected.', true);
 
-  // Collect JSON candidates from BOTH closed fences AND standalone balanced objects (immune to fence-line desync).
-  const candidateTexts = [...new Set([...blocks.filter((b) => b.startsWith('{')), ...scanBalancedJsonStrings(stripped)])];
+  // Collect JSON candidates from closed json/unlabeled fences and prose outside other fences
+  // (never treating quoted code inside ```diff / ```js / ```markdown fences as review decisions).
+  const candidateTexts = [...new Set([...blocks.filter((b) => b.startsWith('{')), ...scanBalancedJsonStrings(outsideText)])];
   const validCandidates = [], allDecisionObjects = [];
   for (const snippet of candidateTexts) {
     const p = safeJsonParse(snippet, { maxBytes, maxDepth });

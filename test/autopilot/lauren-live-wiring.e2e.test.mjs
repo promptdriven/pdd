@@ -1469,6 +1469,10 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   const cleanFencedReview = parseReviewOutput(wrapReviewEvent(`Review complete.\n\`\`\`json\n${markerPassJson}\n\`\`\`\n`));
   assert.equal(cleanFencedReview?.verdict, 'PASS', 'legitimate closed fenced verdict after prose accepted');
   assert.equal(cleanFencedReview?.summary, markerSummary, 'visible closed JSON fence after prose preserves literal <!-- markers');
+
+  // Loop 16 Astra P1 #2: completed 1-line diff hunk must NOT swallow immediately following indented fenced review in parseReviewOutput!
+  const afterHunkReview = parseReviewOutput(wrapReviewEvent(`@@ -1,1 +1,1 @@\n-old\n+new\n \`\`\`json\n ${markerPassJson}\n \`\`\``));
+  assert.equal(afterHunkReview?.verdict, 'PASS', 'indented fence immediately after completed hunk accepted by parseReviewOutput');
 });
 
 test('G3 polyglot base-control and diffTestReports detect missing/skipped/failing tests across ecosystems', async t => {

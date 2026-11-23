@@ -164,18 +164,59 @@ test('10 adversarial fence/injection hardening tests + Findings #14, #15, #19, #
   assert.equal(parsedMarkerFence.ok, true);
   assert.equal(parsedMarkerFence.value.summary, markerReview.summary);
 
-  // Linear O(N) performance on >= 256 KiB (262,145 B) repeated unclosed `<!--` and >= 131 KB (131,080 B) nested splice stress inputs!
+  // Linear O(N) performance on >= 256 KiB (262,145 B) repeated unclosed `<!--`, >= 131 KB (131,080 B) nested splice,
+  // AND >= 256 KiB plain multiline prose (270,000 B across 15,000 lines with zero `<!--`)!
   const stressInput1 = '<!-- '.repeat(52_429);
   const stressInput2 = `${'<!'.repeat(32_768)}<!--x-->${'--'.repeat(32_768)}`;
+  const stressInput3 = 'plain review line\n'.repeat(15_000);
   assert.ok(stressInput1.length >= 256 * 1024);
   assert.ok(stressInput2.length >= 131_072);
+  assert.ok(stressInput3.length >= 256 * 1024);
   const t0 = Date.now();
   const stress1 = stripInjectionContainers(stressInput1);
   const stress2 = stripInjectionContainers(stressInput2);
+  const stress3 = stripInjectionContainers(stressInput3);
   const elapsedMs = Date.now() - t0;
   assert.equal(stress1.includes('<!--'), false);
   assert.equal(stress2.includes('<!--'), false);
-  assert.ok(elapsedMs < 500, `expected linear O(N) HTML comment stripping (<500ms), took ${elapsedMs}ms`);
+  assert.equal(stress3.length, stressInput3.length - 1);
+  assert.ok(elapsedMs < 250, `expected linear O(N) HTML comment stripping across all 3 stress inputs (<250ms), took ${elapsedMs}ms`);
+
+  // Loop 16 Astra P1 #1: Quoted ```diff fence documenting an ordinary `status` object MUST NOT poison a valid FAIL review!
+  const failReview = { ...VALID_REVIEW, verdict: 'FAIL', mustFix: ['fix status check'], summary: 'see quoted diff' };
+  const quotedDiffPlusFail = [
+    'Review details:',
+    '```diff',
+    '-const item = { "status": "draft" };',
+    '+const item = { "status": "published" };',
+    '```',
+    '```json',
+    JSON.stringify(failReview),
+    '```',
+  ].join('\n');
+  const parsedDiffFail = parseTypedOrLegacyOutput(quotedDiffPlusFail, { schemaName: 'review' });
+  assert.equal(parsedDiffFail.ok, true, 'quoted ```diff block with status object must not reject valid FAIL review');
+  assert.equal(parsedDiffFail.value.verdict, 'FAIL');
+
+  // Loop 16 Astra P1 #2: Completed `@@ -1,1 +1,1 @@` hunk ends cleanly without swallowing the immediately following bullet or indented fence!
+  const hunkThenBullet = [
+    '@@ -1,1 +1,1 @@',
+    '-old line',
+    '+new line',
+    '- reviewer finding immediately after hunk',
+  ].join('\n');
+  assert.equal(stripInjectionContainers(hunkThenBullet), '- reviewer finding immediately after hunk');
+  const hunkThenIndentedFence = [
+    '@@ -1,1 +1,1 @@',
+    '-old line',
+    '+new line',
+    ' ```json',
+    ` ${JSON.stringify(failReview)}`,
+    ' ```',
+  ].join('\n');
+  const parsedAfterHunk = parseTypedOrLegacyOutput(hunkThenIndentedFence, { schemaName: 'review' });
+  assert.equal(parsedAfterHunk.ok, true, 'completed hunk must not swallow immediately following valid 1-space indented review fence');
+  assert.equal(parsedAfterHunk.value.verdict, 'FAIL');
   assert.ok(stripped.includes('- ordinary bullet must survive for legacyParser'), 'ordinary Markdown `- ` bullet preserved');
   assert.equal(parseTypedOrLegacyOutput(injectedProse, { schemaName: 'review' }).ok, false);
   const bulletLegacy = parseTypedOrLegacyOutput('VERDICT: FAIL\n- fix bug A\n- fix bug B', {
