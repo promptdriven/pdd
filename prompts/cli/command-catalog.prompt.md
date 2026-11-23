@@ -69,7 +69,7 @@ Register `autopilot.regressions`, prefix `autopilot regressions`, local `autopil
 
 ## Help text
 
-Export the frozen `PUBLIC_HELP_TEXT` object with `heading`, `usageLine`, `quickStartLines`, `groups`, `focusedHelpLines`, `closingLines`, `learnLines`, and `promptingLines`. Keep every rendered line of root help within 80 columns, with zero duplicated commands between Quick start and groups. Groups order human-first: `Core PDD workflow`, `Product & graph (pdd product --help)`, `Autopilot (pdd autopilot --help)`, `Cloud accounts (pdd accounts --help)`, and `Metrics, shell & help`.
+Export the frozen `PUBLIC_HELP_TEXT` object with `heading`, `usageLine`, `quickStartLines`, `groups`, `focusedHelpLines`, `closingLines`, `learnLines`, and `promptingLines`. Keep every rendered non-installation-path line of root help and `promptingLines` within 80 columns (`Skill:` and `Prompting guide:` print full local package paths). Quick start highlights the 4-step workflow (`pdd setup`, `pdd init`, `/pdd`, `pdd prove`), and groups have zero duplicate entries across groups. Groups order human-first: `Core PDD workflow`, `Product & graph (pdd product --help)`, `Autopilot (pdd autopilot --help)`, `Cloud accounts (pdd accounts --help)`, and `Metrics, shell & help`.
 
 ## Learn PDD
 

@@ -2122,7 +2122,6 @@ test('J2 the label removed with no comment after the question: the next job gets
 // ---- Review 8 regressions (each failed on 8dad1ae4c) ------------------------------------------------------------
 const pddFailure = { outcome: 'failed', kind: 'pdd', component: 'pdd test', code: 'crash', cause: 'pdd test crashed', detail: 'Error: crash' };
 const jobFile = (w, n) => { const file = join(w.root, 'jobs', `${n}.json`); return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null; };
-const approveJobPaths = (w, n, paths) => { const file = join(w.root, 'jobs', `${n}.json`); const j = JSON.parse(readFileSync(file, 'utf8')); j.humanApprovedPaths = paths; writeFileSync(file, JSON.stringify(j, null, 2)); };
 
 test('K2 observe validation is visible on GitHub: pdd:would-merge keeps every machine off the issue, and no machine closes the validated PR', async t => {
   const a = await coreWorld(t, { settings: { mode: 'observe', runs: 1 } });
@@ -2521,9 +2520,10 @@ test('O2 #42: a package.json field on path d passes the native checks and merges
   assert.equal(w.job(17, 'suite'), undefined, 'package.json edit holds suite until independent review passes');
   w.review(17, 'PASS'); await w.tick();
   assert.ok(w.job(17, 'suite'), 'suite starts after review passes');
-  approveJobPaths(w, 17, ['package.json']);
   w.suite(17, 0); await w.tick();
-  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.deepEqual(w.github.merges, [], 'Check 4 always holds protected package.json edits for manual human merge');
+  assert.ok(w.labels(17).includes('pdd:needs-decision'));
+  assert.match(w.comments(17).join('\n'), /merge this PR manually on GitHub/i);
 });
 
 test('O3 native reds: an owned file on path d (R1), a new prompt with no new code (R3), ownership added for an existing file (R4), no Path line (R6)', async t => {
@@ -2589,19 +2589,18 @@ test('Q1 P1/S2/S3: a job writes its changed files into its claim; the next brief
 
 test('Q2 mechanical conflicts are fixed in the lane with no agent and no repair: JSON keys (M-d), identical inserts (M-b), derived headers (M-a)', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
-  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' } }, null, 2) + '\n');
+  w.baseCommit('manifest.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' } }, null, 2) + '\n');
   w.baseCommit('CHANGELOG.md', '# Changes\n\n## 1.0.0\n\n- First.\n');
   w.issue(17); await w.tick();
-  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' }, repository: 'acme/widgets' }, null, 2) + '\n');
+  editIn(w, 17, 'manifest.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' }, repository: 'acme/widgets' }, null, 2) + '\n');
   editIn(w, 17, 'CHANGELOG.md', '# Changes\n\n## Unreleased\n\n## 1.0.0\n\n- First.\n');
   const { pr } = w.build(17); await greenLane(w, 17);
-  approveJobPaths(w, 17, ['package.json']);
-  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' }, keywords: ['money'] }, null, 2) + '\n');
+  w.baseCommit('manifest.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' }, keywords: ['money'] }, null, 2) + '\n');
   w.baseCommit('CHANGELOG.md', '# Changes\n\n## Unreleased\n\n## 1.0.0\n\n- First.\n');
   await w.tick();                                    // the lane: merge-tree conflict, all hunks mechanical
   const job = jobFile(w, 17);
   assert.ok(job.mechanical, 'a mechanical lane merge'); assert.equal(job.repairs, 0); assert.deepEqual(roles(w, 17).filter(r => r === 'conflict' || r === 'repair'), []);
-  const pkg = JSON.parse(w.git(job.worktree, 'show', `${job.head}:package.json`));
+  const pkg = JSON.parse(w.git(job.worktree, 'show', `${job.head}:manifest.json`));
   assert.equal(pkg.repository, 'acme/widgets'); assert.deepEqual(pkg.keywords, ['money']);
   assert.equal(w.git(job.worktree, 'show', `${job.head}:CHANGELOG.md`).match(/## Unreleased/g).length, 1, 'M-b: one copy of an identical insert');
   await w.tick(); w.github.setChecks(job.head); w.suite(17, 0); await w.tick();

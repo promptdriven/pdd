@@ -21,8 +21,25 @@ export const EXIT_FAILED = 1;
 export const EXIT_USAGE = 2;
 export const EXIT_NOT_PROVED = 3;
 
-const SETUP_FAILURE_RE = /(?:(?:^|\n)\s*(?:#\s*)?(?:Error:\s*Cannot find module|Error \[ERR_MODULE_NOT_FOUND\]|ERR_MODULE_NOT_FOUND|Cannot find package|ModuleNotFoundError:|ImportError:|No module named|SyntaxError:|FileNotFoundError:|Error:\s*ENOENT|ENOENT:|ERROR collecting|command not found|not recognized as an internal|cannot find package|no Go files|error\[E\d+\]:|failed to compile)|\[build failed\])/i;
+const SETUP_FAILURE_LINE_RE = /^(?:(?:Error:\s*Cannot find module\b|Error \[ERR_MODULE_NOT_FOUND\]|ERR_MODULE_NOT_FOUND\b|Cannot find package\b|ModuleNotFoundError:|ImportError:|No module named\b|SyntaxError:|FileNotFoundError:|Error:\s*ENOENT\b|ENOENT:|ERROR collecting\b|command not found\b|not recognized as an internal\b|cannot find package\b|no Go files\b|error\[E\d+\]:|failed to compile\b)|.*\[build failed\])/i;
+const DIAG_PREFIX_RE = /^\s*(?:#\s*|E\s+)?/;
+const TARGETABLE_ERROR_CLASS_RE = /^(SyntaxError|ImportError|FileNotFoundError):/i;
 const COLOCATED_TEST_RE = /(?:\.(?:test|spec)\.(?:[cm]?[jt]s|[jt]sx)|(?:^|\/)test_[^/]+\.py$|_test\.(?:py|go|rs)$|^(?:test|tests|__tests__|fixtures)\/)/i;
+
+function findSetupFailureLine(stderr, stdout) {
+  // Scan stderr first so an actual diagnostic on stderr is NEVER shadowed by an arbitrary stdout banner.
+  for (const stream of [stderr, stdout]) {
+    for (const rawLine of String(stream ?? '').split(/\r?\n/)) {
+      const normalizedLine = rawLine.replace(DIAG_PREFIX_RE, '').trim();
+      if (!normalizedLine) continue;
+      if (SETUP_FAILURE_LINE_RE.test(normalizedLine)) {
+        const classMatch = TARGETABLE_ERROR_CLASS_RE.exec(normalizedLine);
+        return { rawLine, normalizedLine, errorClass: classMatch ? classMatch[1] : null };
+      }
+    }
+  }
+  return null;
+}
 
 const gitExec = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 const resolveGitRoot = cwd => { const r = gitExec(cwd, ['rev-parse', '--show-toplevel']); return r.status === 0 && r.stdout.trim() ? realpathSync(r.stdout.trim()) : realpathSync(cwd); };
@@ -43,25 +60,25 @@ function summarizeTestOutput(stdout, stderr, setupError, timedOut) {
   return causeText(setupError || (timedOut ? 'command timed out' : ''));
 }
 
-function execShellCommand(command, { cwd, env, timeoutMs }, ports = {}) {
+function execShellCommand(command, { cwd, env, timeoutMs, preScrubbed = false }, ports = {}) {
   const runner = ports.spawnSync ?? spawnSync;
   const started = Date.now();
-  const proc = runner(command, { cwd, env: scrubChildEnv(env), shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = runner(command, { cwd, env: preScrubbed ? env : scrubChildEnv(env), shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   const stdout = String(proc.stdout ?? ''), stderr = String(proc.stderr ?? '');
   const timedOut = proc.error?.code === 'ETIMEDOUT';
   const exitCode = typeof proc.status === 'number' ? proc.status : null;
   const signal = proc.signal ?? '';
-  const setupMatch = exitCode !== 0 ? SETUP_FAILURE_RE.exec(`${stderr}\n${stdout}`) : null;
+  const setupFailure = exitCode !== 0 ? findSetupFailureLine(stderr, stdout) : null;
   const setupError = proc.error && !timedOut
     ? causeText(proc.error.message)
     : (signal && !timedOut
         ? `Process terminated by signal ${signal}`
         : (exitCode !== null && exitCode >= 129 && exitCode <= 192
             ? `Command terminated by signal (exit ${exitCode})`
-            : ([126, 127].includes(exitCode) ? `Command exited ${exitCode}` : (setupMatch ? causeText(setupMatch[0]) : ''))));
+            : ([126, 127].includes(exitCode) ? `Command exited ${exitCode}` : (setupFailure ? causeText(setupFailure.normalizedLine) : ''))));
   return {
     command, ok: exitCode === 0 && !proc.error && !signal, exitCode, signal, timedOut,
-    durationMs: Math.max(0, Date.now() - started), stdout, stderr, setupError,
+    durationMs: Math.max(0, Date.now() - started), stdout, stderr, setupError, setupFailure,
     summary: summarizeTestOutput(stdout, stderr, setupError, timedOut),
   };
 }
@@ -302,14 +319,16 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
 
     basePhase = execShellCommand(test, { cwd: baseWorktree, env, timeoutMs }, ports);
     const baseTextHasExpect = !basePhase.signal && !basePhase.timedOut && (basePhase.stdout.includes(expect) || basePhase.stderr.includes(expect));
-    // Clear SyntaxError/ImportError/FileNotFoundError ONLY when --expect itself explicitly names that error class
-    // AND matches on an actual error line (never clearing a crash just because a test banner matched stdout).
-    const baseSetupClassMatch = /^(SyntaxError|ImportError|FileNotFoundError):/i.exec(basePhase.setupError || '');
+    // Clear SyntaxError/ImportError/FileNotFoundError ONLY when --expect names that error class WITH detail
+    // (never bare class alone) AND matches the ACTUAL normalized diagnostic error line (never a separate banner).
+    const trimmedExpect = expect.trim();
+    const errLine = basePhase.setupFailure;
     const expectTargetsErrorClass = Boolean(
-      baseSetupClassMatch
-      && new RegExp(`\\b${baseSetupClassMatch[1]}\\b`, 'i').test(expect)
-      && `${basePhase.stderr}\n${basePhase.stdout}`.split(/\r?\n/).some(line =>
-        new RegExp(`\\b${baseSetupClassMatch[1]}:`, 'i').test(line) && line.includes(expect)),
+      errLine?.errorClass
+      && trimmedExpect.toLowerCase() !== errLine.errorClass.toLowerCase()
+      && trimmedExpect.toLowerCase() !== `${errLine.errorClass.toLowerCase()}:`
+      && new RegExp(`\\b${errLine.errorClass}\\b`, 'i').test(trimmedExpect)
+      && errLine.normalizedLine.includes(trimmedExpect),
     );
     if (expectTargetsErrorClass) basePhase.setupError = '';
     basePhase.expectedFound = !basePhase.setupError && baseTextHasExpect;
@@ -423,12 +442,32 @@ export function runProve(
     }
   }
 
+  // Inspect checkout cleanliness BEFORE executing tests/recipes so generated reports don't falsely dirty a clean commit,
+  // and fail closed as `Not proved` if `git status` itself fails (NEVER certifying an uninspected checkout as clean).
+  const statusRes = gitExec(root, ['status', '--porcelain']);
+  const statusFailed = statusRes.status !== 0 || Boolean(statusRes.error);
+  const dirtyFiles = !statusFailed && statusRes.stdout
+    ? statusRes.stdout.split(/\r?\n/).map(l => l.slice(3).trim()).filter(Boolean)
+    : [];
+  const dirty = statusFailed || dirtyFiles.length > 0;
+  const proofScope = statusFailed ? 'unknown' : (dirty ? 'working-tree' : 'commit');
+  if (statusFailed) {
+    notProvedReasons.push(`Could not inspect working-tree cleanliness (git status exited ${statusRes.status ?? 'error'}).`);
+  }
+
   let testResult = null;
   const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, diff.touchedFiles);
   const pathResults = [];
+  const scrubbedBaseEnv = scrubChildEnv(env);
+  const resolveStepEnv = (phase, recipeId, command) => (
+    typeof ports.envForStep === 'function'
+      ? ports.envForStep({ phase, recipeId, command, baseEnv: scrubbedBaseEnv })
+      : scrubbedBaseEnv
+  );
   if (shadowBins.length === 0) {
     if (testCommand) {
-      const r = execShellCommand(testCommand, { cwd: root, env, timeoutMs }, ports);
+      const testEnv = resolveStepEnv('test', null, testCommand);
+      const r = execShellCommand(testCommand, { cwd: root, env: testEnv, timeoutMs, preScrubbed: true }, ports);
       testResult = { command: testCommand, ok: r.ok, timedOut: r.timedOut, exitCode: r.exitCode, durationMs: r.durationMs, setupError: r.setupError, summary: r.summary };
       if (r.timedOut) {
         notProvedReasons.push(`Test suite timed out after ${timeoutMinutes} min (\`${testCommand}\`); rerun with --timeout MIN.`);
@@ -445,7 +484,8 @@ export function runProve(
         notProvedReasons.push(`Recipe "${recipe.id}" (${recipe.name}) skipped: missing required capability [${missing.join(', ')}].`);
         continue;
       }
-      const r = execShellCommand(recipe.run, { cwd: root, env, timeoutMs }, ports);
+      const recipeEnv = resolveStepEnv('path', recipe.id, recipe.run);
+      const r = execShellCommand(recipe.run, { cwd: root, env: recipeEnv, timeoutMs, preScrubbed: true }, ports);
       if (r.timedOut) {
         pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', timedOut: true, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary });
         notProvedReasons.push(`Verify path "${recipe.id}" timed out after ${timeoutMinutes} min (\`${recipe.run}\`); rerun with --timeout MIN.`);
@@ -503,22 +543,20 @@ export function runProve(
     ...pathResults.filter(p => p.status === 'failed').map(p => `Verify path "${p.id}" failed (\`${p.run}\`, exit ${p.exitCode}): ${p.summary}`),
   ];
 
-  const statusRes = gitExec(root, ['status', '--porcelain']);
-  const dirty = statusRes.status === 0 && statusRes.stdout.trim().length > 0;
-  const proofScope = dirty ? 'working-tree' : 'commit';
-
   const outcome = failedErrors.length > 0 ? OUTCOME_FAILED : (notProvedReasons.length > 0 ? OUTCOME_NOT_PROVED : OUTCOME_PROVED);
   const exitCode = outcome === OUTCOME_FAILED ? EXIT_FAILED : (outcome === OUTCOME_NOT_PROVED ? EXIT_NOT_PROVED : EXIT_PROVED);
   const receipt = {
     schema_version: 'pdd.prove.v1', mode: 'verify', outcome, exit_code: exitCode, baseRef, baseSha, headSha,
-    dirty, proofScope,
+    dirty, proofScope, ...(dirtyFiles.length ? { dirtyFiles: dirtyFiles.slice(0, 12) } : {}),
     configSource: baseVerify.configured ? baseVerify.source : (testCommand ? 'auto-detected' : null), touchedFiles: diff.touchedFiles, changedSurfaces,
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
     test: testResult, paths: pathResults, notProvedReasons,
   };
 
-  const scopeSuffix = dirty ? ' (working tree, uncommitted changes)' : '';
+  const scopeSuffix = statusFailed
+    ? ' (unknown checkout cleanliness)'
+    : (dirty ? ` (working tree, uncommitted changes: ${dirtyFiles.slice(0, 4).join(', ')})` : '');
   if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
   else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green.\n`);
   else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix}:\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);

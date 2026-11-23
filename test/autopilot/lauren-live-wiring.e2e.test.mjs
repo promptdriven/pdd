@@ -709,6 +709,285 @@ test('Loop 2 P0/P1 regressions: base report diffing, suiteTree JUnit auto-parse,
   assert.equal(coreSettings({ autopilot: { mode: 'auto', engine: 'core', strictEvidenceContract: true } }).strictEvidenceContract, true);
 });
 
+test('Loop 3 P0/P1/P2 regressions: un-spoofable comparator veto, unconditional Check 4 + recipe scripts, unreadable/N-A Stories, identical-cmd recipe-ID isolation + redaction, distinct report meta, unknown/invalid base policy, and zero proved rows on diff error', async t => {
+  const dir = makeTmpDir(t, 'pdd-live-loop3-');
+  const baseDir = makeTmpDir(t, 'pdd-live-loop3-base-');
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+  git('init', '-b', 'main');
+  git('config', 'user.email', 'dev@example.com');
+  git('config', 'user.name', 'Dev');
+
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  mkdirSync(join(dir, 'tools'), { recursive: true });
+  mkdirSync(join(dir, 'user_stories'), { recursive: true });
+  mkdirSync(join(baseDir, 'reports'), { recursive: true });
+
+  const sameCmd = 'node tools/check-env.mjs';
+  writeFileSync(join(dir, 'tools/check-env.mjs'), [
+    'const expect = process.env.EXPECT_KEY || "";',
+    'if (process.env.ALPHA_SECRET && process.env.BETA_SECRET) { console.error("BOTH_LEAKED"); process.exit(2); }',
+    'if (process.env.LEAK_FAIL === "1") { console.error("secret=" + (process.env.ALPHA_SECRET || "")); process.exit(1); }',
+    'process.exit(0);',
+  ].join('\n') + '\n');
+  writeFileSync(join(dir, 'pdd.json'), JSON.stringify({
+    verify: {
+      test: sameCmd,
+      report: 'reports/junit.xml',
+      paths: [
+        { id: 'alpha', when: ['src/alpha.mjs'], needs: ['account:alpha'], run: sameCmd },
+        { id: 'beta', when: ['src/beta.mjs'], needs: ['account:beta'], run: sameCmd },
+      ],
+    },
+  }, null, 2));
+  writeFileSync(join(baseDir, 'pdd.json'), readFileSync(join(dir, 'pdd.json'), 'utf8'));
+  writeFileSync(join(dir, 'src/alpha.mjs'), 'export const a = 1;\n');
+  writeFileSync(join(dir, 'src/beta.mjs'), 'export const b = 1;\n');
+  git('add', '.');
+  git('commit', '-m', 'base');
+  const baseTip = git('rev-parse', 'HEAD');
+
+  writeFileSync(join(dir, 'src/alpha.mjs'), 'export const a = 2;\n');
+  writeFileSync(join(dir, 'src/beta.mjs'), 'export const b = 2;\n');
+  writeFileSync(join(dir, 'user_stories/five.md'), '# Five\n\nAs a person.\n\n## Acceptance criteria\n\n1. A.\n2. B.\n3. C.\n4. D.\n5. E.\n');
+  git('add', '.');
+  git('commit', '-m', 'head');
+  const head = git('rev-parse', 'HEAD');
+
+  const junitOk = '<?xml version="1.0"?><testsuite tests="1" failures="0"><testcase classname="s" name="ok"/></testsuite>\n';
+  const junitCollision = '<?xml version="1.0"?><testsuite tests="1" failures="0"><testcase name="report-diff:unknown"/></testsuite>\n';
+  const provedStub = async () => ({
+    exitCode: 0,
+    outcome: 'Proved',
+    receipt: {
+      dirty: false, proofScope: 'commit',
+      lint: { ok: true, errors: [] }, diff: { ok: true, errors: [] },
+      test: { ok: true, exitCode: 0, summary: 'pass' },
+      paths: [{ id: 'alpha', status: 'proved', exitCode: 0, summary: 'ok', run: sameCmd, needs: [] }],
+      notProvedReasons: [],
+    },
+  });
+
+  // 1. Astra P0 #1: Passing test literally named `report-diff:unknown` CANNOT suppress malformed base report HOLD!
+  const collision = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 31, head, frozenAcs: [{ id: 'AC1', pathIds: ['alpha'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+    baseReport: '<broken-xml',
+    headReport: junitCollision,
+    runProveFn: provedStub,
+  });
+  const collisionContract = evaluateEvidenceContract(collision.contractInput);
+  assert.equal(collisionContract.decision, 'HOLD');
+  assert.ok(collisionContract.checks.testOracle.oracleUnknowns.some(u => u.startsWith('report-diff:unknown')));
+
+  // 2. Astra P0 #3: Unconditional Check 4 holds deleted package.json even with job.humanApprovedPaths,
+  // AND protects src/autopilot/core/* AND trusted recipe script tools/check-env.mjs!
+  const delPkgWithApproved = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 32, head, humanApprovedPaths: ['package.json'], frozenAcs: [{ id: 'AC1', pathIds: ['alpha'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs'],
+    allTouchedFiles: ['src/alpha.mjs', 'package.json'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+    baseReport: junitOk,
+    headReport: junitOk,
+    runProveFn: provedStub,
+  });
+  assert.equal(evaluateEvidenceContract(delPkgWithApproved.contractInput).holdReason, 'protected_path');
+
+  const coreCollectorEdit = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 33, head, frozenAcs: [{ id: 'AC1', pathIds: ['alpha'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs', 'src/autopilot/core/live-evidence.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+    baseReport: junitOk,
+    headReport: junitOk,
+    runProveFn: provedStub,
+  });
+  assert.equal(evaluateEvidenceContract(coreCollectorEdit.contractInput).holdReason, 'protected_path');
+
+  const recipeScriptEdit = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 34, head, frozenAcs: [{ id: 'AC1', pathIds: ['alpha'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs', 'tools/check-env.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+    baseReport: junitOk,
+    headReport: junitOk,
+    runProveFn: provedStub,
+  });
+  assert.equal(evaluateEvidenceContract(recipeScriptEdit.contractInput).holdReason, 'protected_path');
+
+  // 3. Astra P0 #4: Unreadable changed Story AND partial Story with acNotApplicableReason BOTH HOLD!
+  const unreadableStory = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 35, head, frozenAcs: [{ id: 'AC1', pathIds: ['alpha'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs', 'user_stories/does-not-exist.md'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+    baseReport: junitOk,
+    headReport: junitOk,
+    runProveFn: provedStub,
+  });
+  const unreadableStoryContract = evaluateEvidenceContract(unreadableStory.contractInput);
+  assert.equal(unreadableStoryContract.decision, 'HOLD');
+  assert.ok(unreadableStoryContract.checks.acCoverage.unprovedAcIds.includes('user_stories/does-not-exist.md#unreadable'));
+
+  const naReasonStory = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 36, head, acNotApplicableReason: 'docs-only', frozenAcs: [{ id: 'AC1', pathIds: ['alpha'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs', 'user_stories/five.md'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+    baseReport: junitOk,
+    headReport: junitOk,
+    runProveFn: provedStub,
+  });
+  assert.equal(evaluateEvidenceContract(naReasonStory.contractInput).decision, 'HOLD');
+
+  // 4. Astra P0 #5 + Fable P2 #1: Identical command string across verify.test + alpha + beta stays strictly isolated by recipeId,
+  // AND failing account recipe secret output is redacted from BOTH proveReasons AND proveReceipt!
+  const cfgDir = makeTmpDir(t, 'pdd-loop3-env-');
+  chmodSync(cfgDir, 0o700);
+  const testEnvPath = join(cfgDir, 'autopilot-test-env.json');
+  writeFileSync(testEnvPath, JSON.stringify({
+    accounts: {
+      alpha: { ALPHA_SECRET: 'alpha_secret_token_999' },
+      beta: { BETA_SECRET: 'beta_secret_token_777' },
+    },
+  }), { mode: 0o600 });
+  chmodSync(testEnvPath, 0o600);
+
+  const sameCmdRes = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 37, head, review: { verdict: 'PASS', head } },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs', 'src/beta.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+    baseReport: junitOk,
+    headReport: junitOk,
+    testEnvPath,
+    env: { PATH: process.env.PATH },
+  });
+  assert.equal(sameCmdRes.proveOutcome, 'Proved', JSON.stringify(sameCmdRes.proveReasons));
+
+  const leakFailRes = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 38, head, review: { verdict: 'PASS', head } },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+    baseReport: junitOk,
+    headReport: junitOk,
+    testEnvPath,
+    env: { PATH: process.env.PATH, LEAK_FAIL: '1' },
+  });
+  assert.equal(leakFailRes.proveOutcome, 'Failed');
+  assert.equal(JSON.stringify(leakFailRes.proveReasons).includes('alpha_secret_token_999'), false, 'proveReasons must redact secrets');
+  assert.equal(JSON.stringify(leakFailRes.proveReceipt).includes('alpha_secret_token_999'), false, 'proveReceipt must redact secrets');
+
+  // 5. Astra P1 #1: Distinct baseReportMeta vs headReportMeta catches platform mismatch (cache_key_mismatch -> HOLD)!
+  const metaMismatch = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 39, head, frozenAcs: [{ id: 'AC1', pathIds: ['alpha'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+    baseReport: junitOk,
+    headReport: junitOk,
+    baseReportMeta: { platform: 'linux' },
+    headReportMeta: { platform: 'darwin' },
+    runProveFn: provedStub,
+  });
+  assert.equal(metaMismatch.reportDiff?.reason, 'cache_key_mismatch');
+  assert.equal(evaluateEvidenceContract(metaMismatch.contractInput).decision, 'HOLD');
+
+  // 6. Fable P1 #1 + Astra P1 #2: Both trees null, unavailable base SHA, and invalid verify.paths ALL HOLD (never advisory MERGE)!
+  const bothTreesNull = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 40, head },
+    headTree: null,
+    baseTree: null,
+    baseTip,
+    changedFiles: ['src/alpha.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+  });
+  assert.equal(bothTreesNull.advisory, false);
+  assert.equal(evaluateEvidenceContract(bothTreesNull.contractInput).decision, 'HOLD');
+
+  const bogusBaseSha = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 41, head },
+    headTree: dir,
+    baseTree: null,
+    baseTip: 'f'.repeat(40),
+    changedFiles: ['src/alpha.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+  });
+  assert.equal(bogusBaseSha.advisory, false);
+  assert.equal(evaluateEvidenceContract(bogusBaseSha.contractInput).decision, 'HOLD');
+
+  const invalidPolicyDir = makeTmpDir(t, 'pdd-live-invalid-policy-');
+  execFileSync('git', ['init', '-b', 'main'], { cwd: invalidPolicyDir, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'dev@example.com'], { cwd: invalidPolicyDir, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'Dev'], { cwd: invalidPolicyDir, stdio: 'ignore' });
+  writeFileSync(join(invalidPolicyDir, 'pdd.json'), JSON.stringify({ verify: { paths: 'not-an-array' } }));
+  execFileSync('git', ['add', '.'], { cwd: invalidPolicyDir, stdio: 'ignore' });
+  execFileSync('git', ['commit', '-m', 'bad policy'], { cwd: invalidPolicyDir, stdio: 'ignore' });
+  const badBaseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: invalidPolicyDir, encoding: 'utf8' }).trim();
+  const invalidPolicy = await collectLiveEvidenceContract({
+    repo: 'acme/bad',
+    job: { issue: 42, head: badBaseSha },
+    headTree: invalidPolicyDir,
+    baseTip: badBaseSha,
+    changedFiles: ['src/a.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+  });
+  assert.equal(invalidPolicy.advisory, false);
+  assert.equal(evaluateEvidenceContract(invalidPolicy.contractInput).decision, 'HOLD');
+
+  // 7. Astra P1 #3: changedFilesError leaves ZERO contradictory `outcome: "proved"` path receipts!
+  const diffErr = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 43, head, frozenAcs: [{ id: 'AC1', pathIds: ['alpha'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs'],
+    changedFilesError: true,
+    suite: { state: 'pass' },
+    suiteCmd: sameCmd,
+    baseReport: junitOk,
+    headReport: junitOk,
+    runProveFn: provedStub,
+  });
+  assert.deepEqual(diffErr.contractInput.receipts, [], 'diff error must emit zero proved path receipts');
+  assert.equal(evaluateEvidenceContract(diffErr.contractInput).decision, 'HOLD');
+});
+
 test('G3 polyglot base-control and diffTestReports detect missing/skipped/failing tests across ecosystems', async t => {
   const goDir = makeTmpDir(t, 'pdd-poly-go-');
   writeFileSync(join(goDir, 'go.mod'), 'module example.com/calc\n\ngo 1.22\n');

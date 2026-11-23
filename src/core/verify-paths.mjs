@@ -89,22 +89,47 @@ export function parseVerifyConfig(raw, { sourcePath = 'pdd.json' } = {}) {
 }
 
 export function loadVerifyConfig(rootOrObject, { gitRef } = {}) {
-  if (!rootOrObject) return parseVerifyConfig(null);
-  if (typeof rootOrObject === 'object') return parseVerifyConfig(rootOrObject, { sourcePath: 'pdd.json' });
+  if (!rootOrObject) return { ...parseVerifyConfig(null), loadStatus: 'unreadable' };
+  if (typeof rootOrObject === 'object') {
+    const parsed = parseVerifyConfig(rootOrObject, { sourcePath: 'pdd.json' });
+    return { ...parsed, loadStatus: parsed.errors.length > 0 ? 'invalid' : (parsed.configured ? 'ok' : 'absent') };
+  }
   let realRoot;
-  try { realRoot = realpathSync(rootOrObject); } catch { return parseVerifyConfig(null); }
+  try { realRoot = realpathSync(rootOrObject); } catch { return { ...parseVerifyConfig(null), loadStatus: 'unreadable' }; }
 
   let rawText = null;
   let sourcePath = 'pdd.json';
   if (gitRef) {
-    const res = spawnSync('git', ['show', `${gitRef}:pdd.json`], { cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
-    if (res.status === 0 && typeof res.stdout === 'string') { rawText = res.stdout; sourcePath = `${gitRef}:pdd.json`; }
+    // Distinguish genuinely absent pdd.json on a verified commit from an invalid/unavailable Git object.
+    const commitCheck = spawnSync('git', ['cat-file', '-e', `${gitRef}^{commit}`], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    if (commitCheck.status !== 0) {
+      return { ...parseVerifyConfig(null, { sourcePath: `${gitRef}:pdd.json` }), loadStatus: 'unreadable' };
+    }
+    const res = spawnSync('git', ['show', `${gitRef}:pdd.json`], { cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (res.status === 0 && typeof res.stdout === 'string') {
+      rawText = res.stdout;
+      sourcePath = `${gitRef}:pdd.json`;
+    } else {
+      const errMsg = String(res.stderr ?? '');
+      const genuinelyAbsent = /does not exist in|exists on disk, but not in/i.test(errMsg);
+      return {
+        ...parseVerifyConfig(null, { sourcePath: `${gitRef}:pdd.json` }),
+        loadStatus: genuinelyAbsent ? 'absent' : 'unreadable',
+      };
+    }
   } else {
+    const pddPath = join(realRoot, 'pdd.json');
+    if (!existsSync(pddPath)) return { ...parseVerifyConfig(null, { sourcePath: null }), loadStatus: 'absent' };
     rawText = readSafeUtf8(realRoot, 'pdd.json');
+    if (rawText === null) return { ...parseVerifyConfig(null, { sourcePath: 'pdd.json' }), loadStatus: 'unreadable' };
   }
-  if (rawText === null) return parseVerifyConfig(null, { sourcePath: null });
-  try { return parseVerifyConfig(JSON.parse(rawText), { sourcePath }); }
-  catch { return { configured: true, source: sourcePath, test: null, report: null, paths: [], errors: [`${sourcePath}: invalid JSON.`] }; }
+  if (rawText === null) return { ...parseVerifyConfig(null, { sourcePath: null }), loadStatus: 'absent' };
+  try {
+    const parsed = parseVerifyConfig(JSON.parse(rawText), { sourcePath });
+    return { ...parsed, loadStatus: parsed.errors.length > 0 ? 'invalid' : (parsed.configured ? 'ok' : 'absent') };
+  } catch {
+    return { configured: true, source: sourcePath, test: null, report: null, paths: [], errors: [`${sourcePath}: invalid JSON.`], loadStatus: 'invalid' };
+  }
 }
 
 export function matchVerifyPaths(verifyConfig, touchedFiles = []) {

@@ -25,8 +25,8 @@ const FORMAL_TIER_SET = new Set(FORMAL_PROOF_TIERS);
 const RECEIPT_OUTCOME_SET = new Set(RECEIPT_OUTCOMES);
 const DEFAULT_PROTECTED_BASENAMES = new Set(['pdd.json', 'pdd-workspace.json', 'pdd-bindings.json', 'package.json', 'codeowners']);
 const DEFAULT_PROTECTED_EXACT = new Set(['src/autopilot-core.mjs', 'src/autopilot-validator.mjs']);
-const DEFAULT_PROTECTED_PREFIXES = ['.github/workflows/', '.github/actions/', 'rules/lint/', 'src/autopilot/gates/', 'src/autopilot/validator/'];
-const DEFAULT_PROTECTED_SCRIPT_RE = /^scripts\/(?:check-[^/]+|[^/]*gate[^/]*)\.(?:[cm]?js|ts|sh|py)$/i;
+const DEFAULT_PROTECTED_PREFIXES = ['.github/workflows/', '.github/actions/', 'rules/lint/', 'src/autopilot/core/', 'src/autopilot/gates/', 'src/autopilot/validator/'];
+const DEFAULT_PROTECTED_SCRIPT_RE = /^scripts\/(?:check-[^/]+|verify-[^/]+|[^/]*gate[^/]*)\.(?:[cm]?js|ts|sh|py)$/i;
 const TEST_FILE_PATH_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
 const NON_PRODUCTION_PROOF_PATH_RE = /(?:^(?:prompts|docs|user_stories|specs?|models?)\/|\.prompt\.md$|\.mdx?$|^(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
 const HOLD_PRIORITY = ['protected_path', 'malformed_output', 'stale_evidence', 'service_failure', 'abstention', 'missing_capability', 'unmapped_change', 'insufficient_scope'];
@@ -347,10 +347,12 @@ export function checkAcCoverage({ frozenAcs = [], testResults = [], provedPathId
 export function checkTestOracle({
   testResults = [], expectedTestIds = [], approvedSkippedIds = [], baseOracle = null,
   editedTestFiles = null, changedFiles = [], requireBaseOracle = true,
+  reportDiffVerdict = null, reportReadErrors = [],
 } = {}) {
   const failMalformed = (details) => ({ ok: false, badTestIds: [], unlistedOracleFailures: [], oracleUnknowns: [], holdReason: 'malformed_output', details });
   if (!Array.isArray(testResults) || !Array.isArray(expectedTestIds) || !Array.isArray(approvedSkippedIds)) return failMalformed('testResults, expectedTestIds, and approvedSkippedIds must be arrays.');
   if (editedTestFiles !== null && !Array.isArray(editedTestFiles)) return failMalformed('editedTestFiles must be an array.');
+  if (!Array.isArray(reportReadErrors)) return failMalformed('reportReadErrors must be an array.');
 
   const approved = new Set(approvedSkippedIds.filter(nonEmptyStr).map((x) => x.trim()));
   const seenIds = new Set(), badTestIds = [];
@@ -368,6 +370,19 @@ export function checkTestOracle({
   const effectiveEditedTests = Array.isArray(editedTestFiles) ? editedTestFiles.filter(nonEmptyStr) : (Array.isArray(changedFiles) ? changedFiles.filter((f) => nonEmptyStr(f) && TEST_FILE_PATH_RE.test(f)) : []);
   const unlistedOracleFailures = [], oracleUnknowns = [];
   let sawServiceFailure = false, oracleMalformed = null;
+
+  // Un-spoofable harness report comparator veto and report-read errors (completely independent of testResults IDs).
+  for (const err of reportReadErrors) {
+    if (nonEmptyStr(err)) oracleUnknowns.push(err.trim());
+  }
+  if (reportDiffVerdict !== null && reportDiffVerdict !== undefined) {
+    if (!isPlainObj(reportDiffVerdict)) oracleMalformed = 'Malformed reportDiffVerdict object.';
+    else if (reportDiffVerdict.verdict !== 'ALLOW' || reportDiffVerdict.status !== 'pass') {
+      const status = nonEmptyStr(reportDiffVerdict.status) ? reportDiffVerdict.status.trim() : 'hold';
+      const reason = nonEmptyStr(reportDiffVerdict.reason) ? `:${reportDiffVerdict.reason.trim()}` : '';
+      oracleUnknowns.push(`report-diff:${status}${reason}`);
+    }
+  }
 
   if (baseOracle === null || baseOracle === undefined) {
     if (requireBaseOracle !== false || effectiveEditedTests.length > 0) oracleUnknowns.push('oracle:missing');
@@ -437,13 +452,14 @@ export function evaluateEvidenceContract({
   changedFiles = [], humanApprovedPaths = [], protectedPatterns = [], frozenAcs = [], acMapping = {}, requireFrozenAcs = true,
   touchedPaths = [], receipts = [], expectedBinding = null, availableCapabilities = null, requiredCapabilitiesByPath = {},
   testResults = [], expectedTestIds = [], approvedSkippedIds = [], baseOracle = null, editedTestFiles = null, requireBaseOracle = true,
+  reportDiffVerdict = null, reportReadErrors = [],
   formalProofs = [], formalTargetModules = [], requireCodeBoundFormal = false,
   gapCheck = null, requireGapCheck = true, serviceFailure = null, abstained = false,
 } = {}) {
   const protectedPaths = checkProtectedPaths({ changedFiles, humanApprovedPaths, protectedPatterns });
   const pathReceipts = checkPathReceipts({ touchedPaths, receipts, expectedBinding, availableCapabilities, requiredCapabilitiesByPath });
   const acCoverage = checkAcCoverage({ frozenAcs, testResults, provedPathIds: pathReceipts.provedPathIds, acMapping, requireFrozenAcs });
-  const testOracle = checkTestOracle({ testResults, expectedTestIds, approvedSkippedIds, baseOracle, editedTestFiles, changedFiles, requireBaseOracle });
+  const testOracle = checkTestOracle({ testResults, expectedTestIds, approvedSkippedIds, baseOracle, editedTestFiles, changedFiles, requireBaseOracle, reportDiffVerdict, reportReadErrors });
   const formalProofBinding = checkFormalProofBinding({ formalProofs, targetModules: formalTargetModules, requireCodeVerification: requireCodeBoundFormal });
 
   let gapResult;

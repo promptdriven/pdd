@@ -788,4 +788,57 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
     { stdout: makeSink(), stderr: makeSink() },
   );
   assert.equal(synTargeted.exitCode, EXIT_PROVED, JSON.stringify(synTargeted.receipt));
+
+  // 6. Loop 3 Astra P1 #4 & Fable P2 #3: banner with class+text cannot mask a different stderr diagnostic,
+  // bare class-only --expect stays setup-error, while TAP `# FileNotFoundError: ...` diagnostic proves cleanly!
+  writeFileSync(
+    join(synRepo, 'app.test.mjs'),
+    "import { broken } from './app.mjs';\nif (broken) { console.log('SyntaxError: order total banner'); console.error('SyntaxError: invalid syntax'); process.exit(1); }\n",
+  );
+  const spoofBanner = runProve(
+    { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'SyntaxError: order total', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(spoofBanner.exitCode, EXIT_NOT_PROVED, JSON.stringify(spoofBanner.receipt));
+  assert.equal(spoofBanner.receipt.reason, 'setup-error');
+
+  const bareClass = runProve(
+    { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'SyntaxError', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(bareClass.exitCode, EXIT_NOT_PROVED, JSON.stringify(bareClass.receipt));
+  assert.equal(bareClass.receipt.reason, 'setup-error');
+
+  writeFileSync(
+    join(synRepo, 'app.test.mjs'),
+    "import { broken } from './app.mjs';\nif (broken) { console.log('# FileNotFoundError: [Errno 2] conf.yml'); process.exit(1); }\n",
+  );
+  const tapDiag = runProve(
+    { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'FileNotFoundError: [Errno 2] conf.yml', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(tapDiag.exitCode, EXIT_PROVED, JSON.stringify(tapDiag.receipt));
+
+  // 7. Loop 3 Astra P0 #2: a failing `git status` MUST NEVER certify checkout as clean (`proofScope: 'unknown'`, Not proved)!
+  const cleanRepo = initGitRepo(t, 'pdd-prove-git-status-fail-');
+  writeFileSync(join(cleanRepo, 'pdd.json'), JSON.stringify({ verify: { test: `${nodeBin} -e "process.exit(0)"` } }) + '\n');
+  commitAll(cleanRepo, 'base');
+  const fakeBin = mkdtempSync(join(tmpdir(), 'pdd-fake-git-'));
+  t.after(() => rmSync(fakeBin, { recursive: true, force: true }));
+  const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  writeFileSync(
+    join(fakeBin, 'git'),
+    `#!/bin/sh\nif [ "$1" = "status" ]; then echo "fatal: index corrupt" >&2; exit 128; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+    { mode: 0o755 },
+  );
+  const origPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}:${origPath}`;
+  try {
+    const failedStatus = runProve({ cwd: cleanRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+    assert.equal(failedStatus.exitCode, EXIT_NOT_PROVED, JSON.stringify(failedStatus.receipt));
+    assert.equal(failedStatus.receipt.dirty, true);
+    assert.equal(failedStatus.receipt.proofScope, 'unknown');
+  } finally {
+    process.env.PATH = origPath;
+  }
 });
