@@ -1362,12 +1362,14 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   mkdirSync(join(symRepo, 'links'), { recursive: true });
   mkdirSync(join(symRepo, 'src'), { recursive: true });
   writeFileSync(join(symRepo, 'src/a.mjs'), 'export const x = 1;\n');
+  writeFileSync(join(symRepo, 'scripts/parent-only.json'), '{"parent":true}\n');
   writeFileSync(join(symRepo, 'scripts/benchmark/review-eval-manifest.json'), '{"ok":true}\n');
+  writeFileSync(join(symRepo, 'package.json'), '{"name":"sym-demo"}\n');
   symlinkSync('../scripts/benchmark', join(symRepo, 'links/bench'));
   symlinkSync('../../outside', join(symRepo, 'links/escape'));
   symlinkSync('loop', join(symRepo, 'links/loop'));
 
-  const runLoop12Case = async (runCmd, changed = ['scripts/benchmark/review-eval-manifest.json']) => {
+  const runLoop12Case = async (runCmd, changed = ['scripts/benchmark/review-eval-manifest.json'], { tree = symRepo } = {}) => {
     writeFileSync(join(symRepo, 'pdd.json'), JSON.stringify({
       verify: {
         paths: [{ id: 'p', when: ['src/**', 'scripts/**', 'links/**'], run: runCmd }],
@@ -1379,7 +1381,7 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
     return collectLiveEvidenceContract({
       repo: 'acme/sym',
       job: { issue: 120, head: tip },
-      headTree: symRepo,
+      headTree: tree,
       baseTip: tip,
       changedFiles: changed,
       suite: { state: 'pass' },
@@ -1388,14 +1390,25 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
     });
   };
 
-  // Child shell inherits parent OLDPWD (`cd -` inside `sh -c`) while parent stays in `scripts`.
-  const childOldpwd = await runLoop12Case('cd scripts/benchmark && cd .. && sh -c "cd - && cat review-eval-manifest.json" && cat benchmark/review-eval-manifest.json');
+  // Child shell inherits parent OLDPWD (`cd -` inside `sh -c`) reading child-only manifest, while parent stays in `scripts` reading distinct `parent-only.json`.
+  const childOldpwd = await runLoop12Case('cd scripts/benchmark && cd .. && sh -c "cd - && cat review-eval-manifest.json" && cat parent-only.json');
   assert.equal(evaluateEvidenceContract(childOldpwd.contractInput).holdReason, 'protected_path', 'child sh -c inherits OLDPWD');
-  assert.equal(childOldpwd.contractInput.protectedPatterns.includes('scripts/benchmark/review-eval-manifest.json'), true);
+  assert.equal(childOldpwd.contractInput.protectedPatterns.includes('scripts/benchmark/review-eval-manifest.json'), true, 'child file protected via inherited OLDPWD');
+  assert.equal(childOldpwd.contractInput.protectedPatterns.includes('scripts/parent-only.json'), true, 'parent file protected in isolated parent curDir');
 
-  // `cd -P` through tracked symlink `links/bench` -> `../scripts/benchmark`, plus `cd -P links/bench/..` and `cd -L links/bench && cd -P ..`!
+  // Subdirectory checkout (`headTree: join(symRepo, 'src')`) produces identical Git `--full-tree` protection as repo root!
+  const subdirProtected = await runLoop12Case(
+    'cd scripts/benchmark && cat review-eval-manifest.json',
+    ['scripts/benchmark/review-eval-manifest.json'],
+    { tree: join(symRepo, 'src') },
+  );
+  assert.equal(evaluateEvidenceContract(subdirProtected.contractInput).holdReason, 'protected_path', 'subdirectory checkout protects tracked file');
+  assert.equal(subdirProtected.contractInput.protectedPatterns.includes('scripts/benchmark/review-eval-manifest.json'), true);
+
+  // `cd -P` through tracked symlink `links/bench` -> `../scripts/benchmark`, plus `cd -P links/bench/..`, `cd -L links/bench && cd -P ..`, and clustered `cd -LP`!
   for (const symCmd of [
     'cd -P links/bench && cat review-eval-manifest.json',
+    'cd -LP links/bench && cat review-eval-manifest.json',
     'cd -P links/bench/.. && cat benchmark/review-eval-manifest.json',
     'cd -L links/bench && cd -P .. && cat benchmark/review-eval-manifest.json',
   ]) {
@@ -1405,15 +1418,18 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
     assert.equal(res.contractInput.protectedPatterns.includes('links/bench'), true, `traversed symlink itself is protected: ${symCmd}`);
   }
 
-  // Escaping symlink (`../../outside`) and symlink loop (`loop -> loop`) under `cd -P` MUST fail closed!
+  // Escaping symlink (`../../outside`), symlink loop (`loop -> loop`), missing dir, regular file target (`package.json`), and unknown flag under `cd -P`/`cd` MUST fail closed!
   for (const badSymCmd of [
     'cd -P links/escape && cat anything',
     'cd -P links/loop && cat anything',
+    'cd -P does/not/exist && cat anything',
+    'cd -P package.json && cat anything',
+    'cd -Z scripts/benchmark && cat review-eval-manifest.json',
   ]) {
     const res = await runLoop12Case(badSymCmd, ['src/a.mjs']);
     const verdict = evaluateEvidenceContract(res.contractInput);
-    assert.equal(verdict.decision, 'HOLD', `unresolvable cd -P symlink must HOLD: ${badSymCmd}`);
-    assert.equal(verdict.holdReason, 'protected_path', `unresolvable cd -P symlink must fail closed with protected_path: ${badSymCmd}`);
+    assert.equal(verdict.decision, 'HOLD', `unresolvable cd -P / unknown flag must HOLD: ${badSymCmd}`);
+    assert.equal(verdict.holdReason, 'protected_path', `unresolvable cd -P / unknown flag must fail closed with protected_path: ${badSymCmd}`);
   }
 });
 

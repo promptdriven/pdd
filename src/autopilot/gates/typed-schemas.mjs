@@ -144,15 +144,19 @@ export function safeJsonParse(raw, { maxBytes = 262_144, maxDepth = 16, sanitize
   return err ? { ok: false, value: null, error: err } : { ok: true, value: cleaned, error: null };
 }
 
+function stripHtmlComments(input) {
+  let text = String(input ?? '');
+  while (true) {
+    const start = text.indexOf('<!--');
+    if (start < 0) return text;
+    const end = text.indexOf('-->', start + 4);
+    text = end >= 0 ? text.slice(0, start) + text.slice(end + 3) : text.slice(0, start) + text.slice(start + 4);
+  }
+}
+
 /** Hardening 6: Strip HTML comments, blockquotes, and unified diff lines (preserving ordinary `- ` Markdown bullets). */
 export function stripInjectionContainers(raw) {
-  let text = sanitizeUntrustedText(raw);
-  let prev;
-  do {
-    prev = text;
-    text = text.replace(/<!--[\s\S]*?-->/g, '').replace(/<!--/g, '');
-  } while (text !== prev);
-  const lines = text.split(/\r?\n/), out = [];
+  const lines = stripHtmlComments(sanitizeUntrustedText(raw)).split(/\r?\n/), out = [];
   let inDiffHunk = false;
   for (const line of lines) {
     if (/^\s*>/.test(line)) continue;

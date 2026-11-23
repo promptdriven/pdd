@@ -295,12 +295,14 @@ function scanCommandScripts(cmd, initialDir, initialPrevDir, depth, baseCtx, fou
     if ((tok === 'cd' || tok === 'pushd') && i + 1 < tokens.length) {
       let j = i + 1;
       let physical = false;
-      while (j < tokens.length && (tokens[j] === '--' || tokens[j] === '-L' || tokens[j] === '-P')) {
+      while (j < tokens.length && (tokens[j] === '--' || /^-[LP]+$/.test(tokens[j]))) {
         const flag = tokens[j];
-        if (flag === '-P') physical = true;
-        else if (flag === '-L') physical = false;
         j += 1;
         if (flag === '--') break;
+        for (const ch of flag.slice(1)) {
+          if (ch === 'P') physical = true;
+          else if (ch === 'L') physical = false;
+        }
       }
       if (j < tokens.length) {
         const arg = String(tokens[j] ?? '').trim();
@@ -310,7 +312,7 @@ function scanCommandScripts(cmd, initialDir, initialPrevDir, depth, baseCtx, fou
             if (!baseCtx.hasBaseLookup) {
               baseCtx.unresolvedPhysical.push('cd -P - (no trusted base tree available)');
             } else {
-              const phys = resolvePhysicalBasePath(prevDir, baseCtx, { recordSymlinksInto: found });
+              const phys = resolvePhysicalBasePath(prevDir, baseCtx, { recordSymlinksInto: found, requireDirectory: true });
               if (!phys.ok) {
                 baseCtx.unresolvedPhysical.push(`cd -P - (${phys.reason})`);
               } else {
@@ -323,13 +325,15 @@ function scanCommandScripts(cmd, initialDir, initialPrevDir, depth, baseCtx, fou
             prevDir = curDir;
             curDir = next;
           }
-        } else if (arg && !arg.startsWith('-') && !arg.startsWith('/') && !arg.includes('\\') && !arg.includes('\0')) {
+        } else if (arg.startsWith('-')) {
+          baseCtx.unresolvedPhysical.push(`${tok} ${arg} (unsupported flag)`);
+        } else if (arg && !arg.startsWith('/') && !arg.includes('\\') && !arg.includes('\0')) {
           const rawDir = curDir ? `${curDir}/${arg}` : arg;
           if (physical) {
             if (!baseCtx.hasBaseLookup) {
               baseCtx.unresolvedPhysical.push(`cd -P ${arg} (no trusted base tree available)`);
             } else {
-              const phys = resolvePhysicalBasePath(rawDir, baseCtx, { recordSymlinksInto: found });
+              const phys = resolvePhysicalBasePath(rawDir, baseCtx, { recordSymlinksInto: found, requireDirectory: true });
               if (!phys.ok) {
                 baseCtx.unresolvedPhysical.push(`cd -P ${arg} (${phys.reason})`);
               } else {
@@ -403,7 +407,7 @@ function inspectBaseEntry(relPath, baseCtx) {
     const gitCwd = baseCtx.headTree || baseCtx.baseTree;
     if (gitCwd) {
       try {
-        const res = spawnSync('git', ['--literal-pathspecs', 'ls-tree', '-z', baseCtx.baseTip, '--', relPath], {
+        const res = spawnSync('git', ['--literal-pathspecs', 'ls-tree', '--full-tree', '-z', baseCtx.baseTip, '--', relPath], {
           cwd: gitCwd, encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'],
         });
         if (res.status === 0) {
@@ -448,7 +452,7 @@ function fileExistsInBase(relPath, baseCtx) {
   return inspectBaseEntry(relPath, baseCtx)?.kind === 'file';
 }
 
-function resolvePhysicalBasePath(rawPath, baseCtx, { recordSymlinksInto = null } = {}) {
+function resolvePhysicalBasePath(rawPath, baseCtx, { recordSymlinksInto = null, requireDirectory = false } = {}) {
   const clean = String(rawPath ?? '');
   if (!clean) return { ok: true, path: '' };
   if (clean.startsWith('/') || clean.includes('\0') || clean.includes('\\')) {
@@ -477,6 +481,10 @@ function resolvePhysicalBasePath(rawPath, baseCtx, { recordSymlinksInto = null }
       }
       queue.unshift(...target.split('/').filter(Boolean));
       continue;
+    }
+    if (requireDirectory || queue.length > 0) {
+      if (!entry) return { ok: false, reason: 'missing-directory' };
+      if (entry.kind !== 'dir') return { ok: false, reason: `not-a-directory:${entry.kind}` };
     }
     resolved.push(seg);
   }
