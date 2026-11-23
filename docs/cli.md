@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.41, as `pdd --help` and `pdd <command> --help` show it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help catalog is on this page.
+This page lists every command of pdd 0.1.50, as `pdd --help` and `pdd <command> --help` show it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help catalog is on this page.
 
 You need the pdd command for local inspection (`pdd status`, `pdd files`, `pdd owner`, `pdd update`, `pdd lint`, `pdd prove`), remote checks (`pdd test`, `pdd lint --remote`, `pdd simulate`, `pdd approve`), and headless Autopilot issue runs (`pdd autopilot`). Install the single `/pdd` skill globally with `pdd setup` (or `npx skills add promptdriven/pdd -g`), and set up each repository once with `pdd init`. For simulations that your agent drives, use the Try tools in `pdd mcp`. Call the skill with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -766,7 +766,7 @@ The tools are `try_open`, `try_state`, `try_run`, `try_observe`, `try_check` and
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the grouped command overview, quick-start examples, focused-help hint (`pdd <command> --help`), and the full paths of the installed PDD skill and Prompting guide |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the PDD skill and Prompting guide |
-| `pdd --version` | Print the version, `0.1.41`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.50`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
 | `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |

@@ -30,7 +30,7 @@ pdd init
 1. `npm install -g @promptdriven/pdd` installs the `pdd` command.
 2. `pdd setup` installs the global `/pdd` skill into `~/.agents/skills`, `~/.claude/skills` (cleaning retired marked skills and skipping duplicates when a Claude Code plugin is installed), and `~/.gemini/config/skills`, and previews Simulator MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to confirm previewed MCP registration without prompting, or `--skills-dir PATH` for a custom skill folder.
 3. If you use another skills installer, `npx skills add promptdriven/pdd -g --skill '*'` installs the skills globally.
-4. `pdd --version` prints `0.1.41`. When installed skills are older than pdd, it prints the update command on stderr.
+4. `pdd --version` prints `0.1.50`. When installed skills are older than pdd, it prints the update command on stderr.
 5. `pdd init` adds a 4-line PDD block to `CLAUDE.md` (else `AGENTS.md`) inside a repository and detects its language and test command, without editing root `.gitignore` (`.pdd/.gitignore` is managed automatically).
 
 To update a global npm or Volta installation and its `.pdd-skill.json`-marked user skills in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. `pdd upgrade` installs `@promptdriven/pdd@<version>` from npm first with a GitHub tag fallback (using Volta's `npm` without `--prefix` on Volta installs), guards against mutating Git checkouts, PyPI `pdd-cli`, `pnpm`, `npx`, or local `node_modules` installs, and prints `npx skills add promptdriven/pdd -g --skill '*'` when unmarked copies are older. When a global install prints `npm error code EEXIST` on `<prefix>/bin/pdd`, remove the conflicting unscoped `pdd` package with `npm uninstall -g pdd && npm install -g @promptdriven/pdd`.
@@ -338,7 +338,7 @@ The skills and the other commands run on your computer; `pdd lint --local` is of
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a simulation that you do not use, run `pdd simulate --stop STORY`. |
 | `This Try has ended` | The simulation used all its AI calls or its 24 hours. Run `pdd simulate STORY --new`. |
 | `Autopilot did not start: it works only on the issues that you mark with an opt-in label.` | Mark issues with `pdd autopilot add N`, then run `pdd autopilot start --label pdd:autopilot`. |
-| `pdd --version` does not print `0.1.41` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
+| `pdd --version` does not print `0.1.50` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 
