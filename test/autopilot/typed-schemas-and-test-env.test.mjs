@@ -214,6 +214,18 @@ test('10 adversarial fence/injection hardening tests + Findings #14, #15, #19, #
   ].join('\n');
   assert.equal(parseTypedOrLegacyOutput(conflictWithHeadingFail, { schemaName: 'review' }).ok, false, 'heading + FAIL inside unlabeled fence participates in conflict detection');
 
+  // Loop 18 Astra P1: 32+ ordinary JSON objects inside a heading fence or prose MUST NOT truncate a later FAIL (and exceeding maxObjects fails closed)!
+  const decoys40 = Array.from({ length: 40 }, (_, i) => JSON.stringify({ n: i })).join('\n');
+  const failAfter40Decoys = ['```', 'Review result', decoys40, JSON.stringify(failReview), '```'].join('\n');
+  const parsedAfter40 = parseTypedOrLegacyOutput(failAfter40Decoys, { schemaName: 'review' });
+  assert.equal(parsedAfter40.ok, true, 'valid FAIL after 40 ordinary JSON objects inside heading fence must not be truncated');
+  assert.equal(parsedAfter40.value.verdict, 'FAIL');
+  const passThen40ThenFail = ['```', 'Review result', JSON.stringify(VALID_REVIEW), decoys40, JSON.stringify(failReview), '```'].join('\n');
+  assert.equal(parseTypedOrLegacyOutput(passThen40ThenFail, { schemaName: 'review' }).ok, false, 'PASS + 40 decoys + FAIL must fail closed as conflict');
+  // Over-cap (> 4096) candidate objects MUST fail closed instead of accepting an earlier PASS!
+  const overCapPass = ['```', 'Review result', JSON.stringify(VALID_REVIEW), '{} '.repeat(4100), JSON.stringify(failReview), '```'].join('\n');
+  assert.equal(parseTypedOrLegacyOutput(overCapPass, { schemaName: 'review' }).ok, false, 'exceeding candidate scan cap must fail closed');
+
   // Loop 16 Astra P1 #2: Completed `@@ -1,1 +1,1 @@` hunk ends cleanly without swallowing the immediately following bullet or indented fence!
   const hunkThenBullet = [
     '@@ -1,1 +1,1 @@',

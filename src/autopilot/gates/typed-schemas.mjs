@@ -385,20 +385,39 @@ export function extractClosedJsonFences(raw) {
   return { blocks, outsideText: outsideLines.join('\n'), unclosedFence: Boolean(active) };
 }
 
-function scanBalancedJsonStrings(text, maxObjects = 32) {
-  const found = [], s = String(text ?? '');
-  for (let i = 0; i < s.length && found.length < maxObjects; i += 1) {
-    if (s[i] !== '{') continue;
-    let depth = 0, inStr = false, esc = false;
-    for (let j = i; j < s.length; j += 1) {
-      const c = s[j];
-      if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
-      if (c === '"') inStr = true;
-      else if (c === '{') depth += 1;
-      else if (c === '}' && --depth === 0) { found.push(s.slice(i, j + 1)); i = j; break; }
+function scanBalancedJsonStrings(text, maxObjects = 4096) {
+  const s = String(text ?? '');
+  const root = [];
+  const stack = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"' || c === '\n') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      if (stack.length > 0) inStr = true;
+      continue;
+    }
+    if (c === '{') {
+      stack.push({ start: i, children: [] });
+    } else if (c === '}' && stack.length > 0) {
+      const frame = stack.pop();
+      const target = stack.length > 0 ? stack.at(-1).children : root;
+      target.push([frame.start, i + 1]);
     }
   }
-  return found;
+  for (const frame of stack) {
+    for (const span of frame.children) root.push(span);
+  }
+  if (root.length > maxObjects) {
+    return { items: root.slice(0, maxObjects).map(([a, b]) => s.slice(a, b)), truncated: true };
+  }
+  return { items: root.map(([a, b]) => s.slice(a, b)), truncated: false };
 }
 
 const normStrArr = (a) => (Array.isArray(a) ? [...new Set(a.map((x) => String(x)))].sort() : null);
@@ -575,12 +594,18 @@ export function parseTypedOrLegacyOutput(raw, { schemaName = null, schema = null
 
   // Collect JSON candidates from closed json/unlabeled fences (including heading + JSON blocks)
   // and prose outside other fences (never treating quoted code inside ```diff / ```js / ```markdown fences as review decisions).
-  const candidateTexts = [
-    ...new Set([
-      ...blocks.flatMap((b) => (b.startsWith('{') ? [b] : scanBalancedJsonStrings(b))),
-      ...scanBalancedJsonStrings(outsideText),
-    ]),
-  ];
+  // Fail closed if any scan exceeds the candidate object cap so earlier verdicts can never mask unchecked later conflicts.
+  const collected = [];
+  for (const b of blocks) {
+    const scanned = scanBalancedJsonStrings(b);
+    if (scanned.truncated) return fail('legacy-fallback', 'Candidate object scan limit exceeded.', true);
+    if (scanned.items.length > 0) collected.push(...scanned.items);
+    else if (b.startsWith('{')) collected.push(b);
+  }
+  const outsideScanned = scanBalancedJsonStrings(outsideText);
+  if (outsideScanned.truncated) return fail('legacy-fallback', 'Candidate object scan limit exceeded.', true);
+  collected.push(...outsideScanned.items);
+  const candidateTexts = [...new Set(collected)];
   const validCandidates = [], allDecisionObjects = [];
   for (const snippet of candidateTexts) {
     const p = safeJsonParse(snippet, { maxBytes, maxDepth });
