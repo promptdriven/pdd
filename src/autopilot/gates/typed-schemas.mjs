@@ -385,7 +385,14 @@ export function extractClosedJsonFences(raw) {
   return { blocks, outsideText: outsideLines.join('\n'), unclosedFence: Boolean(active) };
 }
 
-function scanBalancedJsonStrings(text, maxObjects = 4096) {
+export const MAX_CANDIDATE_JSON_OBJECTS = 4096;
+export const DECISION_JSON_KEY_RE = /"(?:verdict|decision|status|missingPathIds|unprovedAcIds|flags|mustFix|confidence|score|__proto__)"/;
+
+export function hasEmbeddedFenceLine(block) {
+  return String(block ?? '').split(/\r?\n/).some((ln) => Boolean(parseFenceOpenLine(ln)));
+}
+
+export function scanBalancedJsonStrings(text, maxObjects = MAX_CANDIDATE_JSON_OBJECTS) {
   const s = String(text ?? '');
   const root = [];
   const stack = [];
@@ -411,13 +418,29 @@ function scanBalancedJsonStrings(text, maxObjects = 4096) {
       target.push([frame.start, i + 1]);
     }
   }
+  const unclosedObject = stack.length > 0;
+  let unclosedDecision = false;
+  if (unclosedObject) {
+    const unclosedTail = s.slice(stack[0].start);
+    if (DECISION_JSON_KEY_RE.test(unclosedTail)) unclosedDecision = true;
+  }
   for (const frame of stack) {
     for (const span of frame.children) root.push(span);
   }
   if (root.length > maxObjects) {
-    return { items: root.slice(0, maxObjects).map(([a, b]) => s.slice(a, b)), truncated: true };
+    return {
+      items: root.slice(0, maxObjects).map(([a, b]) => s.slice(a, b)),
+      truncated: true,
+      unclosedObject,
+      unclosedDecision,
+    };
   }
-  return { items: root.map(([a, b]) => s.slice(a, b)), truncated: false };
+  return {
+    items: root.map(([a, b]) => s.slice(a, b)),
+    truncated: false,
+    unclosedObject,
+    unclosedDecision,
+  };
 }
 
 const normStrArr = (a) => (Array.isArray(a) ? [...new Set(a.map((x) => String(x)))].sort() : null);
@@ -588,29 +611,42 @@ export function parseTypedOrLegacyOutput(raw, { schemaName = null, schema = null
   if (unclosedComment) return fail('legacy-fallback', 'Unclosed HTML comment rejected.', true);
   const { blocks, outsideText, unclosedFence } = extractClosedJsonFences(stripped);
   if (unclosedFence) return fail('legacy-fallback', 'Unclosed fenced block rejected.', true);
-  if (blocks.some((b) => String(b ?? '').split(/\r?\n/).some((ln) => Boolean(parseFenceOpenLine(ln))))) {
+  if (blocks.some(hasEmbeddedFenceLine)) {
     return fail('legacy-fallback', 'Desynced nested fence rejected.', true);
   }
 
   // Collect JSON candidates from closed json/unlabeled fences (including heading + JSON blocks)
   // and prose outside other fences (never treating quoted code inside ```diff / ```js / ```markdown fences as review decisions).
-  // Fail closed if any scan exceeds the candidate object cap so earlier verdicts can never mask unchecked later conflicts.
+  // Fail closed on truncated/unclosed objects, ambiguous unclosed decision boundaries, or cumulative candidate cap overflow.
   const collected = [];
+  let totalScanned = 0;
   for (const b of blocks) {
     const scanned = scanBalancedJsonStrings(b);
-    if (scanned.truncated) return fail('legacy-fallback', 'Candidate object scan limit exceeded.', true);
+    totalScanned += scanned.items.length;
+    if (scanned.truncated || totalScanned > MAX_CANDIDATE_JSON_OBJECTS) {
+      return fail('legacy-fallback', 'Candidate object scan limit exceeded.', true);
+    }
+    if (scanned.unclosedObject) {
+      return fail('legacy-fallback', 'Truncated or unclosed JSON object in fence rejected.', true);
+    }
     if (scanned.items.length > 0) collected.push(...scanned.items);
     else if (b.startsWith('{')) collected.push(b);
   }
   const outsideScanned = scanBalancedJsonStrings(outsideText);
-  if (outsideScanned.truncated) return fail('legacy-fallback', 'Candidate object scan limit exceeded.', true);
+  totalScanned += outsideScanned.items.length;
+  if (outsideScanned.truncated || totalScanned > MAX_CANDIDATE_JSON_OBJECTS) {
+    return fail('legacy-fallback', 'Candidate object scan limit exceeded.', true);
+  }
+  if (outsideScanned.unclosedDecision) {
+    return fail('legacy-fallback', 'Truncated or ambiguous unclosed JSON decision rejected.', true);
+  }
   collected.push(...outsideScanned.items);
   const candidateTexts = [...new Set(collected)];
   const validCandidates = [], allDecisionObjects = [];
   for (const snippet of candidateTexts) {
     const p = safeJsonParse(snippet, { maxBytes, maxDepth });
     if (!p.ok) {
-      if (blocks.includes(snippet) || /"(?:verdict|decision|status|missingPathIds|confidence|score|__proto__)"/.test(snippet)) return fail('legacy-fallback', p.error, true);
+      if (blocks.includes(snippet) || DECISION_JSON_KEY_RE.test(snippet)) return fail('legacy-fallback', p.error, true);
       continue;
     }
     const v = validateAgainstSchema(p.value, targetSchema);

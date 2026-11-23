@@ -50,14 +50,18 @@ import {
   validateGapCheckOutput,
 } from './autopilot/gates/evidence-contract.mjs';
 import {
+  DECISION_JSON_KEY_RE,
+  MAX_CANDIDATE_JSON_OBJECTS,
   TYPED_SCHEMAS,
   buildCoreReviewSchema,
   buildNativeSchemaArgs,
   extractClosedJsonFences,
   formatHarnessPrReceipt,
+  hasEmbeddedFenceLine,
   parseHarnessPrReceipt,
   parseTypedOrLegacyOutput,
   safeJsonParse,
+  scanBalancedJsonStrings,
   stripInjectionContainersDetailed,
   toProviderStrictSchema,
 } from './autopilot/gates/typed-schemas.mjs';
@@ -3602,47 +3606,6 @@ async function prepareReviewContext(ctx, job, cwd, scoped = null) {
   return { dir, worktree: cwd, statFile, indexFile, diffFile, rulesFile, evidenceFile, geminiPolicyFile, geminiSettingsFile };
 }
 
-function scanJsonObjectsBounded(rawText, maxRestarts = 16) {
-  const s = typeof rawText === 'string' ? rawText : '';
-  const found = [];
-  let cursor = 0, restarts = 0;
-  while (cursor < s.length) {
-    let depth = 0, start = -1, inString = false, escape = false;
-    for (let i = cursor; i < s.length; i++) {
-      const ch = s[i];
-      if (inString) {
-        if (escape) { escape = false; continue; }
-        if (ch === '\\') { escape = true; continue; }
-        if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"' && depth > 0) { inString = true; continue; }
-      if (ch === '{') {
-        if (depth === 0) start = i;
-        depth++;
-        continue;
-      }
-      if (ch === '}' && depth > 0) {
-        depth--;
-        if (depth === 0 && start >= 0) {
-          const parsed = safeJsonParse(s.slice(start, i + 1));
-          if (parsed.ok && object(parsed.value) && parsed.value.is_error !== true && parsed.value.type !== 'error' && parsed.value.type !== 'turn.failed') {
-            found.push(parsed.value);
-          }
-          start = -1;
-        }
-      }
-    }
-    if (depth > 0 && start >= 0 && restarts < maxRestarts) {
-      restarts++;
-      cursor = start + 1;
-      continue;
-    }
-    break;
-  }
-  return found;
-}
-
 const FINAL_JSON_REJECTION_RE = /(?:Duplicate JSON key|Forbidden or unsafe key|Input exceeds|JSON nesting depth|Max object depth)/;
 const CORE_REVIEW_TYPED_SCHEMA = buildCoreReviewSchema({ includeDecisionFields: false });
 const CORE_REVIEW_DECISION_SCHEMA = buildCoreReviewSchema({ includeDecisionFields: true });
@@ -3713,23 +3676,54 @@ function parseFinalAssistantText(rawText) {
     outsideLines.push(ln);
   }
 
+  if (closedBlocks.some(hasEmbeddedFenceLine)) return null;
+
+  const parseScannedBlock = (text, { inFence }) => {
+    const scanned = scanBalancedJsonStrings(text);
+    if (scanned.truncated) return { ok: false, verdicts: [], count: scanned.items.length };
+    if (inFence && scanned.unclosedObject) return { ok: false, verdicts: [], count: scanned.items.length };
+    if (!inFence && scanned.unclosedDecision) return { ok: false, verdicts: [], count: scanned.items.length };
+    const verdicts = [];
+    for (const snippet of scanned.items) {
+      const parsed = safeJsonParse(snippet);
+      if (!parsed.ok) {
+        if (DECISION_JSON_KEY_RE.test(snippet)) return { ok: false, verdicts: [], count: scanned.items.length };
+        continue;
+      }
+      if (
+        object(parsed.value)
+        && parsed.value.is_error !== true
+        && parsed.value.type !== 'error'
+        && parsed.value.type !== 'turn.failed'
+        && typeof parsed.value.verdict === 'string'
+      ) {
+        verdicts.push(parsed.value);
+      }
+    }
+    return { ok: true, verdicts, count: scanned.items.length };
+  };
+
+  let totalScanned = 0;
   let trailingFenceVerdict = null;
-  if (closedBlocks.length > 0 && lines.slice(lastBlockEndLine + 1).every(ln => !ln.trim())) {
-    const fencedObjs = scanJsonObjectsBounded(closedBlocks.at(-1)).filter(o => typeof o.verdict === 'string');
-    const fencedKinds = new Set(fencedObjs.map(o => o.verdict));
-    if (fencedObjs.length > 0 && fencedKinds.size === 1) {
-      trailingFenceVerdict = fencedObjs.at(-1);
-    }
-  }
   const allVerdicts = [];
-  for (const block of closedBlocks) {
-    for (const o of scanJsonObjectsBounded(block)) {
-      if (typeof o.verdict === 'string') allVerdicts.push(o);
+  for (let bi = 0; bi < closedBlocks.length; bi += 1) {
+    const res = parseScannedBlock(closedBlocks[bi], { inFence: true });
+    totalScanned += res.count;
+    if (!res.ok || totalScanned > MAX_CANDIDATE_JSON_OBJECTS) return null;
+    allVerdicts.push(...res.verdicts);
+    if (
+      bi === closedBlocks.length - 1
+      && lines.slice(lastBlockEndLine + 1).every(ln => !ln.trim())
+      && res.verdicts.length > 0
+      && new Set(res.verdicts.map(o => o.verdict)).size === 1
+    ) {
+      trailingFenceVerdict = res.verdicts.at(-1);
     }
   }
-  for (const o of scanJsonObjectsBounded(outsideLines.join('\n'))) {
-    if (typeof o.verdict === 'string') allVerdicts.push(o);
-  }
+  const outsideRes = parseScannedBlock(outsideLines.join('\n'), { inFence: false });
+  totalScanned += outsideRes.count;
+  if (!outsideRes.ok || totalScanned > MAX_CANDIDATE_JSON_OBJECTS) return null;
+  allVerdicts.push(...outsideRes.verdicts);
   if (!allVerdicts.length) return null;
   const distinctVerdicts = new Set(allVerdicts.map(o => o.verdict));
   if (distinctVerdicts.size > 1) {

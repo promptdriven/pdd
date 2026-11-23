@@ -222,9 +222,28 @@ test('10 adversarial fence/injection hardening tests + Findings #14, #15, #19, #
   assert.equal(parsedAfter40.value.verdict, 'FAIL');
   const passThen40ThenFail = ['```', 'Review result', JSON.stringify(VALID_REVIEW), decoys40, JSON.stringify(failReview), '```'].join('\n');
   assert.equal(parseTypedOrLegacyOutput(passThen40ThenFail, { schemaName: 'review' }).ok, false, 'PASS + 40 decoys + FAIL must fail closed as conflict');
-  // Over-cap (> 4096) candidate objects MUST fail closed instead of accepting an earlier PASS!
-  const overCapPass = ['```', 'Review result', JSON.stringify(VALID_REVIEW), '{} '.repeat(4100), JSON.stringify(failReview), '```'].join('\n');
-  assert.equal(parseTypedOrLegacyOutput(overCapPass, { schemaName: 'review' }).ok, false, 'exceeding candidate scan cap must fail closed');
+  // Over-cap (> 4096) candidate objects with a SINGLE verdict MUST fail closed strictly from truncation (no conflict needed)!
+  const overCapSingleFail = ['```', 'Review result', '{} '.repeat(4096), JSON.stringify(failReview), '```'].join('\n');
+  const overCapRes = parseTypedOrLegacyOutput(overCapSingleFail, { schemaName: 'review' });
+  assert.equal(overCapRes.ok, false, 'single FAIL above 4096 candidate scan cap must fail closed');
+  assert.equal(overCapRes.finalRejection, true);
+  assert.match(overCapRes.error, /scan limit exceeded/i);
+
+  // Loop 19 Astra P1 #1 & #2: truncated second review inside a closed fence AND unfinished quoted fragment before FAIL on same line MUST fail closed!
+  const secondFail = { ...failReview, mustFix: ['second hidden bug'] };
+  const truncatedSecondInFence = ['```json', JSON.stringify(failReview), JSON.stringify(secondFail).slice(0, -1), '```'].join('\n');
+  const truncFenceRes = parseTypedOrLegacyOutput(truncatedSecondInFence, { schemaName: 'review' });
+  assert.equal(truncFenceRes.ok, false, 'truncated second review in closed JSON fence must fail closed');
+  assert.equal(truncFenceRes.finalRejection, true);
+
+  const unfinishedQuoteBeforeFail = `Review notes:\n{ "unfinished quote ${JSON.stringify(secondFail)}`;
+  const quoteHideRes = parseTypedOrLegacyOutput(unfinishedQuoteBeforeFail, { schemaName: 'review' });
+  assert.equal(quoteHideRes.ok, false, 'unfinished quoted fragment hiding a FAIL on the same line must fail closed');
+  assert.equal(quoteHideRes.finalRejection, true);
+  const earlierFailPlusHidden = `${JSON.stringify(failReview)}\n{ "unfinished quote ${JSON.stringify(secondFail)}`;
+  const earlierPlusHiddenRes = parseTypedOrLegacyOutput(earlierFailPlusHidden, { schemaName: 'review' });
+  assert.equal(earlierPlusHiddenRes.ok, false, 'earlier review + unfinished quoted fragment hiding later FAIL must fail closed');
+  assert.equal(earlierPlusHiddenRes.finalRejection, true);
 
   // Loop 16 Astra P1 #2: Completed `@@ -1,1 +1,1 @@` hunk ends cleanly without swallowing the immediately following bullet or indented fence!
   const hunkThenBullet = [

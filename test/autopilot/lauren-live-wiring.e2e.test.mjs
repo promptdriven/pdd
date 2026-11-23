@@ -1473,6 +1473,30 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   // Loop 16 Astra P1 #2: completed 1-line diff hunk must NOT swallow immediately following indented fenced review in parseReviewOutput!
   const afterHunkReview = parseReviewOutput(wrapReviewEvent(`@@ -1,1 +1,1 @@\n-old\n+new\n \`\`\`json\n ${markerPassJson}\n \`\`\``));
   assert.equal(afterHunkReview?.verdict, 'PASS', 'indented fence immediately after completed hunk accepted by parseReviewOutput');
+
+  // Loop 19 Astra P1 #1, #2, #3: parseReviewOutput enforces the exact same truncated-second-review, unfinished-quote, and 4096-object cap rules!
+  const failOne = JSON.stringify({ verdict: 'FAIL', head: fakeHead, summary: 'one', mustFix: ['bug 1'], preExisting: [] });
+  const failTwo = JSON.stringify({ verdict: 'FAIL', head: fakeHead, summary: 'two', mustFix: ['bug 2'], preExisting: [] });
+  assert.equal(
+    parseReviewOutput(wrapReviewEvent(`\`\`\`json\n${failOne}\n${failTwo.slice(0, -1)}\n\`\`\``)),
+    null,
+    'parseReviewOutput rejects truncated second review in closed JSON fence',
+  );
+  assert.equal(
+    parseReviewOutput(wrapReviewEvent(`${failOne}\n{ "unfinished quote ${failTwo}`)),
+    null,
+    'parseReviewOutput rejects unfinished quoted fragment hiding later FAIL on same line',
+  );
+  assert.equal(
+    parseReviewOutput(wrapReviewEvent(`Review:\n${'{} '.repeat(4096)}${failOne}`)),
+    null,
+    'parseReviewOutput rejects prose exceeding 4096-object cap',
+  );
+  assert.equal(
+    parseReviewOutput(wrapReviewEvent(`\`\`\`json\n${'{} '.repeat(4096)}${failOne}\n\`\`\``)),
+    null,
+    'parseReviewOutput rejects JSON fence exceeding 4096-object cap',
+  );
 });
 
 test('G3 polyglot base-control and diffTestReports detect missing/skipped/failing tests across ecosystems', async t => {
