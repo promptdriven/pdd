@@ -7979,6 +7979,7 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
       verifyPathsConfigured: liveEvidence.verifyPathsConfigured,
       advisory: liveEvidence.advisory,
       proveOutcome: liveEvidence.proveOutcome,
+      proveReasons: liveEvidence.proveReasons ?? [],
       postReviewSandboxUsed: liveEvidence.postReviewSandboxUsed,
       reportDiffStatus: liveEvidence.reportDiff?.status ?? null,
       baseOracleStatus: liveEvidence.oracleResult?.status ?? null,
@@ -7992,10 +7993,11 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
     });
     job.evidenceContract = {
       ...contract,
-      ...(liveEvidence ? { verifyPathsConfigured: liveEvidence.verifyPathsConfigured, advisory: liveEvidence.advisory, proveOutcome: liveEvidence.proveOutcome } : {}),
+      ...(liveEvidence ? { verifyPathsConfigured: liveEvidence.verifyPathsConfigured, advisory: liveEvidence.advisory, proveOutcome: liveEvidence.proveOutcome, proveReasons: liveEvidence.proveReasons ?? [] } : {}),
     };
     if (!contract.ok) {
       ctx.saveJob(job);
+      const proveDetail = liveEvidence?.proveReasons?.length ? ` (${liveEvidence.proveReasons.join('; ')})` : '';
       if (contract.holdReason === 'protected_path') {
         const paths = contract.checks.protectedPaths.unapprovedProtectedPaths.join(', ');
         await parkHumanBoundary(ctx, job, pr, {
@@ -8015,18 +8017,18 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
           : (contract.checks.pathReceipts.missingCapabilities[0] || 'capability');
         await parkValidationWait(ctx, job, pr, {
           ...outcome, eligible: false, bucket: 2, decision: 'needs-binding-wait', waitKind: 'needs-binding-wait',
-          cooldownTool, checkCommand: '', message: contract.summary,
+          cooldownTool, checkCommand: '', message: `${contract.summary}${proveDetail}`,
         });
         return { handled: true, outcome, evidenceContract: contract };
       }
-      const red = `[Evidence Contract HOLD (${contract.holdReason})] ${contract.summary}`;
+      const red = `[Evidence Contract HOLD (${contract.holdReason})] ${contract.summary}${proveDetail}`;
       await repairOrEnd(ctx, job, [red], [red], null, {
         skipRepeatStop: true,
         maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS, (job.repairs ?? 0) + 1),
       });
       return { handled: true, outcome, evidenceContract: contract };
     }
-    if (object(contractInput.stampReceipt)) {
+    if (object(contractInput.stampReceipt) && (!liveEvidence || liveEvidence.proveOutcome === 'Proved')) {
       job.harnessReceipt = stampHarnessReceiptForJob(contractInput.stampReceipt);
       job.harnessReceiptHead = job.head;
       const shouldPostStandalone = explicitContractSupplied

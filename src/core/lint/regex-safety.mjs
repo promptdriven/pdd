@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // ReDoS-safe regular expression validator and strictly linear DP glob matcher.
 export const MAX_GLOB_WILDCARDS = 12;
 const MAX_REGEX_GROUP_DEPTH = 16;

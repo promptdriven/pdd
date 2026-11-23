@@ -10,7 +10,7 @@ Write one plain-Markdown prompt with:
 - **`handle_event({ state, event }) -> { state, html }`**: handles clicks, form submits, keyboard shortcuts, and declarative `data-pdd-op` actions in one call. For large screens, may return an HTML delta patch `{ state, mode: "patch", base_sha256, edits }`.
 - **Optional `apply({ state, event }) -> { state }`**: pure JSON state-transition op for fast logic-only checks in `pdd test` without HTML tokens.
 
-Run it immediately with `pdd sim prompts/<app>.prompt.md` (no Story, test file, or `app-map.json` required). The Simulator synthesizes a wildcard map and opens on the **Screen** tab.
+A person can try it right away with `pdd sim prompts/<app>.prompt.md` (no Story, test file, or `app-map.json` required); the Simulator synthesizes a wildcard map and opens on the **Screen** tab. Agents recommend this command during the pre-code check and launch it only when asked.
 
 ### HTML sanitizer & CSS rules
 

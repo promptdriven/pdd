@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/prove.prompt.md
+
 // Unified stateless `pdd prove` (G1): zero-flag merge-base verification + 5-bug-fixed bug-contrast mode.
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -276,9 +278,10 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
 
   try {
     const changedFromBase = listChangedFiles(root, baseSha);
-    const overlayPaths = overlayGlobs.length > 0
-      ? changedFromBase.filter(f => overlayGlobs.some(m => m.test(f)))
-      : changedFromBase.filter(f => COLOCATED_TEST_RE.test(f) || isTestOwnedPath(f));
+    // Always union colocated/repo test files with explicit --overlay globs so fixture overlays never drop the regression test.
+    const overlayPaths = changedFromBase.filter(
+      f => COLOCATED_TEST_RE.test(f) || isTestOwnedPath(f) || overlayGlobs.some(m => m.test(f)),
+    );
     const wtBase = gitExec(root, ['worktree', 'add', '--detach', baseWorktree, baseSha]);
     if (wtBase.status !== 0) throw new Error(wtBase.stderr || wtBase.stdout || 'git worktree add base failed');
     createdWorktrees.push(baseWorktree);
@@ -298,7 +301,11 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
     }
 
     basePhase = execShellCommand(test, { cwd: baseWorktree, env, timeoutMs }, ports);
-    basePhase.expectedFound = !basePhase.setupError && !basePhase.signal && (basePhase.stdout.includes(expect) || basePhase.stderr.includes(expect));
+    const baseTextHasExpect = !basePhase.signal && !basePhase.timedOut && (basePhase.stdout.includes(expect) || basePhase.stderr.includes(expect));
+    // If --expect explicitly targets a runtime error name (e.g. SyntaxError/FileNotFoundError), don't mask a matching bug symptom as a setup error.
+    const baseRealSetupError = basePhase.setupError && !(baseTextHasExpect && /^(?:SyntaxError|ImportError|FileNotFoundError):/i.test(basePhase.setupError));
+    if (!baseRealSetupError && basePhase.setupError) basePhase.setupError = '';
+    basePhase.expectedFound = !basePhase.setupError && baseTextHasExpect;
     headPhase = execShellCommand(test, { cwd: headWorktree, env, timeoutMs }, ports);
   } catch (err) {
     setupError = causeText(err?.message || String(err));
@@ -311,9 +318,10 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
   const notProvedReasons = [];
   if (setupError || basePhase?.setupError || headPhase?.setupError || (!basePhase?.timedOut && basePhase?.signal) || (!headPhase?.timedOut && headPhase?.signal)) {
     outcome = OUTCOME_NOT_PROVED; reason = 'setup-error'; exitCode = EXIT_NOT_PROVED;
-    notProvedReasons.push(`Setup/dependency/compile failure prevented causal bug-contrast proof: ${setupError || basePhase?.setupError || headPhase?.setupError || basePhase?.signal || headPhase?.signal}`);
+    notProvedReasons.push(`Setup/dependency/compile failure prevented causal bug-contrast proof: ${setupError || basePhase?.setupError || headPhase?.setupError || basePhase?.signal || headPhase?.signal}. Pass --setup CMD if dependencies must be installed in fresh worktrees.`);
   } else if (basePhase?.timedOut || headPhase?.timedOut) {
-    outcome = OUTCOME_FAILED; reason = basePhase?.timedOut ? 'base-timeout' : 'head-timeout'; exitCode = EXIT_FAILED;
+    outcome = OUTCOME_NOT_PROVED; reason = basePhase?.timedOut ? 'base-timeout' : 'head-timeout'; exitCode = EXIT_NOT_PROVED;
+    notProvedReasons.push(`Bug-contrast ${basePhase?.timedOut ? 'base' : 'head'} run timed out after ${timeoutMinutes} min; rerun with --timeout MIN.`);
   } else if (!headPhase?.ok) {
     outcome = OUTCOME_FAILED; reason = 'head-fails'; exitCode = EXIT_FAILED;
   } else if (basePhase?.ok) {
@@ -414,7 +422,10 @@ export function runProve(
   if (shadowBins.length === 0) {
     if (testCommand) {
       const r = execShellCommand(testCommand, { cwd: root, env, timeoutMs }, ports);
-      testResult = { command: testCommand, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs, setupError: r.setupError, summary: r.summary };
+      testResult = { command: testCommand, ok: r.ok, timedOut: r.timedOut, exitCode: r.exitCode, durationMs: r.durationMs, setupError: r.setupError, summary: r.summary };
+      if (r.timedOut) {
+        notProvedReasons.push(`Test suite timed out after ${timeoutMinutes} min (\`${testCommand}\`); rerun with --timeout MIN.`);
+      }
     } else {
       notProvedReasons.push('No verify.test command configured in merge-base pdd.json and no standard test runner detected.');
     }
@@ -428,11 +439,16 @@ export function runProve(
         continue;
       }
       const r = execShellCommand(recipe.run, { cwd: root, env, timeoutMs }, ports);
-      pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
+      if (r.timedOut) {
+        pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', timedOut: true, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary });
+        notProvedReasons.push(`Verify path "${recipe.id}" timed out after ${timeoutMinutes} min (\`${recipe.run}\`); rerun with --timeout MIN.`);
+        continue;
+      }
+      pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', timedOut: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
     }
   }
   if (unmappedSurfaces.length > 0) notProvedReasons.push(`No verify.paths recipe covers changed production surface(s): ${unmappedSurfaces.join(', ')}.`);
-  const multiPartGuard = inspectMultiPartIntegrationGuard(root, baseVerify);
+  const multiPartGuard = inspectMultiPartIntegrationGuard(root, baseVerify, { executedPathResults: pathResults, changedSurfaces });
   if (multiPartGuard.applicable && !multiPartGuard.covered && multiPartGuard.reason) {
     notProvedReasons.push(multiPartGuard.reason);
   }
@@ -476,23 +492,29 @@ export function runProve(
     ...lint.errors,
     ...diff.errors.filter(e => e.code !== 'diff-base-unavailable').map(e => e.formatted),
     ...extraShadowErrors,
-    ...(testResult && !testResult.ok ? [`Test suite failed (\`${testResult.command}\`, exit ${testResult.exitCode}): ${testResult.summary}`] : []),
+    ...(testResult && !testResult.ok && !testResult.timedOut ? [`Test suite failed (\`${testResult.command}\`, exit ${testResult.exitCode}): ${testResult.summary}`] : []),
     ...pathResults.filter(p => p.status === 'failed').map(p => `Verify path "${p.id}" failed (\`${p.run}\`, exit ${p.exitCode}): ${p.summary}`),
   ];
+
+  const statusRes = gitExec(root, ['status', '--porcelain']);
+  const dirty = statusRes.status === 0 && statusRes.stdout.trim().length > 0;
+  const proofScope = dirty ? 'working-tree' : 'commit';
 
   const outcome = failedErrors.length > 0 ? OUTCOME_FAILED : (notProvedReasons.length > 0 ? OUTCOME_NOT_PROVED : OUTCOME_PROVED);
   const exitCode = outcome === OUTCOME_FAILED ? EXIT_FAILED : (outcome === OUTCOME_NOT_PROVED ? EXIT_NOT_PROVED : EXIT_PROVED);
   const receipt = {
     schema_version: 'pdd.prove.v1', mode: 'verify', outcome, exit_code: exitCode, baseRef, baseSha, headSha,
+    dirty, proofScope,
     configSource: baseVerify.configured ? baseVerify.source : (testCommand ? 'auto-detected' : null), touchedFiles: diff.touchedFiles, changedSurfaces,
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
     test: testResult, paths: pathResults, notProvedReasons,
   };
 
+  const scopeSuffix = dirty ? ' (working tree, uncommitted changes)' : '';
   if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
-  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved: lint clean, tests passed, ${pathResults.length} verify path(s) green.\n`);
-  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved:\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
-  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed: ${failedErrors.length} check(s) failed.\n`); }
+  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green.\n`);
+  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix}:\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
+  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix}: ${failedErrors.length} check(s) failed.\n`); }
   return { exitCode, outcome, receipt };
 }

@@ -21,6 +21,8 @@ Contents:
 12. [Known limits](#12-known-limits)
 13. [Troubleshooting](#13-troubleshooting)
 14. [Report a problem](#14-report-a-problem)
+15. [Use your program for real with `pdd simulate`](#15-use-your-program-for-real-with-pdd-simulate)
+16. [Ask your agent in the PDD Simulator](#16-ask-your-agent-in-the-pdd-simulator)
 
 ## 1. Before you start
 
@@ -55,20 +57,10 @@ Do these steps in this order:
 | Step | Command | When |
 |---|---|---|
 | 1. Install the pdd command | `npm install -g @promptdriven/pdd` | Once on your machine |
-| 2. Set up your machine | `pdd setup` (or `npx skills add promptdriven/pdd -g`) | Once on your machine: installs `/pdd` globally and previews PDD Simulator MCP registration |
+| 2. Set up your machine | `pdd setup` | Once on your machine: installs `/pdd` globally and previews PDD Simulator MCP registration |
 | 3. Set up a repo | `pdd init` | Once in the top folder of each repository |
 
-### 2.1 Install the skill
-
-```sh
-cd your-project
-npx skills add promptdriven/pdd       # for this project
-npx skills add promptdriven/pdd -g    # for all your projects
-```
-
-This is the standard skills installer. It needs only Node.js. [Section 4](#4-the-pdd-skills) tells where the skill goes. Then do [step 5](#5-set-up-a-repo-and-use-the-skills).
-
-### 2.2 Install the pdd command
+### 2.1 Install the pdd command
 
 You need the pdd command for offline repo tools (`pdd init`, `pdd status`, `pdd lint`, `pdd prove`, `pdd update`, `pdd owner`, `pdd files`), interpreter commands (`pdd test`, `pdd simulate`, `pdd approve`), and headless Autopilot (`pdd autopilot`).
 
@@ -79,8 +71,6 @@ pdd --version   # prints 0.1.50
 which -a pdd    # the first line must be in your global npm or Volta bin folder
 ```
 
-`pdd setup` copies the `/pdd` skill to user folders, `pdd upgrade` updates a global npm or Volta `@promptdriven/pdd` installation and its `.pdd-skill.json`-marked skills, and normal CLI commands refresh existing `.pdd-skill.json`-marked user folders once per version without touching unmarked copies or symlinks.
-
 Important:
 
 - Always install and update `@promptdriven/pdd` (or `github:promptdriven/pdd` for a Git tag/branch).
@@ -88,6 +78,25 @@ Important:
 - Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace your pdd with it. You can see this with `npm outdated -g`.
 - If npm says `EEXIST` on `<prefix>/bin/pdd`, an unscoped `pdd` npm package still owns `bin/pdd` while PDD installs as `@promptdriven/pdd`. Remove the unscoped package first instead of passing `--force`: `npm uninstall -g pdd && npm install -g @promptdriven/pdd`.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager (such as Volta or nvm), or set your own npm prefix. Do not use `sudo`.
+
+### 2.2 Set up your machine (`pdd setup`)
+
+```sh
+pdd setup
+```
+
+`pdd setup` installs the global `/pdd` skill into user folders (marked with `.pdd-skill.json`) and previews PDD Simulator MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to apply previewed MCP registration without prompting, or `--skills-dir PATH` for a custom folder.
+
+**Alternative (skill-only installer, without MCP registration):**
+
+```sh
+npx skills add promptdriven/pdd -g --skill pdd    # for all your projects
+npx skills add promptdriven/pdd --skill pdd       # for one project only
+```
+
+[Section 4](#4-the-pdd-skills) lists where the skill goes. Next, run `pdd init` inside your repository ([Section 5](#5-set-up-a-repo-and-use-the-skills)).
+
+`pdd upgrade` updates a global npm or Volta `@promptdriven/pdd` installation and its `.pdd-skill.json`-marked user skill, and normal CLI commands refresh existing `.pdd-skill.json`-marked user folders once per version without touching unmarked copies or symlinks.
 
 ### 2.3 Start Autopilot on your repository
 
@@ -160,7 +169,8 @@ PDD exposes one skill: [`pdd`](../skills/pdd/SKILL.md), with co-located referenc
 | [`references/product.md`](../skills/pdd/references/product.md) | How to plan multi-part products with shared contracts |
 | [`references/ports-and-cli.md`](../skills/pdd/references/ports-and-cli.md) | Ports, interfaces, CLI programs, HTTP routes, and persistence |
 | [`references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md) | Screens, HTML rendering, app maps, and interactive simulation |
-| [`references/verification.md`](../skills/pdd/references/verification.md) | Real-path verification, `pdd.json` `verify.paths` Feature Map, `pdd prove`, and deliberate-break checks |
+| [`references/verification.md`](../skills/pdd/references/verification.md) | Real-path verification, `pdd.json` `verify.paths` Feature Map, `pdd prove`, and Deliberate-Break Probe |
+| [`references/formal.md`](../skills/pdd/references/formal.md) | Code-bound formal verification (3-tier stack, Z3 isolation, mutation control; loaded only for invariant-heavy work) |
 
 Where the skill goes:
 
@@ -412,7 +422,7 @@ npx skills remove pdd      # add -g for the global install
 Uninstall the pdd command, the skill that `pdd setup` copied, and its state:
 
 ```sh
-npm uninstall -g @promptdriven/pdd pdd
+npm uninstall -g @promptdriven/pdd
 rm -rf ~/.agents/skills/pdd
 rm -rf ~/.claude/skills/pdd
 rm -rf ~/.gemini/config/skills/pdd
@@ -447,7 +457,7 @@ If setup added MCP registration, remove only its `pdd` entry from `$CODEX_HOME/c
 | `pdd test` says that your GitHub account does not have PDD interpreter access | Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses, and wait for the approval. See [section 7.3](#73-when-a-check-does-not-run). |
 | `pdd test` or `pdd simulate` says `Please update pdd` | Run `pdd upgrade` (or `npm install -g @promptdriven/pdd && pdd setup`). |
 | `pdd test` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
-| `pdd approve is for a person at a terminal` | In strict mode, run the approval yourself in a normal terminal. In easy mode, your agent can record your actual chat approval with `--said -`. |
+| `pdd approve is for a person at a terminal` | In strict mode (`"strict_approvals": true`), run the approval yourself in a normal terminal. Otherwise, your agent can record your actual chat approval with `--said -`. |
 | `npm error code EEXIST` on `<prefix>/bin/pdd` | An unscoped `pdd` npm package owns `bin/pdd`. Run `npm uninstall -g pdd && npm install -g @promptdriven/pdd` (do not use `--force`). |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
 
@@ -457,7 +467,7 @@ Follow [Report a problem](ISSUES.md). It is for you and for your agent. It tells
 
 Do not paste tokens, passwords, Simulator links or private code.
 
-## Use your program for real with pdd simulate
+## 15. Use your program for real with `pdd simulate`
 
 Run `pdd simulate <story>` to open a shell with your program ready. Use `--cli` to print the PATH line instead, then type your program's commands in your
 own terminal, or run the printed absolute path. For example: `tipjar split 100 --people 3 --tip 18 --round-up`.
@@ -475,7 +485,7 @@ HTTP status, headers and body. Unknown routes return 404. The listener stays on 
 When the Story has an app map, open `http://127.0.0.1:8080/` to use its real Screen. Click **Open the app**
 if needed; opening and taps use the same simulation budget and saved data. See [`skills/pdd/references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md) for details.
 
-## Ask your agent in the PDD Simulator
+## 16. Ask your agent in the PDD Simulator
 
 Run `pdd simulate STORY` in your own terminal and keep pdd running. Without terminal stdout, plain `pdd simulate STORY` reads saved cases once and returns without discovering or connecting a local agent. An explicit `--agent NAME` connects even in the background; `--no-wait` skips the connection. The Simulator's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the interpreter. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. Suggested inputs are checked against the entry's schema. The agent fills directly on a supported page and runs only when it understands that you want the action to happen; otherwise you press **Run**. Actions use the simulation budget. Older pages keep manual **Fill fields** and **Run**.
 

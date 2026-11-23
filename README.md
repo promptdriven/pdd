@@ -2,22 +2,22 @@
 
 ## What PDD is
 
-In PDD, you write prompts and Stories. The prompts are the source of your program. The PDD interpreter runs the prompts with an AI that acts as the code, so you can check and try the program before any code exists. Then your agent writes the code from the approved prompts.
+In PDD, you write prompts and Stories first. Prompts are the source of truth for your owned modules; Stories describe what a person can do. The PDD interpreter runs prompts with an AI before any code exists so you can test and try the behavior early. Then your coding agent writes the code from the approved prompts and proves the real user path with `pdd prove`.
 
 ```mermaid
 flowchart LR
-  P["Prompt<br/>the source"] --> S["Story<br/>what a user can do"]
-  S --> C["Test<br/>pdd test"]
-  C --> T["Simulate<br/>pdd simulate"]
+  P["Prompt<br/>the source"] --> S["Story<br/>what a person can do"]
+  S --> L["Lint & Test<br/>pdd lint · pdd test"]
+  L --> T["Simulate<br/>pdd sim"]
   T --> A["Approve<br/>pdd approve"]
-  A --> K["Code<br/>from the prompts"]
+  A --> K["Build & Prove<br/>code · pdd prove"]
 ```
 
-PDD is the `pdd` command and a set of skills for your agent. Your agent writes the prompts, the Stories, the tests and the code. The PDD interpreter runs the checks and the simulation. In manual workflows, you approve. An explicit Autopilot auto setup and start can delegate ordinary gates; strict approvals and required human reviews still need a person.
+PDD is the `pdd` command and one `/pdd` skill (`$pdd` in Codex, `/pdd` in Claude Code) with on-demand references for your coding agent. In interactive workflows, you approve changed prompts and authorize pull requests. An explicit Autopilot auto setup and start can delegate ordinary gates; strict approvals and required human reviews still need a person.
 
 ## Install
 
-You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. Install Codex, Claude Code, Gemini CLI or Antigravity CLI to run PDD with your coding agent. Without `--agent`, pdd selects the first ready agent in that order. Codex and Claude status probes check for configured credentials; Gemini checks installation and leaves sign-in to the chat; Antigravity lists models for a signed-in account. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
+You need [Node.js](https://nodejs.org) 22.16.0 or newer (22.20.0+ for Autopilot), [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. Install Codex, Claude Code, Gemini CLI or Antigravity CLI to run PDD with your coding agent. Without `--agent`, pdd selects the first ready agent in that order. Remote `pdd test`, `pdd lint --remote`, and `pdd simulate` need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
 
 ```sh
 npm install -g @promptdriven/pdd
@@ -28,123 +28,17 @@ pdd init
 ```
 
 1. `npm install -g @promptdriven/pdd` installs the `pdd` command.
-2. `pdd setup` installs the global `/pdd` skill into `~/.agents/skills`, `~/.claude/skills` (cleaning retired marked skills and skipping duplicates when a Claude Code plugin is installed), and `~/.gemini/config/skills`, and previews Simulator MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to confirm previewed MCP registration without prompting, or `--skills-dir PATH` for a custom skill folder.
-3. If you use another skills installer, `npx skills add promptdriven/pdd -g --skill '*'` installs the skills globally.
-4. `pdd --version` prints `0.1.50`. When installed skills are older than pdd, it prints the update command on stderr.
-5. `pdd init` adds a 4-line PDD block to `CLAUDE.md` (else `AGENTS.md`) inside a repository and detects its language and test command, without editing root `.gitignore` (`.pdd/.gitignore` is managed automatically).
+2. `pdd setup` installs the global `/pdd` skill into `~/.agents/skills`, `~/.claude/skills` (cleaning marked retired skills and skipping duplicates when a Claude Code plugin is installed), and `~/.gemini/config/skills`, and previews Simulator MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to confirm previewed MCP registration without prompting, or `--skills-dir PATH` for a custom skill folder.
+3. If you prefer another skills installer, `npx skills add promptdriven/pdd -g --skill pdd` installs the `/pdd` skill globally (without MCP registration).
+4. `pdd --version` prints `0.1.50`. When an installed skill is older than pdd, it prints the update command on stderr.
+5. `pdd init` adds a 4-line PDD block to `CLAUDE.md` (else `AGENTS.md`) inside a repository and detects its language and test command without editing root `.gitignore` (`.pdd/.gitignore` is managed automatically).
 
-To update a global npm or Volta installation and its `.pdd-skill.json`-marked user skills in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. `pdd upgrade` installs `@promptdriven/pdd@<version>` from npm first with a GitHub tag fallback (using Volta's `npm` without `--prefix` on Volta installs), guards against mutating Git checkouts, PyPI `pdd-cli`, `pnpm`, `npx`, or local `node_modules` installs, and prints `npx skills add promptdriven/pdd -g --skill '*'` when unmarked copies are older. When a global install prints `npm error code EEXIST` on `<prefix>/bin/pdd`, remove the conflicting unscoped `pdd` package with `npm uninstall -g pdd && npm install -g @promptdriven/pdd`.
+To update a global npm or Volta installation and its `.pdd-skill.json`-marked user skill in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. `pdd upgrade` installs `@promptdriven/pdd@<version>` from npm first with a GitHub tag fallback (using Volta's `npm` without `--prefix` on Volta installs), guards against mutating Git checkouts, PyPI `pdd-cli`, `pnpm`, `npx`, or local `node_modules` installs, and prints `npx skills add promptdriven/pdd -g --skill '*'` when unmarked copies are older. When a global install prints `npm error code EEXIST` on `<prefix>/bin/pdd`, remove the conflicting unscoped `pdd` package with `npm uninstall -g pdd && npm install -g @promptdriven/pdd`.
 
 > [!IMPORTANT]
 > Do not run `npm install -g pdd` or `npm update -g`. The npm registry has a different package with the name `pdd`.
 
-## Autopilot on your own repository
-
-Autopilot works on the GitHub issues that you mark with a label. For each issue, it runs your agent in the background and opens one pull request. A fresh agent reviews the pull request, and Autopilot runs your full test suite on it. In `auto` mode, Autopilot merges the pull request when CI, the review and the suite pass. In `observe` mode, it does the same work and writes "would merge" on the pull request; a person merges. Required branch reviews, checks and strict approvals still apply.
-
-Use a repository that you own or can write to. Read access alone cannot create
-branches and pull requests or merge them. Fork a repository first if you need
-your own write access.
-
-1. Install PDD and its skills with the commands above. Check the tools, sign in
-   to GitHub, and set your Git name and email, because Autopilot makes commits:
-
-   ```sh
-   node --version
-   git --version
-   gh auth login
-   gh auth setup-git
-   git config --global user.name "Your Name"
-   git config --global user.email "you@example.com"
-   pdd --version
-   ```
-
-2. Install and sign in to one agent. For Codex:
-
-   ```sh
-   npm install -g @openai/codex
-   codex login
-   codex login status
-   ```
-
-   For Claude Code, use `npm install -g @anthropic-ai/claude-code`,
-   `claude auth login`, then `claude auth status --json`.
-
-3. Enter your repository, initialize PDD, and choose the Autopilot mode:
-
-   ```sh
-   cd your-repo
-   pdd init
-   pdd autopilot observe   # or: pdd autopilot auto
-   ```
-
-   Choose `observe` for a first try, or `auto` to let Autopilot merge when CI,
-   fresh review, and the full test suite pass. An empty `trust: []` still trusts
-   the owner and the users with write access. Explicit trust names add users via
-   `pdd autopilot trust NAME...`.
-
-4. Commit and push the repository block (`AGENTS.md` or `CLAUDE.md`) and
-   `pdd.json` if needed so GitHub and Autopilot jobs have them:
-
-   ```sh
-   git add pdd.json AGENTS.md
-   git commit -m "Set up PDD"
-   git push
-   ```
-
-   If you cannot push directly to the default branch, `pdd autopilot observe` or
-   `pdd autopilot auto` updates `pdd.json` on GitHub through the API or opens a
-   pull request for you to merge.
-
-5. Check the machine:
-
-   ```sh
-   pdd autopilot doctor
-   ```
-
-   Doctor checks the tools, sign-ins, permissions, setup, the `pdd.json` on
-   GitHub and interpreter access. It makes no GitHub writes or AI calls. A WARN
-   or FAIL line ends with a command that fixes it. Start runs the same doctor
-   first. Only a missing agent sign-in stops the start.
-
-6. Mark the issues for Autopilot, then start it:
-
-   ```sh
-   pdd autopilot add 12 15
-   pdd autopilot start --label pdd:autopilot
-   pdd autopilot status
-   ```
-
-   `pdd autopilot add` puts the label `pdd:autopilot` on the issues that you
-   name. Autopilot works only on open issues with that label, so it never takes
-   an issue that you did not choose. Without a label, `pdd autopilot start`
-   asks for one and starts nothing. You can add the label on GitHub later too.
-   Autopilot checks for work now and every 10 minutes, and works on a few
-   issues at a time; `pdd autopilot status` shows them. When an issue needs a
-   decision, Autopilot asks one question on the issue and adds
-   `pdd:needs-decision`. Answer in a comment, then remove the label.
-
-7. Keep the machine available. On Linux, a systemd user session is required.
-   `loginctl enable-linger` keeps timers available after logout. On macOS,
-   `caffeinate -i` can keep the machine awake while you work. Stop the repo's
-   timer when you finish:
-
-   ```sh
-   pdd autopilot stop
-   ```
-
-Linux tool installation commands use apt-get; use your distribution's package
-manager where needed. See the [CLI reference](docs/cli.md#autopilot-on-this-machine)
-for checks, settings, automatic approval scope, status and stop.
-
-## Team Runtime routing
-
-The standalone [Runtime issue router](scripts/README.md#runtime-issue-routing)
-routes reports about execution inside Runtime to a configured owner. Inputs to
-Runtime stay with PDD. It defaults to dry run; its GitHub Actions workflow runs
-only by manual dispatch and needs a prepared runner. It operates outside Autopilot.
-
-## The PDD loop
+## The PDD loop (your first Story in 5 minutes)
 
 The names `my-story`, `tests/my-story.json` and `NAME` are placeholders. Your names come from your project.
 
@@ -152,44 +46,42 @@ The names `my-story`, `tests/my-story.json` and `NAME` are placeholders. Your na
 
 Open your coding agent in your repo and invoke the single `/pdd` skill (`$pdd` in Codex, `/pdd` in Claude Code):
 
-```
+```text
 /pdd <the feature, bug, product plan, or small change in one or two sentences>
 ```
 
-`/pdd` inspects the repo with `pdd status --json` and routes your request cleanly across four modes:
+`/pdd` inspects the repo offline with `pdd status --json` and routes your request cleanly across four modes:
 
-| Mode | Use it for |
-|---|---|
-| `product` | Map a multi-part product and shared contracts ([product reference](skills/pdd/references/product.md)) |
-| `bug` | Reproduce a defect with failing-first tests, fix root cause, and verify |
-| `feature` | Author prompt, Story, tests, and implementation for new or changed product behavior |
-| `small-change` | Non-product edits only (docs, CI, config, lockfiles, test maintenance) with zero owned files |
+| Mode | Use it for | Prompt & Story? |
+|---|---|---|
+| `product` | Map a multi-part product and shared contracts ([product reference](skills/pdd/references/product.md)) | Product map, plan & contracts |
+| `bug` | Reproduce a defect with failing-first tests, fix root cause, and prove contrast | Update owning prompt if wrong; pure code bugs skip prompt edits |
+| `feature` | Author prompt, Story, tests, and implementation for new or changed behavior | Yes — prompt, Story & tests before code |
+| `small-change` | Non-product edits only (docs, CI, config, lockfiles, test maintenance) with zero owned/product files | None — skip prompts and Stories |
 
 All canonical guides live inside [`skills/pdd/references/`](skills/pdd/SKILL.md) (loaded on demand), including the [Prompting guide](skills/pdd/references/prompting.md), [Story guide](skills/pdd/references/stories.md), and [Verification guide](skills/pdd/references/verification.md).
 
-The agent writes these files before implementation:
+For a `feature` or prompt-level `bug`, the agent writes these files before implementation:
 
 | File | What it is |
 |---|---|
 | `prompts/NAME.prompt.md` | A prompt: the source of one part of the program. |
-| `user_stories/my-story.md` | A Story: one thing that a user can do, with numbered acceptance criteria. |
-| `tests/my-story.json` | The tests of that Story. |
-| `app-map.json` | Only for a program with a screen. It connects the screen to the prompts. |
+| `user_stories/my-story.md` | A Story: one thing that a person can do, with numbered acceptance criteria. |
+| `tests/my-story.json` | The scenario tests of that Story. |
+| `app-map.json` | Optional, only for multi-screen or timed UIs (single-screen UIs work with one plain-prose prompt). |
 
-You read the Stories and approve them in the chat. The expected values come from you and the Stories, not from a run.
+You read the Stories and approve changed prompts in the chat or terminal. Expected values come from you and the Stories, not from observed code output.
 
-In a chat, the agent opens a pull request only when you say yes. For autonomous unattended issue runs with headless workers, use `pdd autopilot start`.
-
-### 2. Test
+### 2. Lint and test prompts
 
 ```sh
 pdd lint
 pdd test
 ```
 
-`pdd lint` checks the format of the files, with 0 AI calls. `pdd test` runs the tests of every Story on the PDD interpreter. To check only some Stories, name them, for example `pdd test my-story other-story`. The output has this shape:
+`pdd lint` runs fast offline structural, SVG, and scenario checks with 0 AI calls and 0 network calls. `pdd test` runs the tests of every Story on the PDD interpreter (name specific Stories like `pdd test my-story` to scope it). The output has this shape:
 
-```
+```text
 Story        Test                    Result  Checks  Time
 My story     tests/my-story.json     passed  20/20   41.4 s
 Other story  tests/other-story.json  passed  34/34   89.1 s
@@ -205,156 +97,187 @@ Reports (anyone with a link can open it):
 | You see | It means |
 |---|---|
 | `✓` | Every check passed. |
-| `✗` / `FAILED` | A check failed. pdd shows the criterion, the expected value and the answer. Usually the prompt is wrong, and your agent fixes it. A person decides expected values. The agent may propose a change, and never makes it. |
+| `✗` / `FAILED` | A check failed. pdd shows the criterion, expected value, and actual answer. Usually the prompt is wrong, and your agent fixes it. A person decides expected values. |
 | `REFUSED` / `no verdict` | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. |
 | `STOPPED` | One test step took more than 10 minutes, and the server stopped it. Make the step smaller. |
 | `DRAFT` | A prompt is still a draft. A DRAFT pass is not an approval. |
-| A report link | A page with each step, check and answer. Anyone with the link can open it. It expires after 7 days. |
+| A report link | A page with each step, check, and answer. Anyone with the link can open it; it expires after 7 days. |
 
-Checks show `✓` when all passed and `✗` when a check failed. Without a failed check, pending work shows `running`, even beside a refused check. Busy checks show `busy` when the other checks passed or are also busy. Other refused, not-run or unknown checks show `no verdict`. Exit codes use this order: 3, 5, 4, 1, 0. When failed checks sit beside a higher exit code, pdd explains why.
+Checks show `✓` when all passed and `✗` when a check failed. Exit codes use this order: 3, 5, 4, 1, 0.
 
-### 3. Simulate
+### 3. Simulate (try before coding)
 
-`pdd simulate` (short: `pdd sim`) lets you use the program by hand in the PDD Simulator. There is no code: the interpreter runs the prompts.
+`pdd simulate` (short: `pdd sim`) lets you use the program by hand in the PDD Simulator before writing code.
 
 | Your program | Command | What you do |
 |---|---|---|
-| A screen | `pdd simulate STORY` | pdd opens the PDD Simulator in your browser. On the **Screen** tab, click **Open the app**, then use it. |
-| A command line | `pdd simulate STORY --cli` | pdd prints an `export PATH=…` line. Run that line, because pdd cannot change the PATH of your terminal. Then run your program's commands. |
-| An HTTP API | `pdd simulate STORY --serve PORT` | pdd serves the routes of the prompt at `http://127.0.0.1:PORT`. Send requests with `curl`. Ctrl-C stops the server. |
-| Anything else | `pdd simulate STORY` | On the **Form** tab of the Simulator, fill the fields and click **Run**. |
+| A screen | `pdd sim STORY` | Opens the PDD Simulator in your browser. On the **Screen** tab, click **Open the app**, then use it. |
+| A command line | `pdd sim STORY --cli` | Prints an `export PATH=…` line. Run it, then run your program's commands. |
+| An HTTP API | `pdd sim STORY --serve PORT` | Serves your prompt's routes at `http://127.0.0.1:PORT`. Send requests with `curl`. Ctrl-C stops the server. |
+| Anything else | `pdd sim STORY` | On the **Form** tab, fill the fields and click **Run**. |
 
-For a command line named `my-program`, and an API with a route `/api/items`:
+For a CLI named `my-program`, or an API with `/api/items`:
 
 ```sh
-pdd simulate my-story --cli
+pdd sim my-story --cli
 export PATH=/path/to/your-repo/.pdd/try/bin:"$PATH"
 my-program --help
 ```
 
 ```sh
-pdd simulate my-story --serve 8091
+pdd sim my-story --serve 8091
 curl http://127.0.0.1:8091/api/items
 ```
 
-The server keeps running, so send the requests from a second terminal. The command line and the API use the same simulation data.
+- **Budget:** A new simulation starts with 400 AI calls. Raise it in the Simulator or run `pdd sim STORY --new --max-calls 600`.
+- **Save a case:** Click **Save as test** in the Simulator, or run `pdd sim --save-last` after a `--cli` command.
+- **Keep the link private:** Anyone with a Simulator link can use it and spend its AI calls.
+- **Stop it:** Simulations end after 24 hours, or sooner with `pdd sim --stop STORY`.
+- **Ask your agent:** While `pdd sim` runs in your terminal, the Simulator's **Ask your agent** panel connects to your local Codex, Claude, or Gemini (`--agent NAME` to choose).
 
-Each command or request runs on the interpreter with no code. It takes about 10 to 20 seconds and uses AI calls from the simulation budget. A simulation runs one command at a time. Your agent can run the same commands after the PATH line, when it has network access and no sandbox that blocks files outside the repo.
+### 4. Approve prompts
 
-In the Simulator, the **Ask your agent** panel connects to an agent on your computer while `pdd simulate` runs in your terminal. It explains and fills fields. When you ask it to run an action, it runs it using the simulation budget; otherwise you press **Run**. To choose the agent, add `--agent NAME`.
-
-- **Budget.** A new simulation has 400 AI calls. For more, click **Raise the limit** in the Simulator, or start a new simulation with `pdd simulate STORY --new --max-calls 600`. `--new` starts with fresh data.
-- **Save a case.** Click **Save as test** in the Simulator, or run `pdd simulate --save-last` after a `--cli` command. pdd adds the case to the Story's test file.
-- **Keep the link private.** Anyone with a Simulator link can use it and spend its AI calls.
-- **Stop it.** A simulation ends after 24 hours. To stop it before that, run `pdd simulate --stop STORY`.
-
-### 4. Approve
-
-When the program does what you want, approve each prompt in chat or your terminal:
+When the behavior matches what you want, approve each changed prompt in your terminal or via chat:
 
 ```sh
 pdd approve prompts/NAME.prompt.md
 ```
 
-Show the gate, then reply to your agent in your own words. Your agent records your approval for the gate and all its draft prompts in one call. Questions and change requests keep the gate open.
+In chat, review the prompt diff your agent shows and reply in your own words; your agent records your reply with `pdd approve PROMPT --said - <<'PDD_SAID'`. Questions and change requests keep the prompt unapproved. See [Record a chat approval](docs/cli.md#record-a-chat-approval) for strict-mode and heredoc details.
 
-See [Record a chat approval](docs/cli.md#record-a-chat-approval) for safe commands, prompt snapshots and terminal or strict-mode approval.
+### 5. Build, prove, and open one PR
 
-### 5. Code space
+Your agent implements the code from the approved prompts, runs the native test suite against the real user path, runs `pdd lint --diff` and `pdd prove`, and verifies with an independent fresh verifier/reviewer:
 
-Code space is the PDD compiler: your agent writes the code from the approved prompts, and runs the prompt-space checks alongside native tests and `pdd prove`. Every workflow (`feature`, `bug`, `product`, and `small-change`) opens **one pull request**:
+```sh
+pdd lint --diff origin/main
+pdd prove --base origin/main
+```
 
-1. **Prompt space first:** author or update the prompts, Stories, and scenarios, check them with `pdd lint` and `pdd test` (and `pdd sim` for interactive screens), and pause for a 1-screen pre-code check.
-2. **Code space on the same branch:** write the code from the approved prompts, run the native test suite against the real user path, run `pdd lint --diff` and `pdd prove`, and verify with an independent fresh reviewer.
-
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [Prompting guide §5](skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
+- In interactive chat, your agent opens **one pull request** only when you ask (the only exception is `pdd product --through prompt-pr`, which explicitly stages a prompt PR first).
+- The `pdd` CLI has no merge command. In manual workflows, ask your agent to merge under [Prompting guide §5](skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges).
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `pdd setup [--yes] [--skills-dir PATH]` | Install laptop-wide PDD skills and preview Simulator MCP setup. |
+| `pdd setup [--yes] [--skills-dir PATH]` | Install laptop-wide `/pdd` skill and preview Simulator MCP setup. |
 | `pdd init` | Add the 4-line PDD block to `CLAUDE.md` (else `AGENTS.md`) and detect stack/tests. |
 | `pdd status [PATH...] [--changed] [--json]` | Compact offline overview of prompts, Stories, ownership, and `pdd.json` Feature Map. |
-| `pdd upgrade [--main]` | Update a global `@promptdriven/pdd` installation and refresh user PDD skills (`--main` installs pinned `main`). |
-| `pdd lint` | Check the format of the prompts, Stories and tests. 0 AI calls. |
-| `pdd test [STORY...]` | Run the tests of the Stories on the PDD interpreter. |
-| `pdd test --files` | List the files that a check sends. No network. |
-| `pdd test --read` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work. |
-| `pdd simulate STORY` | Open the Story in the PDD Simulator. |
-| `pdd simulate STORY --cli` | Run the program as a command line in your terminal. |
-| `pdd simulate STORY --serve PORT` | Serve the program as an HTTP API on localhost. |
-| `pdd simulate STORY --agent NAME` | Connect an agent to the **Ask your agent** panel. |
-| `pdd simulate STORY --new --max-calls N` | Start a new simulation with a limit of N AI calls. |
-| `pdd simulate --stop STORY` | Stop the Simulator link of a Story. |
-| `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
-| `pdd prove [--base REF]` | Run offline lint, diff checks, repository tests, and `verify.paths` recipes against REF (or `--test`/`--expect` bug contrast). |
-| `pdd autopilot start\|status\|logs` | Start, inspect, and follow headless Autopilot workers for opt-in GitHub issues. |
-| `pdd accounts` | Manage enrolled and shared Codex and Claude accounts in PDD Cloud, inspect 5-hour and weekly usage windows, and configure opt-in terminal auto-switch. |
-| `pdd help` | Show all commands. |
-| `pdd help prompting` | Show how to write a prompt, a Story and its test, and where the skill and Prompting guide are. |
+| `pdd lint [STORY...] [--diff [BASE]]` | Offline structural, SVG, scenario, and diff lint (0 AI, 0 network). Pass `--remote` for hosted lint. |
+| `pdd prove [--base REF]` | Run offline lint, diff checks, repo tests, and merge-base `verify.paths` recipes (or `--test`/`--expect` bug contrast). |
+| `pdd test [STORY...]` | Run Story tests on the PDD interpreter (`--files` previews uploads; `--read` reads saved results). |
+| `pdd simulate [STORY\|PROMPT.md]` | Try prompts interactively in the PDD Simulator (short: `pdd sim`; `--cli`, `--serve PORT`, `--stop`). |
+| `pdd approve PROMPT [--said WORDS]` | Review prompt diff and record approval (terminal y/N or `--said -`; strict mode requires terminal). |
+| `pdd update [FILE...] [--branch] [--check]` | Inspect changed code vs owning prompts offline. |
+| `pdd upgrade [--main]` | Update global `@promptdriven/pdd` and refresh marked user skill (`--main` tracks pinned `main`). |
+| `pdd product status\|next\|start` | Track multi-part product plans and prepare scoped `/pdd` run handoffs. |
+| `pdd autopilot doctor\|start\|status\|logs` | Preflight, start, inspect, and follow headless Autopilot workers. |
+| `pdd accounts` | Manage enrolled and shared Codex/Claude logins in PDD Cloud and optional shell auto-switch. |
+| `pdd help prompting` | Show the quick PDD authoring workflow and local guide paths. |
 
-The [CLI reference](docs/cli.md) has every command and option.
+Run `pdd --help` for the overview, `pdd <command> --help` for full options, or read the [CLI reference](docs/cli.md).
 
 ## Key ideas
 
-**Prompt space and code space.** Your program lives in prompt space first: the prompts, the Stories and the tests. You check it, try it and change it there. When it does what you want, you approve the prompts, and the code in code space follows them.
-
-**Stories.** A Story is one thing that a user can do. Its acceptance criteria are a numbered list that a person can check. The test file has at least one exact check for each criterion.
-
-**Small test steps.** Keep each test step small: one action, or a short run of about 10 actions. The server stops a step after 10 minutes.
-
-**Draft and approved.** A prompt starts as a draft. A draft can be checked and tried. New behavior needs approval from a person, or an applicable Autopilot delegation through the supported approval command. Strict approvals still need a person terminal. When an approved prompt changes, it goes back to draft.
-
-**AI-call budgets.** A budget is a limit, not a price. You are charged only for calls that run. A check gives each test file 12 calls for each step, at least 18 and at most 1000. A new simulation has 400 calls. `--max-calls N` sets another limit, from 1 to 1000, for a check or a new simulation.
-
-**Fakes.** The interpreter never touches your real database, files or services. The prompt declares each one as a port, the test gives its starting data, and the interpreter fakes it. See [Ports and CLI](skills/pdd/references/ports-and-cli.md).
-
-**Scoped uploads.** A check sends only the files that the selected Stories need. Each file must be visible to Git. pdd refuses files with secret-like names. `pdd test --files` shows the list.
+- **Prompt space and code space:** Your program lives in prompt space first (`prompts/*.prompt.md`, `user_stories/*.md`, `tests/*.json`). Check, simulate, and approve it there; code follows the approved prompts.
+- **Stories:** One cohesive user loop per Story (`<= 35` lines, `1–6` numbered acceptance criteria) with exact checks in its scenario JSON.
+- **Small test steps:** Keep each test step focused (one action or a short run; 10-minute server cap per step).
+- **Draft and approved:** Prompts start as drafts. New behavior needs human approval (or an applicable Autopilot delegation); editing an approved prompt returns it to draft.
+- **AI-call budgets:** Ceilings, not charges. Checks default to 12 calls/step (`18..1000`); new simulations start at 400 calls (`--max-calls 1..1000`).
+- **Fakes:** The interpreter never touches real databases or external services; prompts declare `<port>.<op>` ports and tests bind deterministic fakes ([Ports and CLI](skills/pdd/references/ports-and-cli.md)).
+- **Scoped uploads:** `pdd test` uploads only Git-visible files needed by the selected Stories and refuses secret-like names (`pdd test --files` previews).
 
 ## Access
 
-`pdd test`, remote `pdd lint`, `pdd simulate` and the Try tools in `pdd mcp` use the hosted PDD interpreter. The interpreter lets you in when PDD Cloud approves your GitHub account. To get access, sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the same GitHub account that `gh` uses. After the approval, access starts within 1 minute. For questions about access, [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Interpreter%20access%20for%20) with your GitHub login.
+`pdd test`, `pdd lint --remote`, `pdd simulate`, and the Try tools in `pdd mcp` use the hosted PDD interpreter with your GitHub login (`gh auth status`) once PDD Cloud approves your account. Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with that GitHub account; access activates within 1 minute of approval. For questions, [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Interpreter%20access%20for%20) with your GitHub login.
 
-The skills and the other commands run on your computer; `pdd lint --local` is offline.
+The `/pdd` skill and all other commands (`pdd setup`, `pdd init`, `pdd status`, `pdd lint`, `pdd prove`, `pdd owner`, `pdd files`, `pdd update`) run 100% locally offline.
+
+## Autopilot on your own repository
+
+Autopilot runs headless background workers on GitHub issues you mark with an opt-in label. For each issue, it opens one pull request, runs a fresh blind reviewer, runs your full test suite, and verifies the mechanical evidence contract (`pdd prove` + merge-base `verify.paths`). In `auto` mode, Autopilot merges the PR when CI, blind review, full tests, and the evidence contract pass. In `observe` mode, it runs the same checks and posts `"would merge"` for a person to merge. Required branch reviews, checks, and `strict_approvals` still apply.
+
+Use a repository you own or can write to (fork first if needed), with **Node.js 22.20.0 or newer**.
+
+1. Verify tools, GitHub login, and Git identity:
+
+   ```sh
+   node --version        # 22.20.0+ for Autopilot
+   git --version
+   gh auth login
+   gh auth setup-git
+   git config --global user.name "Your Name"
+   git config --global user.email "you@example.com"
+   pdd --version
+   ```
+
+2. Install and sign in to one coding agent (for Codex: `npm install -g @openai/codex && codex login && codex login status`; for Claude Code: `npm install -g @anthropic-ai/claude-code && claude auth login && claude auth status --json`).
+3. Initialize your repository and pick a mode (`observe` recommended first):
+
+   ```sh
+   cd your-repo
+   pdd init
+   pdd autopilot observe   # or: pdd autopilot auto
+   ```
+
+   An empty `trust: []` trusts the repo owner and write-access collaborators; add explicit logins with `pdd autopilot trust NAME...`.
+4. Commit and push your repo setup (`git add pdd.json AGENTS.md && git commit -m "Set up PDD" && git push`). If you cannot push directly to the default branch, `pdd autopilot observe|auto` updates `pdd.json` via GitHub API or opens a PR.
+5. Run read-only preflight checks:
+
+   ```sh
+   pdd autopilot doctor
+   ```
+
+6. Opt in issues and start the 10-minute timer:
+
+   ```sh
+   pdd autopilot add 12 15
+   pdd autopilot start --label pdd:autopilot
+   pdd autopilot status
+   pdd autopilot logs 12 -f
+   ```
+
+   When Autopilot needs a human decision, it comments one question and adds `pdd:needs-decision` (reply, then remove the label). Stop the timer with `pdd autopilot stop`. On Linux, `loginctl enable-linger` keeps user timers active after logout; on macOS, `caffeinate -i` keeps the machine awake.
+
+See the [CLI reference](docs/cli.md#autopilot-on-this-machine) for all options and safeguards.
 
 ## Cloud accounts
 
-`pdd accounts` keeps your Codex and Claude logins in PDD Cloud with envelope encryption and writes only short-lived stripped passes (`refresh_token: ""`) to your local `0600` config files so only PDD Cloud refreshes tokens. Inside `pdd` and `pdd autopilot`, steps lease an account automatically, isolate Codex steps in a disposable `0700` overlay folder, stay on the same account until a 5-hour or weekly window reaches 100%, switch to the ready account whose weekly window resets soonest, and never spend usage-reset credits. Plain terminal `codex` and `claude` sessions stay untouched unless you opt in with `pdd accounts auto on` (`pdd accounts auto off` removes the wrapper cleanly). See [Cloud accounts](docs/cli.md#cloud-accounts).
+`pdd accounts` stores enrolled Codex and Claude logins in PDD Cloud with envelope encryption and writes only short-lived stripped passes (`refresh_token: ""`) to local `0600` files so only PDD Cloud refreshes tokens. Inside `pdd` and `pdd autopilot`, steps lease an account automatically, isolate Codex steps in a disposable `0700` overlay folder, rotate when a 5-hour or weekly window reaches 100%, and never spend usage-reset credits. Plain terminal `codex` and `claude` sessions stay untouched unless you opt in with `pdd accounts auto on` (`pdd accounts auto off` removes the wrapper cleanly). See [Cloud accounts](docs/cli.md#cloud-accounts).
 
 ## When something goes wrong
 
 | You see | What to do |
 |---|---|
-| `Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.` (exit code 5) | PDD Cloud has not approved your GitHub account. See [Access](#access). |
-| `PDD Cloud could not confirm your access. Try again in a minute.` (exit code 5) | PDD Cloud could not check your account. Run the command again in a minute. |
-| `Please update pdd: …` | Your pdd is too old for the PDD interpreter. Run `pdd upgrade`, or do the install steps again. |
-| `npm error code EEXIST` on `<prefix>/bin/pdd` during global install | An unscoped `pdd` npm package owns `bin/pdd` while `@promptdriven/pdd` installs under `@promptdriven/pdd`. Run `npm uninstall -g pdd && npm install -g @promptdriven/pdd` (do not use `--force`). |
-| `REFUSED` / `no verdict` (exit code 3, 4 or 5) | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. Run `pdd lint` before a check. [Stories and scenario JSON](skills/pdd/references/stories.md) lists check and schema rules. |
-| `FAILED` (exit code 1) | Read the failed step and the report. A person decides expected values. The agent may propose a change, and never makes it. |
-| `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd test --read` later. Do not send the same check again. |
-| `STOPPED … took more than 10 minutes and was stopped.` | Make the test step smaller, then check that Story again. |
-| `This Try session is busy.` | A simulation runs one command at a time. Wait for the first command to finish. |
-| `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a simulation that you do not use, run `pdd simulate --stop STORY`. |
-| `This Try has ended` | The simulation used all its AI calls or its 24 hours. Run `pdd simulate STORY --new`. |
-| `Autopilot did not start: it works only on the issues that you mark with an opt-in label.` | Mark issues with `pdd autopilot add N`, then run `pdd autopilot start --label pdd:autopilot`. |
-| `pdd --version` does not print `0.1.50` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
+| `Your GitHub account does not have PDD interpreter access yet…` (exit 5) | Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with your `gh` GitHub account. See [Access](#access). |
+| `PDD Cloud could not confirm your access. Try again in a minute.` (exit 5) | Wait one minute and retry the command. |
+| `Please update pdd: …` | Run `pdd upgrade` (or re-run the install steps). |
+| `npm error code EEXIST` on `<prefix>/bin/pdd` | Remove the conflicting unscoped package: `npm uninstall -g pdd && npm install -g @promptdriven/pdd` (never `--force`). |
+| `REFUSED` / `no verdict` (exit 3, 4 or 5) | Read the reason under the line and run `pdd lint` first. See [Stories and scenario JSON](skills/pdd/references/stories.md). |
+| `FAILED` (exit 1) | Read the failed check and report. A person decides expected values. |
+| `UNKNOWN` or `Still running` (exit 3) | Run `pdd test --read` later; do not resend the same check. |
+| `STOPPED … took more than 10 minutes` | Split the test step into smaller steps and re-run. |
+| `This Try session is busy.` | Wait for the current simulation command to finish. |
+| `The runtime is busy` (exit 5) or `Too many Try links are open.` | Wait a few minutes or close unused sessions with `pdd sim --stop STORY`. |
+| `This Try has ended` | Simulation hit its call limit or 24-hour TTL; run `pdd sim STORY --new`. |
+| `Autopilot did not start: it works only on the issues that you mark with an opt-in label.` | Run `pdd autopilot add N`, then `pdd autopilot start --label pdd:autopilot`. |
+| `pdd --version` does not print `0.1.50` | Another `pdd` comes first on PATH. Run `"$(npm prefix -g)/bin/pdd" --version` for the exact fix line. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 
 ## Report a problem
 
-Follow [docs/ISSUES.md](docs/ISSUES.md). Your agent can follow it too, so you can ask your agent to report the problem.
+Follow [docs/ISSUES.md](docs/ISSUES.md) (your agent can follow it too):
 
-1. Run `pdd --version`. It must print `0.1.` and a number.
-2. Search the [open issues](https://github.com/promptdriven/pdd/issues). If an issue has the same problem, add a comment to it.
-3. If not, fill the [issue form](https://github.com/promptdriven/pdd/issues/new?template=bug.yml): one problem, the exact command and the output. Never paste tokens, Simulator links or private code.
+1. Run `pdd --version` (must print `0.1.` and a number).
+2. Search [open issues](https://github.com/promptdriven/pdd/issues) and comment if your issue already exists.
+3. Otherwise fill the [issue form](https://github.com/promptdriven/pdd/issues/new?template=bug.yml) with one problem, exact command, and output (never paste tokens, Simulator links, or private code).
 
 ## Links
 
-- [Documentation](docs/index.md): the [usage guide](docs/USAGE.md), [workflows](docs/workflows.md), the [CLI reference](docs/cli.md), and the [Prompting guide](skills/pdd/references/prompting.md).
-- [`skills/pdd/SKILL.md`](skills/pdd/SKILL.md): the single `/pdd` skill and co-located guides (`skills/pdd/references/`).
-- [The skills](skills/).
+- [Documentation](docs/index.md): [Usage guide](docs/USAGE.md), [Workflows](docs/workflows.md), [CLI reference](docs/cli.md), and [Prompting guide](skills/pdd/references/prompting.md).
+- [`skills/pdd/SKILL.md`](skills/pdd/SKILL.md): the `/pdd` skill and on-demand guides (`skills/pdd/references/`).
 - [Release notes](https://github.com/promptdriven/pdd/releases).
 - [Contributing](CONTRIBUTING.md).
 

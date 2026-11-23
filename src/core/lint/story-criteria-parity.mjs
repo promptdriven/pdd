@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // Layer-1 core check: verify every Story acceptance criterion has >=1 check in paired runtime JSON scenario(s).
 import { posix } from 'node:path';
 import { V1_SCENARIO_SCHEMA, criterionContentId, extractStoryCriteria } from '../../scenario-compile.mjs';

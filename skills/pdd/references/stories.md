@@ -53,24 +53,46 @@ Place `<slug>.json` in `tests/` or `test/` (use `tests/runtime/` or `test/runtim
 ```json
 {
   "entry_path": "prompts/todo.prompt.md",
-  "initial_world": {"kv": {"tasks": [{"id": 1, "title": "Buy milk", "done": false}]}},
+  "initial_world": {
+    "kv": {
+      "tasks": [
+        {"id": 1, "title": "Buy milk", "done": false},
+        {"id": 4, "title": "Call mom", "done": false}
+      ]
+    }
+  },
   "simulation": {
     "store.load": {"action": "key-value.get", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": null, "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": null}, "result_value_pointer": "/value"},
     "store.save": {"action": "key-value.put", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": "/value", "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": []}, "result_value_pointer": "/value"}
   },
   "steps": [
-    {"id": "done-1", "op": "main", "input": {"argv": ["done", "1"]}, "checks": {"1": [["result", "/exit_code", "=", 0], ["world", "/kv/tasks/0/done", "=", true]]}},
-    {"id": "missing", "op": "main", "input": {"argv": ["done", "9"]}, "checks": {"2": [["result", "/exit_code", "=", 1], ["calls", "store.save", "=", 0]]}}
+    {
+      "id": "done-4",
+      "op": "main",
+      "input": {"argv": ["done", "4"]},
+      "checks": {
+        "1": [["result", "/stdout", "=", "Done #4: Call mom\n"], ["result", "/exit_code", "=", 0], ["world", "/kv/tasks/1/done", "=", true]],
+        "2": [["world", "/kv/tasks/0/done", "=", false]]
+      }
+    },
+    {
+      "id": "missing-9",
+      "op": "main",
+      "input": {"argv": ["done", "9"]},
+      "checks": {
+        "3": [["result", "/stderr", "=", "todo: no task #9\n"], ["result", "/exit_code", "=", 1], ["calls", "store.save", "=", 0]]
+      }
+    }
   ]
 }
 ```
 
-## 4. Check targets, operators, schemas, and money/dates
+## 4. Check targets, operators, schemas, and dates
 
-- **4 targets:** `result`, `error` (shorthand `["error", "=", "code"]`), `world`, `calls` (never `output`), plus HTML shorthands (`["html_exists", "button#go"]`, `["html_text", "span#score", "=", "0"]`, `["html_attr", "button#go", "value", "=", "go"]`, `["html", "button", "labels_include", ["Go"]]` — HTML selectors MUST include a tag name). `input` is valid only as a `ref_target` reference source.
+- **4 targets:** `result`, `error` (shorthand `["error", "=", "code"]`), `world`, `calls` (never `output`), plus HTML shorthands (see [ui-and-screens.md §4](ui-and-screens.md#4-html-checks-and-simulator-rules)). `input` is valid only as a `ref_target` reference source.
 - **14 exact operators:** `equals` (`=`), `not_equals` (`!=`), `not_contains`, `count`, `one_of`, `all_in`, `equals_ignore_case`, `at_least` (`>=`), `at_most` (`<=`), `lt` (`<`), `lte`, `gt` (`>`), `gte`, `integer_relation` (plus `html_exists`, `len>=`, `len<=`).
 - **2 supplemental operators** (pair with at least one exact check on the same criterion): `contains` (`contains_all`), non-HTML `exists`.
 - **Exact integer conservation (`integer_relation`):** compare `left` vs `right` (`eq`/`le`/`ge`) across `result`, `input`, and `world` with `field`, `ref_target`/`ref_path`, `integer`, `sum`, `product`.
 - **Explicit `$contract` / `state_schema` rules:** top-level `"type": "object"`, explicit `properties`, `required`, `"additionalProperties": false`; single-string `type` (nullable uses `oneOf`); arrays require `items`; `$ref`, `$defs`, `anyOf`, `if` are refused.
-- **Money & dates:** integer minor units (e.g. `cents: 1099`), explicit rounding in `## Domain decisions`, ISO-8601 strings, clock injected as input or `clock.now` port.
+- **Money & dates:** follow [prompting.md §4](prompting.md#4-behavioral-preservation-and-numerical-meaning) for integer minor units and rounding; use ISO-8601 date strings and inject clocks as input or a `clock.now` port.
 - **Commands:** `pdd lint` (offline deterministic check), `pdd lint --remote` (hosted whole-program cross-prompt lint, 0 AI calls), `pdd test [STORY...]`, `pdd test --read <batch> --details`.

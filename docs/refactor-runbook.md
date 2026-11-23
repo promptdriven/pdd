@@ -54,12 +54,14 @@ Declare one of three structural classes in every cleanup pull request:
   file's ownership header on extracted modules and re-exporting compatibility bindings when needed:
   ```js
   // src/orders-pricing.mjs
-  // Generated from prompts/orders.prompt.md (sha256: <same-hash-as-orders.mjs>).
+  // Prompt: prompts/orders.prompt.md
+
   export function calculateOrderTotal(items, taxRate) { /* ... */ }
   ```
   ```js
   // src/orders.mjs
-  // Generated from prompts/orders.prompt.md (sha256: <same-hash-as-orders.mjs>).
+  // Prompt: prompts/orders.prompt.md
+
   export { calculateOrderTotal } from './orders-pricing.mjs';
   ```
   Because prompt contracts do not change in this first pull request, no prompt re-approval is
@@ -181,9 +183,9 @@ security or error contracts.
 Agents copy the comment density of surrounding files, and stale comments can mislead future edits.
 Keep only four comment kinds in source code:
 
-1. **Generated ownership headers** on line 1 (or line 2 in executable scripts that start with a `#!` shebang on line 1):
-   `// Generated from prompts/<module>.prompt.md (sha256: <hash>)`. `pdd owner` reads the first 4 KiB—never
-   strip this header or place `import` statements above it (commentless files use `pdd-bindings.json`).
+1. **Prompt ownership headers** inside the first 4 KiB (after any shebang `#!`, directive, or SPDX line, followed by a blank line):
+   `// Prompt: prompts/<module>.prompt.md`. `pdd owner` reads the first 4 KiB—never
+   strip this header or place `import` statements above it (commentless files use `pdd-bindings.json`; legacy `Generated from` headers stay readable).
 2. **Shebangs** on line 1 of executable scripts, such as `#!/usr/bin/env node`.
 3. **License notices** required by your project or third-party code.
 4. **Non-obvious external or OS invariants** forced by an operating system, language runtime,
@@ -198,8 +200,7 @@ change history:
 - If the owning `.prompt.md` already records the rule behind a comment, delete the duplicate comment
   in a Class A pull request.
 - If a comment captures a real domain decision that is absent from the owning prompt, add that rule
-  under `## Domain decisions` in a dedicated prompt pull request first, update the ownership header
-  hash, and delete the code comment afterward.
+  under `## Domain decisions` in the owning prompt before updating code, keep the `// Prompt:` header intact, and delete the code comment afterward.
 - Delete changelog narration (`// Added for #128`, `// Phase 2`, `// Temporary workaround`) and
   comments that repeat what the code already says. Run `pdd lint --local` (zero AI calls) to check
   local prompt and source-comment hygiene.

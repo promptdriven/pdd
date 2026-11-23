@@ -50,6 +50,11 @@ reason: <concrete physical effect bound ports cannot fake, e.g. fsync, live sock
 ---
 ```
 
+- Every `kind: native-only` prompt is a complete executable boundary specification (never a thin stub). Include `## Dependencies` linking the checkable domain prompt(s) it wires (never the reverse) and three parts:
+  1. **Boundary & runtime contract:** concrete DDL/SQL/HTTP/wire schemas (declarative `sql`/`ddl`/`openapi`/`yaml`/`json`/`protobuf`/`graphql` fences are exempt from fence-length limits), locking/concurrency rules, CLI/OS/TTY boundaries, and exact `<port>.<op>` bindings matching linked checkable prompts.
+  2. **Error mapping & failure behavior:** how driver, transport, permission, sandbox, timeout, and malformed-input failures map fail-closed to observable exit codes, HTTP statuses, or domain errors.
+  3. **Real-host verification cases:** concrete non-mocked probes exercising real binaries, drivers, local servers, OS sandboxes, `/dev/tty`, multi-turn CLI state, and payloads `> 4 KiB`.
+
 ## 4. Behavioral preservation and numerical meaning
 
 - **Behavioral refinement** preserves named behavior and public interfaces while stating permitted variation. **Drop-in replacement** additionally preserves invocation forms, representation, identity, and side-effect ordering. With source alone and no chosen mode, default to behavioral refinement.

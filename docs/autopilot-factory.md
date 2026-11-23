@@ -38,7 +38,7 @@ Run the offline factory from a source checkout:
 scripts/factory-test.sh
 ```
 
-The factory runs the native CLI, the workflow runner and the durable stores in a
+The factory runs the native CLI, Autopilot core engine, and durable stores in a
 disposable project, with real Git commits, branches, worktrees and a local bare
 origin. Only GitHub, the interpreter and agent reasoning are fake. It checks the
 native check plan: a full batch with a target Story and an unrelated baseline

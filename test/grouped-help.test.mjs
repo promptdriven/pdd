@@ -30,31 +30,29 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   const allLines = baseline.replace(/\n$/, '').split('\n');
   assert.ok(allLines.length < 90, `expected < 90 lines in root help, got ${allLines.length}`);
 
-  // Leads with description, usage, and practical Quick start examples
+  // Leads with description, usage, and concise numbered Quick start
   assert.equal(allLines[0], 'PDD: prompt-driven development for your coding agent.');
   assert.equal(allLines[2], 'Usage: pdd <command> [options]');
   assert.equal(allLines[4], 'Quick start:');
-  assert.match(baseline, /Quick start:\n  pdd setup\b[\s\S]*?\n  pdd init\b[\s\S]*?\n  pdd status\b[\s\S]*?\n  pdd test\b[\s\S]*?\n  pdd simulate\b/);
+  assert.match(baseline, /Quick start:\n  1\. pdd setup\b[\s\S]*?\n  2\. pdd init\b[\s\S]*?\n  3\. \/pdd <task>[\s\S]*?\n  4\. pdd prove\b/);
 
-  // Human-first group ordering: Core PDD workflow before Cloud accounts, Product & dependency graph, Autopilot, Metrics
+  // Human-first group ordering: Core PDD workflow before Product & graph, Autopilot, Cloud accounts, Metrics
   const coreIdx = baseline.indexOf('Core PDD workflow:');
-  const accountsIdx = baseline.indexOf('Cloud accounts (pdd accounts --help):');
-  const productIdx = baseline.indexOf('Product & dependency graph (pdd product --help):');
+  const productIdx = baseline.indexOf('Product & graph (pdd product --help):');
   const autopilotIdx = baseline.indexOf('Autopilot (pdd autopilot --help):');
-  const metricsIdx = baseline.indexOf('Metrics, shell & help (pdd metrics --help):');
-  assert.ok(coreIdx > 0 && coreIdx < accountsIdx, 'Core PDD workflow comes before Cloud accounts');
-  assert.ok(accountsIdx < productIdx, 'Cloud accounts comes before Product & dependency graph');
-  assert.ok(productIdx < autopilotIdx, 'Product & dependency graph comes before Autopilot');
-  assert.ok(autopilotIdx < metricsIdx, 'Autopilot comes before Metrics, shell & help');
+  const accountsIdx = baseline.indexOf('Cloud accounts (pdd accounts --help):');
+  const metricsIdx = baseline.indexOf('Metrics, shell & help:');
+  assert.ok(coreIdx > 0 && coreIdx < productIdx, 'Core PDD workflow comes before Product & graph');
+  assert.ok(productIdx < autopilotIdx, 'Product & graph comes before Autopilot');
+  assert.ok(autopilotIdx < accountsIdx, 'Autopilot comes before Cloud accounts');
+  assert.ok(accountsIdx < metricsIdx, 'Cloud accounts comes before Metrics, shell & help');
 
   // Core commands come right at the top, not buried behind metrics/internals
-  assert.ok(baseline.indexOf('  pdd setup [--yes]') < baseline.indexOf('  pdd metrics'));
-  const initIdx = baseline.indexOf('  pdd init', coreIdx);
-  const statusIdx = baseline.indexOf('  pdd status [PATH...]', coreIdx);
-  assert.ok(initIdx > coreIdx && initIdx < accountsIdx);
-  assert.ok(statusIdx > coreIdx && statusIdx < accountsIdx);
-  assert.ok(baseline.indexOf('  pdd autopilot logs [ISSUE] [-f]') > autopilotIdx);
-  assert.ok(baseline.includes('  pdd --version | -V | pdd -VV   Show CLI version (and interpreter build).'));
+  assert.ok(baseline.indexOf('  1. pdd setup') < baseline.indexOf('  pdd metrics'));
+  const statusIdx = baseline.indexOf('  pdd status [--changed]', coreIdx);
+  assert.ok(statusIdx > coreIdx && statusIdx < productIdx);
+  assert.ok(baseline.indexOf('  pdd autopilot status|logs') > autopilotIdx);
+  assert.ok(baseline.includes('  pdd --version | -V | -VV   Show CLI version (and interpreter build).'));
 
   // No duplicate approval heredoc blocks or stale removed-engine migration note on root help
   assert.doesNotMatch(baseline, /<<'PDD_SAID'/);
@@ -69,7 +67,7 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   }
 
   // Preserves Focused help guidance and installed PDD skill / Prompting guide paths
-  assert.match(baseline, /Focused help: run pdd <command> --help/);
+  assert.match(baseline, /Run pdd <command> --help for full options/);
   assert.match(baseline, /Skill: \/opt\/pdd\/skills\/pdd\/SKILL\.md/);
   assert.match(baseline, /Prompting guide: \/opt\/pdd\/skills\/pdd\/references\/prompting\.md/);
 });
@@ -83,7 +81,11 @@ test('3496: focused family and command help exposes complete options, defaults, 
     const expectedForms = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.slice(4).split(/\s+/)[0] === family);
     assert.ok(expectedForms.length > 0, `manifest has forms for ${family}`);
     for (const entry of expectedForms) {
-      assert.ok(res.stdout.includes(`  ${entry.form}  ${entry.description}`), `${family} --help includes ${entry.form}`);
+      assert.ok(res.stdout.includes(`  ${entry.form}\n`), `${family} --help includes ${entry.form}`);
+    }
+    // Wrapped descriptions keep subcommand help readable instead of multi-hundred-char single lines
+    for (const descLine of res.stdout.split('\n').filter(l => l.startsWith('    '))) {
+      assert.ok(descLine.length <= 86, `${family} --help description line too wide (${descLine.length}): "${descLine}"`);
     }
   }
 

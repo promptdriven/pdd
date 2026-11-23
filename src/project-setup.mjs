@@ -9,7 +9,7 @@ const END = '<!-- pdd:end -->';
 
 export const PDD_BLOCK = [
   START,
-  'This project uses PDD — edit the owning `.prompt.md` before changing owned code, and verify with `pdd status`, `pdd lint`, and `pdd test`.',
+  'This project uses PDD — edit the owning `.prompt.md` before changing owned code, and verify with `pdd status`, `pdd lint`, `pdd test`, and `pdd prove`.',
   'Invoke `/pdd` in Claude Code or `$pdd` in Codex (first time? `npm i -g @promptdriven/pdd && pdd setup`).',
   END,
 ].join('\n');

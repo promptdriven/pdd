@@ -1,4 +1,3 @@
-// Generated from prompts/test/autopilot-factory.prompt.md.
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createGithubRepoFake} from '../github-repo-fake.mjs';

@@ -7,9 +7,11 @@ import { execFile as cbExecFile, spawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { OUTCOME_NOT_PROVED, OUTCOME_PROVED, runProve } from '../../core/prove.mjs';
+import { OUTCOME_FAILED, OUTCOME_NOT_PROVED, OUTCOME_PROVED, runProve } from '../../core/prove.mjs';
+import { readSafeUtf8 } from '../../core/lint/diagnostics.mjs';
 import { loadVerifyConfig, matchVerifyPaths } from '../../core/verify-paths.mjs';
-import { computeCanonicalDigest, isProtectedPath } from '../gates/evidence-contract.mjs';
+import { isLintableStoryPath } from '../../story-lint.mjs';
+import { computeCanonicalDigest } from '../gates/evidence-contract.mjs';
 import {
   buildPostReviewSandboxEnv,
   loadAutopilotTestEnv,
@@ -321,11 +323,24 @@ export async function collectLiveEvidenceContract({
     recipeDigest,
   };
 
-  // 4. Parse head/base structured test reports & run G3 polyglot diffTestReports when both exist.
-  const effectiveHeadReport = headReport ?? (nonEmpty(suiteLog) ? suiteLog : null);
-  const parsedHead = effectiveHeadReport ? parseStandardTestReport(effectiveHeadReport, detectedRunner?.reportFormat ?? 'auto') : { ok: false, cases: [] };
+  // 4. Parse head/base structured test reports (reading merge-base configured verify.report when present)
+  // & run G3 polyglot diffTestReports when both exist.
+  const strictMode = hasVerifyPaths || strictWithoutVerifyPaths === true;
+  const readConfiguredReport = (treeDir) => {
+    if (!baseVerify.report || !nonEmpty(treeDir)) return null;
+    try { return readSafeUtf8(treeDir, baseVerify.report); } catch { return null; }
+  };
+  const resolvedHeadReport = headReport !== null && headReport !== undefined
+    ? headReport
+    : (baseVerify.report ? readConfiguredReport(headTree) : (nonEmpty(suiteLog) ? suiteLog : null));
+  const resolvedBaseReport = baseReport !== null && baseReport !== undefined
+    ? baseReport
+    : (baseVerify.report ? readConfiguredReport(baseTree) : null);
+  const parsedHead = nonEmpty(resolvedHeadReport)
+    ? parseStandardTestReport(resolvedHeadReport, detectedRunner?.reportFormat ?? 'auto')
+    : { ok: false, cases: [] };
   let reportDiff = null;
-  if (baseReport && effectiveHeadReport) {
+  if (nonEmpty(resolvedBaseReport) && nonEmpty(resolvedHeadReport)) {
     const sharedMeta = {
       baseSha: cleanBaseTip,
       policyDigest: trustedPolicyDigest,
@@ -336,8 +351,8 @@ export async function collectLiveEvidenceContract({
       format: detectedRunner?.reportFormat ?? 'auto',
     };
     reportDiff = diffTestReports({
-      baseReport,
-      headReport: effectiveHeadReport,
+      baseReport: resolvedBaseReport,
+      headReport: resolvedHeadReport,
       baseMeta: sharedMeta,
       headMeta: sharedMeta,
       approvedRemovals: Array.isArray(job?.approvedTestRemovals) ? job.approvedTestRemovals : [],
@@ -354,6 +369,9 @@ export async function collectLiveEvidenceContract({
         source: 'harness',
       });
     }
+  } else if (strictMode && (Boolean(baseVerify.report) || headReport !== null && headReport !== undefined)) {
+    // Missing, empty, or unreadable configured/supplied test report MUST fail closed as `unknown`, never green.
+    testResults.push({ id: 'report:unreadable', status: 'unknown', source: 'harness' });
   }
   if (reportDiff) {
     for (const id of reportDiff.missingIds) expectedTestIds.push(id);
@@ -398,9 +416,11 @@ export async function collectLiveEvidenceContract({
     };
   }
 
-  // 6. Execute live `pdd prove` when merge-base `verify.paths` is configured; otherwise emit explicit advisory `Not proved`.
+  // 6. Execute live `pdd prove` when merge-base `verify.paths` is configured; otherwise emit explicit advisory `Not proved`
+  // with zero forged `proved` receipts and zero fabricated `humanApprovedPaths`.
   let proveResult = null;
   let proveOutcome = OUTCOME_NOT_PROVED;
+  let proveReasons = [];
   const receipts = [];
   let touchedPaths = [];
   const requiredCapabilitiesByPath = {};
@@ -440,6 +460,14 @@ export async function collectLiveEvidenceContract({
       provePorts,
     );
     proveOutcome = proveResult?.outcome ?? OUTCOME_NOT_PROVED;
+    const rawNotProved = Array.isArray(proveResult?.receipt?.notProvedReasons) ? proveResult.receipt.notProvedReasons : [];
+    const rawLintErrors = Array.isArray(proveResult?.receipt?.lint?.errors) ? proveResult.receipt.lint.errors : [];
+    const rawDiffErrors = Array.isArray(proveResult?.receipt?.diff?.errors) ? proveResult.receipt.diff.errors : [];
+    const testFailedReason = proveResult?.receipt?.test && proveResult.receipt.test.ok === false
+      ? [`pdd prove test suite failed (exit ${proveResult.receipt.test.exitCode ?? 'null'}): ${proveResult.receipt.test.summary || ''}`.trim()]
+      : [];
+    proveReasons = [...rawLintErrors, ...rawDiffErrors, ...testFailedReason, ...rawNotProved].filter(nonEmpty);
+
     touchedPaths = matched.map(m => m.id);
     for (const m of matched) requiredCapabilitiesByPath[m.id] = [...(m.needs ?? [])];
 
@@ -467,9 +495,26 @@ export async function collectLiveEvidenceContract({
     }
     const anyMissingCap = receipts.find(r => r.outcome === 'missing_capability');
     const anyFailed = receipts.find(r => r.outcome === 'failed');
+    // Overall receipt outcome MUST strictly honor `proveOutcome`; NEVER stamp `proved` when `pdd prove` returned Failed or Not proved.
     const overallOutcome = proveOutcome === OUTCOME_PROVED
       ? 'proved'
-      : (anyMissingCap ? 'missing_capability' : (anyFailed ? 'failed' : (suite?.state === 'pass' ? 'proved' : 'failed')));
+      : (anyMissingCap ? 'missing_capability' : 'failed');
+    if (proveOutcome === OUTCOME_FAILED && !anyFailed) {
+      receipts.push({
+        ...expectedBinding,
+        writtenBy: 'harness',
+        pathId: 'pdd-prove',
+        testProfile: 'pdd-prove',
+        command: effectiveSuiteCmd,
+        toolchain,
+        capability: null,
+        outcome: 'failed',
+        artifactDigest: computeCanonicalDigest({ proveOutcome, proveReasons }),
+      });
+    } else if (proveOutcome === OUTCOME_NOT_PROVED && !anyMissingCap && !anyFailed && !gapCheck) {
+      gapCheck = { missingPathIds: [], unprovedAcIds: [], flags: ['INSUFFICIENT_SCOPE'] };
+      requireGapCheck = true;
+    }
     stampReceipt = {
       ...expectedBinding,
       ...(touchedPaths.length ? { pathIds: touchedPaths } : {}),
@@ -480,46 +525,46 @@ export async function collectLiveEvidenceContract({
       outcome: overallOutcome,
       artifactDigest: computeCanonicalDigest({
         proveOutcome,
+        proveReasons,
         paths: provePaths.map(p => ({ id: p.id, status: p.status, exitCode: p.exitCode ?? null })),
         unmappedSurfaces,
       }),
     };
   } else {
-    // No merge-base verify.paths configured: produce an explicit advisory `Not proved` live evidence record
-    // AND a real bound 13-field harness receipt for the executed suite so evaluateEvidenceContract + stamping run live.
-    const suiteOutcome = suite?.state === 'pass' ? 'proved' : 'failed';
-    const suiteReceipt = {
-      ...expectedBinding,
-      writtenBy: 'harness',
-      testProfile: 'full-suite',
-      command: effectiveSuiteCmd,
-      toolchain,
-      capability: null,
-      outcome: suiteOutcome,
-      artifactDigest: computeCanonicalDigest({
-        suiteCmd: effectiveSuiteCmd,
-        suiteState: suite?.state ?? 'unknown',
-        verifyPathsConfigured: false,
-        proveOutcome: OUTCOME_NOT_PROVED,
-        parsedTestCount: parsedHead.ok ? parsedHead.cases.length : 0,
-      }),
-    };
-    receipts.push(suiteReceipt);
-    stampReceipt = suiteReceipt;
+    // No merge-base verify.paths configured: remain explicitly `Not proved` with zero forged `proved` receipt.
+    proveReasons = ['No merge-base verify.paths Feature Map configured in pdd.json.'];
+    if (strictWithoutVerifyPaths === true) {
+      gapCheck = { missingPathIds: [], unprovedAcIds: [], flags: ['INSUFFICIENT_SCOPE'] };
+      requireGapCheck = true;
+    }
   }
 
-  const strictMode = hasVerifyPaths || strictWithoutVerifyPaths === true;
-  const advisoryProtectedPaths = !strictMode ? cleanFiles.filter(f => isProtectedPath(f)) : [];
-  const humanApprovedPaths = [
-    ...(Array.isArray(job?.humanApprovedPaths) ? job.humanApprovedPaths : []),
-    ...advisoryProtectedPaths,
-  ];
+  // Never manufacture or infer human approvals for protected paths; only genuine caller/job approvals count.
+  const humanApprovedPaths = Array.isArray(job?.humanApprovedPaths) ? [...job.humanApprovedPaths] : [];
+
+  // Detect whether changed Stories in this PR carry numbered acceptance criteria so missing frozenAcs fail closed in strict mode.
+  let changedStoryHasAcs = false;
+  if (strictMode && headTree && !nonEmpty(job?.acNotApplicableReason)) {
+    for (const rel of cleanFiles) {
+      if (!isLintableStoryPath(rel)) continue;
+      const storyText = readSafeUtf8(headTree, rel);
+      if (typeof storyText === 'string' && /^##\s+Acceptance(?:\s+criteria)?\b/im.test(storyText) && /^\s*\d+[.)]\s+\S/m.test(storyText)) {
+        changedStoryHasAcs = true;
+        break;
+      }
+    }
+  }
+  const frozenAcs = Array.isArray(job?.frozenAcs) ? job.frozenAcs : [];
+  const requireFrozenAcs = frozenAcs.length > 0
+    || job?.requireFrozenAcs === true
+    || (strictMode && !nonEmpty(job?.acNotApplicableReason) && (job?.hasAcceptanceCriteria === true || changedStoryHasAcs));
 
   return {
     source: 'live-production',
     verifyPathsConfigured: hasVerifyPaths,
     advisory: !strictMode,
     proveOutcome,
+    proveReasons,
     proveReceipt: proveResult?.receipt ?? null,
     reportDiff,
     oracleResult,
@@ -530,8 +575,8 @@ export async function collectLiveEvidenceContract({
     contractInput: {
       changedFiles: cleanFiles,
       humanApprovedPaths,
-      frozenAcs: Array.isArray(job?.frozenAcs) ? job.frozenAcs : [],
-      requireFrozenAcs: Array.isArray(job?.frozenAcs) && job.frozenAcs.length > 0,
+      frozenAcs,
+      requireFrozenAcs,
       touchedPaths,
       receipts,
       expectedBinding,

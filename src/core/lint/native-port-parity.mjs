@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // Lean #3574 native-only port parity check: YAML ports[] + canonical ## Ports + <stem>.<op> precision & recall.
 import { formatTeachingDetail } from './diagnostics.mjs';
 import {

@@ -43,7 +43,10 @@ export function headerEntries(content) {
       if (fm && canonicalPath(fm[1]) && !rows.has(fm[1])) rows.set(fm[1], { prompt: fm[1], sha256: null });
     }
   }
-  for (const line of lines.filter(line => line.length <= LINE)) {
+  let inFence = false;
+  for (const line of lines) {
+    if (/^\s*(?:```|~~~)/.test(line)) { inFence = !inFence; continue; }
+    if (inFence || line.length > LINE) continue;
     const match = HEADER_PARTS.exec(line);
     if (match && canonicalPath(match[2]) && !rows.has(match[2])) rows.set(match[2], { prompt: match[2], sha256: match[4] ?? match[7] ?? null });
   }

@@ -39,11 +39,12 @@ Start with `# <Product name>: plan` (optional `Through: prompt-pr|code` before t
 
 - Name cross-part boundary operations in `What crosses` using dotted `<part>/<prompt>.<op>` or `<prompt>.<op>` tokens so `pdd lint` and `pdd product status` catch unwired operations.
 - Planned-run issues carry `<!-- pdd-product: run=RUN -->` on its own line (case-sensitive).
-- **Whole-product integration & wiring contracts:** Do not stop at siloed per-part modules or per-part KV stores. Specify in `product/plan.md` and `kind: native-only` integration prompts:
-  1. **Shared persistence schema:** unified relational schema, foreign keys, and migration ownership (never disconnected per-part ad-hoc KV databases).
-  2. **Transport & auth perimeter:** real HTTP/RPC authentication middleware, session/revocation enforcement, CSRF/`Origin` validation, and server-side clocks (never trusting forged auth decisions or caller-supplied timestamps).
-  3. **CLI-to-server wiring & Day-0 bootstrap:** real client-to-server transport (`--api-url` / HTTP calls, not pre-seeded local files) and a Day-0 startup/bootstrap command.
-  4. **Unmocked end-to-end journey recipe:** prove cross-part integration on the integrated branch with at least one unmocked end-to-end journey recipe in `pdd.json` `verify.paths`.
+- **Completion target (`Through:`):** By default, each planned run delivers one implementation PR (`Through: code`). Set `Through: prompt-pr` (or pass `--through prompt-pr`) only when a multi-part product explicitly stages prompt-only PRs ahead of implementation PRs.
+- **Whole-product integration & wiring contracts (where applicable to the product's architecture):** Do not stop at siloed per-part modules or disconnected stubs. Specify in `product/plan.md` and `kind: native-only` integration prompts:
+  1. **Shared persistence:** unified storage/schema and migration ownership when parts share state (avoid disconnected per-part ad-hoc stores).
+  2. **Transport & auth perimeter:** real authentication/authorization, session/revocation enforcement, CSRF/`Origin` validation, and server-side clocks for networked APIs or services.
+  3. **Client-to-server wiring & Day-0 bootstrap:** real client-to-server transport and a documented startup/bootstrap command when parts communicate across processes.
+  4. **Unmocked end-to-end journey recipe:** prove cross-part integration on the integrated branch with at least one unmocked cross-part journey recipe in `pdd.json` `verify.paths` (executed by `pdd prove`).
 
 ## 4. Shared contracts (`contracts/*.md`)
 
@@ -52,10 +53,6 @@ Start with `# <Product name>: plan` (optional `Through: prompt-pr|code` before t
 - `contracts/world.md` defines a key table (`Key`, `What it holds`, `Writer`, `Readers`, `How it is written`). Each key has one writer. Put shared seed data in `contracts/seed-world.json`.
 - Reference schemas with `{"$contract": "contracts/records.json#/defs/order"}` and seed worlds with `{"$seed": "contracts/seed.json", "set": {...}}`.
 
-## 5. `kind: native-only` boundary prompt contract
+## 5. `kind: native-only` boundary specs
 
-Every `kind: native-only` adapter prompt is a complete executable specification (not a thin stub). Include YAML frontmatter (`kind: native-only`, `reason`), `## Dependencies` linking the checkable domain prompt(s) it wires (never the reverse), and:
-
-1. **Boundary & runtime contract:** concrete DDL/SQL/HTTP/wire schemas (declarative `sql`/`ddl`/`openapi`/`yaml`/`json`/`protobuf`/`graphql` blocks are exempt from fence-length limits), locking/concurrency rules, CLI/OS/TTY boundaries, and exact `<port>.<op>` bindings matching linked checkable prompts.
-2. **Error mapping & failure behavior:** how driver, transport, permission, sandbox, timeout, and malformed-input failures map fail-closed to observable exit codes, HTTP statuses, or domain errors.
-3. **Real-host verification cases:** concrete non-mocked probes exercising real binaries, database drivers, local servers, OS sandboxes, `/dev/tty`, multi-turn CLI state, and payloads `> 4 KiB`.
+Follow [prompting.md §3](prompting.md#3-dependency-declarations-and-kind-native-only) for `kind: native-only` frontmatter, dependency inversion, boundary contracts, error mapping, and real-host verification cases.

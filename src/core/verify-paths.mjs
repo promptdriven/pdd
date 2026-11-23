@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/prove.prompt.md
+
 // Universal G2 Feature Map (`verify.test`, `verify.paths[]`) schema parser, glob matcher, and open capability prober.
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
@@ -356,7 +358,7 @@ function recipeCoversCrossPartIntegration(recipe, parts, folderByPart) {
  * Also fails closed when product/plan.md + (product/map.md or contracts/*.md) exist alongside >=2 subdirs
  * under prompts/, src/, or services/ yet fewer than 2 parts could be parsed.
  */
-export function inspectMultiPartIntegrationGuard(root, verifyConfig) {
+export function inspectMultiPartIntegrationGuard(root, verifyConfig, { executedPathResults = null, changedSurfaces = null } = {}) {
   const cleanRes = { applicable: false, parts: [], covered: true, reason: null };
   if (!root || typeof root !== 'string') return cleanRes;
   let realRoot;
@@ -385,17 +387,36 @@ export function inspectMultiPartIntegrationGuard(root, verifyConfig) {
     return { applicable: false, parts, covered: true, reason: null };
   }
   const recipes = Array.isArray(verifyConfig?.paths) ? verifyConfig.paths : [];
-  const covered = recipes.some(recipe => recipeCoversCrossPartIntegration(recipe, parts, folderByPart));
-  if (covered) return { applicable: true, parts, covered: true, reason: null };
-  const detail = formatTeachingDetail({
-    invariant: `multi-part product has >=2 parts in product/plan.md (${parts.join(', ')}) but no unmocked cross-part integration recipe in pdd.json verify.paths`,
-    fix: `Add a verify.paths recipe in pdd.json with "scope": "integration" (covering ${parts.slice(0, 2).join(' and ')} or product/plan.md) that runs an unmocked cross-part integration test`,
-    rerun: 'pdd prove',
-  });
-  return {
-    applicable: true,
-    parts,
-    covered: false,
-    reason: `pdd.json:1 [multi-part-integration-missing] ${detail}`,
-  };
+  const integrationRecipes = recipes.filter(recipe => recipeCoversCrossPartIntegration(recipe, parts, folderByPart));
+  if (integrationRecipes.length === 0) {
+    const detail = formatTeachingDetail({
+      invariant: `multi-part product has >=2 parts in product/plan.md (${parts.join(', ')}) but no unmocked cross-part integration recipe in pdd.json verify.paths`,
+      fix: `Add a verify.paths recipe in pdd.json with "scope": "integration" (covering ${parts.slice(0, 2).join(' and ')} or product/plan.md) that runs an unmocked cross-part integration test`,
+      rerun: 'pdd prove',
+    });
+    return {
+      applicable: true,
+      parts,
+      covered: false,
+      reason: `pdd.json:1 [multi-part-integration-missing] ${detail}`,
+    };
+  }
+  if (Array.isArray(executedPathResults) && Array.isArray(changedSurfaces) && changedSurfaces.length > 0) {
+    const integrationIds = new Set(integrationRecipes.map(r => r.id));
+    const ranIntegration = executedPathResults.some(r => integrationIds.has(r.id) && r.status === 'proved');
+    if (!ranIntegration) {
+      const detail = formatTeachingDetail({
+        invariant: `multi-part product (${parts.join(', ')}) changed production surfaces (${changedSurfaces.join(', ')}) without executing a passing cross-part integration recipe (${[...integrationIds].join(', ')})`,
+        fix: 'Expand the cross-part integration recipe `when` globs in pdd.json so it executes for touched product surfaces',
+        rerun: 'pdd prove',
+      });
+      return {
+        applicable: true,
+        parts,
+        covered: false,
+        reason: `pdd.json:1 [multi-part-integration-not-executed] ${detail}`,
+      };
+    }
+  }
+  return { applicable: true, parts, covered: true, reason: null };
 }

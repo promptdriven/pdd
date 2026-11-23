@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // Native-only prompt contract completeness check (`native-only-contract-incomplete`).
 import { isMarkdownTableSeparator, isNativeOnlyPrompt, scanMarkdownLinesAndFences, stripPromptMetadataPreservingLines } from './prompt-metadata.mjs';
 import { DECLARATIVE_SCHEMA_FENCE_LANGS } from './prompt-rules.mjs';

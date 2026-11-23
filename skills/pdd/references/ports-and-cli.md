@@ -6,7 +6,7 @@ Inject outside-world boundaries (databases, filesystem, HTTP, clocks, randomness
 
 - **3-Port Adoption Rule:** Adopt an existing legacy module in place with a `.prompt.md` only when it has **`<= 3` external ports** and no direct ORM/SDK singletons. If it has more than 3 ports or tangled SDK state, extract the pure decision core into a small clean PDD module (*Functional Core, Imperative Shell*) and leave the outer wiring as a thin adapter.
 - **Ambient telemetry carve-out:** Non-behavioral `logger`, `metrics`, and `tracing` calls do **not** need port mocking unless observability output *is* part of the user contract.
-- **Dependency direction:** Never list a `kind: native-only` adapter under `## Dependencies` of a checkable prompt. Invert the dependency so the adapter imports/links the checkable domain prompt.
+- **Dependency direction:** Follow [prompting.md §3](prompting.md#3-dependency-declarations-and-kind-native-only) — invert dependencies so `kind: native-only` adapters link checkable prompts, never the reverse.
 
 ## 2. Simulation port bindings (`"simulation"` in scenario JSON)
 

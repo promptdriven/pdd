@@ -732,21 +732,36 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
   assert.deepEqual(vRes.receipt.changedSurfaces, [], 'pdd.json must not be classified as a production surface');
   assert.match(vRes.receipt.test.summary, /12 passed in 0\.42s/, `expected summary tail, got: ${vRes.receipt.test.summary}`);
 
-  // 3. Bug-contrast --overlay strictly scopes overlayPaths to the requested glob
-  const bcRepo = initGitRepo(t, 'pdd-prove-overlay-strict-');
+  // 3. Bug-contrast --overlay unions matched fixtures WITH changed test files so fixture overlays never drop the regression test
+  const bcRepo = initGitRepo(t, 'pdd-prove-overlay-union-');
   mkdirSync(join(bcRepo, 'test'), { recursive: true });
+  mkdirSync(join(bcRepo, 'data'), { recursive: true });
   writeFileSync(join(bcRepo, 'lib.mjs'), 'export const val = () => 1;\n');
   writeFileSync(join(bcRepo, 'test', 'a.test.mjs'), "import assert from 'node:assert/strict'; import { val } from '../lib.mjs'; assert.equal(val(), 1);\n");
-  writeFileSync(join(bcRepo, 'test', 'b.test.mjs'), "import assert from 'node:assert/strict'; import { val } from '../lib.mjs'; assert.equal(val(), 1);\n");
   commitAll(bcRepo, 'base');
-  execFileSync('git', ['checkout', '-q', '-b', 'fix-both'], { cwd: bcRepo });
+  execFileSync('git', ['checkout', '-q', '-b', 'fix-with-fixture'], { cwd: bcRepo });
   writeFileSync(join(bcRepo, 'lib.mjs'), 'export const val = () => 2;\n');
-  writeFileSync(join(bcRepo, 'test', 'a.test.mjs'), "import assert from 'node:assert/strict'; import { val } from '../lib.mjs'; assert.equal(val(), 2, 'EXPECTED_A');\n");
-  writeFileSync(join(bcRepo, 'test', 'b.test.mjs'), "import assert from 'node:assert/strict'; import { val } from '../lib.mjs'; assert.equal(val(), 2, 'EXPECTED_B');\n");
+  writeFileSync(join(bcRepo, 'data', 'expected.json'), '{"value":2}\n');
+  writeFileSync(join(bcRepo, 'test', 'a.test.mjs'), "import assert from 'node:assert/strict'; import { readFileSync } from 'node:fs'; import { val } from '../lib.mjs'; const exp = JSON.parse(readFileSync('data/expected.json', 'utf8')).value; assert.equal(val(), exp, 'EXPECTED_A');\n");
   const ov = runProve(
-    { cwd: bcRepo, base: 'main', test: `${nodeBin} test/a.test.mjs`, expect: 'EXPECTED_A', overlay: 'test/a.test.mjs', json: true },
+    { cwd: bcRepo, base: 'main', test: `${nodeBin} test/a.test.mjs`, expect: 'EXPECTED_A', overlay: 'data/**', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
   assert.equal(ov.exitCode, EXIT_PROVED, JSON.stringify(ov.receipt));
-  assert.deepEqual(ov.receipt.overlayPaths, ['test/a.test.mjs'], '--overlay must not union unrelated changed test files');
+  assert.deepEqual(ov.receipt.overlayPaths, ['data/expected.json', 'test/a.test.mjs'], '--overlay must union fixture globs with changed test files');
+
+  // 4. Verify mode records dirty/proofScope accurately and reports timeouts as Not proved with --timeout hint
+  assert.equal(vRes.receipt.dirty, true);
+  assert.equal(vRes.receipt.proofScope, 'working-tree');
+  const timedOutProve = runProve(
+    { cwd: repo, base: 'main', timeoutMinutes: 2, json: true },
+    {
+      stdout: makeSink(),
+      stderr: makeSink(),
+      spawnSync: () => ({ status: null, stdout: '', stderr: '', error: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }) }),
+    },
+  );
+  assert.equal(timedOutProve.exitCode, EXIT_NOT_PROVED);
+  assert.equal(timedOutProve.outcome, OUTCOME_NOT_PROVED);
+  assert.ok(timedOutProve.receipt.notProvedReasons.some(r => /timed out.*--timeout/i.test(r)));
 });

@@ -61,15 +61,30 @@ function pddOwned(dest) {
 }
 
 function copySkill(source, parent, name, version, sum) {
-  const dest = join(parent, name), staging = join(parent, `.${name}.pdd-install-${process.pid}`);
+  const dest = join(parent, name);
+  const staging = join(parent, `.${name}.pdd-install-${process.pid}`);
+  const backup = join(parent, `.${name}.pdd-backup-${process.pid}`);
   mkdirSync(parent, { recursive: true });
+  let movedBackup = false;
   try {
     rmSync(staging, { recursive: true, force: true });
+    rmSync(backup, { recursive: true, force: true });
     cpSync(source, staging, { recursive: true });
     writeFileSync(join(staging, MARKER), `${JSON.stringify({ package: 'pdd', version, digest: sum })}\n`);
-    rmSync(dest, { recursive: true, force: true });
+    if (existsSync(dest)) {
+      renameSync(dest, backup);
+      movedBackup = true;
+    }
     renameSync(staging, dest);
-  } finally { rmSync(staging, { recursive: true, force: true }); }
+    if (movedBackup) rmSync(backup, { recursive: true, force: true });
+  } catch (error) {
+    if (movedBackup && !existsSync(dest) && existsSync(backup)) {
+      try { renameSync(backup, dest); } catch { /* Best-effort rollback */ }
+    }
+    throw error;
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
   return dest;
 }
 

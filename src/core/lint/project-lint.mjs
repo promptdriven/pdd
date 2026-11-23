@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // Single-pass PDD-files-only project lint orchestrator (Layer-1 Core: ZERO autopilot/, ZERO runtime-seam/).
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
@@ -285,7 +287,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
         filePath: storyPath, line: problem.line, order: 10, code: problem.code, category: 'Story hygiene',
         defaultSeverity: STORY_HARD_ERROR_RULES.has(problem.code) ? 'error' : 'warn',
         detail: problem.message,
-        fix: `Rewrite ${storyPath}:${problem.line} in user-observable terms (keep code internals in .prompt.md)`,
+        fix: problem.fix || `Update ${storyPath}:${problem.line} to satisfy Story hygiene rule "${problem.code}" (see \`pdd help prompting\`)`,
       });
     }
     if (lintConfig.customRules.length) rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: storyPath, kind: 'story', rawText: content }));

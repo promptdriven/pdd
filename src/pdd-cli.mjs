@@ -107,12 +107,32 @@ const staleLine = ({ found, stale, staleSkills = [] }, version, cwd) => {
 };
 const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));
 const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '', ...PUBLIC_HELP_TEXT.promptingLines, '', ...packageLines(packageRoot).slice(1)].join('\n');
+function wrapHelpDescription(text, width = 76, indent = '    ') {
+  const out = [];
+  for (const rawLine of String(text ?? '').split('\n')) {
+    if (!rawLine.trim()) { out.push(''); continue; }
+    // Preserve short code/heredoc lines (like `pdd approve ... <<'PDD_SAID'`) verbatim without re-wrapping.
+    if (/^(?:pdd\s|<|PDD_SAID$)/.test(rawLine)) { out.push(`${indent}${rawLine}`); continue; }
+    let line = '';
+    for (const word of rawLine.trim().split(/\s+/)) {
+      if (!line) { line = word; continue; }
+      if (line.length + 1 + word.length <= width) line += ` ${word}`;
+      else { out.push(`${indent}${line}`); line = word; }
+    }
+    if (line) out.push(`${indent}${line}`);
+  }
+  return out;
+}
 export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
   if (prefix.length > 0) {
     const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) =>
       prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
-    return [PUBLIC_HELP_TEXT.heading, '', ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-      ...PUBLIC_HELP_TEXT.closingLines].join('\n');
+    const blocks = rows.flatMap(({ form, description }, index) => [
+      ...(index ? [''] : []),
+      `  ${form}`,
+      ...wrapHelpDescription(description),
+    ]);
+    return [PUBLIC_HELP_TEXT.heading, '', ...blocks].join('\n');
   }
   return [
     PUBLIC_HELP_TEXT.heading, '',
@@ -437,7 +457,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
         if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm: interactive ? confirm : undefined, interactive, yes })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
-      line(stdout, 'Done! Use /pdd in Claude Code or $pdd in Codex. Run `pdd init` inside a repo to add the 4-line PDD block.');
+      if (code === 0) line(stdout, 'Done! Use /pdd in Claude Code or $pdd in Codex. Run `pdd init` inside a repo to add the 4-line PDD block.');
       return code;
     }
     case 'init': {
@@ -535,6 +555,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
       if (plan.options['--remote'] === true && plan.options['--local'] === true) {
         line(stderr, `Use either --local or --remote with pdd ${NAMES.lint}, not both.`);
+        return 2;
+      }
+      if (plan.options['--max-calls'] !== undefined && plan.options['--remote'] !== true) {
+        line(stderr, `Use --max-calls only with pdd ${NAMES.lint} --remote (default pdd ${NAMES.lint} runs offline with 0 AI calls).`);
+        return 2;
+      }
+      if (plan.options['--timeout'] !== undefined && plan.options['--remote'] !== true && plan.options['--codex'] !== true) {
+        line(stderr, `Use --timeout only with pdd ${NAMES.lint} --remote or pdd ${NAMES.lint} --codex.`);
         return 2;
       }
       const needsRemoteOrCompiler = Boolean(

@@ -1,4 +1,3 @@
-// Generated from prompts/test/autopilot-factory.prompt.md.
 import assert from 'node:assert/strict';
 import {cpSync,mkdtempSync,mkdirSync,readFileSync,realpathSync,writeFileSync,rmSync,existsSync,readdirSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';

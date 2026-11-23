@@ -10,6 +10,9 @@
           "src/pdd-cli.mjs",
           "src/command-catalog.mjs",
           "src/argument-parser.mjs",
+          "src/project-setup.mjs",
+          "src/agent-mcp-setup.mjs",
+          "src/shared/skills-install.mjs",
           "src/core/status.mjs",
           "src/core/changed-map.mjs",
           "src/update-sync.mjs",
@@ -31,7 +34,7 @@
       },
       {
         "id": "accounts",
-        "name": "P1 Accounts PTY harness, pool rotation and zero-mutation isolation",
+        "name": "P1 Accounts offline PTY harness and zero-mutation isolation (live rotation requires live host)",
         "when": [
           "bin/pdd-codex.mjs",
           "bin/pdd-claude.mjs",

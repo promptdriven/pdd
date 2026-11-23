@@ -7,65 +7,61 @@ metadata:
 
 # PDD
 
-In PDD, three concepts drive every change: **Prompt** (`prompts/*.prompt.md`), **Story** (`user_stories/*.md`), and **`pdd test` / `pdd sim`**. Prompts are the source of truth for owned modules; code implements them.
+In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned modules, **Stories** (`user_stories/*.md`) state observable user behavior, and deterministic harness tools (`pdd lint`, `pdd test`, `pdd sim`, `pdd prove`) own the facts while you own the method.
 
-## Step 0 — Inspect first and choose mode
+## Step 0 — Orient first and pick mode
 
-1. Run `pdd status --json` to inspect prompts, Stories, ownership, and the repository Feature Map (`pdd.json` `verify.paths`). If `pdd` is not installed yet, inspect `prompts/`, `user_stories/`, `pdd.json`, and `CLAUDE.md`/`AGENTS.md` directly. Never nag about `pdd init` here; suggest `pdd init` once *after* delivering the first prompt-backed win when `has_pdd_block` is `false`.
-2. Pick the mode in strict fail-safe precedence (`product` → `bug` → `feature` → `small-change`):
-   - **`product`** — Multi-part roadmap, contracts, or `product/plan.md`. Read [references/product.md](references/product.md).
+1. Run `pdd status --json` to inspect prompts, Stories, ownership, and the Feature Map (`pdd.json` `verify.paths`). If `pdd` is not installed yet, inspect `prompts/`, `user_stories/`, `pdd.json`, and `CLAUDE.md`/`AGENTS.md` directly. Suggest `pdd init` once *after* delivering the first prompt-backed win when `has_pdd_block` is `false`.
+2. Pick mode in strict fail-safe order (`product` → `bug` → `feature` → `small-change`):
+   - **`product`** — Multi-part roadmap, shared contracts, or `product/plan.md`. Load [references/product.md](references/product.md).
    - **`bug`** — Defect, stack trace, or broken existing product behavior/code.
-   - **`feature`** — Any new/changed behavior OR touching product code (`src/`, `app/`, `lib/`, `packages/`), owned or unowned.
-   - **`small-change`** *(strictly last)* — Allowed **only** when every touched path is non-product (docs, guides, specs, CI, config, lockfiles, test maintenance) **and** `0` prompt-owned or product-code files are touched (confirm with `pdd status --changed` or `pdd owner`) — including docs-only issues that describe a defect.
-3. **Hybrid rule:** Bug + Feature → reproduce the defect first (`bug`), then clarify only the new behavior branch (`feature`).
-4. *(Optional UX hint)* For multi-step features or bugs, keep a brief progress list; skip it on `small-change`. Real readiness comes strictly from deterministic outputs (`pdd lint`, `pdd test`, native tests, and `pdd prove`).
+   - **`feature`** — New or changed behavior, OR touching any product code (`src/`, `app/`, `lib/`, `packages/`), owned or unowned.
+   - **`small-change`** *(strictly last)* — Allowed **only** when every touched path is non-product (docs, guides, specs, CI, config, lockfiles, test maintenance) **and** `0` prompt-owned or product-code files are touched (verify with `pdd status --changed` or `pdd owner`), including docs-only issues describing a defect.
+3. **Hybrid rule:** Bug + Feature → reproduce and fix the defect first (`bug`), then clarify only the new behavior (`feature`).
 
-## Step 1 — Explore and clarify (design check, max 2 rounds)
+## Step 1 — Explore and clarify consequential forks
 
-- Explore existing code, prompts, tests, and ownership *before* asking anything. Settle convention-decided details silently as stated defaults.
-- Skip clarifying questions when `0` high-blast-radius forks exist (public API/schema, UX flow, security/data loss, or >30% rework).
-- Batch 3–4 real forks in one message with **bold recommended defaults** (*"Reply `ok` for defaults, or override by number"*). Hard cap: **max 2 rounds** on single features (reserve deeper design trees for `product`).
-- **Tool-agnostic & headless-safe:** Use native structured question UI (`ask_question`, `AskUserQuestion`, `request_user_input`) **only** when available and interactive. Never block headless or Autopilot runs — pick recommended defaults and log them.
+- Read the relevant code, prompts, tests, and ownership *before* asking questions. Settle convention-decided details silently as stated defaults.
+- Skip clarifying questions when there are no consequential forks (public API/schema, UX flow, security/data loss, or major rework).
+- When real forks exist, batch them concisely with **bold recommended defaults** (*"Reply `ok` for defaults, or override by number"*). Keep interactive design checks brief (reserve deeper planning trees for `product`).
+- **Interactive vs. headless:** Use structured question UI (`ask_question`, `AskUserQuestion`, `request_user_input`) only when available and interactive. In headless or Autopilot runs, follow `src/autopilot/job-rules.md` for real human blockers; for non-blocking defaults, choose the safest option and record it.
 
-## Step 2 — Author Story, Prompt, and scenarios
+## Step 2 — Author Story, Prompt, and scenarios before code
 
-- **Root fix + missing test:** Always fix both the root defect and the test/guard that missed it.
-- **Bugs:** Check ownership first. State `Defect:` and `Not caught because:`. If the owning prompt is already right (a pure code bug), skip Step 3's pre-code pause and move straight to Red→Green TDD (write failing regression test first on unpatched code → show exact failure → fix → show pass).
-- **Features and prompt bugs:** Load [references/prompting.md](references/prompting.md) and [references/stories.md](references/stories.md) on demand. Load [references/ports-and-cli.md](references/ports-and-cli.md) for external ports/CLIs and [references/ui-and-screens.md](references/ui-and-screens.md) for UI screens.
-- Keep **100% Truth**: a prompt owns 100% of its file with a top-of-file `// Prompt: <path>` header (first 4 KiB, followed by a blank line). Hybrid brownfield PRs may pair clean PDD modules with surgical unowned legacy wiring verified natively.
-- Run offline `pdd lint` first, then batch scenarios in `pdd test` (inspect saved receipts with `pdd test --read --details`). Expected values come from the Story and the person — never weaken a criterion or test to force a pass.
+- **Root fix + missing guard:** Always fix both the defect and the test or guard that missed it.
+- **Pure code bugs:** Check ownership first and state `Defect:` and `Not caught because:`. If the owning prompt is already right (a pure code bug), skip Step 3's pre-code pause and go straight to Red→Green TDD (failing regression test on unpatched code → fix → pass).
+- **Features and prompt bugs:** Load [references/prompting.md](references/prompting.md) and [references/stories.md](references/stories.md) on demand (plus [references/ports-and-cli.md](references/ports-and-cli.md) for external ports/CLIs and [references/ui-and-screens.md](references/ui-and-screens.md) for UI screens).
+- Keep **100% Truth**: an owned file's `.prompt.md` covers 100% of that file with a top-of-file `// Prompt: <path>` header (first 4 KiB, followed by a blank line). Hybrid brownfield PRs may pair clean PDD modules with surgical unowned legacy wiring verified natively.
+- Run offline `pdd lint` first, then `pdd test` (inspect receipts with `pdd test --read --details`). Expected values come from the Story and the person — never weaken a criterion or test to force a pass.
 
-## Step 3 — Pre-code check and always 1 PR
+## Step 3 — Pre-code check, prompt approval, and 1 PR
 
-- Pause right before writing implementation code with a 1-screen plain-English Story/cases check unless the person explicitly says *"all the way"* (pure code bugs skip this pause).
-- For UI features, recommend `pdd sim` so the person can try the live screen before coding.
-- Always open **1 PR** (never 2 stacked PRs). Never merge unless explicitly requested by the person.
+- Before writing implementation code, pause with a 1-screen plain-English Story/cases check unless the person said *"all the way"* (pure code bugs and `small-change` skip this pause). For UI work, recommend `pdd sim` so the person can try the live screen first.
+- Record the person's approval for changed prompts via `pdd approve PROMPT` (see [references/prompting.md §5](references/prompting.md#5-expected-values-approvals-and-merges)).
+- Deliver **1 PR** when authorized to open a PR (never 2 stacked PRs; the only exception is `pdd product --through prompt-pr`, which explicitly stages a prompt PR first). Never merge unless explicitly requested by the person.
 
-## Step 4 — Build, test the real user path, and verify
+## Step 4 — Build, prove the real user path, and verify
 
-Read [references/verification.md](references/verification.md) before finalizing implementation and review:
+Load [references/verification.md](references/verification.md) before finalizing implementation and review (and [references/formal.md](references/formal.md) only for invariant-heavy work):
 
-- **Test the real user path:** Exercise the actual user-facing surface (real CLI invocation, local server/browser flow, or real integration boundary — never mocked-only stubs). When adding or changing a user-facing surface, keep the repository Feature Map (`verify.paths` in `pdd.json`) up to date.
-- **Native tests:** Translate Story criteria 1-to-1 into Testing Trophy interface/integration tests in the repo's native test runner (with unchanged-state assertions on negative rules). Require Red→Green TDD specifically for bug fixes. Include spec-derived property tests for parsers, serializers, state machines, sorting/graphs, math/quotas, or untrusted inputs.
-- **Exit check:** Run offline `pdd lint --diff`, native suites, live local smoke checks (ask before touching personal credentials), and **`pdd prove`** (`Proved` / `Failed` / `Not proved`). Always disclose `Not proved:` honestly for anything not verified live.
+- **Prove the real user path:** Exercise the real user-facing surface (CLI subprocess, local server/browser, or real integration boundary — never mocked-only stubs) and keep `pdd.json` `verify.paths` current when adding or changing a surface.
+- **Native tests:** Cover every Story criterion 1-to-1 in the repo's native runner (with unchanged-state checks on negative rules). Require Red→Green TDD on bug fixes.
+- **Exit check:** Run offline `pdd lint --diff`, native tests, safe live local smoke checks (ask before touching personal credentials), and **`pdd prove`** (`Proved` / `Failed` / `Not proved`). Always disclose `Not proved:` honestly.
 
-## Smart subagent guide (advice by change size, max 2 repair rounds)
+## Independent verification (scaled to risk)
 
-- **Spec / Story / Prompt:** 1 session for a coupled slice; parallel subagents for independent modules (`stories > 1` or multi-part).
-- **Build / Verify / Review:**
-  - *Trivial interactive fix* (`1` file, `<20` LOC pure-code bug with causal `pdd prove --base ... --expect ...` Red→Green and a human reviewing the diff): verify in the same session (never skip independent review in unattended runs).
-  - *Small change* (`1–2` files, `~<100` LOC, prompt/Story/behavior change, or short chat): build in the same session + **1 scoped fresh verifier** (inside Autopilot, builders skip self-spawning a verifier because Autopilot's own Blind Fresh Reviewer runs next).
-  - *Medium / big change* (`3+` files, `>100` LOC, `>15` turns, or tricky state/security): **Fresh Builder + Fresh Verifier + Blind Read-Only Reviewer** via your editor's native subagents, passing **only clean file paths** (prompt, Story, `git diff`, real test outputs — zero Builder chat history). Fresh Verifier/Reviewer runs a fast **1-to-3 line mutation check** (flip 1–3 changed logic conditions/returns in a scratch edit, verify a test goes red, revert).
-  - On hosts without subagents, run offline `pdd lint --diff` + real test outputs and disclose same-session verification honestly.
-- Cap automatic repair loops at **2 rounds** before escalating to the human.
+- **Trivial interactive pure-code fix** (human reviewing a tiny diff with causal `pdd prove --base ... --expect ...` Red→Green): verify in the same session.
+- **Normal or high-risk changes** (behavior/prompt edits, multi-file changes, security/state logic, or any unattended run): use a **writable Fresh Verifier** (runs real checks + Deliberate-Break Probe) and a **Blind Read-Only Reviewer** (strictly read-only; receives only clean file paths and Verifier/harness outputs — zero Builder chat history). Inside Autopilot, builders skip self-spawning a verifier because Autopilot runs its own Blind Fresh Reviewer next.
+- On hosts without subagents, run `pdd lint --diff` + `pdd prove` and disclose same-session verification honestly. Escalate to the human if repair loops do not converge.
 
 ## References (load strictly on demand)
 
 | Need | File |
 |---|---|
-| Prompting rules, 100% Truth, top-of-file headers, brownfield PRs, approvals | [references/prompting.md](references/prompting.md) |
+| Prompting rules, 100% Truth, `// Prompt:` headers, `native-only` specs, approvals | [references/prompting.md](references/prompting.md) |
 | Stories, compact scenario JSON, targets, operators, schemas & budgets | [references/stories.md](references/stories.md) |
-| Multi-part product maps, plans, contracts & native-only boundary specs | [references/product.md](references/product.md) |
+| Multi-part product maps, plans, contracts & `--through prompt-pr` | [references/product.md](references/product.md) |
 | External fakes, DB/HTTP/CLI, 3-Port Rule, telemetry & `pdd mcp` | [references/ports-and-cli.md](references/ports-and-cli.md) |
 | Single-file plain-prose UI, optional `app-map.json`, `.ui.svg` & `pdd sim` | [references/ui-and-screens.md](references/ui-and-screens.md) |
-| Native testing, bug TDD, 1-to-3 line mutation checks, PBT, Feature Map & `pdd prove` | [references/verification.md](references/verification.md) |
+| Native tests, Feature Map (`verify.paths`), `pdd prove` & Deliberate-Break Probe | [references/verification.md](references/verification.md) |
+| Code-bound formal verification (3-tier stack, Z3 isolation & mutation control) | [references/formal.md](references/formal.md) |

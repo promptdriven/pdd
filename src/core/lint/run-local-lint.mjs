@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // 100% offline (<1s) CLI handler for `local: 'lint'` (0 AI, 0 network, 0 batch-state writes, PDD files only + --diff).
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
@@ -24,29 +26,34 @@ function resolveGitRoot(cwd) {
 }
 
 function resolveScopedTargets(allFiles, words = []) {
-  if (!Array.isArray(words) || !words.length) return { promptPaths: undefined, tests: undefined };
+  if (!Array.isArray(words) || !words.length) return { promptPaths: undefined, tests: undefined, unmatched: [] };
   const fileSet = new Set(allFiles);
   const prompts = new Set();
   const tests = new Set();
+  const unmatched = [];
 
   for (const raw of words) {
     const word = String(raw ?? '').trim().replace(/^\.\//, '');
     if (!word) continue;
+    let matchedAny = false;
     if (fileSet.has(word)) {
-      if (word.endsWith('.prompt.md')) prompts.add(word);
-      else if (isLintableStoryPath(word) || word.endsWith('.json')) tests.add(word);
-      continue;
+      if (word.endsWith('.prompt.md')) { prompts.add(word); matchedAny = true; }
+      else if (isLintableStoryPath(word) || word.endsWith('.json')) { tests.add(word); matchedAny = true; }
     }
-    const slug = word.replace(/\.md$/i, '').replace(/\.json$/i, '');
-    for (const f of allFiles) {
-      if (isLintableStoryPath(f) && posix.basename(f, '.md') === slug) tests.add(f);
-      if (/^(?:tests?|__tests__)\/.*\.json$/i.test(f) && posix.basename(f, '.json') === slug) tests.add(f);
-      if (f.endsWith('.prompt.md') && posix.basename(f, '.prompt.md') === slug) prompts.add(f);
+    if (!matchedAny) {
+      const slug = word.replace(/\.md$/i, '').replace(/\.json$/i, '');
+      for (const f of allFiles) {
+        if (isLintableStoryPath(f) && posix.basename(f, '.md') === slug) { tests.add(f); matchedAny = true; }
+        if (/^(?:tests?|__tests__)\/.*\.json$/i.test(f) && posix.basename(f, '.json') === slug) { tests.add(f); matchedAny = true; }
+        if (f.endsWith('.prompt.md') && posix.basename(f, '.prompt.md') === slug) { prompts.add(f); matchedAny = true; }
+      }
     }
+    if (!matchedAny) unmatched.push(word);
   }
   return {
     promptPaths: prompts.size ? [...prompts].sort() : (tests.size ? [] : undefined),
     tests: tests.size ? [...tests].sort() : undefined,
+    unmatched,
   };
 }
 
@@ -76,9 +83,23 @@ export function runLocalLint(
   const root = resolveGitRoot(cwd);
 
   let repoFiles = [];
-  try { repoFiles = (ports.gitFiles ?? gitFiles)(root); } catch { repoFiles = []; }
+  try {
+    repoFiles = (ports.gitFiles ?? gitFiles)(root);
+  } catch (err) {
+    const msg = `Local lint failed to list repository files: ${err?.message || String(err)}. Run inside a Git repository.`;
+    if (json) stdout.write(`${JSON.stringify({ schema_version: 'pdd.local-lint.v1', ok: false, exit_code: 2, local_only: true, summary_line: msg, problems: [msg], warnings: [], findings: [] }, null, 2)}\n`);
+    else stderr.write(`${msg}\n`);
+    return 2;
+  }
 
-  const { promptPaths, tests } = resolveScopedTargets(repoFiles, words);
+  const { promptPaths, tests, unmatched } = resolveScopedTargets(repoFiles, words);
+  if (unmatched.length > 0) {
+    const problems = unmatched.map(w => `No prompt, Story, or test matched "${w}". Run \`pdd files\` to list available Stories and prompts.`);
+    const summaryLine = `Local lint: ${problems.length} unmatched target${problems.length === 1 ? '' : 's'}. (0 AI calls, 0 network calls)`;
+    if (json) stdout.write(`${JSON.stringify({ schema_version: 'pdd.local-lint.v1', ok: false, exit_code: 2, local_only: true, summary_line: summaryLine, problems, unmatched, warnings: [], findings: [] }, null, 2)}\n`);
+    else { for (const p of problems) stderr.write(`${p}\n`); }
+    return 2;
+  }
   const resolvedDiffBase = typeof diff === 'string' && diff.trim()
     ? diff.trim()
     : (typeof baseRef === 'string' && baseRef.trim() ? baseRef.trim() : undefined);

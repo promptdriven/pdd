@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // Extract declared `<port>.<op>` and `<stem>.<op>` public operations from checkable prompts & contracts (#3619 R1-R8 parity).
 import { posix } from 'node:path';
 import {

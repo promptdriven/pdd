@@ -10,7 +10,7 @@ Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before
 
 ## Names
 
-`NAMES` is the one place for the words of core commands: `{test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack'}`. Help forms and completion derive `test`, `lint`, and `simulate` from `NAMES`.
+`NAMES` is the one place for the words of core commands: `{test: 'test', lint: 'lint', simulate: 'simulate', run: 'run'}`. Help forms and completion derive `test`, `lint`, and `simulate` from `NAMES`.
 
 | Route id | Prefix | Local | Quiet words | Removed words |
 |---|---|---|---|---|
@@ -69,7 +69,7 @@ Register `autopilot.regressions`, prefix `autopilot regressions`, local `autopil
 
 ## Help text
 
-Export the frozen `PUBLIC_HELP_TEXT` object with `heading`, `usageLine`, `quickStartLines`, `groups`, `focusedHelpLines`, `closingLines`, `learnLines`, and `promptingLines`. Keep every rendered line of root help within 80 columns. Groups order human-first: `Core PDD workflow`, `Cloud accounts (pdd accounts --help)`, `Product & dependency graph (pdd product --help)`, `Autopilot (pdd autopilot --help)`, and `Metrics, shell & help (pdd metrics --help)`.
+Export the frozen `PUBLIC_HELP_TEXT` object with `heading`, `usageLine`, `quickStartLines`, `groups`, `focusedHelpLines`, `closingLines`, `learnLines`, and `promptingLines`. Keep every rendered line of root help within 80 columns, with zero duplicated commands between Quick start and groups. Groups order human-first: `Core PDD workflow`, `Product & graph (pdd product --help)`, `Autopilot (pdd autopilot --help)`, `Cloud accounts (pdd accounts --help)`, and `Metrics, shell & help`.
 
 ## Learn PDD
 
@@ -77,11 +77,12 @@ The catalog owns the Learn PDD and `pdd help prompting` templates; the CLI subst
 
 ```text
 In PDD, prompts are the source. Code follows the prompts.
-1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies.
-2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
-3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write compact JSON steps with an exact check for each criterion.
-4. Check: run pdd test --files STORY && pdd test STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd lint for lint-only diagnosis.
-5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person.
+1. Orient: run pdd status [--changed] to see prompts, Stories, owners, and the Feature Map.
+2. Prompt: prompts/NAME.prompt.md. State behavior and domain rules in plain English, plus ## Dependencies.
+3. Story & Test: user_stories/STORY.md (numbered ## Acceptance criteria) and tests/STORY.json (or tests/runtime/).
+4. Check: run pdd lint first (offline, 0 AI), then pdd test --files STORY && pdd test STORY.
+5. Approve: review each changed prompt and run pdd approve PROMPT.
+6. Build & Prove: implement from approved prompts and run pdd prove [--base REF].
 ```
 
 ## Dependencies

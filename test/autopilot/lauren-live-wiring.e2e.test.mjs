@@ -264,6 +264,157 @@ test('live production collectLiveEvidenceContract injects 0600 test-env secrets 
   assert.equal(postContract.decision, 'MERGE');
 });
 
+test('P0-1..P0-3 live evidence contract fails closed on non-Proved prove outcomes, unreadable verify.report, missing frozen ACs, and never fabricates protected-path approvals or proved receipts', async t => {
+  const dir = makeTmpDir(t, 'pdd-live-p0-');
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+  git('init', '-b', 'main');
+  git('config', 'user.email', 'dev@example.com');
+  git('config', 'user.name', 'Dev');
+
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  mkdirSync(join(dir, 'test'), { recursive: true });
+  mkdirSync(join(dir, 'user_stories'), { recursive: true });
+  writeFileSync(join(dir, 'pdd.json'), JSON.stringify({
+    verify: {
+      test: 'node --test',
+      report: 'reports/junit.xml',
+      paths: [{ id: 'app', when: ['src/**'], run: 'node --test test/app.test.mjs' }],
+    },
+  }, null, 2));
+  writeFileSync(join(dir, 'src/app.mjs'), 'export const x = 1;\n');
+  writeFileSync(join(dir, 'test/app.test.mjs'), 'import test from "node:test"; import assert from "node:assert/strict"; test("ok", () => assert.equal(1, 1));\n');
+  git('add', '.');
+  git('commit', '-m', 'base');
+  const baseTip = git('rev-parse', 'HEAD');
+
+  writeFileSync(join(dir, 'src/app.mjs'), 'export const x = 2;\n');
+  writeFileSync(join(dir, 'user_stories/app.md'), '# App\n\nAs a developer, I want x to equal 2.\n\n## Acceptance criteria\n\n1. Returns 2.\n');
+  git('add', '.');
+  git('commit', '-m', 'change app');
+  const head = git('rev-parse', 'HEAD');
+
+  // P0-1a: Passing suite + lint failure (proveOutcome === 'Failed') MUST hold and NEVER stamp outcome === 'proved'.
+  const lintFail = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 1, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    headReport: 'TAP version 13\nok 1 - ok\n1..1\n',
+    runProveFn: async () => ({
+      exitCode: 1,
+      outcome: 'Failed',
+      receipt: {
+        lint: { ok: false, errors: ['Error: prompt: prompts/a.prompt.md:1 [native-only-unknown-port] bad'] },
+        diff: { ok: true, errors: [] },
+        test: { ok: true, exitCode: 0, summary: 'pass 1' },
+        paths: [{ id: 'app', status: 'proved', exitCode: 0, summary: 'pass 1', run: 'node --test test/app.test.mjs', needs: [] }],
+        notProvedReasons: [],
+      },
+    }),
+  });
+  assert.notEqual(lintFail.contractInput.stampReceipt.outcome, 'proved');
+  const lintFailContract = evaluateEvidenceContract(lintFail.contractInput);
+  assert.equal(lintFailContract.ok, false);
+  assert.equal(lintFailContract.decision, 'HOLD');
+
+  // P0-1b: Passing suite + weakened-test Not proved (proveOutcome === 'Not proved') MUST hold and NEVER stamp outcome === 'proved'.
+  const weakenedNotProved = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 2, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    headReport: 'TAP version 13\nok 1 - ok\n1..1\n',
+    runProveFn: async () => ({
+      exitCode: 3,
+      outcome: 'Not proved',
+      receipt: {
+        lint: { ok: true, errors: [] },
+        diff: { ok: true, errors: [] },
+        test: { ok: true, exitCode: 0, summary: 'pass 1' },
+        paths: [{ id: 'app', status: 'proved', exitCode: 0, summary: 'pass 1', run: 'node --test test/app.test.mjs', needs: [] }],
+        notProvedReasons: ['[diff-assertion-drops] Diff reduces assertion count in 1 kept test(s)'],
+      },
+    }),
+  });
+  assert.notEqual(weakenedNotProved.contractInput.stampReceipt.outcome, 'proved');
+  assert.ok(weakenedNotProved.proveReasons.some(r => r.includes('diff-assertion-drops')));
+  const weakenedContract = evaluateEvidenceContract(weakenedNotProved.contractInput);
+  assert.equal(weakenedContract.ok, false);
+  assert.equal(weakenedContract.holdReason, 'insufficient_scope');
+
+  // P0-2a: Configured verify.report missing on disk -> report:unreadable:unknown -> HOLD.
+  const missingReport = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 3, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    runProveFn: async () => ({
+      exitCode: 0,
+      outcome: 'Proved',
+      receipt: { lint: { ok: true, errors: [] }, diff: { ok: true, errors: [] }, test: { ok: true, exitCode: 0 }, paths: [{ id: 'app', status: 'proved', exitCode: 0, run: 'node --test', needs: [] }], notProvedReasons: [] },
+    }),
+  });
+  const missingReportContract = evaluateEvidenceContract(missingReport.contractInput);
+  assert.equal(missingReportContract.ok, false);
+  assert.ok(missingReportContract.checks.testOracle.badTestIds.includes('report:unreadable:unknown'));
+
+  // P0-2b: Changed Story with numbered ACs and missing frozenAcs -> HOLD (insufficient_scope).
+  const missingAcs = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 4, head },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs', 'user_stories/app.md'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    headReport: 'TAP version 13\nok 1 - ok\n1..1\n',
+    runProveFn: async () => ({
+      exitCode: 0,
+      outcome: 'Proved',
+      receipt: { lint: { ok: true, errors: [] }, diff: { ok: true, errors: [] }, test: { ok: true, exitCode: 0 }, paths: [{ id: 'app', status: 'proved', exitCode: 0, run: 'node --test', needs: [] }], notProvedReasons: [] },
+    }),
+  });
+  assert.equal(missingAcs.contractInput.requireFrozenAcs, true);
+  const missingAcsContract = evaluateEvidenceContract(missingAcs.contractInput);
+  assert.equal(missingAcsContract.ok, false);
+  assert.equal(missingAcsContract.checks.acCoverage.ok, false);
+
+  // P0-3: Repo WITHOUT verify.paths MUST NOT manufacture humanApprovedPaths for protected files and MUST NOT stamp a fake `proved` receipt.
+  const noMapDir = makeTmpDir(t, 'pdd-live-nomap-');
+  execFileSync('git', ['init', '-b', 'main'], { cwd: noMapDir, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'dev@example.com'], { cwd: noMapDir, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'Dev'], { cwd: noMapDir, stdio: 'ignore' });
+  writeFileSync(join(noMapDir, 'a.txt'), 'v1\n');
+  execFileSync('git', ['add', '.'], { cwd: noMapDir, stdio: 'ignore' });
+  execFileSync('git', ['commit', '-m', 'init'], { cwd: noMapDir, stdio: 'ignore' });
+  const noMapBase = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: noMapDir, encoding: 'utf8' }).trim();
+
+  const protectedNoMap = await collectLiveEvidenceContract({
+    repo: 'acme/nomap',
+    job: { issue: 5, head: noMapBase },
+    headTree: noMapDir,
+    baseTip: noMapBase,
+    changedFiles: ['pdd.json', '.github/workflows/ci.yml'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+  });
+  assert.deepEqual(protectedNoMap.contractInput.humanApprovedPaths, []);
+  assert.equal(protectedNoMap.contractInput.stampReceipt, null);
+  assert.equal(protectedNoMap.proveOutcome, 'Not proved');
+  const protectedContract = evaluateEvidenceContract(protectedNoMap.contractInput);
+  assert.equal(protectedContract.ok, false);
+  assert.equal(protectedContract.holdReason, 'protected_path');
+});
+
 test('G3 polyglot base-control and diffTestReports detect missing/skipped/failing tests across ecosystems', async t => {
   const goDir = makeTmpDir(t, 'pdd-poly-go-');
   writeFileSync(join(goDir, 'go.mod'), 'module example.com/calc\n\ngo 1.22\n');

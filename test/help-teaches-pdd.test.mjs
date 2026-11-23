@@ -110,17 +110,18 @@ test('prompting is a help topic, not a command, and takes no other word', async 
   }
 });
 
-test('root help keeps its first line, grouped commands, learn paths and closing lines; command help shows full manifest forms', async () => {
+test('root help keeps its first line, grouped commands, learn paths and closing lines; command help shows wrapped manifest forms without root footer', async () => {
   const outputs = await Promise.all(ROOT_HELP.map(argv => pdd(argv)));
   for (const output of outputs) assert.equal(output.stdout, outputs[0].stdout);
   const rootHelp = lines(outputs[0].stdout), scoped = lines((await pdd(['test', '--help'])).stdout);
-  const testRows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.split(' ')[1] === 'test').map(formLine);
-  // Command help: first line, empty line, its own forms, empty line and closingLines; no learn or path lines.
-  assert.equal(scoped[1], ''); assert.deepEqual(scoped.slice(2, 2 + testRows.length), testRows); assert.equal(scoped[2 + testRows.length], '');
-  const closing = scoped.slice(3 + testRows.length);
-  assert.deepEqual(closing, PUBLIC_HELP_TEXT.closingLines);
+  const testForms = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.split(' ')[1] === 'test').map(({ form }) => `  ${form}`);
+  // Command help: first line, empty line, its own forms with wrapped descriptions, and no root closing/learn footer.
+  assert.equal(scoped[1], '');
+  for (const formHeader of testForms) assert.ok(scoped.includes(formHeader), `missing form header: ${formHeader}`);
+  for (const closingLine of PUBLIC_HELP_TEXT.closingLines) assert.ok(!scoped.includes(closingLine), `subcommand help should omit root closingLine: ${closingLine}`);
   assert.doesNotMatch(scoped.join('\n'), /help prompting|skills\/pdd\/SKILL\.md|references\/prompting\.md/);
   // Root help: the same first line, usage, quick start, grouped summaries, focused help note, learn/path lines, and closing lines.
+  const closing = PUBLIC_HELP_TEXT.closingLines;
   const expectedBody = [
     PUBLIC_HELP_TEXT.usageLine, '',
     'Quick start:', ...PUBLIC_HELP_TEXT.quickStartLines, '',
@@ -141,7 +142,7 @@ test('root help keeps its first line, grouped commands, learn paths and closing 
   for (const line of closing) assert.ok(!topic.includes(line), line);
   const text = topic.join('\n');
   for (const name of ['prompts/NAME.prompt.md', '## Dependencies', 'user_stories/STORY.md', 'Acceptance criteria',
-    'tests/STORY.json', 'pdd test', 'pdd lint', 'pdd approve']) assert.ok(text.includes(name), name);
+    'tests/STORY.json', 'pdd test', 'pdd lint', 'pdd approve', 'pdd prove']) assert.ok(text.includes(name), name);
   for (const pattern of [/\bpdd check\b/, /\bpdd try\b/, /\bworkflow start\b/, /simulat/i]) {
     assert.doesNotMatch(text, pattern); assert.doesNotMatch(rest.join('\n'), pattern);
   }

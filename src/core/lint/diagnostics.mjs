@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // Shared Layer-1 diagnostics, 4-part agent-teaching formatting, and safe in-root file reads.
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
@@ -146,9 +148,12 @@ export function formatDiagnosticLine(item, severity) {
   if (item.fix && !/\bFix:\s/i.test(detail)) {
     detail = formatTeachingDetail({ invariant: detail, fix: item.fix, rerun: item.rerun ?? 'pdd lint' });
   } else if (severity === 'error' && !/\bFix:\s/i.test(detail)) {
+    const guideHint = item.category === 'Story hygiene'
+      ? 'stories.md'
+      : (item.category === 'prompt' || item.category === 'native-only port parity' ? 'prompting.md' : 'verification.md');
     const fallbackFix = item.category === 'custom rule'
       ? `Update ${item.filePath}:${item.line} to satisfy custom rule "${item.code}"`
-      : `Resolve [${item.code}] at ${item.filePath}:${item.line}`;
+      : `Update ${item.filePath}:${item.line} to fix ${item.category} rule "${item.code}" (see skills/pdd/references/${guideHint})`;
     detail = formatTeachingDetail({ invariant: detail, fix: fallbackFix, rerun: item.rerun ?? 'pdd lint' });
   }
   return `${prefix}: ${item.category}: ${item.filePath}:${item.line} [${item.code}] ${detail}`;

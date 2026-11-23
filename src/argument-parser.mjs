@@ -6,6 +6,12 @@ export class CommandInputError extends Error {
 }
 const HELP_WORDS = ['--help', '-h', '-help'];
 const fail = () => { throw new CommandInputError('Unsupported command or options in pdd. Run pdd --help for local authoring tools.'); };
+const sanitizeToken = word => String(word ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').slice(0, 64);
+const failUnknownOption = (route, word) => {
+  if (!route?.prefix?.length || route.prefix[0].startsWith('-')) fail();
+  const cmd = `pdd ${route.prefix.join(' ')}`;
+  throw new CommandInputError(`Unsupported command or options in pdd: unknown option "${sanitizeToken(word)}" for ${cmd}. Run ${cmd} --help.`);
+};
 const routes = [...PUBLIC_COMMAND_ROUTES].sort((a, b) => b.prefix.length - a.prefix.length);
 const matches = (route, words) => route.prefix.every((token, index) => words[index] === token);
 const findRoute = words => routes.find(route => matches(route, words));
@@ -51,7 +57,8 @@ function parseRoute(route, words, allowHelp = false) {
     if (word === '--' && route.operands.at(-1)?.type === 'text' && !literal) { literal = true; continue; }
     if (!literal && word.startsWith('-')) {
       const option = route.options.find(option => option.name === word);
-      if (!option || Object.hasOwn(options, word)) fail();
+      if (!option) failUnknownOption(route, word);
+      if (Object.hasOwn(options, word)) fail();
       if (option.kind === 'flag') options[word] = true;
       else if (option.kind === 'optional-integer') {
         const next = words[index + 1];

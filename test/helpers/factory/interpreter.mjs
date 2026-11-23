@@ -1,4 +1,3 @@
-// Generated from prompts/test/autopilot-factory.prompt.md.
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';

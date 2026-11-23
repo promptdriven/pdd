@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // Polyglot `pdd lint --diff [BASE]` spotlight: BASE..WORKTREE diff, 5 P0 inventory fixes, hard-fail .only, shadow-bin, conflict markers, & mock-only boundary check.
 import { spawnSync } from 'node:child_process';
 import { lstatSync, realpathSync } from 'node:fs';

@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // Project lint configuration loader (`pdd.json` "lint" + `rules/lint/*.json`), 100-rule cap, id dedup, base-trusted lint.commands.
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';

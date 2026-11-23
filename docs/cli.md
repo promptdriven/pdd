@@ -15,7 +15,7 @@ Typing `pdd check`, `pdd try`, or `pdd workflow` runs nothing and prints the com
 | `pdd status [PATH...] [--changed] [--json]` | Offline repository overview: inspect prompts, Stories, tests, file ownership, PDD block status, and `pdd.json` `verify.paths` Feature Map coverage without network or AI calls |
 | `pdd upgrade [--main]` | Update a user-owned global npm or Volta `@promptdriven/pdd` installation from npm (with GitHub tag fallback, or the pinned `main` commit with `--main`) using `--ignore-scripts`, refresh `.pdd-skill.json`-marked user PDD skills across supported agent folders, and clear cached release notices |
 
-`pdd setup` copies the bundled `/pdd` skill to `~/.agents/skills` (Codex and Gemini CLI), `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path, cleaning marked retired split skills and skipping duplicate `/pdd` copies when Claude Code already has the PDD plugin installed in `installed_plugins.json`), and `~/.gemini/config/skills` when Antigravity (`agy` on PATH, `~/.gemini/antigravity-cli`, or `~/.gemini/config/mcp_config.json`) is present. Pass `--skills-dir PATH` to target a custom skill folder instead of the default roots. Setup also updates existing `.pdd-skill.json`-marked folders in `~/.codex/skills` and `$CODEX_HOME/skills`. After an update of the pdd command, `pdd setup`, `pdd upgrade`, and the once-per-version automatic sync on normal `pdd` commands replace older or same-version differing copies with the `.pdd-skill.json` marker (including invalid markers), add missing bundled skills to existing marked folders, and remove `.pdd-skill.json`-marked retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`, `pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`). Unmarked folders, customized copies, symlinks and unrelated custom skills are never modified; `pdd upgrade` reports updated marked folders, lists skipped unmarked or customized folders with `npx skills add promptdriven/pdd -g --skill '*'` (without `-g` for project folders), and reports failed folders with their recovery commands. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd is 0.1.20`. Discovery, `pdd files`, `pdd init`, `pdd status` and `--json` commands write nothing and skip automatic network checks.
+`pdd setup` copies the bundled `/pdd` skill to `~/.agents/skills` (Codex and Gemini CLI), `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path, cleaning marked retired split skills and skipping duplicate `/pdd` copies when Claude Code already has the PDD plugin installed in `installed_plugins.json`), and `~/.gemini/config/skills` when Antigravity (`agy` on PATH, `~/.gemini/antigravity-cli`, or `~/.gemini/config/mcp_config.json`) is present. Pass `--skills-dir PATH` to target a custom skill folder instead of the default roots. Setup also updates existing `.pdd-skill.json`-marked folders in `~/.codex/skills` and `$CODEX_HOME/skills`. After an update of the pdd command, `pdd setup`, `pdd upgrade`, and the once-per-version automatic sync on normal `pdd` commands replace older or same-version differing copies that carry PDD's `.pdd-skill.json` marker (including invalid markers), add missing bundled skills to existing marked folders, and remove `.pdd-skill.json`-marked retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`, `pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`). Do not hand-edit PDD-managed folders that carry `.pdd-skill.json` because updates replace managed copies; unmarked folders, symlinks, and unrelated custom skills are never modified. `pdd upgrade` reports updated marked folders, lists skipped unmarked folders with `npx skills add promptdriven/pdd -g --skill '*'` (without `-g` for project folders), and reports failed folders with their recovery commands. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd is 0.1.20`. Discovery commands (`pdd files`, `pdd status`, `pdd owner`, default `pdd lint`) make no network calls and write nothing to the repository (`pdd lint --local` may still save local assessment state under `$PDD_STATE_DIR` when assessing scenario JSONs).
 
 Setup previews the exact PDD Simulator MCP tools configuration changes for the Codex, Claude Code, Gemini CLI and Antigravity (`agy`) agents it finds, then asks once (y/N). Passing `--yes` applies the previewed MCP configuration without asking; without `--yes` in a non-interactive terminal, MCP registration is skipped safely. Registrations pin this running pdd executable, so another installation earlier on PATH cannot receive its tools, and stale PDD entries are updated in place while preserving custom keys, unrelated servers and formatting. Codex uses `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and `mcp_servers.pdd` with `default_tools_approval_mode = "approve"`. Claude Code uses `mcpServers.pdd` in its configuration; Gemini CLI uses `mcpServers.pdd` in `~/.gemini/settings.json` with server trust (detected via `settings.json` or `gemini` on PATH); Antigravity uses `mcpServers.pdd` in `~/.gemini/config/mcp_config.json` (detected via `mcp_config.json`, `~/.gemini/antigravity-cli`, or `agy` on PATH). Each entry runs `pdd mcp`. A symlinked agent config is skipped with a warning and exit 0, and a failure in one agent does not block registering healthy agents.
 
@@ -692,12 +692,13 @@ pdd test --files STORY && pdd test STORY
 ```
 
 Replace STORY with the selected Story name; omit STORY to preview and check all
-Stories. Each command must succeed before the next starts. `--files` is local;
-the final test performs interpreter lint before sending checks. Do not run
-`pdd lint` immediately before `pdd test`. Use standalone lint when you want only
-format/admission diagnostics without a behavioral check.
+Stories. Each command must succeed before the next starts. Run offline `pdd lint`
+first to catch local structural, SVG, and scenario problems immediately (0 AI, 0 network).
+`pdd test` performs hosted interpreter lint automatically before sending checks, so
+you do not need `pdd lint --remote` immediately before `pdd test`; use `pdd lint --remote`
+when you want hosted cross-prompt admission diagnostics without running AI checks.
 
-`pdd test` reuses a passing lint received within ten minutes for the exact same
+`pdd test` reuses a passing remote lint received within ten minutes for the exact same
 captured source, test selection, interpreter endpoint, signed-in account,
 package version and lint options. It retains the original receipt for saved
 reads; reuse does not extend its age. Local validation and server admission
@@ -705,19 +706,20 @@ still run. Missing, incomplete, failed, expired or changed evidence runs lint
 again. A reported current interpreter build must match the saved build; when
 capacity does not report a build, reuse cannot detect a deployment inside that
 short window. This receipt is independent of the complete Story pass cache and
-never proves behavior or grants approval. Explicit lint always runs fresh.
+never proves behavior or grants approval. Explicit `pdd lint --remote` always runs fresh.
 
-`pdd lint --json` includes `report_url` with the interpreter's same-origin report
+`pdd lint --remote --json` includes `report_url` with the interpreter's same-origin report
 link, or null when no safe link is available. Text output prints `Report: <url>`
-for the same link. Saved lint reads retain it.
+for the same link. Saved remote lint reads retain it. Plain `pdd lint --json` runs
+locally offline (`pdd.local-lint.v1`) with zero network calls and no report URL.
 
 - A new simulation defaults to 400 calls. Both `pdd test --max-calls N` and `pdd simulate --max-calls N` accept 1 through 1000. Checks default to 12 calls per step, at least 18 and at most 1000. Choose at least three times your worst-case estimate.
 - `pdd test` and saved-batch `pdd test --read BATCH` wait until every Story ends in every shell. Only `--timeout MIN` sets a caller limit. Use the shell tool's longest timeout or an exit-notifying background task; if stopped, run the printed recovery read once. Never poll every minute.
 - The optional profile job cap has no default limit. Set `PDD_MAX_JOBS` to a positive safe decimal integer to share that cap across repositories and worktrees among local pdd processes that set it; capped jobs wait their turn and show how many jobs are ahead. An invalid value warns once per command and uses no cap. When the interpreter is busy and confirms that your job did not start, pdd waits and tries again until your wait ends. After a saved lint passes, `--read` can start the original checks that were waiting for it, using the same files, owner and call limits. `--retry BATCH` retries checks confirmed never started, using the same files after lint passes. See [waiting for capacity](lint-capacity.md) for recovery and restart handling.
 - Check source uploads use at most 8 unanswered POSTs at once per pdd process. Set `PDD_MAX_UPLOADS` to a positive safe decimal integer (leading zeros are allowed); invalid values warn once and use 8. Each answered POST or transport failure frees its place while server jobs continue running; GET reads use no upload places. This laptop upload setting protects your own connection from the 90-second POST timeout, and is not a server limit. It uses no shared job-slot queue.
 - Lint and check results use `waiting`, `sent`, `passed`, `failed`, `refused`, `partial` or `not run`. Every result except `passed` includes a reason code in text, JSON, saved batches and PR evidence. Only `passed` is a full pass.
-- `pdd lint --local` exits 0 after its local part and reports `partial` with code `local-only`: checked SVG layout only; prompts not checked. It cannot satisfy a PDD gate.
-- For a new check, `--timeout MIN` starts after the free lint. Preliminary lint has a separate wait of MIN minutes, capped at 90 seconds in an agent shell. This bound includes maintenance, local slots and capacity waits. A timeout reports `timeout-flag` and names `--timeout`. Standalone `pdd lint --timeout MIN` bounds lint itself, including admission and capacity waits before sending. A caller stop cause takes precedence over `server-busy`; raw capacity receipts keep their server codes. A default lint wait reports `deadline`.
+- Default `pdd lint` runs fast offline structural, SVG, scenario, and optional `--diff` checks with 0 AI calls, 0 network calls, and 0 batch-state writes. `pdd lint --local` runs the offline local assessment path (including local scenario/criterion checks) and reports `partial` with code `local-only` when run through runtime assessment; it cannot substitute for hosted `pdd test`. Use `pdd lint --remote` for hosted interpreter cross-prompt lint (0 AI calls).
+- For a new check, `--timeout MIN` starts after the free lint. Preliminary lint has a separate wait of MIN minutes, capped at 90 seconds in an agent shell. This bound includes maintenance, local slots and capacity waits. A timeout reports `timeout-flag` and names `--timeout`. Standalone `pdd lint --remote --timeout MIN` bounds remote lint itself, including admission and capacity waits before sending. A caller stop cause takes precedence over `server-busy`; raw capacity receipts keep their server codes. A default remote lint wait reports `deadline`.
 - Offline-only work uses `pdd lint --local`, local authoring review, `pdd files` and `pdd test --files`. It is not a server lint pass. Factories can bind through interface v2 instances; ports and SQL, blob and compute resources cover declared simulation. Native effects stay unbound; see [Interpreter boundaries](runtime-boundaries.md).
 - Running `pdd simulate STORY` for a paused simulation explicitly reopens the same session before showing its link. Its original expiry and remaining call allowance stay in force; an unconfirmed reopen is nonzero.
 - A `draft` prompt can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
@@ -786,12 +788,13 @@ token; repeated flags, extra operands and `--verbose` are unsupported.
 From a clone of this repository, run the CLI without a global install:
 
 ```sh
+npm ci --ignore-scripts
 node bin/pdd.mjs --help
 node bin/pdd.mjs --version
 npm test
 ```
 
-You need Node.js 22.16.0 or newer. The package has no dependencies and no build step. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+You need Node.js 22.16.0 or newer (22.20.0+ for Autopilot). Install dependencies with `npm ci --ignore-scripts` (the only runtime dependency is `@promptdriven/runtime-client`); there is no build step. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 Check, remote lint and simulation setup use [local bookkeeping and capacity waiting](lint-capacity.md); they share a local slot cap when `PDD_MAX_JOBS` is set. Local waiting, maintenance and interpreter queue time all use the existing caller wait. `pdd simulate` uses one five-minute setup allowance for lint and the rest of setup in every shell; it adds no timeout flag.
 
@@ -815,7 +818,7 @@ Virtual CLI and HTTP startup print `Try AI usage` on stderr. Each virtual CLI co
 
 `pdd test --read CALL_ID` reads an authenticated owner call receipt by UUID without sending the operation again. Interrupted `pdd simulate --cli` commands print the recovery command for this read. See [module binding coverage](runtime-bindings.md) for selected Story coverage and unbound reasons.
 
-`pdd prove --base REF --test CMD --expect TEXT` leaves the repository checkout unchanged and runs both base and head snapshots in isolated temporary worktrees. Fresh worktrees have no installed dependencies; include required installation in `--setup` or `--test`. Interrupting with SIGINT, SIGTERM or SIGHUP stops the process group and removes both temporary snapshots.
+`pdd prove --base REF --test CMD --expect TEXT` leaves the repository checkout unchanged and runs both base and head snapshots in isolated temporary worktrees (default `--timeout` is 10 minutes per phase; timed-out runs report `Not proved`). `--overlay GLOB` adds extra matching files alongside the changed test files overlaid onto the base worktree. `--expect TEXT` matches in the failing base run's combined output (prefer a concrete assertion message rather than a test title). Fresh worktrees have no installed dependencies; include required installation in `--setup` or `--test`. Temporary worktrees are removed cleanly when execution finishes.
 
 Preliminary lint shares Check's unlimited default caller wait; standalone remote lint retains its 90-second agent default and unlimited interactive wait. `--timeout` bounds either, with no separate lint cap. A saved-batch read of a lint-held Check waits without a default limit, retains the saved interpreter origin and dispatches each original check at most once. Explicit retry retains its finite default wait. Standalone lint reads never send checks.
 
@@ -881,7 +884,7 @@ PDD_SAID
 
 Replace the payload line with the person's words. Choose a delimiter that does not occur as a whole line in those words. Keep the delimiter quoted. Do not put the words into shell quotes or interpolate them into a command. `--said -` reads stdin exactly, including newlines. Blank input is refused. pdd records nonblank words without a yes-word list or semantic grading.
 
-Without `--said`, a person at a normal terminal answers y/N. `pdd approve PROMPT` reads `pdd.json` from the Git root of the current checkout. `"strict_approvals": true` permits only a person at a terminal and refuses `--said`. Absent or false keeps easy mode. Agents never edit approval fields or decide expected values. Records retain the invoking actor, time, route, exact words and prompt path/hash.
+Without `--said`, a person at a normal terminal answers y/N. `pdd approve PROMPT` reads `pdd.json` from the Git root of the current checkout. `"strict_approvals": true` permits only a person at a terminal and refuses `--said`. Absent or false allows chat approvals via `--said`. Agents never edit approval fields or decide expected values. Records retain the invoking actor, time, route, exact words and prompt path/hash.
 
 ## Metrics
 
@@ -1487,7 +1490,7 @@ existing behavior. Reopening a product retains its original selection and world;
 use --new to deliberately replace it. Unknown requests must be reconciled first.
 ### Inspect a call cap before paid work
 
-Run `pdd lint STORY --max-calls 25` to inspect a selected cap with 0 AI calls.
+Run `pdd lint --remote STORY --max-calls 25` to inspect a selected cap with 0 AI calls.
 The interpreter reports each step's catalog cost and a structural test estimate.
 For example, an estimate of 29 calls against cap 25 produces an advisory warning.
 The cap stays 25. This does not change paid Check admission or guarantee actual
@@ -1499,5 +1502,5 @@ JSON rows expose the server's `call_preflight`; the result exposes
 Unknown analysis stays unknown. Missing or inconsistent source, engine or cap
 association cannot support a fit claim. An interpreter without
 `lint-call-preflight` support refuses an explicitly selected lint cap before
-submission. Ordinary lint without a cap remains available. Local lint does not
-accept a call cap. Reading a saved standalone lint never starts a paid check.
+submission. Ordinary remote lint without a cap remains available. Offline `pdd lint`
+(without `--remote`) does not accept `--max-calls`. Reading a saved standalone lint never starts a paid check.

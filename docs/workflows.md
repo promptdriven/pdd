@@ -29,10 +29,11 @@ Open Codex, Claude Code, Gemini CLI, or Antigravity in your repository and invok
    - [`skills/pdd/references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md): screens, `.ui.svg` drawings, app maps, and Simulator verification.
    - [`skills/pdd/references/product.md`](../skills/pdd/references/product.md): multi-part roadmaps and shared contracts.
    - [`skills/pdd/references/verification.md`](../skills/pdd/references/verification.md): real-path verification, `pdd prove`, and independent review.
-3. **Author prompt space first (`feature` and `bug`):**
-   - For a `bug`, reproduce the defect first with the smallest failing test.
-   - For a multi-behavior `feature`, draft `user_stories/PLAN.md` with one Story and test file per behavior.
-   - Edit the owning `prompts/*.prompt.md`, `user_stories/*.md`, and `tests/*.json` before changing product code. Expected values come from the person and Stories, never from reading code output.
+   - [`skills/pdd/references/formal.md`](../skills/pdd/references/formal.md): code-bound formal verification and mutation control (loaded only for invariant-heavy work).
+3. **Author prompt space first (`feature` and prompt-level `bug`):**
+   - For a `bug`, reproduce the defect first with the smallest failing test and check ownership. If the owning prompt is already right (a pure code bug), skip prompt edits and proceed straight to Red→Green TDD.
+   - For a `feature` or prompt-level `bug`, edit the owning `prompts/*.prompt.md`, `user_stories/*.md`, and `tests/*.json` before changing product code. Keep 1 Story per cohesive user loop (ask before creating more than 3 Stories). Expected values come from the person and Stories, never from reading code output.
+   - For `small-change` (non-product files only with zero owned/product code touched), skip prompts and Stories.
 4. **Check and simulate:**
    - Run offline `pdd lint` (0 AI, 0 network) to catch structural, SVG, scenario, and diff problems immediately.
    - Run `pdd test --files STORY && pdd test STORY` on the PDD interpreter, or `pdd simulate STORY` (short: `pdd sim`) to try the program interactively before writing code.
@@ -41,8 +42,8 @@ Open Codex, Claude Code, Gemini CLI, or Antigravity in your repository and invok
 6. **Build, prove, and review:**
    - Implement code from the approved prompts and keep `// Prompt: ...` headers or `pdd-bindings.json` current (`pdd update --check`).
    - Run `pdd prove --base origin/main` to verify offline lint, diff checks, the repository test suite, and merge-base trusted `verify.paths` recipes. For bug fixes, prove base-vs-head contrast with `pdd prove --base origin/main --test "CMD" --expect "DEFECT_TEXT"`.
-   - Have a fresh subagent that did not write the code review the diff and exercise a real changed path.
-   - Open a PR when asked; merge only on an explicit human request under [Prompting guide §5](../skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges).
+   - Use a writable Fresh Verifier (running real checks and a Deliberate-Break Probe) plus a Blind Read-Only Reviewer with clean file paths only.
+   - Open one PR when authorized by the person (or staged prompt PR when `pdd product --through prompt-pr` is explicitly set); merge only on an explicit human request under [Prompting guide §5](../skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges).
 
 ## Two ways to run PDD
 

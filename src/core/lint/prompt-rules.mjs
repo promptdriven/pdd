@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // Built-in deterministic prompt hygiene rules: code fences, size, structure, dependency links & cycles.
 import { formatTeachingDetail } from './diagnostics.mjs';
 import {

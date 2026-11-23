@@ -1,3 +1,5 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
 // Frontmatter + Runtime interface metadata stripping, Markdown fence/table/dependency scanner.
 import { posix } from 'node:path';
 import { canonicalRepoPath } from './diagnostics.mjs';

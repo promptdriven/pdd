@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: cecf3cbea83fe385a315d58d34958791c9e414f366ca3ad625eb232e5ffb4b5e).
+// Prompt: prompts/cli/command-catalog.prompt.md
 import { NAMES } from './shared/command-names.mjs';
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of core commands; a later rename changes only NAMES.
@@ -10,87 +10,85 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
   heading: "PDD: prompt-driven development for your coding agent.",
   usageLine: "Usage: pdd <command> [options]",
   quickStartLines: Object.freeze([
-    "  pdd setup                    Install laptop skills and Simulator MCP.",
-    "  pdd init                     Add the 4-line PDD block to this repo.",
-    "  pdd status [--changed]       Inspect prompts, ownership & Feature Map.",
-    `  pdd ${lint} [--diff]           Offline structural lint (0 AI/network).`,
-    "  pdd prove [--base REF]       Prove tests & verify.paths against base.",
-    `  pdd ${test} [STORY...]          Check Stories on the PDD interpreter.`,
-    `  pdd ${simulate} [STORY|PROMPT.md]  Open PDD Simulator (short: pdd sim).`,
-    "  pdd help prompting           Learn how prompts, Stories and tests work.",
+    "  1. pdd setup               Install the /pdd skill & Simulator MCP (once).",
+    "  2. pdd init                Add the 4-line PDD block to this repo (once).",
+    "  3. /pdd <task>             Ask Claude Code (/pdd) or Codex ($pdd).",
+    "  4. pdd prove               Verify lint, tests, and real user paths.",
   ]),
   groups: Object.freeze([
     group("Core PDD workflow", [
-      "  pdd setup [--yes] [--skills-dir PATH]  Install global skills & MCP.",
-      "  pdd init                     Add the PDD block to CLAUDE.md/AGENTS.md.",
-      "  pdd status [PATH...] [--changed] [--json]  Offline status & ownership.",
-      `  pdd ${lint} [STORY...] [--diff]  Offline PDD structural & diff lint.`,
-      "  pdd prove [--base REF] [...] Verify tests & Feature Map against base.",
-      `  pdd ${test} [PATH|STORY...]     Check Stories on the PDD interpreter.`,
-      `  pdd ${simulate} [STORY|PROMPT.md]  Run in PDD Simulator (alias: pdd sim).`,
-      "  pdd approve PROMPT           Review prompt changes and record approval.",
-      "  pdd files [--json]           List prompts, Stories, tests and refusals.",
-      "  pdd owner PATH... [--json]   Show which prompt owns each file.",
-      "  pdd update [FILE...]         Inspect changed code vs owning prompts.",
-      "  pdd contracts [sync]         Inspect or sync shared record schemas.",
-      "  pdd jobs                     List active local interpreter jobs.",
-      "  pdd mcp                      Serve repository simulator tools over MCP.",
-      "  pdd upgrade [--main]         Upgrade global pdd and installed skills.",
+      "  pdd status [--changed]     Offline prompts, Stories, owners & Feature Map.",
+      `  pdd ${lint} [STORY] [--diff]  Offline structural, SVG & diff lint (0 AI).`,
+      "  pdd prove [--base REF]     Run lint, repo tests & Feature Map recipes.",
+      `  pdd ${test} [STORY...]        Run Story tests on the PDD interpreter.`,
+      `  pdd ${simulate} [STORY]       Try prompts interactively (short: pdd sim).`,
+      "  pdd approve PROMPT         Review prompt diff and record approval.",
+      "  pdd update [FILE...]       Check changed code against owning prompts.",
+      "  pdd files [--json]         List prompts, Stories, tests and refusals.",
+      "  pdd owner PATH...          Show which prompt owns each file.",
+      "  pdd contracts [sync]       List or sync shared record schemas.",
+      "  pdd jobs                   List active local interpreter jobs.",
+      "  pdd mcp                    Serve repository simulator tools over MCP.",
+      "  pdd upgrade [--main]       Update global pdd and installed /pdd skill.",
     ]),
-    group("Cloud accounts (pdd accounts --help)", [
-      "  pdd accounts [list|status]   Show Cloud accounts, usage and lease health.",
-      "  pdd accounts add|import      Enroll or import Codex and Claude logins.",
-      "  pdd accounts use|next|sync   Pin, rotate or refresh managed logins.",
-      "  pdd accounts share|auto|...  Share accounts or manage shell auto-switch.",
-    ]),
-    group("Product & dependency graph (pdd product --help)", [
-      "  pdd product status|next|start  Inspect or launch planned product runs.",
-      "  pdd product contracts          List shared product records and stale Stories.",
-      "  pdd graph [--open] [--issue N] Inspect or open issue dependency graph.",
+    group("Product & graph (pdd product --help)", [
+      "  pdd product status|next    Inspect multi-part product plan & ready waves.",
+      "  pdd product start RUN      Prepare scoped run issue & /pdd handoff.",
+      "  pdd product contracts      List shared product records and stale Stories.",
+      "  pdd graph [--open]         Inspect or open the issue dependency graph.",
     ]),
     group("Autopilot (pdd autopilot --help)", [
-      "  pdd autopilot doctor           Run read-only first-start checks.",
-      "  pdd autopilot start|stop       Start or stop headless Autopilot timer.",
-      "  pdd autopilot status [--all]   Show repo Autopilot state and next tick.",
-      "  pdd autopilot logs [ISSUE] [-f] List workers or follow live worker logs.",
-      "  pdd autopilot observe|auto|off Set repository Autopilot mode.",
-      "  pdd autopilot trust|untrust    Manage trusted GitHub collaborators.",
-      "  pdd autopilot add|release ...  Opt in issues or release an idle claim.",
-      "  pdd autopilot intake|report    Inspect local intake cards or reports.",
-      "  pdd autopilot alerts|regressions Configure alerts or scan regressions.",
+      "  pdd autopilot doctor       Run read-only preflight checks.",
+      "  pdd autopilot start|stop   Start or stop background Autopilot timer.",
+      "  pdd autopilot status|logs  Check repo state or follow live worker logs.",
+      "  pdd autopilot observe|auto|off  Set repository Autopilot mode.",
+      "  pdd autopilot add|release  Opt in issues or release an idle claim.",
+      "  pdd autopilot trust|untrust  Manage trusted GitHub collaborators.",
+      "  pdd autopilot intake|report  Inspect intake cards or local reports.",
+      "  pdd autopilot alerts|regressions  Configure alerts or scan regressions.",
     ]),
-    group("Metrics, shell & help (pdd metrics --help)", [
-      "  pdd metrics [stages|skills|full|on|off] Show local Autopilot metrics.",
-      "  pdd completion bash|zsh        Print shell tab-completion script.",
-      "  pdd --help | pdd <cmd> --help  Show this overview or full command help.",
-      "  pdd help prompting             Show the 5-step PDD authoring summary.",
-      "  pdd --version | -V | pdd -VV   Show CLI version (and interpreter build).",
+    group("Cloud accounts (pdd accounts --help)", [
+      "  pdd accounts [list|status] Show enrolled/shared Codex & Claude logins.",
+      "  pdd accounts add|import    Add or import a Codex or Claude login.",
+      "  pdd accounts use|next|sync Switch or refresh the active managed login.",
+      "  pdd accounts share|auto    Share logins or toggle terminal auto-switch.",
+    ]),
+    group("Metrics, shell & help", [
+      "  pdd metrics [stages|skills|full]  Show local Autopilot metrics.",
+      "  pdd completion bash|zsh    Print shell tab-completion script.",
+      "  pdd help prompting         Show the 6-step PDD authoring guide.",
+      "  pdd --version | -V | -VV   Show CLI version (and interpreter build).",
     ]),
   ]),
   focusedHelpLines: Object.freeze([
-    `Focused help: run pdd <command> --help (for example, pdd ${test} --help,`,
-    "pdd approve --help, pdd product --help, or pdd autopilot --help) for",
-    "all options, defaults, approval heredocs, and execution details.",
+    `Run pdd <command> --help for full options (for example, pdd ${test} --help,`,
+    "pdd prove --help, pdd approve --help, or pdd autopilot --help).",
   ]),
   closingLines: Object.freeze([
-    "Open Codex or Claude as usual and invoke the PDD skill: $pdd in Codex,",
-    "/pdd in Claude Code (covers product, bug, feature, and small-change).",
-    "The CLI has no merge command. In auto mode, Autopilot merges its own pull",
-    "request after CI, a fresh review and the full test suite pass; required",
-    "human approvals still apply.",
+    "Open Codex ($pdd) or Claude Code (/pdd) to plan products, build features,",
+    "fix bugs, or make small changes. pdd has no merge command; Autopilot auto",
+    "mode merges only after CI, review, tests, and evidence checks pass.",
   ]),
   learnLines: Object.freeze([
     "Learn PDD: run pdd help prompting, or read the skill and prompting guide.",
     "Skill: PACKAGE_ROOT/skills/pdd/SKILL.md",
     "Prompting guide: PACKAGE_ROOT/skills/pdd/references/prompting.md",
   ]),
-  promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write compact JSON steps with an exact check for each criterion.", `4. Check: run pdd ${test} --files STORY && pdd ${test} STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd ${lint} for lint-only diagnosis.`, "5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person."])
+  promptingLines: Object.freeze([
+    "In PDD, prompts are the source. Code follows the prompts.",
+    "1. Orient: run pdd status [--changed] to see prompts, Stories, owners, and the Feature Map.",
+    "2. Prompt: prompts/NAME.prompt.md. State behavior and domain rules in plain English, plus ## Dependencies.",
+    "3. Story & Test: user_stories/STORY.md (numbered ## Acceptance criteria) and tests/STORY.json (or tests/runtime/).",
+    `4. Check: run pdd ${lint} first (offline, 0 AI), then pdd ${test} --files STORY && pdd ${test} STORY.`,
+    "5. Approve: review each changed prompt and run pdd approve PROMPT.",
+    "6. Build & Prove: implement from approved prompts and run pdd prove [--base REF].",
+  ]),
 });
-const approvalHelp = command => `Use the person's words after showing the gate or prompt. Ask the person in any chat, then relay their nonblank words without grading. Ask the person, then relay their words with --said. Without --said, use a separate person terminal. Chat alone never approves. Use this quoted heredoc by default:
+const approvalHelp = command => `Show the prompt diff first, then record the person's later reply with --said (chat alone never approves). Without --said, a person approves interactively via terminal y/N. Default quoted heredoc:
 ${command} --said - <<'PDD_SAID'
 <the person's exact words>
 PDD_SAID
-Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
+Choose a delimiter absent as a whole line from the words and keep it quoted (--said - reads UTF-8 stdin including newlines; simple replies may use --said WORDS). Root pdd.json "strict_approvals": true requires a person terminal.`;
 const routes = [
   // Core PDD workflow
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }, { name: '--skills-dir', kind: 'text' }],
@@ -115,17 +113,17 @@ const routes = [
   // Offline-first PDD structural, SVG and diff lint (0 AI, 0 network, 0 batch-state writes); --remote runs hosted interpreter lint.
   { id: 'lint', prefix: [lint], local: 'lint', removed: ['check', '--lint'], implies: ['--lint'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--json', kind: 'flag' }, { name: '--local', kind: 'flag' }, { name: '--remote', kind: 'flag' }, { name: '--diff', kind: 'optional-text' }, { name: '--base', kind: 'text' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--codex', kind: 'flag' }, { name: '--issue', kind: 'text' }, { name: '--emit-v1', kind: 'flag' }, { name: '--write', kind: 'flag' }, { name: '--bind-criteria', kind: 'flag' }],
-    forms: [form(`pdd ${lint} [STORY...] [--diff [BASE]] [--json]`, 'Run deterministic offline PDD structural, SVG layout, and optional diff checks with 0 AI/network calls and 0 batch-state writes.'),
-      form(`pdd ${lint} --local [STORY...] [--json]`, 'Run offline local structural, Short JSON scenario, criterion-binding and native-evidence lint checks with 0 AI/network calls.'),
-      form(`pdd ${lint} --remote [STORY...] [--json] [--timeout MIN] [--max-calls N]`, 'Run the PDD interpreter structural lint (0 AI calls) on selected Stories and their dependencies; sends no checks. --max-calls selects 1 to 1000 calls for structural preflight.'),
-      form(`pdd ${lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN]`, 'Run local deterministic lint plus read-only Codex readability, Story-vs-Prompt alignment, and optional issue-coverage checks on selected prompts and Stories with clear pass/fail output.'),
-      form(`pdd ${lint} --emit-v1 [STORY...] [--write] [--json]`, 'Compile Short JSON Story tests to full scenario JSON with 0 AI/network calls (--write updates each selected test file on disk).'),
-      form(`pdd ${lint} --bind-criteria [STORY...] [--json]`, 'Bind matching Story acceptance criteria in selected test files to current ac-sha256-... content IDs on disk for review; 0 AI/network calls.')] },
+    forms: [form(`pdd ${lint} [STORY...] [--diff [BASE]] [--json]`, 'Run fast offline structural, SVG layout, and optional diff checks (0 AI, 0 network).'),
+      form(`pdd ${lint} --local [STORY...] [--json]`, 'Run offline local structural, compact scenario JSON, criterion-binding, and native-evidence checks (0 AI, 0 network).'),
+      form(`pdd ${lint} --remote [STORY...] [--json] [--timeout MIN] [--max-calls N]`, 'Run hosted PDD interpreter cross-prompt lint (0 AI calls) on selected Stories and dependencies; --max-calls (1..1000) previews call budgets.'),
+      form(`pdd ${lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN]`, 'Run local deterministic lint plus read-only Codex readability, Story-vs-Prompt alignment, and optional issue-coverage checks.'),
+      form(`pdd ${lint} --emit-v1 [STORY...] [--write] [--json]`, 'Expand compact scenario JSON files to full scenario JSON offline (--write updates each selected test file on disk).'),
+      form(`pdd ${lint} --bind-criteria [STORY...] [--json]`, 'Bind matching Story acceptance criteria in selected test files to current content-hash IDs on disk; 0 AI/network calls.')] },
   { id: 'prove', prefix: ['prove'], local: 'prove', operands: [],
     options: [{ name: '--base', kind: 'text' }, { name: '--test', kind: 'text' }, { name: '--expect', kind: 'text' }, { name: '--overlay', kind: 'text' }, { name: '--setup', kind: 'text' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--json', kind: 'flag' }],
     forms: [
-      form('pdd prove [--base REF] [--timeout MIN] [--json]', 'Run offline lint, diff checks, repository test command and merge-base trusted verify.paths recipes against REF; exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
-      form('pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]', 'Run isolated base-vs-head bug-contrast proof in temporary worktrees: proves CMD fails on base with TEXT and passes on head; exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
+      form('pdd prove [--base REF] [--timeout MIN] [--json]', 'Run offline lint, diff checks, repository tests, and merge-base trusted verify.paths recipes against REF (default timeout: 10 min per step). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
+      form('pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]', 'Run isolated base-vs-head bug-contrast proof in temporary worktrees: proves CMD fails on base with TEXT and passes on head (default timeout: 10 min per phase; --overlay adds extra files alongside changed tests). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
     ] },
   // A quiet word (`sim`) parses like the prefix, with nothing added; help names `sim` once, completion never.
   { id: 'try', prefix: [simulate], local: 'runtime-try', quiet: ['sim'], removed: ['try'], operands: [{ name: 'story', type: 'text', optional: true }],
@@ -140,7 +138,7 @@ const routes = [
       form(`pdd ${simulate} --save-last`, 'Save the last terminal command and its output in the original Story test file.'),
       form(`pdd ${simulate} --stop [STORY|PROMPT.md]`, 'Stop the open Simulator link of a Story, prompt, or exact Try ID.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [{name:'--said',kind:'text'}],
-    forms: [form('pdd approve PROMPT [--said WORDS]', "Show one prompt's text changes since its last approval (plus any embedded runtime interface or native-only declaration). Approve only that prompt. Easy mode accepts the person's nonblank words without grading them. " + approvalHelp('pdd approve PATH'))] },
+    forms: [form('pdd approve PROMPT [--said WORDS]', "Show one prompt's changes since its last approval and approve only that prompt. " + approvalHelp('pdd approve PATH'))] },
   { id: 'files', prefix: ['files'], local: 'project-files', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd files [--json]', 'List prompts, Stories, tests and refusal reasons; no network calls.')] },
   { id: 'owner', prefix: ['owner'], local: 'file-owner', operands: [{ name: 'path', type: 'text', repeat: true }], options: [{ name: '--json', kind: 'flag' }],
@@ -214,7 +212,7 @@ const routes = [
     forms: [form('pdd graph', 'Read native dependencies and saved reviews without AI.'), form('pdd graph --open', 'Open the local viewer.'), form('pdd graph --issue N', 'Select a root issue.'), form('pdd graph --open --issue N --repo OWNER/REPO', 'Open a selected issue in an explicit repository, including outside a checkout.')] },
   // Autopilot
   { id: 'autopilot.doctor', prefix: ['autopilot', 'doctor'], local: 'autopilot-doctor', operands: [], options: [], forms: [form('pdd autopilot doctor', 'Read-only first-start checks and fix commands; no AI call or GitHub write.')] },
-  { id: 'autopilot.start', prefix: ['autopilot', 'start'], local: 'autopilot-start', operands: [], options: [{name:'--runs',kind:'text'},{name:'--checks',kind:'text'},{name:'--engine',kind:'value',choices:['core','full']},{name:'--label',kind:'text'},{name:'--issues',kind:'text'},{name:'--issue',kind:'text'},{name:'--mode',kind:'value',choices:['auto','observe','off']},{name:'--report',kind:'value',choices:['file','draft','off']},{name:'--decisions',kind:'value',choices:['ask','decide']},{name:'--intake',kind:'value',choices:['off','shadow','active']},{name:'--share',kind:'text'},{name:'--agent',kind:'text',choices:['codex','claude','gemini','agy']},{name:'--pool',kind:'text',hidden:true},{name:'--auto-update',kind:'value',choices:['release','main','off']}],
+  { id: 'autopilot.start', prefix: ['autopilot', 'start'], local: 'autopilot-start', operands: [], options: [{name:'--runs',kind:'text'},{name:'--checks',kind:'text'},{name:'--engine',kind:'value',choices:['core','full'],hidden:true},{name:'--label',kind:'text'},{name:'--issues',kind:'text'},{name:'--issue',kind:'text'},{name:'--mode',kind:'value',choices:['auto','observe','off']},{name:'--report',kind:'value',choices:['file','draft','off']},{name:'--decisions',kind:'value',choices:['ask','decide']},{name:'--intake',kind:'value',choices:['off','shadow','active']},{name:'--share',kind:'text'},{name:'--agent',kind:'text',choices:['codex','claude','gemini','agy']},{name:'--pool',kind:'text',hidden:true},{name:'--auto-update',kind:'value',choices:['release','main','off']}],
     forms: [form('pdd autopilot start [--runs N] [--checks N] [--label NAME] [--issues N,M] [--issue N] [--mode auto|observe|off] [--report file|draft|off] [--decisions ask|decide] [--intake off|shadow|active] [--share PERCENT] [--agent codex|claude|gemini|agy] [--auto-update release|main|off]', 'Start this repo with headless agent jobs (the core engine): check now and every 10 minutes, with no AI call on empty ticks. Autopilot works on issues with an opt-in label (--label NAME or autopilot.label in pdd.json) or on vetted ready cards when --intake active is enabled; without --intake active, a start with no label starts nothing. --issues N,M or --issue N limits this machine to those issue numbers (pass off, all or clear to clear). --runs and --checks override machine-sized run and heavy-check limits; --label, --mode and --report save this machine\'s opt-in label, mode and report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --decisions saves this machine\'s decision mode (ask asks a person only for a big decision; decide, the default, never asks); --intake saves this machine\'s intake mode (shadow writes local intake cards that never change what starts; active selects ready cards, refines improve cards via read-only repo inspection and groups related small work; off is the default). --share saves the percent of this machine\'s CPU and memory that Autopilot may use (1-100, default 50; it sets the automatic slots, the room check and the timer\'s memory limit). --agent saves or replaces this machine\'s agent and sign-in profile. --auto-update saves this machine\'s between-tick self-update mode for a user-owned global pdd install and its skills when no job is publishing or merging (release is the default; main tracks promptdriven/pdd main; off disables self-update).')] },
   { id: 'autopilot.suite', prefix: ['autopilot', 'suite'], local: 'autopilot-suite', operands: [], options: [{name:'--command',kind:'text'},{name:'--timeout',kind:'integer',min:0,max:120}],
     forms: [form('pdd autopilot suite --command COMMAND [--timeout MIN]', 'Run a full test suite through the shared machine queue without workflow dependencies (machine-sized check slots, 30-minute default timeout; --timeout 0 runs with no time limit).')] },

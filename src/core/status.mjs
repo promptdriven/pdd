@@ -7,6 +7,8 @@ import { findOwners } from '../file-owner.mjs';
 import { runtimePreflightSlice } from '../runtime-seam.mjs';
 import { gitFiles, resolveRepoRoot } from '../shared/git-context.mjs';
 import { readBoundedUtf8 } from '../shared/safe-read.mjs';
+import { resolveDefaultBaseRef } from './lint/diagnostics.mjs';
+import { loadVerifyConfig, matchVerifyPaths } from './verify-paths.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const START = '<!-- pdd:start -->';
@@ -15,31 +17,14 @@ const END = '<!-- pdd:end -->';
 const canonicalPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
 
-function globToRegExp(pattern) {
-  let re = '^';
-  const text = String(pattern ?? '').replace(/\\/g, '/');
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === '*' && text[i + 1] === '*') {
-      if (text[i + 2] === '/') { re += '(?:.*/)?'; i += 2; }
-      else { re += '.*'; i += 1; }
-    } else if (ch === '*') re += '[^/]*';
-    else if (ch === '?') re += '[^/]';
-    else if (/[.+^${}()|[\]\\]/.test(ch)) re += `\\${ch}`;
-    else re += ch;
+function hasBalancedPddBlock(text) {
+  const lines = String(text ?? '').split(/\r?\n/);
+  const starts = [], ends = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] === START) starts.push(i);
+    if (lines[i] === END) ends.push(i);
   }
-  return new RegExp(`${re}$`);
-}
-
-function matchVerifyPaths(paths, verifyPaths) {
-  if (!paths.length || !verifyPaths.length) return [];
-  return verifyPaths.filter(entry => {
-    const globs = Array.isArray(entry.when) ? entry.when : [];
-    return globs.some(glob => {
-      const re = globToRegExp(glob);
-      return paths.some(file => re.test(file));
-    });
-  });
+  return starts.length === 1 && ends.length === 1 && starts[0] < ends[0];
 }
 
 function readInstructionBlockState(root) {
@@ -58,38 +43,15 @@ function readInstructionBlockState(root) {
       } catch { return { instruction_file: name, has_pdd_block: false }; }
     }
     try {
-      const lines = readBoundedUtf8(target, { maxBytes: 256 * 1024, noFollow: true }).split(/\r?\n/);
-      return { instruction_file: name, has_pdd_block: lines.includes(START) && lines.includes(END) };
+      const content = readBoundedUtf8(target, { maxBytes: 256 * 1024, noFollow: true });
+      return { instruction_file: name, has_pdd_block: hasBalancedPddBlock(content) };
     } catch { return { instruction_file: name, has_pdd_block: false }; }
   }
   return { instruction_file: null, has_pdd_block: false };
 }
 
-function readFeatureMap(root) {
-  const file = join(root, 'pdd.json');
-  if (!existsSync(file)) return { test: null, paths: [] };
-  try {
-    const cfg = JSON.parse(readBoundedUtf8(file, { maxBytes: 256 * 1024, noFollow: true }));
-    const verify = cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg.verify : null;
-    if (!verify || typeof verify !== 'object' || Array.isArray(verify)) return { test: null, paths: [] };
-    const test = typeof verify.test === 'string' && verify.test.trim() ? verify.test.trim() : null;
-    const rawPaths = Array.isArray(verify.paths) ? verify.paths : [];
-    const paths = rawPaths
-      .filter(item => item && typeof item === 'object' && typeof item.id === 'string' && item.id.trim())
-      .map(item => ({
-        id: item.id.trim(),
-        name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : item.id.trim(),
-        when: Array.isArray(item.when) ? item.when.filter(w => typeof w === 'string' && w.trim()) : [],
-        run: typeof item.run === 'string' ? item.run.trim() : '',
-        needs: Array.isArray(item.needs) ? item.needs.filter(n => typeof n === 'string' && n.trim()) : [],
-      }));
-    return { test, paths };
-  } catch {
-    return { test: null, paths: [] };
-  }
-}
-
 async function detectChangedFiles(root, ports = {}) {
+  const found = new Set();
   const changedMapPath = join(HERE, 'changed-map.mjs');
   if (existsSync(changedMapPath)) {
     try {
@@ -97,19 +59,11 @@ async function detectChangedFiles(root, ports = {}) {
       if (typeof mod.analyzeChangedMap === 'function') {
         const res = mod.analyzeChangedMap({ cwd: root }, ports);
         if (res?.ok && res.report) {
-          const scoped = (res.report.scope?.files ?? []).filter(canonicalPath);
-          if (scoped.length) return [...new Set(scoped)].sort();
+          for (const p of (res.report.scope?.files ?? []).filter(canonicalPath)) found.add(p);
         }
       }
-      const fn = mod.mapChangedFiles ?? mod.inspectChangedMap ?? mod.default;
-      if (typeof fn === 'function') {
-        const res = await fn({ root }, ports);
-        if (Array.isArray(res?.changed)) return [...new Set(res.changed.filter(canonicalPath))].sort();
-        if (Array.isArray(res?.files)) return [...new Set(res.files.map(f => (typeof f === 'string' ? f : f?.path)).filter(canonicalPath))].sort();
-      }
-    } catch { /* Fall back cleanly to git status when optional changed-map fails. */ }
+    } catch { /* Fall back cleanly to git status/diff when optional changed-map fails. */ }
   }
-  const found = new Set();
   const status = spawnSync('git', ['status', '--porcelain', '-z', '--untracked-files=all'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   if (status.status === 0 && status.stdout) {
     const tokens = status.stdout.split('\0').filter(Boolean);
@@ -125,6 +79,20 @@ async function detectChangedFiles(root, ports = {}) {
   const diff = spawnSync('git', ['diff', '--name-only', '-z', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   if (diff.status === 0 && diff.stdout) {
     for (const path of diff.stdout.split('\0').filter(Boolean)) if (canonicalPath(path)) found.add(path);
+  }
+  // Also include committed branch changes since the default branch merge-base when HEAD is ahead of base.
+  const baseRef = resolveDefaultBaseRef(root);
+  if (baseRef) {
+    const mb = spawnSync('git', ['merge-base', 'HEAD', baseRef], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const baseSha = mb.status === 0 ? mb.stdout.trim() : '';
+    const headSha = head.status === 0 ? head.stdout.trim() : '';
+    if (baseSha && headSha && baseSha !== headSha) {
+      const branchDiff = spawnSync('git', ['diff', '--name-only', '-z', `${baseSha}...HEAD`], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      if (branchDiff.status === 0 && branchDiff.stdout) {
+        for (const path of branchDiff.stdout.split('\0').filter(Boolean)) if (canonicalPath(path)) found.add(path);
+      }
+    }
   }
   return [...found].sort();
 }
@@ -159,8 +127,8 @@ export async function inspectStatus({ cwd = process.cwd(), paths = [], changed =
     : [];
 
   const { instruction_file, has_pdd_block } = readInstructionBlockState(root);
-  const featureMap = readFeatureMap(root);
-  const matchedVerify = matchVerifyPaths(targetPaths, featureMap.paths);
+  const featureMap = loadVerifyConfig(root);
+  const matchedVerify = matchVerifyPaths(featureMap, targetPaths).matched;
 
   return {
     schema_version: 'pdd.status.v1',
@@ -183,6 +151,7 @@ export async function inspectStatus({ cwd = process.cwd(), paths = [], changed =
       test: featureMap.test,
       paths: featureMap.paths.map(({ id, name, when, needs }) => ({ id, name, when, needs })),
       matched: matchedVerify.map(p => p.id),
+      ...(featureMap.errors.length ? { errors: featureMap.errors } : {}),
     },
     ...(changed ? { changed: changedFiles } : {}),
     files: ownership.map(({ path, owner, owners, source, certain, note }) => ({ path, owner, owners, source, certain, note })),
@@ -196,6 +165,9 @@ function formatStatusText(view) {
     `Repo init: ${view.has_pdd_block ? `ready (${view.instruction_file})` : 'not initialized (run `pdd init` to add the 4-line PDD block)'}`,
     `Feature Map: ${c.verify_paths} path${c.verify_paths === 1 ? '' : 's'}${view.verify.test ? ` · test: ${view.verify.test}` : ''}`,
   ];
+  if (view.verify.errors?.length) {
+    for (const err of view.verify.errors) lines.push(`  verify config error: ${err}`);
+  }
   if (view.verify.paths.length) {
     const shown = view.verify.paths.slice(0, 4).map(p => `${p.id} (${p.name})`).join(', ');
     const more = view.verify.paths.length > 4 ? ` +${view.verify.paths.length - 4} more` : '';
