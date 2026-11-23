@@ -240,6 +240,22 @@ function tokenizeShellCommand(cmd) {
 function recordScriptToken(raw, curDir, baseCtx, found) {
   const trimmedRaw = typeof raw === 'string' ? raw.trim() : '';
   if (!trimmedRaw || trimmedRaw.startsWith('-') || trimmedRaw.startsWith('/') || trimmedRaw.includes('\\') || trimmedRaw.includes('\0')) return;
+  // Resolve raw un-collapsed operands against the trusted Git tree FIRST so symlinks before `..`
+  // (e.g. `links/bench/../benchmark/file`) follow OS symlink-first traversal before collapsing `..`.
+  const rawCandidates = new Set();
+  if (curDir) rawCandidates.add(`${curDir}/${trimmedRaw}`);
+  rawCandidates.add(trimmedRaw);
+  if (baseCtx.hasBaseLookup) {
+    for (const rawCand of rawCandidates) {
+      const phys = resolvePhysicalBasePath(rawCand, baseCtx, { recordSymlinksInto: found });
+      if (phys.ok && phys.path && !TEST_FILE_RE.test(phys.path)) {
+        const targetEntry = inspectBaseEntry(phys.path, baseCtx);
+        if (targetEntry?.kind === 'file' || SCRIPT_EXT_RE.test(phys.path)) {
+          found.add(phys.path);
+        }
+      }
+    }
+  }
   const relCandidates = new Set();
   if (curDir) {
     const joined = normalizeCandidateRepoPath(`${curDir}/${trimmedRaw}`);
@@ -295,10 +311,11 @@ function scanCommandScripts(cmd, initialDir, initialPrevDir, depth, baseCtx, fou
     if ((tok === 'cd' || tok === 'pushd') && i + 1 < tokens.length) {
       let j = i + 1;
       let physical = false;
+      let sawDashDash = false;
       while (j < tokens.length && (tokens[j] === '--' || /^-[LP]+$/.test(tokens[j]))) {
         const flag = tokens[j];
         j += 1;
-        if (flag === '--') break;
+        if (flag === '--') { sawDashDash = true; break; }
         for (const ch of flag.slice(1)) {
           if (ch === 'P') physical = true;
           else if (ch === 'L') physical = false;
@@ -310,11 +327,11 @@ function scanCommandScripts(cmd, initialDir, initialPrevDir, depth, baseCtx, fou
         if (arg === '-') {
           if (physical) {
             if (!baseCtx.hasBaseLookup) {
-              baseCtx.unresolvedPhysical.push('cd -P - (no trusted base tree available)');
+              baseCtx.unresolvedPhysical.push(`${tok} -P - (no trusted base tree available)`);
             } else {
               const phys = resolvePhysicalBasePath(prevDir, baseCtx, { recordSymlinksInto: found, requireDirectory: true });
               if (!phys.ok) {
-                baseCtx.unresolvedPhysical.push(`cd -P - (${phys.reason})`);
+                baseCtx.unresolvedPhysical.push(`${tok} -P - (${phys.reason})`);
               } else {
                 prevDir = curDir;
                 curDir = phys.path;
@@ -325,17 +342,17 @@ function scanCommandScripts(cmd, initialDir, initialPrevDir, depth, baseCtx, fou
             prevDir = curDir;
             curDir = next;
           }
-        } else if (arg.startsWith('-')) {
+        } else if (!sawDashDash && arg.startsWith('-')) {
           baseCtx.unresolvedPhysical.push(`${tok} ${arg} (unsupported flag)`);
         } else if (arg && !arg.startsWith('/') && !arg.includes('\\') && !arg.includes('\0')) {
           const rawDir = curDir ? `${curDir}/${arg}` : arg;
           if (physical) {
             if (!baseCtx.hasBaseLookup) {
-              baseCtx.unresolvedPhysical.push(`cd -P ${arg} (no trusted base tree available)`);
+              baseCtx.unresolvedPhysical.push(`${tok} -P ${arg} (no trusted base tree available)`);
             } else {
               const phys = resolvePhysicalBasePath(rawDir, baseCtx, { recordSymlinksInto: found, requireDirectory: true });
               if (!phys.ok) {
-                baseCtx.unresolvedPhysical.push(`cd -P ${arg} (${phys.reason})`);
+                baseCtx.unresolvedPhysical.push(`${tok} -P ${arg} (${phys.reason})`);
               } else {
                 prevDir = curDir;
                 curDir = phys.path;

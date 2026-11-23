@@ -144,19 +144,78 @@ export function safeJsonParse(raw, { maxBytes = 262_144, maxDepth = 16, sanitize
   return err ? { ok: false, value: null, error: err } : { ok: true, value: cleaned, error: null };
 }
 
-function stripHtmlComments(input) {
-  let text = String(input ?? '');
-  while (true) {
-    const start = text.indexOf('<!--');
-    if (start < 0) return text;
-    const end = text.indexOf('-->', start + 4);
-    text = end >= 0 ? text.slice(0, start) + text.slice(end + 3) : text.slice(0, start) + text.slice(start + 4);
+function stripHtmlCommentsDetailed(input) {
+  const src = String(input ?? '');
+  const out = [];
+  let unclosedComment = false;
+  let pos = 0;
+
+  const popTail3 = () => {
+    let tail = '';
+    while (tail.length < 3 && out.length > 0) {
+      const chunk = out.pop();
+      const need = 3 - tail.length;
+      if (chunk.length > need) {
+        out.push(chunk.slice(0, chunk.length - need));
+        tail = chunk.slice(chunk.length - need) + tail;
+      } else {
+        tail = chunk + tail;
+      }
+    }
+    return tail;
+  };
+
+  const closeCommentFrom = (bodyStart) => {
+    // HTML5 §13.2.5.42 abrupt-closing comments `<!-->` and `<!--->` close immediately
+    // rather than swallowing a subsequent comment opener on a later line.
+    if (src[bodyStart] === '>') return bodyStart + 1;
+    if (src[bodyStart] === '-' && src[bodyStart + 1] === '>') return bodyStart + 2;
+    const end = src.indexOf('-->', bodyStart);
+    return end >= 0 ? end + 3 : -1;
+  };
+
+  while (pos < src.length) {
+    const start = src.indexOf('<!--', pos);
+    if (start < 0) {
+      out.push(src.slice(pos));
+      break;
+    }
+    if (start > pos) out.push(src.slice(pos, start));
+    const after = closeCommentFrom(start + 4);
+    if (after < 0) {
+      // Unclosed HTML comment: drop everything through EOF so hidden content cannot leak.
+      unclosedComment = true;
+      break;
+    }
+    pos = after;
+    // Handle boundary-spliced synthetic `<!--` openers (e.g. `<!<!--x-->--`) in single-pass O(N).
+    while (pos <= src.length) {
+      const tail = popTail3();
+      const probe = tail + src.slice(pos, pos + 3);
+      const spliceIdx = probe.indexOf('<!--');
+      if (spliceIdx < 0) {
+        if (tail) out.push(tail);
+        break;
+      }
+      if (spliceIdx > 0) out.push(tail.slice(0, spliceIdx));
+      pos += Math.max(0, spliceIdx + 4 - tail.length);
+      const synAfter = closeCommentFrom(pos);
+      if (synAfter < 0) {
+        unclosedComment = true;
+        pos = src.length;
+        break;
+      }
+      pos = synAfter;
+    }
+    if (unclosedComment) break;
   }
+  return { text: out.join(''), unclosedComment };
 }
 
-/** Hardening 6: Strip HTML comments, blockquotes, and unified diff lines (preserving ordinary `- ` Markdown bullets). */
-export function stripInjectionContainers(raw) {
-  const lines = stripHtmlComments(sanitizeUntrustedText(raw)).split(/\r?\n/), out = [];
+/** Hardening 6 (detailed): Strip HTML comments (closed & unclosed), blockquotes, and unified diff lines. */
+export function stripInjectionContainersDetailed(raw) {
+  const { text: withoutComments, unclosedComment } = stripHtmlCommentsDetailed(sanitizeUntrustedText(raw));
+  const lines = withoutComments.split(/\r?\n/), out = [];
   let inDiffHunk = false;
   for (const line of lines) {
     if (/^\s*>/.test(line)) continue;
@@ -165,7 +224,12 @@ export function stripInjectionContainers(raw) {
     if (/^[+-]\s*(?:\{|```|~~~)/.test(line)) continue;
     out.push(line);
   }
-  return out.join('\n');
+  return { text: out.join('\n'), unclosedComment };
+}
+
+/** Hardening 6: Strip HTML comments, blockquotes, and unified diff lines (preserving ordinary `- ` Markdown bullets). */
+export function stripInjectionContainers(raw) {
+  return stripInjectionContainersDetailed(raw).text;
 }
 
 /** Hardening 7: Extract strictly closed JSON fences and detect unclosed/truncated fence attacks. */
@@ -369,7 +433,8 @@ export function parseTypedOrLegacyOutput(raw, { schemaName = null, schema = null
     return valid.ok ? { ok: true, source: 'typed-json', value: env.value, reason: null, error: null, finalRejection: false } : fail('typed-json', valid.error, false);
   }
 
-  const stripped = stripInjectionContainers(text);
+  const { text: stripped, unclosedComment } = stripInjectionContainersDetailed(text);
+  if (unclosedComment) return fail('legacy-fallback', 'Unclosed HTML comment rejected.', true);
   const { blocks, unclosedFence } = extractClosedJsonFences(stripped);
   if (unclosedFence) return fail('legacy-fallback', 'Unclosed fenced block rejected.', true);
 

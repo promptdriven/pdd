@@ -53,10 +53,12 @@ import {
   TYPED_SCHEMAS,
   buildCoreReviewSchema,
   buildNativeSchemaArgs,
+  extractClosedJsonFences,
   formatHarnessPrReceipt,
   parseHarnessPrReceipt,
   parseTypedOrLegacyOutput,
   safeJsonParse,
+  stripInjectionContainersDetailed,
   toProviderStrictSchema,
 } from './autopilot/gates/typed-schemas.mjs';
 import {
@@ -3671,25 +3673,61 @@ function parseFinalAssistantText(rawText) {
       return null;
     }
   }
-  // 2. Fallback scan: collect all verdict objects from fenced blocks and prose, failing closed on conflicting verdicts.
-  const fenceMatches = [...trimmed.matchAll(/```(?:json)?[ \t]*\r?\n([\s\S]*?)```/gi)];
+  // 2. Fallback scan: strip injection containers (closed & unclosed HTML comments, blockquotes, diffs)
+  // before extracting strictly closed fences and prose verdicts; reject ambiguous unclosed comments/fences.
+  const { text: cleaned, unclosedComment } = stripInjectionContainersDetailed(trimmed);
+  if (unclosedComment) return null;
+  const { unclosedFence } = extractClosedJsonFences(cleaned);
+  if (unclosedFence) return null;
+
+  const lines = cleaned.split(/\r?\n/);
+  const closedBlocks = [];
+  const outsideLines = [];
+  let activeFence = null;
+  let lastBlockEndLine = -1;
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const ln = lines[idx];
+    if (activeFence) {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(ln);
+      if (close && close[1][0] === activeFence.ch && close[1].length >= activeFence.len) {
+        if (activeFence.lang === 'json' || activeFence.lang === '') {
+          closedBlocks.push(activeFence.lines.join('\n'));
+          lastBlockEndLine = idx;
+        }
+        activeFence = null;
+      } else {
+        activeFence.lines.push(ln);
+      }
+      continue;
+    }
+    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(ln);
+    if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
+      activeFence = {
+        ch: open[1][0],
+        len: open[1].length,
+        lang: (open[2].trim().split(/[\s{`~]/)[0] ?? '').toLowerCase(),
+        lines: [],
+      };
+      continue;
+    }
+    outsideLines.push(ln);
+  }
+
   let trailingFenceVerdict = null;
-  const lastFence = fenceMatches.at(-1);
-  if (lastFence && trimmed.slice(lastFence.index + lastFence[0].length).trim() === '') {
-    const fencedObjs = scanJsonObjectsBounded(lastFence[1]).filter(o => typeof o.verdict === 'string');
+  if (closedBlocks.length > 0 && lines.slice(lastBlockEndLine + 1).every(ln => !ln.trim())) {
+    const fencedObjs = scanJsonObjectsBounded(closedBlocks.at(-1)).filter(o => typeof o.verdict === 'string');
     const fencedKinds = new Set(fencedObjs.map(o => o.verdict));
     if (fencedObjs.length > 0 && fencedKinds.size === 1) {
       trailingFenceVerdict = fencedObjs.at(-1);
     }
   }
   const allVerdicts = [];
-  for (const m of fenceMatches) {
-    for (const o of scanJsonObjectsBounded(m[1])) {
+  for (const block of closedBlocks) {
+    for (const o of scanJsonObjectsBounded(block)) {
       if (typeof o.verdict === 'string') allVerdicts.push(o);
     }
   }
-  const withoutFences = trimmed.replace(/```(?:json)?[ \t]*\r?\n[\s\S]*?```/gi, '\n');
-  for (const o of scanJsonObjectsBounded(withoutFences)) {
+  for (const o of scanJsonObjectsBounded(outsideLines.join('\n'))) {
     if (typeof o.verdict === 'string') allVerdicts.push(o);
   }
   if (!allVerdicts.length) return null;
