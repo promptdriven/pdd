@@ -13,6 +13,15 @@ const commandWords = command => {
 };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const unrun = (step, reason) => ({step_id:step?.step_id, status:'not run', reason});
+// A plain-Markdown prompt (no Runtime interface) gets its command from pdd.json code.commands (#3641).
+const missingCommand = entry => `CLI implementation command is missing or unsupported. ${entry} has no Runtime interface, so add "code": {"commands": {"${entry}": "COMMAND"}} to pdd.json (whitespace-separated argv, no shell).`;
+function codeCommands(source, visible) {
+  if (!visible.has('pdd.json')) return {};
+  try {
+    const commands = JSON.parse(source.read({path:'pdd.json'}).content.toString('utf8'))?.code?.commands;
+    return object(commands) ? commands : {};
+  } catch { return {}; }
+}
 function execute(step, doc, found, root, ports) {
   if (step.simulation_overrides !== undefined && (!object(step.simulation_overrides) || Object.keys(step.simulation_overrides).length))
     return unrun(step, 'Step simulation overrides are not supported.');
@@ -22,6 +31,11 @@ function execute(step, doc, found, root, ports) {
   let prompt;
   try { prompt = readPrompt(root, found.visible, step.entry_path, found.workspace); } catch { return unrun(step, 'Entry prompt is unavailable.'); }
   if (Object.hasOwn(step, 'expected_error')) return unrun(step, 'Expected-error steps are unsupported.');
+  let words;
+  if (prompt.error === 'interface-missing' && prompt.interface === undefined) {
+    words = commandWords(Object.hasOwn(ports.commands, step.entry_path) ? ports.commands[step.entry_path] : undefined);
+    if (!words) return unrun(step, missingCommand(step.entry_path));
+  } else {
   const iface = prompt.interface;
   if (!object(iface) || !Array.isArray(iface.entries) || !iface.entries.every(object) ||
       !['resources', 'calls'].every(key => iface[key] === undefined || Array.isArray(iface[key])) ||
@@ -35,8 +49,10 @@ function execute(step, doc, found, root, ports) {
   if (!['input_schema','result_schema'].every(key => conventions.some(c => c.path === `/entries/${index}/${key}` && c.convention === 'cli'))) return unrun(step, 'Entry is not a CLI.');
   const admission = checkInput(step.input, iface.entries[index].input_schema, 0);
   if (!iface.entries[index].input_schema || admission.refusals.length || admission.warnings.length) return unrun(step, 'CLI input schema cannot admit this input.');
-  const implementation = iface.entries[index].implementation, words = commandWords(implementation?.command);
+  const implementation = iface.entries[index].implementation;
+  words = commandWords(implementation?.command);
   if (implementation?.kind !== 'cli' || !words) return unrun(step, 'CLI implementation command is missing or unsupported.');
+  }
   if (!step.input || !Array.isArray(step.input.argv) || !step.input.argv.every(x => typeof x === 'string') || (step.input.stdin !== undefined && typeof step.input.stdin !== 'string') || Object.keys(step.input).some(k => !['argv','stdin'].includes(k))) return unrun(step, 'CLI input is unsupported.');
   if (!step.checks?.length || step.checks.some(c => c.target !== 'result' || !['/stdout','/stderr','/exit_code'].includes(c.path) || c.op !== 'equals')) return unrun(step, 'A check is unsupported.');
   let result;
@@ -69,6 +85,7 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
   const git = spawn('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}), commit = git.status === 0 ? git.stdout.trim() : null;
   const state = spawn('git',['status','--porcelain','--untracked-files=normal'],{cwd:root,encoding:'utf8'}), dirty = state.status === 0 ? !!state.stdout.trim() : null;
   const source = createStrictSourceAccess(root, found.workspace).sourceFilePort(found.visible);
+  const commands = codeCommands(source, found.visible);
   const groups = new Map();
   for (const item of missing) groups.set(item.storyPath, [{scenario:null, step:unrun({step_id:item.storyPath}, item.line)}]);
   const explicitScenarioPaths = new Set(
@@ -87,7 +104,7 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
   const checkedCriterionTextsFor = candidate => {
     try {
       if (candidate.error || scenarioShapeRefusal(candidate.doc, candidate.path)) return new Set();
-      const admission = preflight({ root, found, selected: [candidate] }).rows[0];
+      const admission = preflight({ root, found, selected: [candidate], allowMissingInterfaces: true }).rows[0];
       if (admission.refusals.length || admission.native_only?.length) return new Set();
       const raw = source.read({ path: candidate.path }).content;
       const storySource = source.read({ path: candidate.storyPath }).content;
@@ -125,7 +142,7 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
     const story = test.storyPath ?? test.path, steps = groups.get(story) ?? [];
     let refusal = test.error || scenarioShapeRefusal(test.doc,test.path), doc, admission;
     try {
-      admission = preflight({root,found,selected:[test]}).rows[0];
+      admission = preflight({root,found,selected:[test],allowMissingInterfaces:true}).rows[0];
       if (admission.native_only?.length) {
         steps.push({scenario:test.path, step:unrun({step_id:test.path}, `Native-only interface: ${admission.native_only.map(item => item.reason).join('; ')}`)});
         groups.set(story,steps);
@@ -169,7 +186,7 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
     else {
       const covered = new Set(doc.steps.flatMap(step => step.checks.map(check => check.criterion_id)));
       if (!siblingCoverageValid && doc.criteria.some(criterion => !covered.has(criterion.id))) steps.push({scenario:test.path, step:unrun({step_id:test.path}, 'A Story criterion has no check.')});
-      steps.push(...doc.steps.map(step => ({scenario:test.path, step:execute(step,doc,found,root,{spawn})})));
+      steps.push(...doc.steps.map(step => ({scenario:test.path, step:execute(step,doc,found,root,{spawn,commands})})));
     }
     groups.set(story,steps);
   }

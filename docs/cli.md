@@ -715,8 +715,13 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd --stop [STORY\|PROMPT.md]` | Stop the open Prompt Interpreter link of a Story, prompt, or exact Try ID. |
 <!-- END GENERATED: cli-commands:interpreter -->
 
-For `--target code`, each tested Runtime entry declares
-`"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}`. The command
+For `--target code`, a plain-Markdown entry prompt (no Runtime interface) takes
+its command from the root `pdd.json`, keyed by the entry path:
+`{"code": {"commands": {"prompts/tip.prompt.md": "node bin/tip.mjs"}}}`. Its steps
+show that it is a CLI call: string `argv`, optional `stdin`, and only the checks
+below. A prompt with an embedded Runtime interface declares
+`"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}` on each tested
+entry instead, and `pdd.json` does not override it. The command
 is split into words without a shell; quoted or shell-dependent command strings
 are unsupported. Cases supply string `argv` and optional UTF-8 `stdin`.
 The runner supports `equals` checks on `/exit_code`, `/stdout` and `/stderr`.
