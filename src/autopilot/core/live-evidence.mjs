@@ -249,21 +249,31 @@ function recordScriptToken(raw, curDir, baseCtx, found) {
   if (rootCand) relCandidates.add(rootCand);
   for (const cand of relCandidates) {
     if (TEST_FILE_RE.test(cand)) continue;
+    const directEntry = baseCtx.hasBaseLookup ? inspectBaseEntry(cand, baseCtx) : null;
     if (SCRIPT_EXT_RE.test(cand)) {
       found.add(cand);
-      if (!cand.includes('/') && (!baseCtx.hasBaseLookup || !fileExistsInBase(cand, baseCtx))) {
+      if (!cand.includes('/') && (!baseCtx.hasBaseLookup || directEntry?.kind !== 'file')) {
         found.add(`**/${cand}`);
       }
-    } else if (baseCtx.hasBaseLookup && fileExistsInBase(cand, baseCtx)) {
+    } else if (directEntry?.kind === 'file') {
       found.add(cand);
+    }
+    if (baseCtx.hasBaseLookup && directEntry?.kind !== 'file') {
+      const phys = resolvePhysicalBasePath(cand, baseCtx, { recordSymlinksInto: found });
+      if (phys.ok && phys.path && phys.path !== cand && !TEST_FILE_RE.test(phys.path)) {
+        const targetEntry = inspectBaseEntry(phys.path, baseCtx);
+        if (targetEntry?.kind === 'file' || SCRIPT_EXT_RE.test(phys.path)) {
+          found.add(phys.path);
+        }
+      }
     }
   }
 }
 
-function scanCommandScripts(cmd, initialDir, depth, baseCtx, found) {
+function scanCommandScripts(cmd, initialDir, initialPrevDir, depth, baseCtx, found) {
   const tokens = tokenizeShellCommand(cmd);
   let curDir = initialDir;
-  let prevDir = initialDir;
+  let prevDir = initialPrevDir;
   const dirStack = [];
   const subshellStack = [];
   for (let i = 0; i < tokens.length; i += 1) {
@@ -284,8 +294,11 @@ function scanCommandScripts(cmd, initialDir, depth, baseCtx, found) {
     }
     if ((tok === 'cd' || tok === 'pushd') && i + 1 < tokens.length) {
       let j = i + 1;
+      let physical = false;
       while (j < tokens.length && (tokens[j] === '--' || tokens[j] === '-L' || tokens[j] === '-P')) {
         const flag = tokens[j];
+        if (flag === '-P') physical = true;
+        else if (flag === '-L') physical = false;
         j += 1;
         if (flag === '--') break;
       }
@@ -293,18 +306,46 @@ function scanCommandScripts(cmd, initialDir, depth, baseCtx, found) {
         const arg = String(tokens[j] ?? '').trim();
         if (tok === 'pushd') dirStack.push(curDir);
         if (arg === '-') {
-          const next = prevDir;
-          prevDir = curDir;
-          curDir = next;
+          if (physical) {
+            if (!baseCtx.hasBaseLookup) {
+              baseCtx.unresolvedPhysical.push('cd -P - (no trusted base tree available)');
+            } else {
+              const phys = resolvePhysicalBasePath(prevDir, baseCtx, { recordSymlinksInto: found });
+              if (!phys.ok) {
+                baseCtx.unresolvedPhysical.push(`cd -P - (${phys.reason})`);
+              } else {
+                prevDir = curDir;
+                curDir = phys.path;
+              }
+            }
+          } else {
+            const next = prevDir;
+            prevDir = curDir;
+            curDir = next;
+          }
         } else if (arg && !arg.startsWith('-') && !arg.startsWith('/') && !arg.includes('\\') && !arg.includes('\0')) {
           const rawDir = curDir ? `${curDir}/${arg}` : arg;
-          const normDir = posix.normalize(rawDir).replace(/^(?:\.\/)+/, '');
-          if (normDir === '.' || normDir === '') {
-            prevDir = curDir;
-            curDir = '';
-          } else if (!normDir.startsWith('..')) {
-            prevDir = curDir;
-            curDir = normDir;
+          if (physical) {
+            if (!baseCtx.hasBaseLookup) {
+              baseCtx.unresolvedPhysical.push(`cd -P ${arg} (no trusted base tree available)`);
+            } else {
+              const phys = resolvePhysicalBasePath(rawDir, baseCtx, { recordSymlinksInto: found });
+              if (!phys.ok) {
+                baseCtx.unresolvedPhysical.push(`cd -P ${arg} (${phys.reason})`);
+              } else {
+                prevDir = curDir;
+                curDir = phys.path;
+              }
+            }
+          } else {
+            const normDir = posix.normalize(rawDir).replace(/^(?:\.\/)+/, '');
+            if (normDir === '.' || normDir === '') {
+              prevDir = curDir;
+              curDir = '';
+            } else if (!normDir.startsWith('..')) {
+              prevDir = curDir;
+              curDir = normDir;
+            }
           }
         }
         i = j;
@@ -334,9 +375,9 @@ function scanCommandScripts(cmd, initialDir, depth, baseCtx, found) {
       && !cleanToken.includes('\0')
       && (fileExistsInBase(cleanToken, baseCtx) || (curDir && fileExistsInBase(normalizeCandidateRepoPath(`${curDir}/${cleanToken}`), baseCtx))),
     );
-    // Recurse into nested shell commands (e.g. `sh -c '...'`) inheriting curDir without mutating parent curDir.
+    // Recurse into nested shell commands (e.g. `sh -c '...'`) inheriting curDir and prevDir (OLDPWD) without mutating parent state.
     if (depth < 3 && !exactBaseFile && /[\s"'`=<>|&;()]/.test(tok)) {
-      scanCommandScripts(tok, curDir, depth + 1, baseCtx, found);
+      scanCommandScripts(tok, curDir, prevDir, depth + 1, baseCtx, found);
     }
   }
 }
@@ -352,26 +393,94 @@ function readGitHeadSha(cwd) {
   } catch { return null; }
 }
 
-function fileExistsInBase(relPath, { headTree, baseTree, baseTip, baseTipValid, fs }) {
+function inspectBaseEntry(relPath, baseCtx) {
+  if (!relPath || relPath.startsWith('/') || relPath.includes('\0')) return null;
+  if (baseCtx.entryCache.has(relPath)) return baseCtx.entryCache.get(relPath);
+  let entry = null;
   // When a verified merge-base commit SHA is known, consult ONLY the case-sensitive Git commit object
   // (never local filesystem lstatSync, which can false-match untracked files or macOS case-insensitive names).
-  if (baseTipValid) {
-    const gitCwd = headTree || baseTree;
-    if (!gitCwd) return false;
+  if (baseCtx.baseTipValid) {
+    const gitCwd = baseCtx.headTree || baseCtx.baseTree;
+    if (gitCwd) {
+      try {
+        const res = spawnSync('git', ['--literal-pathspecs', 'ls-tree', '-z', baseCtx.baseTip, '--', relPath], {
+          cwd: gitCwd, encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        if (res.status === 0) {
+          const rec = String(res.stdout ?? '').split('\0').find(Boolean);
+          const tabIdx = rec ? rec.indexOf('\t') : -1;
+          if (tabIdx > 0 && rec.slice(tabIdx + 1) === relPath) {
+            const [mode, type] = rec.slice(0, tabIdx).split(/\s+/);
+            if (mode === '120000' && type === 'blob') {
+              const tgt = spawnSync('git', ['cat-file', '-p', `${baseCtx.baseTip}:${relPath}`], {
+                cwd: gitCwd, encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'],
+              });
+              entry = { kind: 'symlink', target: tgt.status === 0 ? String(tgt.stdout ?? '') : null };
+            } else if (type === 'blob') {
+              entry = { kind: 'file' };
+            } else if (type === 'tree') {
+              entry = { kind: 'dir' };
+            }
+          }
+        }
+      } catch { entry = null; }
+    }
+  } else if (baseCtx.baseTree) {
     try {
-      const res = spawnSync('git', ['cat-file', '-t', `${baseTip}:${relPath}`], {
-        cwd: gitCwd, encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      return res.status === 0 && String(res.stdout ?? '').trim() === 'blob';
-    } catch { return false; }
+      const full = join(baseCtx.baseTree, relPath);
+      const st = baseCtx.fs.lstatSync(full);
+      if (st.isSymbolicLink()) {
+        let target = null;
+        try { target = baseCtx.fs.readlinkSync(full); } catch { target = null; }
+        entry = { kind: 'symlink', target };
+      } else if (st.isFile()) {
+        entry = { kind: 'file' };
+      } else if (st.isDirectory()) {
+        entry = { kind: 'dir' };
+      }
+    } catch { entry = null; }
   }
-  if (baseTree) {
-    try {
-      const st = fs.lstatSync(join(baseTree, relPath));
-      if (st.isFile() && !st.isSymbolicLink()) return true;
-    } catch { /* absent */ }
+  baseCtx.entryCache.set(relPath, entry);
+  return entry;
+}
+
+function fileExistsInBase(relPath, baseCtx) {
+  return inspectBaseEntry(relPath, baseCtx)?.kind === 'file';
+}
+
+function resolvePhysicalBasePath(rawPath, baseCtx, { recordSymlinksInto = null } = {}) {
+  const clean = String(rawPath ?? '');
+  if (!clean) return { ok: true, path: '' };
+  if (clean.startsWith('/') || clean.includes('\0') || clean.includes('\\')) {
+    return { ok: false, reason: 'invalid-path' };
   }
-  return false;
+  const queue = clean.split('/').filter(Boolean);
+  const resolved = [];
+  let hops = 0;
+  while (queue.length > 0) {
+    const seg = queue.shift();
+    if (seg === '.') continue;
+    if (seg === '..') {
+      if (resolved.length === 0) return { ok: false, reason: 'escapes-repo' };
+      resolved.pop();
+      continue;
+    }
+    const candidate = resolved.length ? `${resolved.join('/')}/${seg}` : seg;
+    const entry = baseCtx.hasBaseLookup ? inspectBaseEntry(candidate, baseCtx) : null;
+    if (entry?.kind === 'symlink') {
+      if (recordSymlinksInto && !TEST_FILE_RE.test(candidate)) recordSymlinksInto.add(candidate);
+      hops += 1;
+      if (hops > 16) return { ok: false, reason: 'symlink-loop' };
+      const target = typeof entry.target === 'string' ? entry.target : '';
+      if (!target || target.startsWith('/') || target.includes('\0') || target.includes('\\')) {
+        return { ok: false, reason: 'external-or-unreadable-symlink' };
+      }
+      queue.unshift(...target.split('/').filter(Boolean));
+      continue;
+    }
+    resolved.push(seg);
+  }
+  return { ok: true, path: resolved.join('/') };
 }
 
 function normalizeCandidateRepoPath(raw) {
@@ -390,11 +499,11 @@ function extractRecipeScriptPaths(baseVerify, { headTree = null, baseTree = null
     ...(Array.isArray(baseVerify?.paths) ? baseVerify.paths.map(p => p?.run).filter(nonEmpty) : []),
   ];
   const hasBaseLookup = Boolean((baseTipValid && (headTree || baseTree)) || (!baseTipValid && baseTree));
-  const baseCtx = { hasBaseLookup, headTree, baseTree, baseTip, baseTipValid, fs };
+  const baseCtx = { hasBaseLookup, headTree, baseTree, baseTip, baseTipValid, fs, entryCache: new Map(), unresolvedPhysical: [] };
   for (const cmd of commands) {
-    scanCommandScripts(cmd, '', 0, baseCtx, found);
+    scanCommandScripts(cmd, '', '', 0, baseCtx, found);
   }
-  return [...found].sort();
+  return { paths: [...found].sort(), unresolved: [...baseCtx.unresolvedPhysical] };
 }
 
 function redactTextWithValues(text, sandbox, secretValues = []) {
@@ -506,7 +615,10 @@ export async function collectLiveEvidenceContract({
     && baseVerify.configured
     && Array.isArray(baseVerify.paths)
     && baseVerify.paths.length > 0;
-  const recipeProtectedPatterns = extractRecipeScriptPaths(baseVerify, { headTree, baseTree, baseTip: cleanBaseTip, baseTipValid, fs });
+  const recipeScripts = extractRecipeScriptPaths(baseVerify, { headTree, baseTree, baseTip: cleanBaseTip, baseTipValid, fs });
+  const recipeProtectedPatterns = recipeScripts.unresolved.length > 0
+    ? [...new Set([...recipeScripts.paths, '**'])]
+    : recipeScripts.paths;
   const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, cleanFiles);
 
   // 2. Load 0600 test-env metadata & probe host capabilities ONLY when merge-base verify.paths (or explicit probeOptions) need them;
@@ -772,6 +884,11 @@ export async function collectLiveEvidenceContract({
   } else if (basePolicyUnreadable) {
     proveOutcome = OUTCOME_NOT_PROVED;
     proveReasons = ['Could not inspect merge-base pdd.json verify policy (missing checkout or unavailable base commit).'];
+    gapCheck = { missingPathIds: [], unprovedAcIds: [], flags: ['INSUFFICIENT_SCOPE'] };
+    requireGapCheck = true;
+  } else if (recipeScripts.unresolved.length > 0) {
+    proveOutcome = OUTCOME_NOT_PROVED;
+    proveReasons = recipeScripts.unresolved.map(r => `Could not resolve physical recipe directory safely against trusted base tree: ${r}`);
     gapCheck = { missingPathIds: [], unprovedAcIds: [], flags: ['INSUFFICIENT_SCOPE'] };
     requireGapCheck = true;
   } else if (!headTree) {

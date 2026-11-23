@@ -146,7 +146,13 @@ export function safeJsonParse(raw, { maxBytes = 262_144, maxDepth = 16, sanitize
 
 /** Hardening 6: Strip HTML comments, blockquotes, and unified diff lines (preserving ordinary `- ` Markdown bullets). */
 export function stripInjectionContainers(raw) {
-  const lines = sanitizeUntrustedText(raw).replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/), out = [];
+  let text = sanitizeUntrustedText(raw);
+  let prev;
+  do {
+    prev = text;
+    text = text.replace(/<!--[\s\S]*?-->/g, '').replace(/<!--/g, '');
+  } while (text !== prev);
+  const lines = text.split(/\r?\n/), out = [];
   let inDiffHunk = false;
   for (const line of lines) {
     if (/^\s*>/.test(line)) continue;

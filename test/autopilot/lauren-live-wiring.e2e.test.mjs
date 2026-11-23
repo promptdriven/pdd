@@ -2,7 +2,7 @@ import '../helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { agentCommand, resolveCodexMultiAgent } from '../../src/agent-job.mjs';
@@ -1350,6 +1350,71 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   });
   assert.equal(evaluateEvidenceContract(emptyBaseAdv.contractInput).decision, 'HOLD');
   assert.ok(emptyBaseAdv.contractInput.reportReadErrors.includes('report:base-empty'));
+
+  // 8. Loop 12 Astra P1 #1 & #2: child shell inherits parent OLDPWD (while keeping parent isolated),
+  // AND `cd -P` resolves tracked Git directory symlinks physically against the trusted base tree (failing closed on escaping/looping symlinks)!
+  const symRepo = makeTmpDir(t, 'pdd-live-loop12-sym-');
+  const sgit = (...args) => execFileSync('git', args, { cwd: symRepo, encoding: 'utf8' }).trim();
+  sgit('init', '-b', 'main');
+  sgit('config', 'user.email', 'dev@example.com');
+  sgit('config', 'user.name', 'Dev');
+  mkdirSync(join(symRepo, 'scripts/benchmark'), { recursive: true });
+  mkdirSync(join(symRepo, 'links'), { recursive: true });
+  mkdirSync(join(symRepo, 'src'), { recursive: true });
+  writeFileSync(join(symRepo, 'src/a.mjs'), 'export const x = 1;\n');
+  writeFileSync(join(symRepo, 'scripts/benchmark/review-eval-manifest.json'), '{"ok":true}\n');
+  symlinkSync('../scripts/benchmark', join(symRepo, 'links/bench'));
+  symlinkSync('../../outside', join(symRepo, 'links/escape'));
+  symlinkSync('loop', join(symRepo, 'links/loop'));
+
+  const runLoop12Case = async (runCmd, changed = ['scripts/benchmark/review-eval-manifest.json']) => {
+    writeFileSync(join(symRepo, 'pdd.json'), JSON.stringify({
+      verify: {
+        paths: [{ id: 'p', when: ['src/**', 'scripts/**', 'links/**'], run: runCmd }],
+      },
+    }, null, 2));
+    sgit('add', '.');
+    sgit('commit', '-m', `case: ${runCmd}`);
+    const tip = sgit('rev-parse', 'HEAD');
+    return collectLiveEvidenceContract({
+      repo: 'acme/sym',
+      job: { issue: 120, head: tip },
+      headTree: symRepo,
+      baseTip: tip,
+      changedFiles: changed,
+      suite: { state: 'pass' },
+      suiteCmd: 'true',
+      runProveFn: provedStub,
+    });
+  };
+
+  // Child shell inherits parent OLDPWD (`cd -` inside `sh -c`) while parent stays in `scripts`.
+  const childOldpwd = await runLoop12Case('cd scripts/benchmark && cd .. && sh -c "cd - && cat review-eval-manifest.json" && cat benchmark/review-eval-manifest.json');
+  assert.equal(evaluateEvidenceContract(childOldpwd.contractInput).holdReason, 'protected_path', 'child sh -c inherits OLDPWD');
+  assert.equal(childOldpwd.contractInput.protectedPatterns.includes('scripts/benchmark/review-eval-manifest.json'), true);
+
+  // `cd -P` through tracked symlink `links/bench` -> `../scripts/benchmark`, plus `cd -P links/bench/..` and `cd -L links/bench && cd -P ..`!
+  for (const symCmd of [
+    'cd -P links/bench && cat review-eval-manifest.json',
+    'cd -P links/bench/.. && cat benchmark/review-eval-manifest.json',
+    'cd -L links/bench && cd -P .. && cat benchmark/review-eval-manifest.json',
+  ]) {
+    const res = await runLoop12Case(symCmd, ['scripts/benchmark/review-eval-manifest.json']);
+    assert.equal(evaluateEvidenceContract(res.contractInput).holdReason, 'protected_path', `cd -P symlink must protect target: ${symCmd}`);
+    assert.equal(res.contractInput.protectedPatterns.includes('scripts/benchmark/review-eval-manifest.json'), true, symCmd);
+    assert.equal(res.contractInput.protectedPatterns.includes('links/bench'), true, `traversed symlink itself is protected: ${symCmd}`);
+  }
+
+  // Escaping symlink (`../../outside`) and symlink loop (`loop -> loop`) under `cd -P` MUST fail closed!
+  for (const badSymCmd of [
+    'cd -P links/escape && cat anything',
+    'cd -P links/loop && cat anything',
+  ]) {
+    const res = await runLoop12Case(badSymCmd, ['src/a.mjs']);
+    const verdict = evaluateEvidenceContract(res.contractInput);
+    assert.equal(verdict.decision, 'HOLD', `unresolvable cd -P symlink must HOLD: ${badSymCmd}`);
+    assert.equal(verdict.holdReason, 'protected_path', `unresolvable cd -P symlink must fail closed with protected_path: ${badSymCmd}`);
+  }
 });
 
 test('G3 polyglot base-control and diffTestReports detect missing/skipped/failing tests across ecosystems', async t => {

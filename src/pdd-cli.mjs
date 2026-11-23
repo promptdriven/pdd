@@ -27,8 +27,22 @@ function hasExecutableOnPath(name, env) {
   });
 }
 
+function hasGhHostsConfig(env) {
+  const configDir = (env?.GH_CONFIG_DIR && env.GH_CONFIG_DIR.trim())
+    || (env?.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim()
+      ? join(env.XDG_CONFIG_HOME.trim(), 'gh')
+      : join(env?.HOME || homedir(), '.config', 'gh'));
+  try { return existsSync(join(configDir, 'hosts.yml')); } catch { return false; }
+}
+
 function checkPddAccountNonBlocking(env) {
-  if (!hasExecutableOnPath('gh', env)) return { checked: false, connected: false };
+  if ((env?.GH_TOKEN && env.GH_TOKEN.trim()) || (env?.GITHUB_TOKEN && env.GITHUB_TOKEN.trim())) {
+    return { checked: true, connected: true };
+  }
+  // Avoid spawning `gh` when unconfigured, because `gh` creates `$HOME/.local/state/gh` on startup.
+  if (!hasExecutableOnPath('gh', env) || !hasGhHostsConfig(env)) {
+    return { checked: false, connected: false };
+  }
   try {
     const res = spawnSync('gh', ['auth', 'token'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500 });
     return { checked: true, connected: !res.error && res.status === 0 && Boolean(res.stdout?.trim()) };

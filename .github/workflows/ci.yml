@@ -134,7 +134,7 @@ jobs:
           cd "$smoke_dir/harbor"
           git init --quiet
           git add .
-          "$installed" lint --local --json place-order > "$smoke_dir/lint.json"
+          "$installed" lint --json place-order > "$smoke_dir/lint.json"
           node --input-type=module - "$smoke_dir/lint.json" "$PDD_STATE_DIR" <<'NODE'
           import assert from 'node:assert/strict';
           import { existsSync, readFileSync } from 'node:fs';

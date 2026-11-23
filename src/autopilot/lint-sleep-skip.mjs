@@ -178,7 +178,7 @@ function isPureCounter(cond, body) {
   const m = /^([A-Za-z_$][\w$]*)\s*(?:<|<=|>|>=|!=|!==)\s*(?:\d+|[A-Za-z_$][\w$.]*)$/.exec(cond);
   if (!m || POLL_DEADLINE_RE.test(cond) || POLL_STATE_RE.test(cond)) return false;
   if (COUNTER_VAR_RE.test(m[1])) return true;
-  const e = m[1].replace(/\$/g, '\\$');
+  const e = m[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(?:\\+\\+|--)\\s*\\b${e}\\b|\\b${e}\\b\\s*(?:\\+\\+|--|\\+=|-=|=(?!=)\\s*${e}\\s*[+-])`).test(body);
 }
 

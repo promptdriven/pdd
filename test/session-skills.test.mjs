@@ -215,9 +215,13 @@ test('INSTALL4: setup updates only older or changed copies that carry the pdd ma
 
 // Wrong: Claude started with CLAUDE_CONFIG_DIR reads <dir>/skills, so a ~/.claude copy is invisible to it.
 test('INSTALL5: with CLAUDE_CONFIG_DIR set, setup installs Claude skills in <dir>/skills', t => {
-  const { sandbox, home, run } = packageCopy(t);
+  const { sandbox, home, env, run } = packageCopy(t);
+  // Even when `gh` exists on PATH (as on Linux `/usr/bin/gh`), an unconfigured HOME must NOT spawn `gh` or create `$HOME/.local`.
+  const ghShimDir = join(sandbox, 'gh-shim');
+  mkdirSync(ghShimDir);
+  writeFileSync(join(ghShimDir, 'gh'), '#!/bin/sh\nmkdir -p "$HOME/.local/state/gh"\nexit 1\n', { mode: 0o755 });
   const config = join(sandbox, 'claude config');
-  const result = run(['setup'], { CLAUDE_CONFIG_DIR: config });
+  const result = run(['setup'], { CLAUDE_CONFIG_DIR: config, PATH: `${ghShimDir}:${env.PATH}` });
   assert.equal(result.status, 0, result.stderr);
   const skillLabel = `${PDD_SKILL_NAMES.length} PDD skill${PDD_SKILL_NAMES.length === 1 ? '' : 's'}`;
   assert.ok(result.stdout.includes(`Installed ${skillLabel} to ${join(config, 'skills')}: ${PDD_SKILL_NAMES.join(', ')}\n`), result.stdout);

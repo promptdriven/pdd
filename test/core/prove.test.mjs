@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import {
   detectHostCapabilities,
   isProductionSurfaceFile,
@@ -354,7 +354,13 @@ test('G1/G2 polyglot prove works offline on real Python (pytest/pyproject.toml) 
   assert.equal(pyContrast.exitCode, EXIT_PROVED, JSON.stringify(pyContrast.receipt));
   assert.equal(pyContrast.outcome, OUTCOME_PROVED);
 
-  const pyZero = runProve({ cwd: pyRepo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const pyShimDir = mkdtempSync(join(tmpdir(), 'pdd-prove-pyshim-'));
+  t.after(() => rmSync(pyShimDir, { recursive: true, force: true }));
+  writeFileSync(join(pyShimDir, 'pytest'), '#!/bin/sh\nexec python3 -m unittest discover -s tests\n', { mode: 0o755 });
+  const pyZero = runProve(
+    { cwd: pyRepo, json: true, env: { ...process.env, PATH: `${pyShimDir}${delimiter}${process.env.PATH ?? ''}` } },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
   assert.equal(pyZero.exitCode, EXIT_PROVED, JSON.stringify(pyZero.receipt));
   assert.equal(pyZero.receipt.test.command, 'pytest');
 
