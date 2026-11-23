@@ -493,7 +493,7 @@ test('Attack 3: Story with unbound acceptance criteria in paired runtime JSON fi
 test('Dogfood fixes: no stale RUNBOOK.md in NO_TESTS and actionable error when git origin remote is missing', async t => {
   assert.equal(SEAM_NO_TESTS, SEL_NO_TESTS);
   assert.equal(SEAM_NO_TESTS.includes('RUNBOOK.md'), false);
-  assert.match(SEAM_NO_TESTS, /skills\/pdd\/references\/stories\.md/);
+  assert.match(SEAM_NO_TESTS, /pdd help prompting/);
 
   const noRemoteRepo = initGitRepo(t, 'pdd-no-origin-', { 'README.md': '# Local only\n' });
   await assert.rejects(

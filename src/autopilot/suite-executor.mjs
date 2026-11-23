@@ -114,7 +114,9 @@ export async function executeSuite(command, { cwd, env, timeoutMs, onChild, onOu
     const killGroup = signal => {
       if (child.pid) {
         try { (ports.kill ?? process.kill)(-child.pid, signal); }
-        catch (error) { if (error.code !== 'ESRCH') throw error; }
+        catch (error) {
+          if (error.code !== 'ESRCH' && !(error.code === 'EPERM' && !ports.kill && process.platform === 'darwin')) throw error;
+        }
       }
     };
     const stop = (code, why, sig = null) => {
