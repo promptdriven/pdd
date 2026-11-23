@@ -988,6 +988,196 @@ test('Loop 3 P0/P1/P2 regressions: un-spoofable comparator veto, unconditional C
   assert.equal(evaluateEvidenceContract(diffErr.contractInput).decision, 'HOLD');
 });
 
+test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret redaction, root/extensionless/quoted/--flag=path recipe scripts, empty baseReport, deleted Stories, shardId set equality, and unverified fallback baseTree', async t => {
+  const dir = makeTmpDir(t, 'pdd-live-loop4-');
+  const unrelatedDir = makeTmpDir(t, 'pdd-live-loop4-unrelated-');
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+  git('init', '-b', 'main');
+  git('config', 'user.email', 'dev@example.com');
+  git('config', 'user.name', 'Dev');
+
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  mkdirSync(join(dir, 'tools'), { recursive: true });
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  mkdirSync(join(dir, 'user_stories'), { recursive: true });
+
+  writeFileSync(join(dir, 'verify.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(dir, 'tools/run-e2e'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(dir, 'tools/setup.mjs'), 'export {};\n');
+  writeFileSync(join(dir, 'scripts/verify my app.mjs'), 'process.exit(0);\n');
+  writeFileSync(join(dir, 'tools/env-audit.mjs'), [
+    'const hasA = Boolean(process.env.ALPHA_SECRET);',
+    'const hasB = Boolean(process.env.BETA_SECRET);',
+    'if (hasA && hasB) { console.error("BOTH_PRESENT"); process.exit(2); }',
+    'if (process.env.FAIL_SHORT === "1") { console.error("val=" + (process.env.ALPHA_SECRET || "")); process.exit(1); }',
+    'process.exit(0);',
+  ].join('\n') + '\n');
+
+  writeFileSync(join(dir, 'pdd.json'), JSON.stringify({
+    verify: {
+      test: 'node --import=./tools/setup.mjs tools/env-audit.mjs',
+      paths: [
+        { id: 'root-sh', when: ['src/**', '*.sh'], run: './verify.sh' },
+        { id: 'extless', when: ['src/**', 'tools/**'], run: 'sh tools/run-e2e' },
+        { id: 'quoted', when: ['src/**', 'scripts/**'], run: 'node "scripts/verify my app.mjs"' },
+        { id: 'alpha', when: ['src/alpha.mjs'], needs: ['account:alpha'], run: 'node tools/env-audit.mjs' },
+        { id: 'beta', when: ['src/beta.mjs'], needs: ['account:beta'], run: 'node tools/env-audit.mjs' },
+      ],
+    },
+  }, null, 2));
+  writeFileSync(join(dir, 'src/alpha.mjs'), 'export const a = 1;\n');
+  writeFileSync(join(dir, 'src/beta.mjs'), 'export const b = 1;\n');
+  writeFileSync(join(dir, 'user_stories/s.md'), '# S\n\nAs a person.\n\n## Acceptance criteria\n\n1. Works.\n');
+  git('add', '.');
+  git('commit', '-m', 'base');
+  const baseTip = git('rev-parse', 'HEAD');
+
+  writeFileSync(join(dir, 'src/alpha.mjs'), 'export const a = 2;\n');
+  writeFileSync(join(dir, 'src/beta.mjs'), 'export const b = 2;\n');
+  git('add', '.');
+  git('commit', '-m', 'head');
+  const head = git('rev-parse', 'HEAD');
+
+  const junitOk = '<?xml version="1.0"?><testsuite tests="1" failures="0"><testcase classname="s" name="ok"/></testsuite>\n';
+  const provedStub = async () => ({
+    exitCode: 0,
+    outcome: 'Proved',
+    receipt: {
+      dirty: false, proofScope: 'commit',
+      lint: { ok: true, errors: [] }, diff: { ok: true, errors: [] },
+      test: { ok: true, exitCode: 0, summary: 'pass' },
+      paths: [
+        { id: 'root-sh', status: 'proved', exitCode: 0, summary: 'ok', run: './verify.sh', needs: [] },
+        { id: 'extless', status: 'proved', exitCode: 0, summary: 'ok', run: 'sh tools/run-e2e', needs: [] },
+        { id: 'quoted', status: 'proved', exitCode: 0, summary: 'ok', run: 'node "scripts/verify my app.mjs"', needs: [] },
+        { id: 'alpha', status: 'proved', exitCode: 0, summary: 'ok', run: 'node tools/env-audit.mjs', needs: [] },
+      ],
+      notProvedReasons: [],
+    },
+  });
+
+  // 1. Astra P0 #1: Inherited parent account keys scrubbed from verify.test & sibling recipes; short 4-char secret redacted!
+  const cfgDir = makeTmpDir(t, 'pdd-loop4-env-');
+  chmodSync(cfgDir, 0o700);
+  const testEnvPath = join(cfgDir, 'autopilot-test-env.json');
+  writeFileSync(testEnvPath, JSON.stringify({
+    accounts: {
+      alpha: { ALPHA_SECRET: 'ab12' },
+      beta: { BETA_SECRET: 'cd34' },
+    },
+  }), { mode: 0o600 });
+  chmodSync(testEnvPath, 0o600);
+
+  const inheritedRes = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 50, head, review: { verdict: 'PASS', head } },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs', 'src/beta.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node tools/env-audit.mjs',
+    testEnvPath,
+    env: { PATH: process.env.PATH, ALPHA_SECRET: 'parent_a', BETA_SECRET: 'parent_b' },
+  });
+  assert.equal(inheritedRes.proveOutcome, 'Proved', JSON.stringify(inheritedRes.proveReasons));
+
+  const shortSecretFail = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 51, head, review: { verdict: 'PASS', head } },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node tools/env-audit.mjs',
+    testEnvPath,
+    env: { PATH: process.env.PATH, FAIL_SHORT: '1' },
+  });
+  assert.equal(shortSecretFail.proveOutcome, 'Failed');
+  assert.equal(JSON.stringify(shortSecretFail.proveReasons).includes('ab12'), false, 'short 4-char secret redacted in proveReasons');
+  assert.equal(JSON.stringify(shortSecretFail.proveReceipt).includes('ab12'), false, 'short 4-char secret redacted in proveReceipt');
+
+  // 2. Fable P1 #1 + Astra P0 #2: root-level verify.sh, extensionless tools/run-e2e, --import=./tools/setup.mjs,
+  // quoted "scripts/verify my app.mjs", and nested scripts/sub/verify-a.rb ALL trigger Check 4 protected_path!
+  for (const scriptFile of ['verify.sh', 'tools/run-e2e', 'tools/setup.mjs', 'scripts/verify my app.mjs', 'scripts/sub/verify-a.rb']) {
+    const res = await collectLiveEvidenceContract({
+      repo: 'acme/app',
+      job: { issue: 52, head },
+      headTree: dir,
+      baseTip,
+      changedFiles: ['src/alpha.mjs', scriptFile],
+      suite: { state: 'pass' },
+      suiteCmd: 'node tools/env-audit.mjs',
+      runProveFn: provedStub,
+    });
+    assert.equal(evaluateEvidenceContract(res.contractInput).holdReason, 'protected_path', `expected protected_path for ${scriptFile}`);
+  }
+
+  // 3. Astra P1 #1: Explicitly supplied whitespace-only baseReport with no configured verify.report -> HOLD!
+  const emptyBaseRep = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 53, head },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node tools/env-audit.mjs',
+    baseReport: '   \n  ',
+    headReport: junitOk,
+    runProveFn: provedStub,
+  });
+  assert.equal(evaluateEvidenceContract(emptyBaseRep.contractInput).decision, 'HOLD');
+  assert.ok(emptyBaseRep.contractInput.reportReadErrors.includes('report:base-empty'));
+
+  // 4. Astra P1 #2: Deleted Story supplied ONLY through allTouchedFiles -> HOLD!
+  const deletedStory = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 54, head },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs'],
+    allTouchedFiles: ['src/alpha.mjs', 'user_stories/deleted.md'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node tools/env-audit.mjs',
+    runProveFn: provedStub,
+  });
+  const deletedStoryContract = evaluateEvidenceContract(deletedStory.contractInput);
+  assert.equal(deletedStoryContract.decision, 'HOLD');
+  assert.ok(deletedStoryContract.checks.acCoverage.unprovedAcIds.includes('user_stories/deleted.md#unreadable'));
+
+  // 5. Astra P1 #3: Shard ID set mismatch {A, B} vs {A, C} with equal counts -> HOLD (partial_shard_mismatch)!
+  const shardSetMismatch = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 55, head },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/alpha.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node tools/env-audit.mjs',
+    baseReport: junitOk,
+    headReport: junitOk,
+    baseReportMeta: { expectedShards: 2, completedShards: 2, shardIds: ['A', 'B'] },
+    headReportMeta: { expectedShards: 2, completedShards: 2, shardIds: ['A', 'C'] },
+    runProveFn: provedStub,
+  });
+  assert.equal(shardSetMismatch.reportDiff?.reason, 'partial_shard_mismatch');
+  assert.equal(shardSetMismatch.reportDiff?.detail, 'shard_id_set_mismatch');
+  assert.equal(evaluateEvidenceContract(shardSetMismatch.contractInput).decision, 'HOLD');
+
+  // 6. Astra P1 #4: Unavailable baseTip SHA + unrelated fallback directory with no pdd.json -> HOLD (never advisory MERGE)!
+  const badFallback = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 56, head },
+    headTree: dir,
+    baseTree: unrelatedDir,
+    baseTip: 'e'.repeat(40),
+    changedFiles: ['src/alpha.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node tools/env-audit.mjs',
+  });
+  assert.equal(badFallback.advisory, false);
+  assert.equal(evaluateEvidenceContract(badFallback.contractInput).decision, 'HOLD');
+});
+
 test('G3 polyglot base-control and diffTestReports detect missing/skipped/failing tests across ecosystems', async t => {
   const goDir = makeTmpDir(t, 'pdd-poly-go-');
   writeFileSync(join(goDir, 'go.mod'), 'module example.com/calc\n\ngo 1.22\n');

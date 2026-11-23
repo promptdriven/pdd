@@ -59,14 +59,24 @@ function checkShardIntegrity(baseMeta, headMeta) {
     if (!Number.isInteger(expected) || expected < 1) return { ok: false, detail: `${label}_invalid_expected_shards` };
     if (meta.shards !== undefined && meta.expectedShards !== undefined && meta.shards !== meta.expectedShards) return { ok: false, detail: `${label}_shard_field_mismatch` };
     if (!Number.isInteger(meta.completedShards) || meta.completedShards !== expected) return { ok: false, detail: `${label}_incomplete_shards` };
-    if (meta.shardIds !== undefined && (!Array.isArray(meta.shardIds) || new Set(meta.shardIds).size !== expected)) return { ok: false, detail: `${label}_missing_shard_ids` };
-    return { ok: true, expected };
+    let shardIdList = null;
+    if (meta.shardIds !== undefined) {
+      if (!Array.isArray(meta.shardIds)) return { ok: false, detail: `${label}_missing_shard_ids` };
+      const cleanIds = [...new Set(meta.shardIds.map(id => String(id ?? '').trim()).filter(Boolean))].sort();
+      if (cleanIds.length !== expected) return { ok: false, detail: `${label}_missing_shard_ids` };
+      shardIdList = cleanIds;
+    }
+    return { ok: true, expected, shardIdList };
   };
   const b = parseSide('base', baseMeta);
   if (!b.ok) return b;
   const h = parseSide('head', headMeta);
   if (!h.ok) return h;
   if (b.expected !== h.expected) return { ok: false, detail: 'shard_count_mismatch' };
+  if ((b.shardIdList !== null) !== (h.shardIdList !== null)) return { ok: false, detail: 'one_sided_shard_ids' };
+  if (b.shardIdList && (b.shardIdList.length !== h.shardIdList.length || b.shardIdList.some((id, i) => id !== h.shardIdList[i]))) {
+    return { ok: false, detail: 'shard_id_set_mismatch' };
+  }
   return { ok: true, detail: null };
 }
 

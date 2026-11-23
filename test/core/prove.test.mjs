@@ -819,6 +819,18 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
   );
   assert.equal(tapDiag.exitCode, EXIT_PROVED, JSON.stringify(tapDiag.receipt));
 
+  // Loop 4 Astra P1 #5 / Fable P2 #6: exit 127 command failure MUST NEVER be cleared by matching --expect!
+  writeFileSync(
+    join(synRepo, 'app.test.mjs'),
+    "import { broken } from './app.mjs';\nif (broken) { console.error('ImportError: cannot import foo from bar'); process.exit(127); }\n",
+  );
+  const exit127Diag = runProve(
+    { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'ImportError: cannot import foo from bar', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(exit127Diag.exitCode, EXIT_NOT_PROVED, JSON.stringify(exit127Diag.receipt));
+  assert.equal(exit127Diag.receipt.reason, 'setup-error');
+
   // 7. Loop 3 Astra P0 #2: a failing `git status` MUST NEVER certify checkout as clean (`proofScope: 'unknown'`, Not proved)!
   const cleanRepo = initGitRepo(t, 'pdd-prove-git-status-fail-');
   writeFileSync(join(cleanRepo, 'pdd.json'), JSON.stringify({ verify: { test: `${nodeBin} -e "process.exit(0)"` } }) + '\n');

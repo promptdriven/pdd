@@ -68,7 +68,13 @@ function execShellCommand(command, { cwd, env, timeoutMs, preScrubbed = false },
   const timedOut = proc.error?.code === 'ETIMEDOUT';
   const exitCode = typeof proc.status === 'number' ? proc.status : null;
   const signal = proc.signal ?? '';
-  const setupFailure = exitCode !== 0 ? findSetupFailureLine(stderr, stdout) : null;
+  const hardSetupFailure = Boolean(
+    (proc.error && !timedOut)
+    || (signal && !timedOut)
+    || (exitCode !== null && exitCode >= 129 && exitCode <= 192)
+    || [126, 127].includes(exitCode),
+  );
+  const setupFailure = exitCode !== 0 && !hardSetupFailure ? findSetupFailureLine(stderr, stdout) : null;
   const setupError = proc.error && !timedOut
     ? causeText(proc.error.message)
     : (signal && !timedOut
@@ -78,7 +84,7 @@ function execShellCommand(command, { cwd, env, timeoutMs, preScrubbed = false },
             : ([126, 127].includes(exitCode) ? `Command exited ${exitCode}` : (setupFailure ? causeText(setupFailure.normalizedLine) : ''))));
   return {
     command, ok: exitCode === 0 && !proc.error && !signal, exitCode, signal, timedOut,
-    durationMs: Math.max(0, Date.now() - started), stdout, stderr, setupError, setupFailure,
+    durationMs: Math.max(0, Date.now() - started), stdout, stderr, setupError, setupFailure, hardSetupFailure,
     summary: summarizeTestOutput(stdout, stderr, setupError, timedOut),
   };
 }
@@ -324,7 +330,8 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
     const trimmedExpect = expect.trim();
     const errLine = basePhase.setupFailure;
     const expectTargetsErrorClass = Boolean(
-      errLine?.errorClass
+      !basePhase.hardSetupFailure
+      && errLine?.errorClass
       && trimmedExpect.toLowerCase() !== errLine.errorClass.toLowerCase()
       && trimmedExpect.toLowerCase() !== `${errLine.errorClass.toLowerCase()}:`
       && new RegExp(`\\b${errLine.errorClass}\\b`, 'i').test(trimmedExpect)

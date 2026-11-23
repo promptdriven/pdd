@@ -203,28 +203,113 @@ function oracleCommandForRunner(detected, suiteCmd) {
 
 const SCRIPT_EXT_RE = /\.(?:[cm]?js|[cm]?ts|sh|bash|py|rb|pl|ps1)$/i;
 
-function extractRecipeScriptPaths(baseVerify) {
+function tokenizeShellCommand(cmd) {
+  const tokens = [];
+  let cur = '';
+  let quote = null;
+  const src = String(cmd ?? '');
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (quote) {
+      if (ch === '\\' && quote === '"' && i + 1 < src.length) {
+        cur += src[i + 1];
+        i += 1;
+        continue;
+      }
+      if (ch === quote) { quote = null; continue; }
+      cur += ch;
+      continue;
+    }
+    if (ch === '\'' || ch === '"') { quote = ch; continue; }
+    if (ch === '\\' && i + 1 < src.length) { cur += src[i + 1]; i += 1; continue; }
+    if (/[\s;&|()]/.test(ch)) {
+      if (cur) { tokens.push(cur); cur = ''; }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
+function readGitHeadSha(cwd) {
+  if (!nonEmpty(cwd)) return null;
+  try {
+    const res = spawnSync('git', ['rev-parse', '--verify', 'HEAD^{commit}'], {
+      cwd, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const sha = String(res.stdout ?? '').trim();
+    return res.status === 0 && GIT_SHA_RE.test(sha) ? sha : null;
+  } catch { return null; }
+}
+
+function fileExistsInBase(relPath, { headTree, baseTree, baseTip, baseTipValid, fs }) {
+  if (baseTree) {
+    try {
+      const st = fs.lstatSync(join(baseTree, relPath));
+      if (st.isFile() && !st.isSymbolicLink()) return true;
+    } catch { /* fall through to git cat-file */ }
+  }
+  if (headTree && baseTipValid) {
+    try {
+      const res = spawnSync('git', ['cat-file', '-t', `${baseTip}:${relPath}`], {
+        cwd: headTree, encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      if (res.status === 0 && String(res.stdout ?? '').trim() === 'blob') return true;
+    } catch { /* absent */ }
+  }
+  return false;
+}
+
+function extractRecipeScriptPaths(baseVerify, { headTree = null, baseTree = null, baseTip = null, baseTipValid = false, fs = nativeFs } = {}) {
   const found = new Set();
   const commands = [
     ...(nonEmpty(baseVerify?.test) ? [baseVerify.test] : []),
     ...(Array.isArray(baseVerify?.paths) ? baseVerify.paths.map(p => p?.run).filter(nonEmpty) : []),
   ];
+  const candidateTokens = [];
   for (const cmd of commands) {
-    for (const rawToken of String(cmd).split(/[\s"'`;&|()]+/)) {
-      const token = rawToken.replace(/^\.\//, '');
-      if (!token || token.startsWith('-') || token.startsWith('/') || token.includes('..') || token.includes('\\')) continue;
-      if (!token.includes('/')) continue;
-      if (!SCRIPT_EXT_RE.test(token)) continue;
-      if (TEST_FILE_RE.test(token)) continue;
-      found.add(token);
+    for (const token of tokenizeShellCommand(cmd)) {
+      candidateTokens.push(token);
+      const eqIdx = token.indexOf('=');
+      if (eqIdx > 0 && eqIdx < token.length - 1) {
+        candidateTokens.push(token.slice(eqIdx + 1));
+      }
+      if (/\s/.test(token)) {
+        for (const sub of token.split(/\s+/)) {
+          if (sub) candidateTokens.push(sub);
+        }
+      }
+    }
+  }
+  const hasBaseLookup = Boolean(baseTree || (headTree && baseTipValid));
+  for (const raw of candidateTokens) {
+    const cand = raw.replace(/^(?:\.\/)+/, '');
+    if (!cand || cand.startsWith('-') || cand.startsWith('/') || cand.includes('..') || cand.includes('\\') || cand.includes('\0')) continue;
+    if (TEST_FILE_RE.test(cand)) continue;
+    if (SCRIPT_EXT_RE.test(cand)) {
+      found.add(cand);
+      continue;
+    }
+    if (hasBaseLookup && fileExistsInBase(cand, { headTree, baseTree, baseTip, baseTipValid, fs })) {
+      found.add(cand);
     }
   }
   return [...found].sort();
 }
 
-function redactProveReceipt(receipt, sandbox) {
-  if (!receipt || !sandbox || typeof sandbox.redact !== 'function') return receipt;
-  const r = text => (typeof text === 'string' ? sandbox.redact(text) : text);
+function redactTextWithValues(text, sandbox, secretValues = []) {
+  if (typeof text !== 'string') return text;
+  let out = sandbox && typeof sandbox.redact === 'function' ? sandbox.redact(text) : text;
+  for (const secret of secretValues) {
+    if (secret && out.includes(secret)) out = out.split(secret).join('[redacted]');
+  }
+  return out;
+}
+
+function redactProveReceipt(receipt, sandbox, secretValues = []) {
+  if (!receipt || (!sandbox && !secretValues.length)) return receipt;
+  const r = text => redactTextWithValues(text, sandbox, secretValues);
   return {
     ...receipt,
     ...(receipt.test ? { test: { ...receipt.test, summary: r(receipt.test.summary), setupError: r(receipt.test.setupError) } } : {}),
@@ -282,14 +367,20 @@ export async function collectLiveEvidenceContract({
   const effectiveSuiteCmd = nonEmpty(suiteCmd) ? suiteCmd.trim() : 'npm test';
   const baseTipValid = GIT_SHA_RE.test(cleanBaseTip);
 
-  // 1. Load verify config strictly from trusted merge-base (`baseTip:pdd.json` or `baseTree/pdd.json`).
+  // 1. Load verify config strictly from trusted merge-base (`baseTip:pdd.json` or verified `baseTree/pdd.json`).
   // Enter no-map advisory mode ONLY after establishing the trusted base genuinely has no verify.paths.
   let baseVerify = { configured: false, source: 'pdd.json', test: null, report: null, paths: [], errors: [], loadStatus: 'unreadable' };
   if (headTree && baseTipValid) {
     baseVerify = loadVerifyConfig(headTree, { gitRef: cleanBaseTip });
   }
   if (baseVerify.loadStatus === 'unreadable' && baseTree) {
-    baseVerify = loadVerifyConfig(baseTree);
+    // Only trust a fallback baseTree when either no commit SHA was requested OR baseTree actually points at cleanBaseTip.
+    const baseTreeHead = readGitHeadSha(baseTree);
+    const fallbackMatchesRequestedBase = !baseTipValid
+      || (baseTreeHead !== null && baseTreeHead.toLowerCase() === cleanBaseTip.toLowerCase());
+    if (fallbackMatchesRequestedBase) {
+      baseVerify = loadVerifyConfig(baseTree);
+    }
   }
   const basePolicyInvalid = baseVerify.loadStatus === 'invalid'
     || (Array.isArray(baseVerify.errors) && baseVerify.errors.length > 0);
@@ -299,7 +390,7 @@ export async function collectLiveEvidenceContract({
     && baseVerify.configured
     && Array.isArray(baseVerify.paths)
     && baseVerify.paths.length > 0;
-  const recipeProtectedPatterns = extractRecipeScriptPaths(baseVerify);
+  const recipeProtectedPatterns = extractRecipeScriptPaths(baseVerify, { headTree, baseTree, baseTip: cleanBaseTip, baseTipValid, fs });
   const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, cleanFiles);
 
   // 2. Load 0600 test-env metadata & probe host capabilities ONLY when merge-base verify.paths (or explicit probeOptions) need them;
@@ -477,6 +568,10 @@ export async function collectLiveEvidenceContract({
     // Configured verify.report without a base baseline MUST fail closed independently of test IDs.
     reportReadErrors.push('report:base-missing');
     testResults.push({ id: 'report:base-missing', status: 'unknown', source: 'harness' });
+  } else if (strictMode && baseReport !== null && baseReport !== undefined && !nonEmpty(resolvedBaseReport)) {
+    // Explicitly supplied empty/whitespace base report MUST fail closed, never silently skip diffing.
+    reportReadErrors.push('report:base-empty');
+    testResults.push({ id: 'report:base-empty', status: 'unknown', source: 'harness' });
   }
   let reportDiffVerdict = null;
   if (reportDiff) {
@@ -570,19 +665,36 @@ export async function collectLiveEvidenceContract({
     requireGapCheck = true;
   } else if (hasVerifyPaths) {
     const sink = { write() {} };
-    // Forward ONLY each matched recipe's own allowlisted `account:*` keys strictly by `(phase, recipeId)`,
-    // NEVER leaking credentials into `verify.test` or sibling recipes even when command strings match.
+    // Collect EVERY configured account key name across rawTestEnv so inherited parent env vars can NEVER leak
+    // into verify.test or sibling recipes; then inject ONLY the exact recipe's authorized keys by `(phase, recipeId)`.
+    const allConfiguredAccountKeys = new Set();
+    if (rawTestEnv?.ok === true && isObj(rawTestEnv.accounts)) {
+      for (const vars of Object.values(rawTestEnv.accounts)) {
+        if (!isObj(vars)) continue;
+        for (const k of Object.keys(vars)) allConfiguredAccountKeys.add(k);
+      }
+    }
+    const cleanProveBaseEnv = { ...(env ?? {}) };
+    for (const k of allConfiguredAccountKeys) delete cleanProveBaseEnv[k];
+
+    const injectedSecretValues = [...new Set(
+      [...recipeSandboxesById.values()]
+        .flatMap(sb => sb.injectedKeys.map(k => sb.env[k]))
+        .filter(v => typeof v === 'string' && v.length > 0),
+    )].sort((a, b) => b.length - a.length);
+
     const provePorts = { stdout: sink, stderr: sink };
-    if (recipeSandboxesById.size > 0 && runProveFn === runProve) {
+    if ((recipeSandboxesById.size > 0 || allConfiguredAccountKeys.size > 0) && runProveFn === runProve) {
       provePorts.envForStep = ({ phase, recipeId, baseEnv }) => {
-        if (phase !== 'path' || !recipeId) return baseEnv;
+        const sanitized = { ...(baseEnv ?? {}) };
+        for (const k of allConfiguredAccountKeys) delete sanitized[k];
+        if (phase !== 'path' || !recipeId) return sanitized;
         const recipeSandbox = recipeSandboxesById.get(recipeId);
-        if (!recipeSandbox) return baseEnv;
-        const mergedEnv = { ...(baseEnv ?? {}) };
+        if (!recipeSandbox) return sanitized;
         for (const key of recipeSandbox.injectedKeys) {
-          if (typeof recipeSandbox.env[key] === 'string') mergedEnv[key] = recipeSandbox.env[key];
+          if (typeof recipeSandbox.env[key] === 'string') sanitized[key] = recipeSandbox.env[key];
         }
-        return mergedEnv;
+        return sanitized;
       };
     }
     proveResult = await runProveFn(
@@ -590,13 +702,13 @@ export async function collectLiveEvidenceContract({
         cwd: headTree,
         base: baseTipValid ? cleanBaseTip : undefined,
         capabilities: availableCapabilities,
-        env,
+        env: cleanProveBaseEnv,
         json: true,
       },
       provePorts,
     );
-    const redactText = text => (postReviewSandbox ? postReviewSandbox.redact(String(text ?? '')) : String(text ?? ''));
-    const sanitizedReceipt = redactProveReceipt(proveResult?.receipt ?? null, postReviewSandbox);
+    const redactText = text => redactTextWithValues(String(text ?? ''), postReviewSandbox, injectedSecretValues);
+    const sanitizedReceipt = redactProveReceipt(proveResult?.receipt ?? null, postReviewSandbox, injectedSecretValues);
     if (proveResult && sanitizedReceipt) proveResult = { ...proveResult, receipt: sanitizedReceipt };
 
     proveOutcome = proveResult?.outcome ?? OUTCOME_NOT_PROVED;
@@ -697,9 +809,9 @@ export async function collectLiveEvidenceContract({
   // Unconditional Check 4 manual merge in Autopilot: never auto-approve protected paths via job state.
   const humanApprovedPaths = [];
 
-  // Always enumerate changed Stories BEFORE applying any issue-level `acNotApplicableReason`;
-  // fail closed on unreadable changed Stories and require every numbered criterion across all changed Stories.
-  const changedStoryFiles = strictMode ? cleanFiles.filter(isLintableStoryPath) : [];
+  // Always enumerate ALL touched Stories (including deletions from allTouchedFiles) BEFORE applying any
+  // issue-level `acNotApplicableReason`; fail closed on deleted/unreadable Stories and cover every numbered criterion.
+  const changedStoryFiles = strictMode ? protectedCheckFiles.filter(isLintableStoryPath) : [];
   const changedStoryAcRefs = [];
   const unreadableStoryRefs = [];
   let changedStoryCount = 0;
