@@ -12,12 +12,21 @@ import { fingerprint } from '../examples/fakes/hash.mjs';
 import { lookup } from '../examples/fakes/service.mjs';
 import { decideReply, doLookup } from '../examples/fakes/decision.mjs';
 import { createGreeter } from '../examples/fakes/factory.mjs';
+import { compileScenarioText } from '../src/scenario-compile.mjs';
 
 const pointer = (object, path) => path.split('/').slice(1).reduce((value, key) => value[key.replaceAll('~1', '/').replaceAll('~0', '~')], object);
 
 for (const name of ['database', 'files', 'hash', 'service', 'decision', 'factory']) {
   test(`replay unchanged fake-${name} scenario through native public exports`, async () => {
-    const scenario = JSON.parse(readFileSync(new URL(`runtime/fake-${name}.json`, import.meta.url)));
+    const raw = readFileSync(new URL(`runtime/fake-${name}.json`, import.meta.url), 'utf8');
+    const storySource = readFileSync(new URL(`../user_stories/fake-${name}.md`, import.meta.url), 'utf8');
+    const compiled = compileScenarioText(raw, {
+      path: `test/runtime/fake-${name}.json`,
+      storyPath: `user_stories/fake-${name}.md`,
+      storySource,
+    });
+    assert.equal(compiled.refusal ?? null, null, `fake-${name} compact compile refused: ${JSON.stringify(compiled.refusal)}`);
+    const scenario = compiled.doc;
     const world = structuredClone(scenario.initial_world);
     const results = new Map();
     const instances = new Map();
