@@ -145,19 +145,34 @@ export function extractFrontmatterPorts(raw) {
   const body = String(raw ?? '').slice(fm.bodyStart, fm.bodyEnd);
   const lines = body.split(/\r?\n/);
   const found = [];
+  const pushVal = (rawVal, lineNo) => {
+    const cleaned = String(rawVal ?? '').replace(/#[^\r\n]*$/, '').trim().replace(/^['"`]|['"`]$/g, '').trim();
+    if (!cleaned) return;
+    const bare = cleaned.replace(/^(?:(?:op|port|name)\s*:\s*)+/i, '').replace(/^['"`]|['"`]$/g, '').replace(/\s*\([^()\r\n]*\).*$/, '').trim();
+    if (bare) found.push({ port: bare, line: lineNo });
+  };
   let inList = false;
+  let inFlowList = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const lineNo = i + 2; // line 1 is opening ---
+    if (inFlowList) {
+      const stripped = line.replace(/#[^\r\n]*$/, '').trim();
+      const closeIdx = stripped.indexOf(']');
+      const chunk = closeIdx >= 0 ? stripped.slice(0, closeIdx) : stripped;
+      for (const item of chunk.split(',')) pushVal(item, lineNo);
+      if (closeIdx >= 0) inFlowList = false;
+      continue;
+    }
     if (!inList) {
       const m = /^[ \t]*ports[ \t]*:[ \t]*(.*)$/i.exec(line);
       if (!m) continue;
       const rest = m[1].replace(/#[^\r\n]*$/, '').trim();
-      if (rest.startsWith('[') && rest.endsWith(']')) {
-        for (const item of rest.slice(1, -1).split(',')) {
-          const val = item.trim().replace(/^['"`]|['"`]$/g, '').trim();
-          if (val) found.push({ port: val, line: lineNo });
-        }
+      if (rest.startsWith('[')) {
+        const closeIdx = rest.indexOf(']');
+        const chunk = closeIdx >= 0 ? rest.slice(1, closeIdx) : rest.slice(1);
+        for (const item of chunk.split(',')) pushVal(item, lineNo);
+        if (closeIdx < 0) inFlowList = true;
       } else if (!rest) {
         inList = true;
       }
@@ -165,8 +180,7 @@ export function extractFrontmatterPorts(raw) {
     }
     const itemMatch = /^[ \t]*-[ \t]+(.+)$/.exec(line);
     if (itemMatch) {
-      const val = itemMatch[1].replace(/#[^\r\n]*$/, '').trim().replace(/^['"`]|['"`]$/g, '').trim();
-      if (val) found.push({ port: val, line: lineNo });
+      pushVal(itemMatch[1], lineNo);
     } else if (line.trim() && !/^[ \t]*#/.test(line)) {
       inList = false;
     }

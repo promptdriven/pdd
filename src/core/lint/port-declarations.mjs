@@ -116,7 +116,7 @@ export function scanDottedTokens(text, onPair) {
     }
   }
   for (const m of text.matchAll(/[A-Za-z0-9_./:@-]+/g)) {
-    const tok = m[0].replace(/\.+$/, '');
+    const tok = m[0].replace(/[.:]+$/, '');
     const dot = tok.indexOf('.');
     if (dot <= 0 || dot !== tok.lastIndexOf('.') || tok.includes('/') || tok.includes(':') || tok.includes('@')) continue;
     const port = tok.slice(0, dot), op = tok.slice(dot + 1);

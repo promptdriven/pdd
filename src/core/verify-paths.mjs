@@ -366,10 +366,10 @@ export function inspectMultiPartIntegrationGuard(root, verifyConfig) {
   if (parts.length < 2) {
     const hasMap = Boolean(mapText.trim());
     const hasContracts = hasContractMarkdownFiles(realRoot);
-    const subdirs = (hasMap || hasContracts) ? listMultiPartCandidateSubdirs(realRoot) : [];
-    if ((hasMap || hasContracts) && subdirs.length >= 2) {
+    const subdirs = listMultiPartCandidateSubdirs(realRoot);
+    if (subdirs.length >= 2 && (parts.length === 0 || hasMap || hasContracts)) {
       const detail = formatTeachingDetail({
-        invariant: `product/plan.md exists alongside ${hasMap ? 'product/map.md' : 'contracts/*.md'} and >=2 subdirectories (${subdirs.slice(0, 4).join(', ')}), yet only ${parts.length} product part(s) could be parsed`,
+        invariant: `product/plan.md exists alongside >=2 subdirectories (${subdirs.slice(0, 4).join(', ')}), yet only ${parts.length} product part(s) could be parsed`,
         fix: 'Format product/map.md "## Parts" as a "| Part | Folder | What it is |" table (or bullet list) and product/plan.md "## Runs" with a "Part" column so multi-part integration checks can verify wiring',
         rerun: 'pdd prove',
       });

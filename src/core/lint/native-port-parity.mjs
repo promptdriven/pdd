@@ -117,7 +117,7 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
   };
   const scanSpans = (spans, lineNo, onlyDeclared = false, opts = {}) => {
     for (const rawSpan of spans) {
-      const span = rawSpan.trim();
+      const span = rawSpan.trim().replace(/^(?:(?:async|await)\s+)+/, '');
       let m = BARE_PAIR_RE.exec(span);
       if (m) { if (!onlyDeclared || declaredPrefixes.has(m[1])) record(m[1], m[2], lineNo, opts); continue; }
       m = CALL_PAIR_RE.exec(span);
