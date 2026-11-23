@@ -1192,7 +1192,7 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   writeFileSync(join(nestedShellDir, 'src/ab12-mod.mjs'), 'export const v = 1;\n');
   writeFileSync(join(nestedShellDir, 'pdd.json'), JSON.stringify({
     verify: {
-      test: 'node -e "process.exit(0)"',
+      test: 'sh -c "node tools/plain-nested.mjs"',
       paths: [
         {
           id: 'nested',
@@ -1203,6 +1203,7 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
       ],
     },
   }, null, 2));
+  writeFileSync(join(nestedShellDir, 'tools/plain-nested.mjs'), 'process.exit(0);\n');
   ngit('add', '.');
   ngit('commit', '-m', 'base');
   const nBase = ngit('rev-parse', 'HEAD');
@@ -1211,7 +1212,7 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   ngit('commit', '-m', 'head');
   const nHead = ngit('rev-parse', 'HEAD');
 
-  for (const nestedTarget of ['tools/setup.mjs', 'scripts/verify my app.mjs']) {
+  for (const nestedTarget of ['tools/plain-nested.mjs', 'tools/setup.mjs', 'scripts/verify my app.mjs']) {
     const nestedProt = await collectLiveEvidenceContract({
       repo: 'acme/nested',
       job: { issue: 60, head: nHead },
@@ -1239,15 +1240,22 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   assert.equal(unrelatedRootApp.contractInput.protectedPatterns.includes('app.mjs'), false, 'must not split quoted script path into unrelated root app.mjs');
   assert.equal(evaluateEvidenceContract(unrelatedRootApp.contractInput).checks.protectedPaths.ok, true);
 
-  // Loop 6 Astra P1: Deep receipt redaction removes BOTH 4-char & 10-char secrets at depth 15 AND inside object keys!
+  // Loop 6/7 Astra P1: Deep receipt redaction removes BOTH 4-char & 10-char secrets at depth 15 in BOTH keys and values,
+  // AND unconditionally replaces any value (including benign strings) beyond depth 64 with `[redacted]`!
+  let depth65 = 'benign-string-at-depth-65';
+  for (let i = 0; i < 65; i += 1) depth65 = { wrap: depth65 };
   const deepNestedSecret = {
-    a1: { a2: { a3: { a4: { a5: { a6: { a7: { a8: { a9: { a10: { a11: { a12: { a13: { a14: { a15: { 'key_ab12_val': 'deep_ab12_value', 'key_long': 'deep_longsecret99' } } } } } } } } } } } } } } },
+    a1: { a2: { a3: { a4: { a5: { a6: { a7: { a8: { a9: { a10: { a11: { a12: { a13: { a14: { a15: {
+      key_ab12_val: 'deep_ab12_value',
+      key_secret1234: 'deep_secret1234_value',
+    } } } } } } } } } } } } } } },
+    overDeep: depth65,
   };
   const cfgDirLong = makeTmpDir(t, 'pdd-loop6-env-');
   chmodSync(cfgDirLong, 0o700);
   const longEnvPath = join(cfgDirLong, 'autopilot-test-env.json');
   writeFileSync(longEnvPath, JSON.stringify({
-    accounts: { alpha: { SHORT_KEY: 'ab12', LONG_KEY: 'longsecret99' } },
+    accounts: { alpha: { SHORT_KEY: 'ab12', LONG_KEY: 'secret1234' } },
   }), { mode: 0o600 });
   chmodSync(longEnvPath, 0o600);
   const deepRedact = await collectLiveEvidenceContract({
@@ -1276,7 +1284,8 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   });
   const serializedDeep = JSON.stringify(deepRedact.proveReceipt);
   assert.equal(serializedDeep.includes('ab12'), false, 'proveReceipt must deep-redact 4-char secret at depth 15 and in object keys');
-  assert.equal(serializedDeep.includes('longsecret99'), false, 'proveReceipt must deep-redact 10-char secret at depth 15 and in object keys');
+  assert.equal(serializedDeep.includes('secret1234'), false, 'proveReceipt must deep-redact 10-char secret at depth 15 and in object keys');
+  assert.equal(serializedDeep.includes('benign-string-at-depth-65'), false, 'values beyond depth 64 must unconditionally become [redacted]');
 
   // Fallback baseTree pointing at subdirectory (`src/`) of matching base commit MUST still read root `pdd.json` (never advisory MERGE)!
   const subdirBase = makeTmpDir(t, 'pdd-live-loop5-subdir-');

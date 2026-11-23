@@ -232,9 +232,7 @@ function tokenizeShellCommand(cmd) {
   return tokens;
 }
 
-const SHELL_OP_OR_QUOTE_RE = /["'`=<>|&;()]/;
-
-function collectCommandCandidates(cmd, depth = 0, out = []) {
+function collectCommandCandidates(cmd, depth = 0, out = [], baseCtx = null) {
   for (const token of tokenizeShellCommand(cmd)) {
     out.push(token);
     const eqIdx = token.indexOf('=');
@@ -242,9 +240,18 @@ function collectCommandCandidates(cmd, depth = 0, out = []) {
       out.push(token.slice(eqIdx + 1));
     }
     const cleanToken = token.replace(/^(?:\.\/)+/, '');
-    const isSingleScriptPath = SCRIPT_EXT_RE.test(cleanToken) && !SHELL_OP_OR_QUOTE_RE.test(cleanToken);
-    if (depth < 3 && !isSingleScriptPath && /[\s"'`=<>|&;()]/.test(token)) {
-      collectCommandCandidates(token, depth + 1, out);
+    const exactBaseFile = Boolean(
+      baseCtx?.hasBaseLookup
+      && cleanToken
+      && !cleanToken.startsWith('-')
+      && !cleanToken.startsWith('/')
+      && !cleanToken.includes('..')
+      && !cleanToken.includes('\\')
+      && !cleanToken.includes('\0')
+      && fileExistsInBase(cleanToken, baseCtx),
+    );
+    if (depth < 3 && !exactBaseFile && /[\s"'`=<>|&;()]/.test(token)) {
+      collectCommandCandidates(token, depth + 1, out, baseCtx);
     }
   }
   return out;
@@ -285,11 +292,12 @@ function extractRecipeScriptPaths(baseVerify, { headTree = null, baseTree = null
     ...(nonEmpty(baseVerify?.test) ? [baseVerify.test] : []),
     ...(Array.isArray(baseVerify?.paths) ? baseVerify.paths.map(p => p?.run).filter(nonEmpty) : []),
   ];
+  const hasBaseLookup = Boolean(baseTree || (headTree && baseTipValid));
+  const baseCtx = { hasBaseLookup, headTree, baseTree, baseTip, baseTipValid, fs };
   const candidateTokens = [];
   for (const cmd of commands) {
-    collectCommandCandidates(cmd, 0, candidateTokens);
+    collectCommandCandidates(cmd, 0, candidateTokens, baseCtx);
   }
-  const hasBaseLookup = Boolean(baseTree || (headTree && baseTipValid));
   for (const raw of candidateTokens) {
     const cand = raw.replace(/^(?:\.\/)+/, '');
     if (!cand || cand.startsWith('-') || cand.startsWith('/') || cand.includes('..') || cand.includes('\\') || cand.includes('\0')) continue;
@@ -315,11 +323,12 @@ function redactTextWithValues(text, sandbox, secretValues = []) {
 }
 
 function deepRedactValue(value, sandbox, secretValues = [], depth = 0, seen = new WeakSet()) {
+  // Unconditional fail-closed depth cap BEFORE type dispatch: no value beyond depth 64 survives unredacted.
+  if (depth > 64) return '[redacted]';
   if (value === null || value === undefined) return value;
   if (typeof value === 'string') return redactTextWithValues(value, sandbox, secretValues);
   if (typeof value !== 'object') return value;
-  // Fail closed on cycles or excessive nesting depth: NEVER return unredacted raw data.
-  if (depth > 64 || seen.has(value)) return '[redacted]';
+  if (seen.has(value)) return '[redacted]';
   seen.add(value);
   try {
     if (Array.isArray(value)) {
@@ -337,6 +346,7 @@ function deepRedactValue(value, sandbox, secretValues = [], depth = 0, seen = ne
 }
 
 function redactProveReceipt(receipt, sandbox, secretValues = []) {
+  // Returns receipt unchanged only when neither sandbox nor injected secret values exist.
   if (!receipt || (!sandbox && !secretValues.length)) return receipt;
   return deepRedactValue(receipt, sandbox, secretValues, 0, new WeakSet());
 }
