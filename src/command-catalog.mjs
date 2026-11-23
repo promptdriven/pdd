@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: cecf3cbea83fe385a315d58d34958791c9e414f366ca3ad625eb232e5ffb4b5e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: ee7a46f2a7a1ce210c243a44d669ec149bf134725af4d213af1391841673d38e).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -136,8 +136,9 @@ const routes = [
   { id: 'owner', prefix: ['owner'], local: 'file-owner', operands: [{ name: 'path', type: 'text', repeat: true }], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd owner PATH... [--json]', 'Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only.')] },
   { id: 'update', prefix: ['update'], local: 'update-sync', operands: [{ name: 'file', type: 'text', optional: true, repeat: true }],
-    options: [{ name: '--from', kind: 'text' }, { name: '--check', kind: 'flag' }, { name: '--write', kind: 'flag' }, { name: '--json', kind: 'flag' }],
-    forms: [form('pdd update [FILE...] [--from RANGE] [--check] [--write] [--json]', 'Inspect or sync touched code files with their owning prompts and per-module content hashes using local Git and working files only, with zero AI calls. Use --check to fail on drift and --write to refresh derived hashes for touched modules.')] },
+    options: [{ name: '--from', kind: 'text' }, { name: '--all', kind: 'flag' }, { name: '--check', kind: 'flag' }, { name: '--write', kind: 'flag' }, { name: '--json', kind: 'flag' }],
+    forms: [form('pdd update [FILE...] [--from RANGE] [--check] [--write] [--json]', 'Inspect or sync touched code files with their owning prompts and per-module content hashes using local Git and working files only, with zero AI calls. Use --check to fail on drift and --write to refresh derived hashes for touched modules.'),
+      form('pdd update --all [--check] [--write] [--json]', 'Inspect, check or sync every prompt-owned module and every .pdd/sync record in the repository, not only touched files; use it in CI or review, where a clean branch has nothing touched.')] },
   { id: 'contracts', prefix: ['contracts'], local: 'contracts', operands: [], options: [],
     forms: [form('pdd contracts', 'List shared records, their users and Stories stale since their last check; local working files only.')] },
   { id: 'contracts.sync', prefix: ['contracts', 'sync'], local: 'contracts-sync', operands: [], options: [{name:'--write',kind:'flag'}],

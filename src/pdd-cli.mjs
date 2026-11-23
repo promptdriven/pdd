@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 781319c7b1844d0be7a6d9cae4a5b4005b074a0042fb38a875fabbf5cbbb000c).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: ac7449bc95a884df397abcaf22daa9ef0f395b2245b77a7c72b0975bedda0c8e).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -702,6 +702,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           ...(plan.options['--from'] !== undefined ? { from: plan.options['--from'] } : {}),
           check: plan.options['--check'] === true,
           write: plan.options['--write'] === true,
+          all: plan.options['--all'] === true,
           json: plan.options['--json'] === true,
         }, { stdout, stderr });
       } catch (error) { line(stderr, `pdd update failed.${reason(error)}`); return 1; }

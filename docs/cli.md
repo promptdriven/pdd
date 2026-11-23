@@ -146,6 +146,10 @@ Choose one scope:
   scope strictly to files touched in that Git diff range.
 - Omit both to inspect staged, unstaged, and untracked non-ignored changes in
   the current working tree.
+- Run `pdd update --all [--check] [--write] [--json]` to inspect every
+  prompt-owned module and every `.pdd/sync` record in the repository. Use `pdd update --check --all` in CI or
+  review: on a clean branch the working-tree scope is empty, so a plain
+  `--check` passes without checking anything.
 
 `pdd update` maps each touched file through `pdd owner` (`pdd-bindings.json`,
 `Generated from` or `Prompt:` headers, opening-sentence prose claims, and

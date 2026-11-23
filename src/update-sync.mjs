@@ -1,4 +1,4 @@
-// Generated from prompts/cli/update-sync.prompt.md (sha256: d2d69053f47193461710d5f39ca7f7ed58d53ca4b94f45933822bd003a110e9e).
+// Generated from prompts/cli/update-sync.prompt.md (sha256: 31a4b6a9031b30ef8ae970416798c3dbed50130e90b2eb0e4f37510322b156d7).
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
@@ -633,7 +633,7 @@ function aggregatePromptStatus(statuses) {
   return 'current';
 }
 
-function buildInstructions(promptPath, status, activePaths, deletedPaths, diffStats, driftedStale, range) {
+function buildInstructions(promptPath, status, activePaths, deletedPaths, diffStats, driftedStale, range, all = false) {
   const activeList = activePaths.join(', ');
   const deletedList = deletedPaths.join(', ');
   const allList = [...activePaths, ...deletedPaths].join(', ');
@@ -642,7 +642,7 @@ function buildInstructions(promptPath, status, activePaths, deletedPaths, diffSt
     ? `pdd update --write ${activePaths.map(shellArg).join(' ')}`
     : range
       ? `pdd update --from ${shellArg(range)} --write`
-      : 'pdd update --write';
+      : all ? 'pdd update --all --write' : 'pdd update --write';
 
   switch (status) {
     case 'current':
@@ -680,7 +680,7 @@ function buildInstructions(promptPath, status, activePaths, deletedPaths, diffSt
   }
 }
 
-function evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, diffByPath, updated, range }) {
+function evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, diffByPath, updated, range, all = false }) {
   const promptHashCache = new Map();
   for (const [promptPath, promptText] of promptTextMap.entries()) {
     promptHashCache.set(promptPath, promptHeaderHash(promptText));
@@ -787,7 +787,7 @@ function evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, 
         modules: modulePaths,
         diff_stats: { added, removed },
         changed_symbols,
-        instructions: buildInstructions(prompt, status, activePaths, deletedPaths, { added, removed }, driftedStale, range),
+        instructions: buildInstructions(prompt, status, activePaths, deletedPaths, { added, removed }, driftedStale, range, all),
       };
     });
 
@@ -802,17 +802,26 @@ function isEligiblePromptScanCodePath(path) {
   return true;
 }
 
-export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = false, write = false } = {}, ports = {}) {
+// --all: every non-test prompt counts as touched (which gathers all of its owned modules),
+// plus every module that still has a .pdd/sync record, so stale records of deleted modules are checked too.
+function allScopeEntries(root, visible, readBytes) {
+  const paths = new Set(visible.filter(path => path.endsWith('.prompt.md') && !isTestPromptPath(path) && !isPddInternalPath(path)));
+  for (const modulePath of scanSyncRecords(root, readBytes).keys()) paths.add(modulePath);
+  return [...paths].sort(cmpPath).map(path => ({ path, status: 'M', renamedFrom: null, deleted: false }));
+}
+
+export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = false, write = false, all = false } = {}, ports = {}) {
   try {
     if (check && write) throw new UpdateStop(2, 'Cannot combine --check and --write.');
     if (files.length > 0 && from !== undefined) throw new UpdateStop(2, 'Specify either file paths or --from RANGE, not both.');
+    if (all && (files.length > 0 || from !== undefined)) throw new UpdateStop(2, 'Use --all on its own: it already covers every file path and range.');
 
     const normalizedRange = from !== undefined ? parseFromRange(from) : null;
     const root = ports.gitRoot ? ports.gitRoot(cwd) : defaultGitRoot(cwd);
     if (!root) throw new UpdateStop(2, 'pdd update works inside a Git repository.');
 
     const mode = write ? 'write' : check ? 'check' : 'plan';
-    const scopeKind = files.length > 0 ? 'files' : normalizedRange ? 'from' : 'working-tree';
+    const scopeKind = all ? 'all' : files.length > 0 ? 'files' : normalizedRange ? 'from' : 'working-tree';
     const readBytes = ports.readBytes ?? ((path, limit) => readRegularBytes(root, path, limit));
     const probeBytes = ports.probeBytes ?? ((path, limit) => probeRegularBytes(root, path, limit));
     const listFiles = () => (ports.files ? ports.files() : gitFiles(root)).filter(p => !isBlockedSecretPath(p));
@@ -852,7 +861,9 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
         touchedMap.set(rel, { path: rel, status: isUntracked ? 'A' : 'M', renamedFrom: null, deleted: false, untracked: isUntracked });
       }
     } else {
-      const rawEntries = scopeKind === 'from'
+      const rawEntries = scopeKind === 'all'
+        ? allScopeEntries(root, listFiles(), readBytes)
+        : scopeKind === 'from'
         ? (ports.gitRangeEntries ? ports.gitRangeEntries(root, normalizedRange) : defaultGitRangeEntries(root, normalizedRange))
         : (ports.gitWorkingEntries ? ports.gitWorkingEntries(root) : defaultGitWorkingEntries(root));
       for (const raw of rawEntries) {
@@ -1256,7 +1267,7 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       }
     }
 
-    const evaluated = evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, diffByPath, updated, range: normalizedRange });
+    const evaluated = evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, diffByPath, updated, range: normalizedRange, all: scopeKind === 'all' });
     const unowned = [...unownedMap.values()].sort((a, b) => cmpPath(a.path, b.path));
     const ok = mode === 'check' ? evaluated.drifted.length === 0 : true;
     const exitCode = mode === 'check' && evaluated.drifted.length > 0 ? 1 : 0;
@@ -1335,10 +1346,10 @@ export function formatUpdateText(report) {
 }
 
 export function runUpdate(
-  { cwd = process.cwd(), files = [], from, check = false, write = false, json = false } = {},
+  { cwd = process.cwd(), files = [], from, check = false, write = false, all = false, json = false } = {},
   { stdout = process.stdout, stderr = process.stderr, ...ports } = {},
 ) {
-  const result = analyzeUpdate({ cwd, files, from, check, write }, ports);
+  const result = analyzeUpdate({ cwd, files, from, check, write, all }, ports);
   if (result.error !== null) {
     stderr.write(`${result.error}\n`);
     return result.exitCode;

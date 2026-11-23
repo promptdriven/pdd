@@ -187,6 +187,10 @@ local Git and working files only, with zero AI calls, using `--check` to fail on
 drift and `--write` to refresh derived hashes for touched modules. Include it in
 root help (Core PDD workflow, within 80 columns) and completion. [Code-to-prompt sync](update-sync.prompt.md)
 owns its behavior and validation; do not import the Runtime client for this route.
+It also accepts the Boolean flag `--all`, with a second form
+`pdd update --all [--check] [--write] [--json]` whose help says it inspects, checks
+or syncs every prompt-owned module and every `.pdd/sync` record in the repository,
+not only touched files, for CI or review where a clean branch has nothing touched (#3630).
 
 ## Shared contract routes
 

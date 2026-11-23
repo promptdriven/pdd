@@ -100,9 +100,9 @@ file owner module, with the PATH operands and json from --json. Return its exit
 code. This local route imports no Runtime client, reads no token and installs no
 skills.
 
-Dispatch `update-sync` to `runUpdate({cwd,files,from,check,write,json}, {stdout,stderr})`
+Dispatch `update-sync` to `runUpdate({cwd,files,from,check,write,all,json}, {stdout,stderr})`
 from [Code-to-prompt sync](update-sync.prompt.md), with FILE operands as `files`,
-`--from` as `from` (when present), and Boolean flags `--check`, `--write`, and
+`--from` as `from` (when present), and Boolean flags `--check`, `--write`, `--all`, and
 `--json`. Return its exit code, catching unexpected errors with one finite stderr
 line and exit 1. This local route imports no Runtime client, spawns zero AI
 subprocesses, skips post-upgrade skill sync and the cached release notice (zero
