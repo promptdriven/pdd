@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 
 export const GAP_CHECK_FLAGS = Object.freeze(['UNMAPPED_CHANGE', 'INSUFFICIENT_SCOPE']);
+export const FORMAL_PROOF_TIERS = Object.freeze(['proved_solver_code', 'proved_spec_model']);
 export const HOLD_REASONS = Object.freeze([
   'malformed_output', 'abstention', 'stale_evidence', 'missing_capability',
   'protected_path', 'unmapped_change', 'insufficient_scope', 'service_failure',
@@ -20,12 +21,14 @@ export const RECEIPT_BINDING_FIELDS = Object.freeze([
 
 const GAP_ALLOWED_KEYS = new Set(['missingPathIds', 'unprovedAcIds', 'flags']);
 const GAP_FLAG_SET = new Set(GAP_CHECK_FLAGS);
+const FORMAL_TIER_SET = new Set(FORMAL_PROOF_TIERS);
 const RECEIPT_OUTCOME_SET = new Set(RECEIPT_OUTCOMES);
 const DEFAULT_PROTECTED_BASENAMES = new Set(['pdd.json', 'pdd-workspace.json', 'pdd-bindings.json', 'package.json', 'codeowners']);
 const DEFAULT_PROTECTED_EXACT = new Set(['src/autopilot-core.mjs', 'src/autopilot-validator.mjs']);
 const DEFAULT_PROTECTED_PREFIXES = ['.github/workflows/', '.github/actions/', 'rules/lint/', 'src/autopilot/gates/', 'src/autopilot/validator/'];
 const DEFAULT_PROTECTED_SCRIPT_RE = /^scripts\/(?:check-[^/]+|[^/]*gate[^/]*)\.(?:[cm]?js|ts|sh|py)$/i;
 const TEST_FILE_PATH_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
+const NON_PRODUCTION_PROOF_PATH_RE = /(?:^(?:prompts|docs|user_stories|specs?|models?)\/|\.prompt\.md$|\.mdx?$|^(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
 const HOLD_PRIORITY = ['protected_path', 'malformed_output', 'stale_evidence', 'service_failure', 'abstention', 'missing_capability', 'unmapped_change', 'insufficient_scope'];
 
 const isPlainObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -104,6 +107,132 @@ export function checkProtectedPaths({ changedFiles = [], humanApprovedPaths = []
   };
 }
 
+function normalizeProductionProofModules(list) {
+  const out = new Set();
+  for (const raw of Array.isArray(list) ? list : []) {
+    const c = canonicalizeRepoPath(raw);
+    if (!c.invalid && !NON_PRODUCTION_PROOF_PATH_RE.test(c.path)) out.add(c.path);
+  }
+  return [...out].sort();
+}
+
+function hasFailingProductionMutationControl(mc) {
+  if (typeof mc === 'string') return mc.trim().toLowerCase() === 'failed-on-mutation';
+  if (!isPlainObj(mc)) return false;
+  return mc.executed === true && mc.failedOnMutation === true && mc.mutatedProductionCode !== false && mc.passedOnMutation !== true;
+}
+
+/**
+ * #3151 code-bound formal proof classifier:
+ * distinguishes `proved_solver_code` vs `proved_spec_model`.
+ * A formal/solver proof satisfies code verification ONLY when it imports/executes production modules
+ * (covering all `targetModules` if supplied) AND passes a failing production-code mutation control.
+ */
+export function classifyFormalProofTier(proof, { targetModules = [] } = {}) {
+  if (!isPlainObj(proof)) {
+    return {
+      tier: 'proved_spec_model',
+      satisfiesCodeVerification: false,
+      holdReason: 'insufficient_scope',
+      importedProductionModules: [],
+      executedProductionModules: [],
+      mutationControlPassed: false,
+      reason: 'Formal proof record is missing or malformed; cannot satisfy code verification (proved_spec_model).',
+    };
+  }
+  const importedProductionModules = normalizeProductionProofModules([
+    ...(Array.isArray(proof.importedProductionModules) ? proof.importedProductionModules : []),
+    ...(Array.isArray(proof.productionModules) ? proof.productionModules : []),
+  ]);
+  const executedProductionModules = normalizeProductionProofModules([
+    ...(Array.isArray(proof.executedProductionModules) ? proof.executedProductionModules : []),
+    ...(Array.isArray(proof.productionModules) ? proof.productionModules : []),
+  ]);
+  const coveredModules = new Set([...importedProductionModules, ...executedProductionModules]);
+  const normalizedTargets = normalizeProductionProofModules(
+    Array.isArray(targetModules) && targetModules.length
+      ? targetModules
+      : (Array.isArray(proof.targetModules) ? proof.targetModules : (nonEmptyStr(proof.targetModule) ? [proof.targetModule] : [])),
+  );
+  const coversTargets = normalizedTargets.length === 0
+    ? coveredModules.size > 0
+    : normalizedTargets.every((m) => coveredModules.has(m));
+  const mutationControlPassed = hasFailingProductionMutationControl(proof.mutationControl);
+  const isCodeBound = coveredModules.size > 0 && coversTargets && mutationControlPassed;
+
+  if (isCodeBound) {
+    return {
+      tier: 'proved_solver_code',
+      satisfiesCodeVerification: true,
+      holdReason: null,
+      importedProductionModules,
+      executedProductionModules,
+      mutationControlPassed: true,
+      reason: 'Formal proof imported/executed production module(s) and verified a failing production-code mutation control (proved_solver_code).',
+    };
+  }
+  const gaps = [];
+  if (coveredModules.size === 0) gaps.push('did not import or execute production modules');
+  else if (!coversTargets) gaps.push(`missing production module coverage for [${normalizedTargets.filter((m) => !coveredModules.has(m)).join(', ')}]`);
+  if (!mutationControlPassed) gaps.push('missing failing production-code mutation control');
+  return {
+    tier: 'proved_spec_model',
+    satisfiesCodeVerification: false,
+    holdReason: 'insufficient_scope',
+    importedProductionModules,
+    executedProductionModules,
+    mutationControlPassed,
+    reason: `Formal proof classified as proved_spec_model (${gaps.join('; ')}); cannot satisfy code verification.`,
+  };
+}
+
+/** Check #3151 code-bound formal proof rule across formal proof records. */
+export function checkFormalProofBinding({ formalProofs = [], targetModules = [], requireCodeVerification = false } = {}) {
+  if (!Array.isArray(formalProofs)) {
+    return { ok: false, tier: null, provedCodeProofs: [], specModelOnlyProofs: [], holdReason: 'malformed_output', details: 'formalProofs must be an array.' };
+  }
+  const provedCodeProofs = [];
+  const specModelOnlyProofs = [];
+  let rejectedClaim = false;
+  for (const proof of formalProofs) {
+    const classified = classifyFormalProofTier(proof, { targetModules });
+    if (classified.tier === 'proved_solver_code') {
+      provedCodeProofs.push({ ...classified, id: isPlainObj(proof) && nonEmptyStr(proof.id) ? proof.id.trim() : null });
+    } else {
+      const claimedCode = isPlainObj(proof) && (
+        proof.satisfiesCode === true
+        || proof.forCodeVerification === true
+        || proof.tier === 'proved_solver_code'
+        || proof.proofTier === 'proved_solver_code'
+      );
+      if (claimedCode) rejectedClaim = true;
+      specModelOnlyProofs.push({ ...classified, id: isPlainObj(proof) && nonEmptyStr(proof.id) ? proof.id.trim() : null, claimedCode });
+    }
+  }
+  if (rejectedClaim || (requireCodeVerification && provedCodeProofs.length === 0)) {
+    const reason = specModelOnlyProofs[0]?.reason
+      || 'Code-bound formal proof (proved_solver_code) is required to satisfy code verification.';
+    return {
+      ok: false,
+      tier: specModelOnlyProofs.length > 0 ? 'proved_spec_model' : null,
+      provedCodeProofs,
+      specModelOnlyProofs,
+      holdReason: 'insufficient_scope',
+      details: reason,
+    };
+  }
+  return {
+    ok: true,
+    tier: provedCodeProofs.length > 0 ? 'proved_solver_code' : (specModelOnlyProofs.length > 0 ? 'proved_spec_model' : null),
+    provedCodeProofs,
+    specModelOnlyProofs,
+    holdReason: null,
+    details: provedCodeProofs.length > 0
+      ? `${provedCodeProofs.length} code-bound formal proof(s) verified (proved_solver_code).`
+      : 'No code-bound formal proof required.',
+  };
+}
+
 /** Check 2: Every touched user path has a green harness-written receipt bound to all 13 contract fields. */
 export function checkPathReceipts({
   touchedPaths = [], receipts = [], expectedBinding = null, availableCapabilities = null, requiredCapabilitiesByPath = {},
@@ -125,7 +254,7 @@ export function checkPathReceipts({
   }
 
   const provedCurrentPaths = new Set(), failedCurrentPaths = new Set(), hardStalePathIds = new Set(), oldHeadPathIds = new Set();
-  const missingCapabilities = new Set(), malformedReasons = [];
+  const missingCapabilities = new Set(), malformedReasons = [], formalSpecModelReasons = [];
   let sawBoundServiceFailure = false;
 
   for (const r of receipts) {
@@ -149,6 +278,19 @@ export function checkPathReceipts({
     if (r.outcome === 'missing_capability') { missingCapabilities.add(nonEmptyStr(r.capability) && r.capability !== 'none' ? r.capability.trim() : 'unknown'); continue; }
     if (r.outcome === 'failed') { if (receiptPaths.length) for (const p of receiptPaths) failedCurrentPaths.add(p); else failedCurrentPaths.add('receipt:failed'); continue; }
     if (capSet && nonEmptyStr(r.capability) && r.capability !== 'none' && !capSet.has(r.capability.trim())) { missingCapabilities.add(r.capability.trim()); continue; }
+    // #3151: A formal/solver receipt cannot prove code verification unless classified as `proved_solver_code`.
+    const isFormalReceipt = isPlainObj(r.formalProof) || r.proofKind === 'formal' || (nonEmptyStr(r.proofTier) && FORMAL_TIER_SET.has(r.proofTier.trim()));
+    if (isFormalReceipt) {
+      const classified = classifyFormalProofTier(isPlainObj(r.formalProof) ? r.formalProof : r, {
+        targetModules: Array.isArray(r.targetModules) ? r.targetModules : [],
+      });
+      if (!classified.satisfiesCodeVerification) {
+        formalSpecModelReasons.push(classified.reason);
+        if (receiptPaths.length) for (const p of receiptPaths) failedCurrentPaths.add(p);
+        else failedCurrentPaths.add('receipt:proved_spec_model');
+        continue;
+      }
+    }
     for (const p of receiptPaths) provedCurrentPaths.add(p);
   }
 
@@ -170,7 +312,7 @@ export function checkPathReceipts({
   return {
     ok, provedPathIds: [...provedCurrentPaths].sort(), missingPathIds, stalePathIds: stale, failedPathIds: failed, missingCapabilities: missingCaps, holdReason,
     details: ok ? `All ${paths.length} touched path(s) have valid bound harness receipts.`
-      : (malformedReasons[0] || (stale.length ? `Stale/mismatched receipt binding for: ${stale.join(', ')}` : sawBoundServiceFailure ? 'Harness reported bound service_failure during verification.' : missingCaps.length ? `Missing capability: ${missingCaps.join(', ')}` : failed.length ? `Current-head receipt failed for: ${failed.join(', ')}` : `Missing proved receipt(s) for path(s): ${missingPathIds.join(', ')}`)),
+      : (malformedReasons[0] || (stale.length ? `Stale/mismatched receipt binding for: ${stale.join(', ')}` : sawBoundServiceFailure ? 'Harness reported bound service_failure during verification.' : missingCaps.length ? `Missing capability: ${missingCaps.join(', ')}` : formalSpecModelReasons[0] || (failed.length ? `Current-head receipt failed for: ${failed.join(', ')}` : `Missing proved receipt(s) for path(s): ${missingPathIds.join(', ')}`))),
   };
 }
 
@@ -290,17 +432,19 @@ export function validateGapCheckOutput(raw) {
   return { ok: !hasGap, holdReason, missingPathIds, unprovedAcIds, flags, details: !hasGap ? 'Cross-family gap check found no unmapped changes or unproved ACs.' : `Gap check flagged: ${holdReason}.` };
 }
 
-/** Evaluate the full 4-Check Non-Compensatory Mechanical Evidence Contract + cross-family gap check. */
+/** Evaluate the full 4-Check Non-Compensatory Mechanical Evidence Contract + #3151 formal proof binding + cross-family gap check. */
 export function evaluateEvidenceContract({
   changedFiles = [], humanApprovedPaths = [], protectedPatterns = [], frozenAcs = [], acMapping = {}, requireFrozenAcs = true,
   touchedPaths = [], receipts = [], expectedBinding = null, availableCapabilities = null, requiredCapabilitiesByPath = {},
   testResults = [], expectedTestIds = [], approvedSkippedIds = [], baseOracle = null, editedTestFiles = null, requireBaseOracle = true,
+  formalProofs = [], formalTargetModules = [], requireCodeBoundFormal = false,
   gapCheck = null, requireGapCheck = true, serviceFailure = null, abstained = false,
 } = {}) {
   const protectedPaths = checkProtectedPaths({ changedFiles, humanApprovedPaths, protectedPatterns });
   const pathReceipts = checkPathReceipts({ touchedPaths, receipts, expectedBinding, availableCapabilities, requiredCapabilitiesByPath });
   const acCoverage = checkAcCoverage({ frozenAcs, testResults, provedPathIds: pathReceipts.provedPathIds, acMapping, requireFrozenAcs });
   const testOracle = checkTestOracle({ testResults, expectedTestIds, approvedSkippedIds, baseOracle, editedTestFiles, changedFiles, requireBaseOracle });
+  const formalProofBinding = checkFormalProofBinding({ formalProofs, targetModules: formalTargetModules, requireCodeVerification: requireCodeBoundFormal });
 
   let gapResult;
   if (serviceFailure) gapResult = { ok: false, skipped: false, holdReason: 'service_failure', missingPathIds: [], unprovedAcIds: [], flags: [], details: String(serviceFailure) };
@@ -312,16 +456,16 @@ export function evaluateEvidenceContract({
   } else gapResult = { ...validateGapCheckOutput(gapCheck), skipped: false };
 
   const reasons = [];
-  for (const c of [protectedPaths, pathReceipts, acCoverage, testOracle, gapResult]) if (!c.ok && c.holdReason && !reasons.includes(c.holdReason)) reasons.push(c.holdReason);
+  for (const c of [protectedPaths, pathReceipts, acCoverage, testOracle, formalProofBinding, gapResult]) if (!c.ok && c.holdReason && !reasons.includes(c.holdReason)) reasons.push(c.holdReason);
   if (serviceFailure && !reasons.includes('service_failure')) reasons.push('service_failure');
 
   const holdReason = HOLD_PRIORITY.find((r) => reasons.includes(r)) ?? null;
-  const ok = holdReason === null && protectedPaths.ok && pathReceipts.ok && acCoverage.ok && testOracle.ok && gapResult.ok;
+  const ok = holdReason === null && protectedPaths.ok && pathReceipts.ok && acCoverage.ok && testOracle.ok && formalProofBinding.ok && gapResult.ok;
   return {
     decision: ok ? 'MERGE' : 'HOLD', ok, holdReason, holdReasons: reasons,
     burnRepairStrike: !ok && holdReason !== 'service_failure',
-    checks: { acCoverage, pathReceipts, testOracle, protectedPaths, gapCheck: gapResult },
+    checks: { acCoverage, pathReceipts, testOracle, protectedPaths, formalProofBinding, gapCheck: gapResult },
     summary: ok ? 'All 4 non-compensatory mechanical evidence checks and gap check passed.'
-      : `HOLD (${holdReason}): ${[protectedPaths, pathReceipts, acCoverage, testOracle, gapResult].filter((c) => !c.ok).map((c) => c.details).join(' | ')}`,
+      : `HOLD (${holdReason}): ${[protectedPaths, pathReceipts, acCoverage, testOracle, formalProofBinding, gapResult].filter((c) => !c.ok).map((c) => c.details).join(' | ')}`,
   };
 }

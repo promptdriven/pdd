@@ -2,24 +2,14 @@
 // Layer-2 Autopilot/step agent launcher with model tiering, telemetry, and Cloud step failover.
 import { runAgentProcess } from '../shared/agent-process.mjs';
 
-const TIER_PROFILES = {
-  codex: {
-    worker: { model: 'gpt-5.4-mini', reasoningEffort: 'medium' },
-    reviewer: { model: 'gpt-5.4', reasoningEffort: 'high' },
-  },
-  claude: {
-    worker: { model: 'claude-sonnet-4-6', reasoningEffort: 'medium' },
-    reviewer: { model: 'claude-opus-4-6', reasoningEffort: 'high' },
-  },
-  gemini: {
-    worker: { model: 'gemini-2.5-flash', reasoningEffort: 'medium' },
-    reviewer: { model: 'gemini-2.5-pro', reasoningEffort: 'high' },
-  },
-  agy: {
-    worker: { model: 'gemini-2.5-flash', reasoningEffort: 'medium' },
-    reviewer: { model: 'gemini-2.5-pro', reasoningEffort: 'high' },
-  },
-};
+// Provider/tier defaults: configurable via `tiering` config or env (`PDD_<PROVIDER>_<TIER>_MODEL`,
+// `PDD_<TIER>_MODEL`, `PDD_<PROVIDER>_<TIER>_EFFORT`, `PDD_<TIER>_EFFORT`). Never hardcode model IDs.
+export const SUPPORTED_TIER_PROVIDERS = Object.freeze(['codex', 'claude', 'gemini', 'agy']);
+export const DEFAULT_TIER_EFFORTS = Object.freeze({
+  worker: 'medium',
+  reviewer: 'high',
+});
+const PROVIDER_SET = new Set(SUPPORTED_TIER_PROVIDERS);
 
 const WORKER_STEPS = new Set([
   'intake', 'triage', 'sort', 'dependencies', 'improve', 'groom', 'clarify',
@@ -57,7 +47,7 @@ export function resolveAgentStepLaunch({
   env = process.env,
 } = {}) {
   const rawKind = definition?.kind ?? agent;
-  const normalizedAgent = typeof rawKind === 'string' && Object.hasOwn(TIER_PROFILES, rawKind.trim().toLowerCase())
+  const normalizedAgent = typeof rawKind === 'string' && PROVIDER_SET.has(rawKind.trim().toLowerCase())
     ? rawKind.trim().toLowerCase()
     : 'codex';
   const command = definition?.command ?? rawKind;
@@ -81,14 +71,18 @@ export function resolveAgentStepLaunch({
       tieringEnabled: false,
     };
   }
-  const defaults = TIER_PROFILES[normalizedAgent]?.[tier] ?? TIER_PROFILES.codex[tier];
-  const envModel = tier === 'worker' ? env?.PDD_WORKER_MODEL : env?.PDD_REVIEWER_MODEL;
-  const envEffort = tier === 'worker' ? env?.PDD_WORKER_EFFORT : env?.PDD_REVIEWER_EFFORT;
+  const providerKey = normalizedAgent.toUpperCase();
+  const tierKey = tier.toUpperCase();
+  const envProviderModel = env?.[`PDD_${providerKey}_${tierKey}_MODEL`];
+  const envModel = envProviderModel ?? (tier === 'worker' ? env?.PDD_WORKER_MODEL : env?.PDD_REVIEWER_MODEL);
+  const envProviderEffort = env?.[`PDD_${providerKey}_${tierKey}_EFFORT`];
+  const envEffort = envProviderEffort ?? (tier === 'worker' ? env?.PDD_WORKER_EFFORT : env?.PDD_REVIEWER_EFFORT);
+  const defaultEffort = DEFAULT_TIER_EFFORTS[tier] ?? 'medium';
   const resolvedModel = explicitModel && cfg?.overrideExplicitModel !== true
     ? explicitModel
-    : checkModel(cfg?.models?.[normalizedAgent]?.[tier] ?? cfg?.[tier]?.model ?? envModel ?? defaults.model);
+    : checkModel(cfg?.models?.[normalizedAgent]?.[tier] ?? cfg?.[tier]?.model ?? envModel ?? null);
   const resolvedEffort = explicitEffort
-    ?? checkEffort(cfg?.efforts?.[normalizedAgent]?.[tier] ?? cfg?.[tier]?.reasoningEffort ?? envEffort ?? defaults.reasoningEffort);
+    ?? checkEffort(cfg?.efforts?.[normalizedAgent]?.[tier] ?? cfg?.[tier]?.reasoningEffort ?? envEffort ?? defaultEffort);
   const args = [];
   if (resolvedModel) args.push('--model', resolvedModel);
   if (resolvedEffort) {

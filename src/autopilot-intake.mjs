@@ -26,7 +26,7 @@ export {
   summarizeIntakeFilterPrecision,
 };
 
-export {
+import {
   AUTO_DEPS_MARKER_PREFIX,
   DEPENDENCY_EVIDENCE_KINDS,
   DEPENDENCY_ACTIONS,
@@ -40,6 +40,21 @@ export {
   activeFileConflicts,
   sweepExpiredClaims,
 } from './autopilot/intake/auto-deps.mjs';
+
+export {
+  AUTO_DEPS_MARKER_PREFIX,
+  DEPENDENCY_EVIDENCE_KINDS,
+  DEPENDENCY_ACTIONS,
+  DEFAULT_FILE_CLAIM_TTL_MS,
+  issueContentHash,
+  parseExplicitDependencies,
+  inspectEdgeTimeline,
+  reconcileAutoDependencies,
+  acquireFileClaim,
+  releaseFileClaim,
+  activeFileConflicts,
+  sweepExpiredClaims,
+};
 
 export const DEFAULT_MIN_INTAKE_CONFIDENCE = 0.75;
 export const INTAKE_MODES = Object.freeze(['off', 'shadow', 'active']);
@@ -72,9 +87,134 @@ export function intakeMode(value) { return INTAKE_MODES.includes(value) ? value 
 
 export function intakeFolders(root) {
   const base = join(root, 'intake');
-  return { base, cards: join(base, 'cards'), jobs: join(base, 'jobs'), logs: join(base, 'logs'), empty: join(base, 'empty'), trust: join(base, 'trust.json'), pick: join(base, 'would-pick.json'), started: join(base, 'started.json'),
+  return { base, cards: join(base, 'cards'), jobs: join(base, 'jobs'), logs: join(base, 'logs'), empty: join(base, 'empty'),
+    deps: join(base, 'deps'), claims: join(base, 'claims'),
+    trust: join(base, 'trust.json'), pick: join(base, 'would-pick.json'), started: join(base, 'started.json'),
     preflightSkips: join(base, 'preflight-skips.jsonl'), preflightRouted: join(base, 'preflight-routed.json'), declined: join(base, 'declined.json'),
     diff: at => join(base, `diff-${day(at)}.jsonl`) };
+}
+
+function createAutoDepsGhAdapter(ctx) {
+  const gh = ctx?.gh;
+  const repo = ctx?.repo;
+  if (!gh || !repo) return {};
+  const listPage = async (path, page) => {
+    const sep = path.includes('?') ? '&' : '?';
+    const res = await gh.call('GET', `${path}${sep}per_page=100&page=${page}`);
+    if (res.status >= 400) throw Object.assign(new Error(`GitHub GET ${path}: ${res.status}`), { status: res.status, body: res.body });
+    return Array.isArray(res.body) ? res.body : [];
+  };
+  return {
+    listBlockedBy: (issueNum, { page = 1 } = {}) => listPage(`repos/${repo}/issues/${issueNum}/dependencies/blocked_by`, page),
+    addBlockedBy: async (dependentNum, blockerIssue) => {
+      const payload = Number.isSafeInteger(blockerIssue?.id) ? { issue_id: blockerIssue.id } : { issue_number: blockerIssue?.number ?? blockerIssue };
+      const res = await gh.call('POST', `repos/${repo}/issues/${dependentNum}/dependencies/blocked_by`, payload);
+      if (res.status >= 400) throw Object.assign(new Error(`GitHub POST blocked_by: ${res.status}`), { status: res.status, body: res.body });
+      return { status: res.status, ...(object(res.body) ? res.body : {}) };
+    },
+    removeBlockedBy: async (dependentNum, blockerIssue) => {
+      const targetId = blockerIssue?.id ?? blockerIssue?.number ?? blockerIssue;
+      const res = await gh.call('DELETE', `repos/${repo}/issues/${dependentNum}/dependencies/blocked_by/${targetId}`);
+      if (res.status >= 400 && res.status !== 404) throw Object.assign(new Error(`GitHub DELETE blocked_by: ${res.status}`), { status: res.status, body: res.body });
+      return { status: res.status };
+    },
+    listTimeline: (issueNum, { page = 1 } = {}) => listPage(`repos/${repo}/issues/${issueNum}/timeline`, page),
+    getIssue: async issueNum => {
+      const res = await gh.call('GET', `repos/${repo}/issues/${issueNum}`);
+      if (res.status >= 400) throw Object.assign(new Error(`GitHub GET issue #${issueNum}: ${res.status}`), { status: res.status, body: res.body });
+      return res.body;
+    },
+    listComments: (issueNum, { page = 1 } = {}) => listPage(`repos/${repo}/issues/${issueNum}/comments`, page),
+    createComment: async (issueNum, body) => (typeof ctx.comment === 'function'
+      ? ctx.comment(issueNum, body)
+      : gh.ok('POST', `repos/${repo}/issues/${issueNum}/comments`, { body })),
+  };
+}
+
+/**
+ * Reconcile conservative explicit-prerequisite native `blocked_by` edges for an intake issue.
+ * Only invokes GitHub dependency endpoints when explicit prerequisite edges or prior managed edges exist.
+ * Forces `dryRun: true` in `shadow` mode (0 GitHub writes).
+ */
+export async function reconcileIntakeAutoDependencies(ctx, row, openIssues = [], { mode = null, dryRun = null, force = false } = {}) {
+  if (!ctx?.root || !ctx?.repo || !object(row) || !Number.isSafeInteger(row.number)) {
+    return { skipped: true, reason: 'invalid-context', actions: [], holds: [], retriage: [], commentsPosted: 0 };
+  }
+  if (ctx.settings?.autoDeps === false) {
+    return { skipped: true, reason: 'disabled', actions: [], holds: [], retriage: [], commentsPosted: 0 };
+  }
+  const effectiveMode = mode ?? intakeMode(ctx.settings?.intake);
+  const isDryRun = dryRun !== null ? Boolean(dryRun) : effectiveMode === 'shadow';
+  const f = intakeFolders(ctx.root);
+
+  // Fast pre-check: avoid extra GitHub calls for ordinary issues with zero explicit prerequisite declarations or managed edges.
+  const ownExplicit = parseExplicitDependencies(row, { repo: ctx.repo });
+  const peerBlocksRow = (Array.isArray(openIssues) ? openIssues : []).some(other => {
+    if (!object(other) || other.number === row.number) return false;
+    const op = parseExplicitDependencies(other, { repo: ctx.repo });
+    return op.blocking.some(e => e.target === row.number) || op.blockedBy.some(e => e.target === row.number);
+  });
+  const savedDeps = readJson(ctx.fs, join(f.deps, 'auto-deps-state.json'));
+  const hasManaged = object(savedDeps?.managedEdges) && Object.values(savedDeps.managedEdges).some(m => m?.dependent === row.number || m?.blocker === row.number);
+  if (!ownExplicit.blockedBy.length && !ownExplicit.blocking.length && !peerBlocksRow && !hasManaged) {
+    return { skipped: true, reason: 'no-explicit-prerequisites', actions: [], holds: [], retriage: [], commentsPosted: 0 };
+  }
+
+  ctx.fs.mkdirSync(f.deps, { recursive: true, mode: 0o700 });
+  const ghPort = ctx.ports?.autoDepsGh ?? createAutoDepsGhAdapter(ctx);
+  const login = typeof ctx.login === 'function' ? await ctx.login().catch(() => null) : null;
+  const res = await reconcileAutoDependencies({
+    repo: ctx.repo,
+    subjectIssue: row,
+    openIssues: Array.isArray(openIssues) ? openIssues : null,
+    gh: ghPort,
+    stateDir: f.deps,
+    autopilotLogins: login ? [login] : [],
+    dryRun: isDryRun,
+    force,
+    fs: ctx.fs,
+    now: ctx.now,
+  });
+
+  const addedForRow = (res.actions ?? []).filter(a => a.action === 'add' && a.dependent === row.number && !a.dryRun).length;
+  if (addedForRow > 0) {
+    const prevBlocked = Number(row.issue_dependencies_summary?.blocked_by ?? 0);
+    row.issue_dependencies_summary = {
+      ...(object(row.issue_dependencies_summary) ? row.issue_dependencies_summary : {}),
+      blocked_by: prevBlocked + addedForRow,
+    };
+  }
+  return res;
+}
+
+/** Acquire a locked, expiring local file-claim reservation for an issue/worker (separate from GitHub `blocked_by`). */
+export function reserveIntakeFileClaim(ctx, { issue, files = [], leaseId = null, owner = null, ttlMs = DEFAULT_FILE_CLAIM_TTL_MS } = {}) {
+  if (!ctx?.root || !Number.isSafeInteger(issue) || issue <= 0 || !Array.isArray(files) || !files.length) {
+    return { acquired: false, conflict: false, conflicts: [], claim: null, skipped: true };
+  }
+  const f = intakeFolders(ctx.root);
+  ctx.fs.mkdirSync(f.claims, { recursive: true, mode: 0o700 });
+  const claimOwner = owner || ctx.machineId || ctx.state?.machine || 'autopilot';
+  const claimLease = leaseId || `issue-${issue}`;
+  try { sweepExpiredClaims(f.claims, { now: ctx.now, fs: ctx.fs }); } catch { /* Fail-closed checked by acquireFileClaim below. */ }
+  return acquireFileClaim(f.claims, { owner: claimOwner, issue, leaseId: claimLease, files, ttlMs, now: ctx.now, fs: ctx.fs });
+}
+
+/** Release a local file-claim reservation when a job merges, ends, hands over, or undoes its claim. */
+export function releaseIntakeFileClaim(ctx, { issue = null, leaseId = null, owner = null } = {}) {
+  if (!ctx?.root) return { releasedCount: 0, released: [], remaining: [] };
+  const f = intakeFolders(ctx.root);
+  if (!ctx.fs.existsSync?.(join(f.claims, 'file-claims.json'))) return { releasedCount: 0, released: [], remaining: [] };
+  return releaseFileClaim(f.claims, { owner, issue, leaseId, now: ctx.now, fs: ctx.fs });
+}
+
+/** Check local active file-claim conflicts for candidate files/areas (temporary overlap never creates GitHub `blocked_by`). */
+export function checkIntakeFileConflicts(ctx, { files = [], excludeIssue = null, excludeOwner = null, excludeLeaseId = null } = {}) {
+  if (!ctx?.root || !Array.isArray(files) || !files.length) return { hasConflict: false, conflicts: [] };
+  const f = intakeFolders(ctx.root);
+  if (!ctx.fs.existsSync?.(join(f.claims, 'file-claims.json'))) return { hasConflict: false, conflicts: [] };
+  try { sweepExpiredClaims(f.claims, { now: ctx.now, fs: ctx.fs }); } catch { /* Checked below. */ }
+  return activeFileConflicts(f.claims, { files, excludeIssue, excludeOwner, excludeLeaseId, now: ctx.now, fs: ctx.fs });
 }
 function readJson(fs, file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
 function writeJson(fs, file, value) {
@@ -1562,6 +1702,9 @@ export async function shadowIntake(ctx, rows) {
 export async function activeIntake(ctx, rows) {
   const f = intakeFolders(ctx.root);
   for (const dir of [f.base, f.cards, f.jobs, f.logs, f.empty]) ctx.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (ctx.fs.existsSync?.(join(f.claims, 'file-claims.json'))) {
+    try { sweepExpiredClaims(f.claims, { now: ctx.now, fs: ctx.fs }); } catch (error) { ctx.warn?.(`Autopilot intake file-claim sweep: ${error.message}`); }
+  }
   const failedDeclines = new Set();
   await collectActiveIntake(ctx, rows, { failedDeclines });
   const scoped = intakeRows(rows, ctx.settings?.label, ctx.settings?.allowedIssues);
@@ -1744,6 +1887,27 @@ export async function activeIntake(ctx, rows) {
         const next = { issue: n, version, at: ctx.now(), agent: runner?.agent ?? defaultAgent, native: { kind: 'untrusted', reason: 'the author is not trusted; the core never gives this issue to an agent' }, card: null, previous: card?.card ?? card?.previous ?? null };
         saveCard(ctx, f, n, next); cards.set(n, next); continue;
       }
+      // Conservative directed prerequisite-only auto-deps reconciliation (zero file-overlap edges).
+      try {
+        const depRes = await reconcileIntakeAutoDependencies(ctx, row, scoped, { mode: 'active' });
+        const depHold = (depRes?.retriage ?? []).find(r => r.issue === n)
+          ?? (depRes?.holds ?? []).find(h => h.issue === n)
+          ?? null;
+        const addedBlocker = (depRes?.actions ?? []).find(a => a.action === 'add' && a.dependent === n && !a.dryRun);
+        if (depHold || addedBlocker) {
+          const reason = depHold
+            ? (depHold.needsRetriage ? `prerequisite #${depHold.blocker} closed not_planned (needs re-triage)` : `dependency hold (${depHold.reason})`)
+            : `linked explicit prerequisite #${addedBlocker.blocker} (${addedBlocker.kind})`;
+          const next = {
+            issue: n, version: issueVersion(row), at: ctx.now(), agent: runner?.agent ?? defaultAgent,
+            native: { kind: 'waiting', reason }, card: null, previous: card?.card ?? card?.previous ?? null,
+          };
+          saveCard(ctx, f, n, next); cards.set(n, next);
+          continue;
+        }
+      } catch (error) {
+        ctx.warn?.(`Autopilot intake auto-deps #${n}: ${error.message}`);
+      }
       let loaded = null;
       let pre = evaluatePreflight(ctx, row);
       if (pre.decision !== 'allow' && pre.reasonCode !== 'cross_repo') {
@@ -1814,7 +1978,21 @@ export async function activeIntake(ctx, rows) {
     } catch (error) { ctx.warn(`Autopilot intake #${n}: ${error.message}`); }
   }
   if (changed) try { writeJson(ctx.fs, f.trust, Object.fromEntries(Object.entries(cache).filter(([, e]) => object(e) && ctx.now() - e.at < INTAKE_LIMITS.trustHours * HOUR))); } catch (error) { ctx.warn(`Autopilot intake trust cache: ${error.message}`); }
-  const pick = wouldPick(scoped, cards, { minConfidence: ctx.settings?.minIntakeConfidence }), lastPick = readJson(ctx.fs, f.pick);
+  const rawPick = wouldPick(scoped, cards, { minConfidence: ctx.settings?.minIntakeConfidence });
+  // Deprioritize ready issues whose target areas conflict with an active local file-claim reservation.
+  const pick = rawPick.length > 1 && ctx.fs.existsSync?.(join(f.claims, 'file-claims.json'))
+    ? [
+        ...rawPick.filter(n => {
+          const areas = cards.get(n)?.card?.areas ?? [];
+          return !areas.length || !checkIntakeFileConflicts(ctx, { files: areas, excludeIssue: n }).hasConflict;
+        }),
+        ...rawPick.filter(n => {
+          const areas = cards.get(n)?.card?.areas ?? [];
+          return areas.length > 0 && checkIntakeFileConflicts(ctx, { files: areas, excludeIssue: n }).hasConflict;
+        }),
+      ]
+    : rawPick;
+  const lastPick = readJson(ctx.fs, f.pick);
   if (JSON.stringify(lastPick?.issues ?? null) !== JSON.stringify(pick)) { writeJson(ctx.fs, f.pick, { at: ctx.now(), issues: pick }); appendDiff(ctx, f, { kind: 'would-pick', issues: pick }); }
   const jobs = [...coreOwnedIssues(ctx)], seenFile = readJson(ctx.fs, f.started);
   if (seenFile) for (const n of jobs.filter(n => !(seenFile.issues ?? []).includes(n))) appendDiff(ctx, f, { kind: 'started', issue: n, verdict: verdictOf(before.get(n) ?? cards.get(n)), would_pick: (lastPick?.issues ?? pick).includes(n) });

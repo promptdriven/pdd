@@ -29,7 +29,11 @@ let text=''; process.stdin.on('data',c=>text+=c); process.stdin.on('end',()=>{
 });`;
 
 test('agent commands follow the headless auditor launch for codex, claude, gemini and agy', () => {
-  assert.deepEqual(agentCommand({ kind: 'codex', command: '/bin/codex' }), { command: '/bin/codex',
+  assert.deepEqual(agentCommand({ kind: 'codex', command: '/bin/codex' }, { env: {} }), { command: '/bin/codex',
+    args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-'] });
+  assert.deepEqual(agentCommand({ kind: 'codex', command: '/bin/codex' }, { multiAgent: false, env: {} }), { command: '/bin/codex',
+    args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false', '-'] });
+  assert.deepEqual(agentCommand({ kind: 'codex', command: '/bin/codex' }, { env: { PDD_CODEX_MULTI_AGENT: 'false' } }), { command: '/bin/codex',
     args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false', '-'] });
   assert.deepEqual(agentCommand({ kind: 'claude' }, { model: 'opus' }), { command: 'claude',
     args: ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', '--model', 'opus'] });

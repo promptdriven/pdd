@@ -712,6 +712,20 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
     }
   }
 
+  const reopenedEvents = [];
+  for (const [key, list] of reopenedEventsByIssue.entries()) {
+    const hashIdx = key.lastIndexOf('#');
+    if (hashIdx <= 0) continue;
+    const repoLower = key.slice(0, hashIdx);
+    const issueNum = Number(key.slice(hashIdx + 1));
+    if (!Number.isSafeInteger(issueNum) || issueNum <= 0) continue;
+    const repoName = targetRepos.find(r => r.toLowerCase() === repoLower) ?? repoLower;
+    for (const ev of Array.isArray(list) ? list : []) {
+      const reopenedAt = typeof ev === 'string' ? ev : (ev?.reopenedAt ?? ev?.createdAt ?? ev?.at ?? null);
+      if (reopenedAt) reopenedEvents.push({ repo: repoName, issue: issueNum, reopenedAt });
+    }
+  }
+
   const view = subcommand ?? 'overview';
   let report;
   try {
@@ -724,6 +738,7 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
       prStates,
       regressions,
       regressionsComplete,
+      reopenedEvents,
       flakeEntries: ports.flakeEntries ?? localState.flakes,
       ...(ports.recurringFlakes !== undefined ? { recurringFlakes: ports.recurringFlakes } : {}),
       view,

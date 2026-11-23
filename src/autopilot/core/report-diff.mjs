@@ -165,6 +165,8 @@ export function compareTestReports({ baseReport, headReport, baseMeta = null, he
   });
 }
 
+export const diffTestReports = compareTestReports;
+
 function inspectSafePathInTree(realRoot, relPath) {
   if (!canonicalRelPath(relPath)) return { status: 'unsafe', reason: 'non_canonical_path' };
   const parts = relPath.split('/');
