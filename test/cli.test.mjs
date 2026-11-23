@@ -149,7 +149,7 @@ test('3157 autopilot release routes issue reference to runAutopilotLauncher', as
   assert.throws(() => parseArgv(['autopilot', 'release']), CommandInputError);
 });
 
-test('3578 pdd lint --local enforces default-on structural errors without pdd.json and exits 0 once fixed', async t => {
+test('3578 pdd lint --local emits default-warn native-only-unknown-port without pdd.json, enforces error when promoted in pdd.json, and exits 0 once fixed', async t => {
   const repo = temp(t);
   const home = temp(t);
   const state = temp(t);
@@ -167,6 +167,15 @@ test('3578 pdd lint --local enforces default-on structural errors without pdd.js
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
 
   const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
+  const warnOut = capture(), warnErr = capture();
+  const warnCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: warnOut, stderr: warnErr });
+  assert.equal(warnCode, 0, warnErr.text);
+  const warnParsed = JSON.parse(warnOut.text);
+  assert.deepEqual(warnParsed.problems, []);
+  assert.ok(warnParsed.warnings.some(w => /Warning:.*\[native-only-unknown-port\].*"access\.commit"/.test(w)));
+
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'error' } } }, null, 2) + '\n');
+  execFileSync('git', ['add', 'pdd.json'], { cwd: repo });
   const errOut = capture(), errErr = capture();
   const failCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: errOut, stderr: errErr });
   assert.equal(failCode, 1);
