@@ -140,6 +140,7 @@ test('10 adversarial fence/injection hardening tests + Findings #14, #15, #19, #
     `> ${JSON.stringify(VALID_REVIEW)}`,
     '> ```',
     '@@ -1,2 +1,2 @@',
+    ` ${JSON.stringify(VALID_REVIEW)}`,
     `+${JSON.stringify(VALID_REVIEW)}`,
     '',
     '- ordinary bullet must survive for legacyParser',
@@ -156,10 +157,21 @@ test('10 adversarial fence/injection hardening tests + Findings #14, #15, #19, #
   assert.equal(parseTypedOrLegacyOutput(unclosedCommentText, { schemaName: 'review' }).ok, false);
   assert.equal(parseTypedOrLegacyOutput(`Valid prose\n${JSON.stringify(VALID_REVIEW)}\n<!-- trailing unclosed`, { schemaName: 'review' }).ok, false);
 
-  // Linear O(N) performance on 256 KiB repeated unclosed `<!--` and 131 KiB nested splice stress inputs!
+  // Visible closed JSON fence after introductory prose preserves literal `<!--` and `<!-- ... -->` inside JSON strings!
+  const markerReview = { ...VALID_REVIEW, summary: 'Document the <!-- marker and <!-- paired --> cleanly.' };
+  const proseThenMarkerFence = `Review complete.\n\`\`\`json\n${JSON.stringify(markerReview)}\n\`\`\`\n`;
+  const parsedMarkerFence = parseTypedOrLegacyOutput(proseThenMarkerFence, { schemaName: 'review' });
+  assert.equal(parsedMarkerFence.ok, true);
+  assert.equal(parsedMarkerFence.value.summary, markerReview.summary);
+
+  // Linear O(N) performance on >= 256 KiB (262,145 B) repeated unclosed `<!--` and >= 131 KB (131,080 B) nested splice stress inputs!
+  const stressInput1 = '<!-- '.repeat(52_429);
+  const stressInput2 = `${'<!'.repeat(32_768)}<!--x-->${'--'.repeat(32_768)}`;
+  assert.ok(stressInput1.length >= 256 * 1024);
+  assert.ok(stressInput2.length >= 131_072);
   const t0 = Date.now();
-  const stress1 = stripInjectionContainers('<!-- '.repeat(52_000));
-  const stress2 = stripInjectionContainers(`${'<!'.repeat(16_000)}<!--x-->${'--'.repeat(16_000)}`);
+  const stress1 = stripInjectionContainers(stressInput1);
+  const stress2 = stripInjectionContainers(stressInput2);
   const elapsedMs = Date.now() - t0;
   assert.equal(stress1.includes('<!--'), false);
   assert.equal(stress2.includes('<!--'), false);

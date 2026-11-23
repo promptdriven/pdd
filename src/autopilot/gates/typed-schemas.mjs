@@ -144,19 +144,50 @@ export function safeJsonParse(raw, { maxBytes = 262_144, maxDepth = 16, sanitize
   return err ? { ok: false, value: null, error: err } : { ok: true, value: cleaned, error: null };
 }
 
-function stripHtmlCommentsDetailed(input) {
-  const src = String(input ?? '');
-  const out = [];
+function parseFenceOpenLine(line) {
+  const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  if (!open) return null;
+  if (open[1][0] === '`' && open[2].includes('`')) return null;
+  return {
+    ch: open[1][0],
+    len: open[1].length,
+    lang: (open[2].trim().split(/[\s{`~]/)[0] ?? '').toLowerCase(),
+  };
+}
+
+function isFenceCloseLine(line, active) {
+  const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+  return Boolean(close && close[1][0] === active.ch && close[1].length >= active.len);
+}
+
+/**
+ * Hardening 6 (detailed): Single-pass O(N) injection container stripper.
+ * Preserves visible top-level fenced code blocks verbatim (so JSON strings containing `<!--` survive
+ * even after introductory prose), while stripping HTML comments (closed, nested, boundary-spliced,
+ * abrupt-closing `<!-->`/`<!--->`, and unclosed to EOF), blockquotes, and unified diff hunks
+ * (including unchanged leading-space context lines).
+ */
+export function stripInjectionContainersDetailed(raw) {
+  const src = sanitizeUntrustedText(raw).replace(/\r\n/g, '\n');
+  const segments = [];
+  let proseBuf = [];
   let unclosedComment = false;
+  let inDiffHunk = false;
   let pos = 0;
+
+  const flushProse = () => {
+    if (!proseBuf.length) return;
+    segments.push({ fence: false, text: proseBuf.join('') });
+    proseBuf = [];
+  };
 
   const popTail3 = () => {
     let tail = '';
-    while (tail.length < 3 && out.length > 0) {
-      const chunk = out.pop();
+    while (tail.length < 3 && proseBuf.length > 0) {
+      const chunk = proseBuf.pop();
       const need = 3 - tail.length;
       if (chunk.length > need) {
-        out.push(chunk.slice(0, chunk.length - need));
+        proseBuf.push(chunk.slice(0, chunk.length - need));
         tail = chunk.slice(chunk.length - need) + tail;
       } else {
         tail = chunk + tail;
@@ -166,38 +197,30 @@ function stripHtmlCommentsDetailed(input) {
   };
 
   const closeCommentFrom = (bodyStart) => {
-    // HTML5 §13.2.5.42 abrupt-closing comments `<!-->` and `<!--->` close immediately
-    // rather than swallowing a subsequent comment opener on a later line.
+    // HTML5 §13.2.5.42 abrupt-closing comments `<!-->` and `<!--->` close immediately.
     if (src[bodyStart] === '>') return bodyStart + 1;
     if (src[bodyStart] === '-' && src[bodyStart + 1] === '>') return bodyStart + 2;
     const end = src.indexOf('-->', bodyStart);
     return end >= 0 ? end + 3 : -1;
   };
 
-  while (pos < src.length) {
-    const start = src.indexOf('<!--', pos);
-    if (start < 0) {
-      out.push(src.slice(pos));
-      break;
-    }
-    if (start > pos) out.push(src.slice(pos, start));
+  const consumeCommentAndSplices = (start) => {
     const after = closeCommentFrom(start + 4);
     if (after < 0) {
-      // Unclosed HTML comment: drop everything through EOF so hidden content cannot leak.
       unclosedComment = true;
-      break;
+      pos = src.length;
+      return;
     }
     pos = after;
-    // Handle boundary-spliced synthetic `<!--` openers (e.g. `<!<!--x-->--`) in single-pass O(N).
     while (pos <= src.length) {
       const tail = popTail3();
       const probe = tail + src.slice(pos, pos + 3);
       const spliceIdx = probe.indexOf('<!--');
       if (spliceIdx < 0) {
-        if (tail) out.push(tail);
+        if (tail) proseBuf.push(tail);
         break;
       }
-      if (spliceIdx > 0) out.push(tail.slice(0, spliceIdx));
+      if (spliceIdx > 0) proseBuf.push(tail.slice(0, spliceIdx));
       pos += Math.max(0, spliceIdx + 4 - tail.length);
       const synAfter = closeCommentFrom(pos);
       if (synAfter < 0) {
@@ -207,24 +230,86 @@ function stripHtmlCommentsDetailed(input) {
       }
       pos = synAfter;
     }
-    if (unclosedComment) break;
-  }
-  return { text: out.join(''), unclosedComment };
-}
+  };
 
-/** Hardening 6 (detailed): Strip HTML comments (closed & unclosed), blockquotes, and unified diff lines. */
-export function stripInjectionContainersDetailed(raw) {
-  const { text: withoutComments, unclosedComment } = stripHtmlCommentsDetailed(sanitizeUntrustedText(raw));
-  const lines = withoutComments.split(/\r?\n/), out = [];
-  let inDiffHunk = false;
-  for (const line of lines) {
-    if (/^\s*>/.test(line)) continue;
-    if (/^(?:diff --git |@@ |--- [a-z/]|\+\+\+ [a-z/])/i.test(line)) { inDiffHunk = true; continue; }
-    if (inDiffHunk) { if (/^[+-]/.test(line)) continue; if (!line.startsWith(' ')) inDiffHunk = false; }
-    if (/^[+-]\s*(?:\{|```|~~~)/.test(line)) continue;
-    out.push(line);
+  while (pos < src.length && !unclosedComment) {
+    const atLineStart = pos === 0 || src[pos - 1] === '\n';
+    const nl = src.indexOf('\n', pos);
+    const lineEnd = nl < 0 ? src.length : nl;
+    const nextLinePos = nl < 0 ? src.length : nl + 1;
+
+    if (atLineStart) {
+      const line = src.slice(pos, lineEnd);
+      if (inDiffHunk) {
+        if (/^[ +-]/.test(line) || line === '\\ No newline at end of file') {
+          pos = nextLinePos;
+          continue;
+        }
+        inDiffHunk = false;
+      }
+      if (/^(?:diff --git |@@ |--- [a-z/]|\+\+\+ [a-z/])/i.test(line)) {
+        inDiffHunk = true;
+        pos = nextLinePos;
+        continue;
+      }
+      if (/^\s*>/.test(line) || /^[+-]\s*(?:\{|```|~~~)/.test(line)) {
+        pos = nextLinePos;
+        continue;
+      }
+      const fence = parseFenceOpenLine(line);
+      if (fence) {
+        flushProse();
+        let scanPos = nextLinePos;
+        let fenceEnd = src.length;
+        while (scanPos < src.length) {
+          const snl = src.indexOf('\n', scanPos);
+          const sEnd = snl < 0 ? src.length : snl;
+          const sNext = snl < 0 ? src.length : snl + 1;
+          if (isFenceCloseLine(src.slice(scanPos, sEnd), fence)) {
+            fenceEnd = sNext;
+            break;
+          }
+          scanPos = sNext;
+        }
+        segments.push({ fence: true, text: src.slice(pos, fenceEnd) });
+        pos = fenceEnd;
+        continue;
+      }
+    }
+
+    const start = src.indexOf('<!--', pos);
+    if (start < 0 || start >= lineEnd) {
+      proseBuf.push(src.slice(pos, nextLinePos));
+      pos = nextLinePos;
+      continue;
+    }
+    if (start > pos) proseBuf.push(src.slice(pos, start));
+    consumeCommentAndSplices(start);
   }
-  return { text: out.join('\n'), unclosedComment };
+  flushProse();
+
+  const outLines = [];
+  let postInDiffHunk = false;
+  for (const seg of segments) {
+    if (seg.fence) {
+      postInDiffHunk = false;
+      const cleanFence = seg.text.endsWith('\n') ? seg.text.slice(0, -1) : seg.text;
+      outLines.push(cleanFence);
+      continue;
+    }
+    const rawSeg = seg.text.endsWith('\n') ? seg.text.slice(0, -1) : seg.text;
+    for (const line of rawSeg.split('\n')) {
+      if (/^\s*>/.test(line)) continue;
+      if (/^(?:diff --git |@@ |--- [a-z/]|\+\+\+ [a-z/])/i.test(line)) { postInDiffHunk = true; continue; }
+      if (postInDiffHunk) {
+        if (/^[ +-]/.test(line) || line === '\\ No newline at end of file') continue;
+        postInDiffHunk = false;
+      }
+      if (/^[+-]\s*(?:\{|```|~~~)/.test(line)) continue;
+      outLines.push(line);
+    }
+  }
+  return { text: outLines.join('\n'), unclosedComment };
 }
 
 /** Hardening 6: Strip HTML comments, blockquotes, and unified diff lines (preserving ordinary `- ` Markdown bullets). */
