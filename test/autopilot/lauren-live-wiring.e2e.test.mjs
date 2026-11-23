@@ -1200,30 +1200,41 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
           needs: ['account:alpha'],
           run: 'sh -c "node --import=./tools/setup.mjs \'scripts/verify my app.mjs\'"',
         },
+        {
+          id: 'cd-gate',
+          when: ['src/**', 'tools/**'],
+          run: 'cd tools && node gate.mjs',
+        },
       ],
     },
   }, null, 2));
   writeFileSync(join(nestedShellDir, 'tools/plain-nested.mjs'), 'process.exit(0);\n');
+  writeFileSync(join(nestedShellDir, 'tools/gate.mjs'), 'process.exit(0);\n');
+  writeFileSync(join(nestedShellDir, 'README.md'), '# Demo\n');
   ngit('add', '.');
   ngit('commit', '-m', 'base');
   const nBase = ngit('rev-parse', 'HEAD');
+  // Create untracked file on disk (not in base commit) to verify fileExistsInBase uses git commit object exclusively!
+  mkdirSync(join(nestedShellDir, 'node_modules'), { recursive: true });
+  writeFileSync(join(nestedShellDir, 'node_modules/.package-lock.json'), '{}\n');
   writeFileSync(join(nestedShellDir, 'src/ab12-mod.mjs'), 'export const v = 2;\n');
-  ngit('add', '.');
+  ngit('add', 'src/ab12-mod.mjs');
   ngit('commit', '-m', 'head');
   const nHead = ngit('rev-parse', 'HEAD');
 
-  for (const nestedTarget of ['tools/plain-nested.mjs', 'tools/setup.mjs', 'scripts/verify my app.mjs']) {
+  for (const nestedTarget of ['tools/plain-nested.mjs', 'tools/setup.mjs', 'tools/gate.mjs', 'scripts/verify my app.mjs']) {
     const nestedProt = await collectLiveEvidenceContract({
       repo: 'acme/nested',
       job: { issue: 60, head: nHead },
       headTree: nestedShellDir,
+      baseTree: nestedShellDir,
       baseTip: nBase,
       changedFiles: ['src/ab12-mod.mjs', nestedTarget],
       suite: { state: 'pass' },
       suiteCmd: 'node -e "process.exit(0)"',
       runProveFn: provedStub,
     });
-    assert.equal(evaluateEvidenceContract(nestedProt.contractInput).holdReason, 'protected_path', `nested sh -c must protect ${nestedTarget}`);
+    assert.equal(evaluateEvidenceContract(nestedProt.contractInput).holdReason, 'protected_path', `nested/cd recipe must protect ${nestedTarget}`);
   }
 
   // Loop 6 Astra P2: quoted filename `'scripts/verify my app.mjs'` MUST NOT falsely protect unrelated root `app.mjs`!

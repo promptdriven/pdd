@@ -5,7 +5,7 @@
 // post-review isolated test-env secret injection, and bound 13-field harness receipts.
 import { execFile as cbExecFile, spawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, posix } from 'node:path';
 import { promisify } from 'node:util';
 import { OUTCOME_FAILED, OUTCOME_NOT_PROVED, OUTCOME_PROVED, runProve } from '../../core/prove.mjs';
 import { readSafeUtf8 } from '../../core/lint/diagnostics.mjs';
@@ -269,21 +269,34 @@ function readGitHeadSha(cwd) {
 }
 
 function fileExistsInBase(relPath, { headTree, baseTree, baseTip, baseTipValid, fs }) {
+  // When a verified merge-base commit SHA is known, consult ONLY the case-sensitive Git commit object
+  // (never local filesystem lstatSync, which can false-match untracked files or macOS case-insensitive names).
+  if (baseTipValid) {
+    const gitCwd = headTree || baseTree;
+    if (!gitCwd) return false;
+    try {
+      const res = spawnSync('git', ['cat-file', '-t', `${baseTip}:${relPath}`], {
+        cwd: gitCwd, encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      return res.status === 0 && String(res.stdout ?? '').trim() === 'blob';
+    } catch { return false; }
+  }
   if (baseTree) {
     try {
       const st = fs.lstatSync(join(baseTree, relPath));
       if (st.isFile() && !st.isSymbolicLink()) return true;
-    } catch { /* fall through to git cat-file */ }
-  }
-  if (headTree && baseTipValid) {
-    try {
-      const res = spawnSync('git', ['cat-file', '-t', `${baseTip}:${relPath}`], {
-        cwd: headTree, encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      if (res.status === 0 && String(res.stdout ?? '').trim() === 'blob') return true;
     } catch { /* absent */ }
   }
   return false;
+}
+
+function normalizeCandidateRepoPath(raw) {
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.startsWith('-') || trimmed.startsWith('/') || trimmed.includes('\\') || trimmed.includes('\0')) return '';
+  const norm = posix.normalize(trimmed).replace(/^(?:\.\/)+/, '');
+  if (!norm || norm === '.' || norm === '..' || norm.startsWith('../')) return '';
+  return norm;
 }
 
 function extractRecipeScriptPaths(baseVerify, { headTree = null, baseTree = null, baseTip = null, baseTipValid = false, fs = nativeFs } = {}) {
@@ -292,22 +305,47 @@ function extractRecipeScriptPaths(baseVerify, { headTree = null, baseTree = null
     ...(nonEmpty(baseVerify?.test) ? [baseVerify.test] : []),
     ...(Array.isArray(baseVerify?.paths) ? baseVerify.paths.map(p => p?.run).filter(nonEmpty) : []),
   ];
-  const hasBaseLookup = Boolean(baseTree || (headTree && baseTipValid));
+  const hasBaseLookup = Boolean((baseTipValid && (headTree || baseTree)) || (!baseTipValid && baseTree));
   const baseCtx = { hasBaseLookup, headTree, baseTree, baseTip, baseTipValid, fs };
   const candidateTokens = [];
+  const cdDirs = new Set();
   for (const cmd of commands) {
-    collectCommandCandidates(cmd, 0, candidateTokens, baseCtx);
+    const tokens = collectCommandCandidates(cmd, 0, [], baseCtx);
+    for (let i = 0; i < tokens.length; i += 1) {
+      const tok = tokens[i];
+      candidateTokens.push(tok);
+      if (tok === 'cd' && i + 1 < tokens.length) {
+        const dir = normalizeCandidateRepoPath(tokens[i + 1]);
+        if (dir) cdDirs.add(dir);
+      }
+    }
   }
   for (const raw of candidateTokens) {
-    const cand = raw.replace(/^(?:\.\/)+/, '');
-    if (!cand || cand.startsWith('-') || cand.startsWith('/') || cand.includes('..') || cand.includes('\\') || cand.includes('\0')) continue;
-    if (TEST_FILE_RE.test(cand)) continue;
+    const cand = normalizeCandidateRepoPath(raw);
+    if (!cand || TEST_FILE_RE.test(cand)) continue;
     if (SCRIPT_EXT_RE.test(cand)) {
       found.add(cand);
+      if (!cand.includes('/')) {
+        // Handle `cd <dir> && node <script>` cleanly: protect `<dir>/<script>` and `**/<script>` when not at root.
+        for (const dir of cdDirs) {
+          const joined = normalizeCandidateRepoPath(`${dir}/${cand}`);
+          if (joined && !TEST_FILE_RE.test(joined)) found.add(joined);
+        }
+        if (!hasBaseLookup || !fileExistsInBase(cand, baseCtx)) {
+          found.add(`**/${cand}`);
+        }
+      }
       continue;
     }
-    if (hasBaseLookup && fileExistsInBase(cand, { headTree, baseTree, baseTip, baseTipValid, fs })) {
+    if (hasBaseLookup && fileExistsInBase(cand, baseCtx)) {
       found.add(cand);
+    } else if (hasBaseLookup && !cand.includes('/')) {
+      for (const dir of cdDirs) {
+        const joined = normalizeCandidateRepoPath(`${dir}/${cand}`);
+        if (joined && !TEST_FILE_RE.test(joined) && fileExistsInBase(joined, baseCtx)) {
+          found.add(joined);
+        }
+      }
     }
   }
   return [...found].sort();

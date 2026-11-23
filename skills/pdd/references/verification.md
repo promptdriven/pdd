@@ -26,7 +26,7 @@ Maintain the repository **Feature Map** in `pdd.json` under `verify`:
 ```
 
 - `when`: path globs covering direct and indirect files that affect that user path.
-- `run`: repo-native verification command exercising the real user path.
+- `run`: repo-native verification command exercising the real user path. Reference verification scripts by repository-relative path (for example `node scripts/verify.mjs`) so Autopilot Check 4 protects them automatically.
 - `needs`: open capability strings (`tty`, `browser`, `docker`, `ios-simulator`, `account:<name>`, custom).
 - When adding or changing a user-facing surface, add or update its `verify.paths` entry so `pdd status` shows it. Note: `pdd prove` trusts `verify` recipes from the merge base (`base:pdd.json`), so a newly proposed recipe is exercised locally on its introducing PR and becomes trusted for `pdd prove` once reviewed and merged to the base branch.
 
