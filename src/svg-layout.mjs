@@ -413,7 +413,7 @@ function extractControls(source, parts) {
         const inner = body.slice(0, close.index);
         if (/<\/?[a-zA-Z][\w:-]*(?=\s|\/?>)/.test(inner)) {
           extractHtmlControls(inner, controls); push(` ${S}H0${S} `);
-        } else if (/=/.test(inner) && /^(?:[a-zA-Z_:][\w:.-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?\s*)+$/.test(inner.trim())) {
+        } else if (/=/.test(inner) && /^[a-zA-Z_:][\w:.-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?(?:\s+[a-zA-Z_:][\w:.-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*$/.test(inner.trim())) {
           for (const attrMatch of inner.trim().matchAll(/([a-zA-Z_:][\w:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
             const attr = attrMatch[1].toLowerCase(), val = (attrMatch[2] ?? attrMatch[3] ?? attrMatch[4] ?? '').replace(/\s+/g, ' ').trim();
             push(` ${CONTROL_ATTRS.has(attr) ? put('A', val) : put('N', val)} `);
