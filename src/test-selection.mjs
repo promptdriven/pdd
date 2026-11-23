@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-selection.prompt.md (sha256: 579eaebb04307f7a3bcc5fc9c6840e013d18f474a36f4999f8d0a46673c81f76).
+// Generated from prompts/cli/test-selection.prompt.md (sha256: 51dbd663136bdabce204db3fafbf7d297c41792abad1fb25cc5f9def7b3276e6).
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
@@ -186,7 +186,7 @@ export function selectTests(found, words = [], { native = false, captureSource }
   return { selected: found.tests.filter(test => selected.has(test)), nativeSelections: descriptors, unknown, untested };
 }
 
-export const NO_TESTS = 'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.';
+export const NO_TESTS = 'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See skills/pdd/references/stories.md.';
 
 // Why a repo has no tests, by the test name rule (it opens no JSON file): Stories with no test, test-folder JSON
 // that matches no Story, and *.prompt names.

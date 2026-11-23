@@ -43,7 +43,20 @@ export async function resolveProductRepository({ cwd } = {}, ports = {}) {
   if (!nonControlText(cwd)) throw Error('Git repository cwd is required to resolve product repository.');
   const execFile = ports.execFile ?? nativeGithubCounter((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
   const p = { execFile };
-  const remote = (await command(p, cwd, 'git', ['remote', 'get-url', 'origin'])).trim();
+  let remoteRaw;
+  try {
+    remoteRaw = await command(p, cwd, 'git', ['remote', 'get-url', 'origin']);
+  } catch (error) {
+    const msg = String(error?.message ?? '');
+    if (/no such remote|git remote get-url origin|\bfailed:\s*2\b/i.test(msg) && !/\bENOENT\b|\bEACCES\b|not a git repository/i.test(msg)) {
+      throw Error('No Git "origin" remote configured in this repository. Add one with `git remote add origin https://github.com/OWNER/REPO.git`, then rerun pdd product.');
+    }
+    throw error;
+  }
+  const remote = remoteRaw.trim();
+  if (!remote) {
+    throw Error('No Git "origin" remote configured in this repository. Add one with `git remote add origin https://github.com/OWNER/REPO.git`, then rerun pdd product.');
+  }
   const repository = githubOriginRepository(remote);
   if (!repository || !REPO_NAME_RE.test(repository)) {
     throw Error('Git origin remote is not a standard GitHub repository URL. Point origin at https://github.com/OWNER/REPO or git@github.com:OWNER/REPO.git, then rerun pdd product.');

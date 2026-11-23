@@ -39,7 +39,7 @@ Export synchronous `selectTests(found, words = [], { native = false, captureSour
 
 ## Empty-repository explanation
 
-Export `NO_TESTS` (`'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.'`) and synchronous `whyNoTests(root, visible, found, ports = {})`:
+Export `NO_TESTS` (`'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See skills/pdd/references/stories.md.'`) and synchronous `whyNoTests(root, visible, found, ports = {})`:
 - Require `ports.allowsPath(root, path)` (and `ports.discoverTests(root, [...visible])` when `found` is omitted), throwing a clear unbound-port `Error` when omitted.
 - Filter `visible` by `ports.allowsPath(root, path)` and sort. Collect lines in order: `found.untested` lines, `found.orphans` lines, and `PDD prompts must end in .prompt.md: rename <path> to <path>.md.` for each `*.prompt` file. Plain `*.prompt.md` files without embedded Runtime interface blocks are valid and emit no diagnostic.
 - Return at most 5 lines; when more exist, return the first 5 followed by `…and N more`. Open no JSON file.
@@ -70,6 +70,6 @@ Node `node:path` (`basename`, `posix`), `node:fs`, and `node:child_process` (`ex
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"approved","prose_sha256":"29f73bf12b94782bbed04a2d350046e478a1a828ae176446ad9b81c2fbe1360f","reason":"Exposes synchronous host-bound callbacks for native Story capture, repository import-graph inspection, and pure path-matching functions consumed across pdd and Runtime ports."}
+{"kind":"native-only","status":"approved","prose_sha256":"4f882a895de2d9dc31962a993bb812318c14dbda38e86290726fa5f4516d5176","reason":"Exposes synchronous host-bound callbacks for native Story capture, repository import-graph inspection, and pure path-matching functions consumed across pdd and Runtime ports."}
 ```
 </details>

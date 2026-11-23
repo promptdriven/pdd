@@ -1,7 +1,8 @@
-// Polyglot `pdd lint --diff [BASE]` spotlight: BASE..WORKTREE diff, 5 P0 inventory fixes, hard-fail .only & conflict markers.
+// Polyglot `pdd lint --diff [BASE]` spotlight: BASE..WORKTREE diff, 5 P0 inventory fixes, hard-fail .only, shadow-bin, conflict markers, & mock-only boundary check.
 import { spawnSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { isTestPromptPath } from '../../file-owner.mjs';
+import { lstatSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
+import { isTestOwnedPath, isTestPromptPath } from '../../file-owner.mjs';
 import { causeText } from '../../shared/safe-read.mjs';
 import { buildLineStarts, formatTeachingDetail, lineNumberAt, readSafeUtf8, resolveDefaultBaseRef } from './diagnostics.mjs';
 
@@ -10,7 +11,16 @@ export { resolveDefaultBaseRef };
 const UTILITY_TEST_DIR = /(?:^|\/)(?:helpers?|fixtures?|mocks?|__mocks__|__fixtures__)\//i;
 const DOC_OR_FIXTURE_PATH = /(?:^|\/)(?:docs?|fixtures?|__fixtures__)\/|\.md$/i;
 const SNAPSHOT_PATH = /\.snap$|(?:^|\/)__snapshots__\//i;
-const HARNESS_PATH = /(?:^|\/)(?:package\.json|vitest\.config\.[^/]+|jest\.config\.[^/]+|pytest\.ini|pyproject\.toml|conftest\.py|tox\.ini|setup\.cfg|\.github\/workflows\/[^/]+\.ya?ml)$/i;
+const HARNESS_PATH = /(?:^|\/)(?:pdd\.json|rules\/lint\/[^/]+\.json|package\.json|vitest\.config\.[^/]+|jest\.config\.[^/]+|pytest\.ini|pyproject\.toml|conftest\.py|tox\.ini|setup\.cfg|\.github\/workflows\/[^/]+\.ya?ml)$/i;
+const SHADOW_BIN_PATH_RE = /(?:^|\/)node_modules\/\.bin\/.+/;
+export const SHADOW_RUNTIME_BINS = ['node', 'npm', 'python', 'python3', 'pytest', 'go', 'cargo', 'sh', 'bash'];
+const PROD_CODE_EXT_RE = /\.(?:[cm]?[jt]s|[jt]sx|py|go|rs)$/i;
+const JS_BOUNDARY_IMPORT_RE = /(?:from\s+|require\s*\(\s*|import\s*\(\s*)['"`](?:node:)?(?:http|https|http2|net|tls|dgram|child_process)['"`]/;
+const JS_BOUNDARY_CALL_RE = /\b(?:http|https|http2|net|tls)\s*\.\s*createServer\s*\(|\b(?:spawn|spawnSync|execFile|execFileSync|exec|execSync|fork)\s*\(|(?<![.\w$])(?:globalThis\s*\.\s*)?fetch\s*\(/;
+const PY_BOUNDARY_RE = /\b(?:import\s+(?:subprocess|socket|http\.server|urllib\.request|aiohttp|httpx|requests)|from\s+(?:subprocess|socket|http\.server|urllib\.request|aiohttp|httpx|requests)\s+import)\b/;
+const GO_BOUNDARY_RE = /"(?:net\/http|net|os\/exec)"/;
+const RS_BOUNDARY_RE = /\b(?:std::process::Command|std::net::(?:TcpListener|TcpStream|UdpSocket)|tokio::(?:process::Command|net::))\b/;
+const TEST_BOUNDARY_MOCK_RE = /\b(?:(?:vi|jest|mock|vitest)\s*\.\s*(?:mock|doMock|module|spyOn)\s*\(|sinon\s*\.\s*(?:stub|mock|fake)\s*\(|(?:mockSpawn|createMockSpawn|fakeSpawn|stubSpawn|mockExec|mockExecFile|mockFetch|fakeFetch|stubFetch|mockServer|mockHttp|httpMock|createMockServer)\b|unittest\.mock\b|monkeypatch\.(?:setattr|delattr)\b|mock\.patch\b|MagicMock\b)|^\s*@patch\b/m;
 const CHAI_MODIFIERS = new Set(['not', 'resolves', 'rejects', 'to', 'be', 'been', 'is', 'that', 'which', 'and', 'has', 'have', 'with', 'at', 'of', 'same', 'but', 'does', 'still', 'also', 'deep', 'nested', 'own', 'ordered', 'any', 'all']);
 const CHAI_TERMINAL_PROPS = new Set(['true', 'false', 'null', 'undefined', 'NaN', 'exist', 'empty', 'ok', 'arguments', 'finite', 'extensible', 'sealed', 'frozen']);
 
@@ -275,12 +285,126 @@ export function extractTestCases(source, lang) {
   return { cases: found, tableCaseCount: countTableRows(source, lang) };
 }
 
+function stripLineAndBlockComments(source, lang) {
+  if (lang === 'py') return String(source ?? '').replace(/#[^\r\n]*/g, ' ');
+  return String(source ?? '')
+    .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\r\n]/g, ' '))
+    .replace(/\/\/[^\r\n]*/g, ' ');
+}
+
+function hasProductionBoundaryPrimitives(filePath, source) {
+  if (!filePath || !source || !PROD_CODE_EXT_RE.test(filePath) || isTestOwnedPath(filePath) || DOC_OR_FIXTURE_PATH.test(filePath) || UTILITY_TEST_DIR.test(filePath)) {
+    return false;
+  }
+  if (/\.py$/i.test(filePath)) return PY_BOUNDARY_RE.test(stripLineAndBlockComments(source, 'py'));
+  if (/\.go$/i.test(filePath)) return GO_BOUNDARY_RE.test(stripLineAndBlockComments(source, 'go'));
+  if (/\.rs$/i.test(filePath)) return RS_BOUNDARY_RE.test(stripLineAndBlockComments(source, 'rs'));
+  const noComments = stripLineAndBlockComments(source, 'js');
+  if (JS_BOUNDARY_IMPORT_RE.test(noComments)) return true;
+  const masked = maskJsNonCode(source);
+  return JS_BOUNDARY_CALL_RE.test(masked);
+}
+
+function analyzeTestBoundaryCoverage(source, lang) {
+  if (!source || !lang) return { hasMock: false, hasRealUnmockedBoundary: false };
+  const noComments = stripLineAndBlockComments(source, lang);
+  const hasMock = TEST_BOUNDARY_MOCK_RE.test(noComments);
+
+  if (lang === 'py') {
+    const importsRealSubproc = /\b(?:import\s+subprocess|from\s+subprocess\s+import)\b/.test(noComments);
+    const importsRealNet = /\b(?:import\s+(?:socket|urllib\.request|http\.client|requests|httpx)|from\s+(?:socket|urllib\.request|http\.client|requests|httpx)\s+import)\b/.test(noComments);
+    const callsReal = /\b(?:subprocess\.(?:run|Popen|check_output|check_call)|socket\.create_connection|urlopen|HTTPServer)\s*\(/.test(noComments);
+    return { hasMock, hasRealUnmockedBoundary: Boolean(!hasMock && (importsRealSubproc || importsRealNet) && callsReal) };
+  }
+  if (lang === 'go') {
+    const callsReal = /\b(?:httptest\.NewServer|net\.Listen|exec\.Command)\s*\(/.test(noComments);
+    return { hasMock, hasRealUnmockedBoundary: callsReal };
+  }
+  if (lang === 'rs') {
+    const callsReal = /\b(?:Command::new|TcpListener::bind)\s*\(/.test(noComments);
+    return { hasMock, hasRealUnmockedBoundary: callsReal };
+  }
+
+  const masked = maskJsNonCode(source);
+  const mockedModules = new Set();
+  for (const m of noComments.matchAll(/\b(?:vi|jest|mock|vitest)\s*\.\s*(?:mock|doMock|module)\s*\(\s*['"`](?:node:)?([a-z0-9_/-]+)['"`]/g)) {
+    mockedModules.add(m[1]);
+  }
+  const importsChildProc = /(?:from\s+|require\s*\(\s*|import\s*\(\s*)['"`](?:node:)?child_process['"`]/.test(noComments);
+  const importsHttpOrNet = /(?:from\s+|require\s*\(\s*|import\s*\(\s*)['"`](?:node:)?(?:http|https|http2|net|tls)['"`]/.test(noComments);
+  const realChildProc = importsChildProc && !mockedModules.has('child_process')
+    && /(?<![.\w$])(?:spawnSync|execFileSync|execSync|execFile|spawn|fork)\s*\(|\.\s*(?:spawnSync|execFileSync|execSync|execFile|spawn|fork)\s*\(/.test(masked);
+  const realHttpOrNet = importsHttpOrNet && !mockedModules.has('http') && !mockedModules.has('https') && !mockedModules.has('net')
+    && (/(?<![.\w$])createServer\s*\(|\.\s*createServer\s*\(/.test(masked) || /\.\s*listen\s*\(/.test(masked));
+  const mocksGlobalFetch = /\b(?:stubGlobal\s*\(\s*['"`]fetch['"`]|spyOn\s*\(\s*(?:globalThis|global)\s*,\s*['"`]fetch['"`]|(?:globalThis|global)\s*\.\s*fetch\s*=)/.test(noComments);
+  const realFetch = !mocksGlobalFetch && /(?<![.\w$])(?:globalThis\s*\.\s*)?fetch\s*\(/.test(masked);
+  return { hasMock, hasRealUnmockedBoundary: Boolean(realChildProc || realHttpOrNet || realFetch) };
+}
+
+export function detectShadowBinaries(root, { touchedFiles = [], baseSha = null } = {}) {
+  const hits = [];
+  const seen = new Set();
+  const addHit = (relPath, reason) => {
+    if (!relPath || seen.has(relPath)) return;
+    seen.add(relPath);
+    hits.push({ path: relPath, reason });
+  };
+
+  for (const rel of touchedFiles) {
+    if (SHADOW_BIN_PATH_RE.test(rel)) {
+      addHit(rel, 'diff modifies or adds a file under node_modules/.bin/');
+    }
+  }
+  if (root && baseSha) {
+    const diffBin = spawnSync('git', ['diff', '--name-only', '-z', baseSha, '--', 'node_modules/.bin'], {
+      cwd: root, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (diffBin.status === 0 && diffBin.stdout) {
+      for (const rel of diffBin.stdout.toString('utf8').split('\0').filter(Boolean)) {
+        addHit(rel, 'git diff modifies or adds a file under node_modules/.bin/');
+      }
+    }
+    const untrackedBin = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z', '--', 'node_modules/.bin'], {
+      cwd: root, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (untrackedBin.status === 0 && untrackedBin.stdout) {
+      for (const rel of untrackedBin.stdout.toString('utf8').split('\0').filter(Boolean)) {
+        addHit(rel, 'untracked file under node_modules/.bin/');
+      }
+    }
+  }
+  if (root) {
+    for (const bin of SHADOW_RUNTIME_BINS) {
+      const rel = `node_modules/.bin/${bin}`;
+      try {
+        const st = lstatSync(join(root, 'node_modules', '.bin', bin));
+        if (st.isFile() || st.isSymbolicLink()) {
+          addHit(rel, `core runtime binary "${bin}" exists inside node_modules/.bin/ and shadows PATH during test commands`);
+        }
+      } catch {
+        // absent
+      }
+    }
+  }
+  return hits;
+}
+
 export function analyzeDiffEntries(entries = []) {
   const removedByName = new Map(), addedByName = new Map();
-  const removedTests = [], addedTests = [], movedTests = [], newSkips = [], assertionDrops = [], tableDrops = [], snapshotEdits = [], harnessEdits = [], errors = [];
+  const removedTests = [], addedTests = [], movedTests = [], newSkips = [], assertionDrops = [], tableDrops = [], snapshotEdits = [], harnessEdits = [], mockOnlyBoundaryTests = [], errors = [];
+  const boundaryProdFiles = [], mockedBoundaryTestFiles = [];
+  let anyRealUnmockedBoundaryTest = false;
 
   for (const entry of entries) {
     const newPath = entry.newPath || '', oldPath = entry.oldPath || '', activePath = newPath || oldPath;
+    if (newPath && SHADOW_BIN_PATH_RE.test(newPath)) {
+      const detail = formatTeachingDetail({
+        invariant: `Shadow binary "${newPath}" under node_modules/.bin/ can intercept repository test commands`,
+        fix: `Remove "${newPath}" so host toolchain binaries are not shadowed`,
+        rerun: 'pdd lint --diff',
+      });
+      errors.push({ path: newPath, line: 1, code: 'diff-shadow-bin', formatted: `Error: diff gate: ${newPath}:1 [diff-shadow-bin] ${detail}` });
+    }
     if (newPath && entry.after) {
       for (const hit of findExecutableOnlyMarkers(entry.after, newPath)) {
         const detail = formatTeachingDetail({ invariant: `Executable focus marker "${hit.marker}(" in ${hit.path}:${hit.line} skips the rest of the test suite`, fix: `Remove ".only" / "${hit.marker}" at ${hit.path}:${hit.line}`, rerun: 'pdd lint --diff' });
@@ -293,6 +417,9 @@ export function analyzeDiffEntries(entries = []) {
       if (isTestPromptPath(newPath)) {
         const detail = formatTeachingDetail({ invariant: `Misplaced test prompt "${newPath}" violates PDD ownership (prompts own production modules, not test files)`, fix: `Delete ${newPath} and keep test assertions in native test files`, rerun: 'pdd lint --diff' });
         errors.push({ path: newPath, line: 1, code: 'misplaced-test-prompt', formatted: `Error: diff gate: ${newPath}:1 [misplaced-test-prompt] ${detail}` });
+      }
+      if (hasProductionBoundaryPrimitives(newPath, entry.after)) {
+        boundaryProdFiles.push(newPath);
       }
     }
 
@@ -307,6 +434,11 @@ export function analyzeDiffEntries(entries = []) {
 
     const oldLang = detectTestLanguage(oldPath, entry.before || ''), newLang = detectTestLanguage(newPath, entry.after || '');
     if (!oldLang && !newLang) continue;
+    if (newPath && newLang && entry.after) {
+      const cov = analyzeTestBoundaryCoverage(entry.after, newLang);
+      if (cov.hasRealUnmockedBoundary) anyRealUnmockedBoundaryTest = true;
+      else if (cov.hasMock) mockedBoundaryTestFiles.push(newPath);
+    }
     const prev = extractTestCases(entry.before || '', oldLang), next = extractTestCases(entry.after || '', newLang);
     if (prev.tableCaseCount > next.tableCaseCount) tableDrops.push({ path: activePath, before: prev.tableCaseCount, after: next.tableCaseCount });
 
@@ -356,8 +488,14 @@ export function analyzeDiffEntries(entries = []) {
   if (tableDrops.length) advisories.push(`Diff spotlight: table-driven case count dropped in ${tableDrops.map(t => `${t.path} (${t.before}->${t.after})`).join(', ')}`);
   if (snapshotEdits.length) advisories.push(`Diff spotlight: snapshot file(s) modified (${snapshotEdits.join(', ')})`);
   if (harnessEdits.length) advisories.push(`Diff spotlight: test harness / CI config edited (${harnessEdits.join(', ')})`);
+  if (boundaryProdFiles.length > 0 && mockedBoundaryTestFiles.length > 0 && !anyRealUnmockedBoundaryTest) {
+    const sortedProd = [...new Set(boundaryProdFiles)].sort();
+    const sortedTests = [...new Set(mockedBoundaryTestFiles)].sort();
+    mockOnlyBoundaryTests.push({ prodFiles: sortedProd, testFiles: sortedTests });
+    advisories.push(`Diff spotlight: [diff-mock-only-boundary] Changed I/O/subprocess boundary file(s) (${sortedProd.join(', ')}) are only covered by mocked tests (${sortedTests.join(', ')}) with zero real unmocked boundary calls`);
+  }
 
-  return { ok: errors.length === 0, errors, advisories, removedTests: genuinelyRemoved, movedTests, addedTests, newSkips, assertionDrops, tableDrops, snapshotEdits, harnessEdits };
+  return { ok: errors.length === 0, errors, advisories, removedTests: genuinelyRemoved, movedTests, addedTests, newSkips, assertionDrops, tableDrops, snapshotEdits, harnessEdits, mockOnlyBoundaryTests };
 }
 
 function baseUnavailableResult(baseRef, reason) {
@@ -365,7 +503,7 @@ function baseUnavailableResult(baseRef, reason) {
   return {
     ok: false, baseAvailable: false, baseRef: baseRef ?? null, baseSha: null, baseError: reason, touchedFiles: [],
     errors: [{ path: '.', line: 1, code: 'diff-base-unavailable', formatted: `Error: diff gate: .:1 [diff-base-unavailable] ${detail}` }],
-    advisories: [], removedTests: [], movedTests: [], addedTests: [], newSkips: [], assertionDrops: [], tableDrops: [], snapshotEdits: [], harnessEdits: [],
+    advisories: [], removedTests: [], movedTests: [], addedTests: [], newSkips: [], assertionDrops: [], tableDrops: [], snapshotEdits: [], harnessEdits: [], mockOnlyBoundaryTests: [],
   };
 }
 
@@ -408,6 +546,17 @@ export function runDiffSpotlight({ cwd, baseRef } = {}) {
     entries.push({ status: 'A', oldPath: '', newPath: rel, before: '', after: readSafeUtf8(realRoot, rel) ?? '' });
   }
   const analysis = analyzeDiffEntries(entries);
+  for (const hit of detectShadowBinaries(realRoot, { touchedFiles: [...seenPaths], baseSha })) {
+    if (!analysis.errors.some(e => e.code === 'diff-shadow-bin' && e.path === hit.path)) {
+      const detail = formatTeachingDetail({
+        invariant: `Shadow binary "${hit.path}" detected (${hit.reason})`,
+        fix: `Remove "${hit.path}" so repository commands execute the authentic host toolchain`,
+        rerun: 'pdd lint --diff',
+      });
+      analysis.errors.push({ path: hit.path, line: 1, code: 'diff-shadow-bin', formatted: `Error: diff gate: ${hit.path}:1 [diff-shadow-bin] ${detail}` });
+      analysis.ok = false;
+    }
+  }
   const checkRes = spawnSync('git', ['diff', '--check', baseSha, '--'], { cwd: realRoot, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   if (checkRes.status === 2 && checkRes.stdout) {
     for (const line of checkRes.stdout.split(/\r?\n/)) {

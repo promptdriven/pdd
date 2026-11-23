@@ -20,7 +20,7 @@ export const NON_PORT_FILES = new Set(['yarn.lock', 'bun.lock', 'cargo.lock', 'p
 export const NON_PORT_TLDS = new Set(['com', 'org', 'net', 'io', 'dev', 'app', 'ai', 'gov', 'edu', 'localhost', 'arpa', 'local']);
 export const NON_PORT_PREFIXES = new Set([
   'env', 'process', 'console', 'window', 'document', 'global', 'globalthis', 'module', 'exports', 'import', 'this', 'self', 'super', 'args', 'argv', 'stdin', 'stdout', 'stderr',
-  'ports', 'options', 'opts', 'req', 'res', 'request', 'response', 'err', 'error', 'headers', 'params', 'query', 'body', 'cookies', 'ctx', 'app', 'router', 'server', 'db', 'pool', 'conn', 'tx',
+  'ports', 'options', 'opts', 'req', 'res', 'request', 'response', 'err', 'error', 'headers', 'params', 'query', 'body', 'payload', 'cookies', 'ctx', 'app', 'router', 'server', 'db', 'pool', 'conn', 'tx', 'cursor', 'session',
   'config', 'excluded', 'sqlite3', 'uvicorn', 'asyncio', 'json', 'sqlalchemy', 'httpx', 'requests', 'fastapi', 'flask', 'express', 'fastify', 'koa', 'django', 'pydantic', 'aiohttp',
   'psycopg', 'psycopg2', 'pg', 'prisma', 'drizzle', 'knex', 'redis', 'ioredis', 'boto3', 'logging', 'logger', 'pathlib', 'subprocess', 'threading', 'multiprocessing',
   'datetime', 'time', 'math', 'random', 'hashlib', 'base64', 'urllib', 'socket', 'ssl', 'node', 'bun', 'deno', 'sys', 'os', 'path', 'posix', 'fs', 'url', 'util',

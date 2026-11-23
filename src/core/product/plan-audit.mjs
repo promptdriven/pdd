@@ -159,11 +159,18 @@ function extractBoundaryOpsFromText(text, { requirePartPrefix = false, from = ''
   return ops;
 }
 
+const BOUNDARY_FROM_COLS = new Set(['from', 'consumer']);
+const BOUNDARY_TO_COLS = new Set(['to', 'provider']);
+const BOUNDARY_OP_COLS = new Set(['what crosses', 'operations', 'operation', 'ops', 'interface', 'boundary', 'contract']);
+const MAP_PART_COLS = new Set(['part', 'service', 'app', 'component', 'module']);
+const MAP_FOLDER_COLS = new Set(['folder', 'path', 'dir', 'directory', 'root']);
+
 export function parsePlanBoundaryOperations(planText, parts = []) {
   const sec = findSectionLines(planText, 'Boundaries', { caseInsensitive: true });
-  if (!sec) return { hasSection: false, operations: [] };
+  if (!sec) return { hasSection: false, operations: [], unparseableTables: [] };
   const knownParts = new Set(parts.map(p => p.part).filter(Boolean));
   const seen = new Map();
+  const unparseableTables = [];
   const addOp = item => {
     const key = `${item.part}\0${item.shortName}`, existing = seen.get(key);
     if (!existing) { seen.set(key, item); return; }
@@ -172,31 +179,50 @@ export function parsePlanBoundaryOperations(planText, parts = []) {
     }
   };
 
-  let heading = null, inNeverCrosses = false, neverCrossesSawBody = false;
+  let heading = null, headingLine = 1, headingUnparseable = false, headingHasData = false;
+  let inNeverCrosses = false, neverCrossesSawBody = false;
+  const flushTable = () => {
+    if (heading && headingUnparseable && headingHasData) {
+      unparseableTables.push({ line: headingLine, headers: heading });
+    }
+    heading = null;
+    headingUnparseable = false;
+    headingHasData = false;
+  };
   for (const item of sec.lines) {
     const trimmed = item.text.trim();
     if (!trimmed) {
-      heading = null;
+      flushTable();
       if (inNeverCrosses && neverCrossesSawBody) { inNeverCrosses = false; neverCrossesSawBody = false; }
       continue;
     }
     if (/^\s*\|/.test(item.text)) {
       inNeverCrosses = false; neverCrossesSawBody = false;
       const cells = tableCells(item.text);
-      if (!heading) { heading = cells; continue; }
+      if (!heading) {
+        heading = cells;
+        headingLine = item.lineNo;
+        headingHasData = false;
+        const lower = cells.map(c => c.toLowerCase());
+        const hasOpCol = lower.some(c => BOUNDARY_OP_COLS.has(c));
+        headingUnparseable = !hasOpCol;
+        continue;
+      }
       if (isSeparatorRow(cells)) continue;
-      const fromIdx = heading.findIndex(c => c.toLowerCase() === 'from');
-      const toIdx = heading.findIndex(c => c.toLowerCase() === 'to');
-      const crossesIdx = heading.findIndex(c => c.toLowerCase() === 'what crosses');
-      const opsIdx = heading.findIndex(c => ['operations', 'operation', 'ops'].includes(c.toLowerCase()));
+      headingHasData = true;
+      const fromIdx = heading.findIndex(c => BOUNDARY_FROM_COLS.has(c.toLowerCase()));
+      const toIdx = heading.findIndex(c => BOUNDARY_TO_COLS.has(c.toLowerCase()));
+      const opIndices = heading
+        .map((c, idx) => (BOUNDARY_OP_COLS.has(c.toLowerCase()) ? idx : -1))
+        .filter(idx => idx >= 0);
       const from = fromIdx >= 0 ? (cells[fromIdx] ?? '') : '', to = toIdx >= 0 ? (cells[toIdx] ?? '') : '';
-      for (const idx of [crossesIdx, opsIdx]) {
-        if (idx < 0 || !cells[idx]) continue;
+      for (const idx of opIndices) {
+        if (!cells[idx]) continue;
         for (const op of extractBoundaryOpsFromText(cells[idx], { requirePartPrefix: false, from, to, line: item.lineNo, knownParts })) addOp(op);
       }
       continue;
     }
-    heading = null;
+    flushTable();
     const isSubheading = /^#{3,6}[ \t]+/.test(trimmed);
     const neverMatch = /^(?:#{3,6}[ \t]+|(?:[-*+]|\d+[.)])[ \t]+)?(?:\*\*)?never[ \t]+crosses\b/i.exec(trimmed);
     if (neverMatch) {
@@ -208,14 +234,46 @@ export function parsePlanBoundaryOperations(planText, parts = []) {
     if (inNeverCrosses) { neverCrossesSawBody = true; continue; }
     for (const op of extractBoundaryOpsFromText(trimmed, { requirePartPrefix: true, line: item.lineNo, knownParts })) addOp(op);
   }
-  return { hasSection: true, operations: [...seen.values()] };
+  flushTable();
+  return { hasSection: true, operations: [...seen.values()], unparseableTables };
 }
 
 function parseLenientMapParts(mapText) {
   if (!mapText || typeof mapText !== 'string') return [];
-  const meta = rowsWithMeta(mapText, 'Parts', 'product/map.md', { required: false });
-  if (!meta.heading || !meta.heading.includes('Part') || !meta.heading.includes('Folder')) return [];
-  return meta.rows.map(item => ({ part: item.values.Part, folder: item.values.Folder })).filter(item => item.part && item.folder);
+  const sec = findSectionLines(mapText, 'Parts', { caseInsensitive: true });
+  if (!sec) return [];
+  const out = [];
+  const seen = new Set();
+  const push = (part, folder) => {
+    const p = clean(part), f = clean(folder);
+    if (!p || seen.has(p)) return;
+    seen.add(p);
+    out.push({ part: p, folder: f });
+  };
+  const tableLines = sec.lines.filter(item => /^\s*\|/.test(item.text)).map(item => tableCells(item.text));
+  if (tableLines.length > 0) {
+    const heading = tableLines.shift() ?? [];
+    const pIdx = heading.findIndex(c => MAP_PART_COLS.has(c.toLowerCase()));
+    const fIdx = heading.findIndex(c => MAP_FOLDER_COLS.has(c.toLowerCase()));
+    if (pIdx >= 0 && fIdx >= 0) {
+      for (const cells of tableLines) {
+        if (isSeparatorRow(cells)) continue;
+        if (cells[pIdx] && cells[fIdx]) push(cells[pIdx], cells[fIdx]);
+      }
+    }
+  }
+  for (const item of sec.lines) {
+    const bm = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(.+)$/.exec(item.text);
+    if (!bm) continue;
+    const body = bm[1].trim();
+    const lead = /^(?:\*\*`?([a-zA-Z0-9][a-zA-Z0-9_-]*)`?\*\*|`([a-zA-Z0-9][a-zA-Z0-9_-]*)`)/.exec(body);
+    if (!lead) continue;
+    const partName = lead[1] ?? lead[2];
+    const rest = body.slice(lead[0].length);
+    const folderMatch = /^\s*\(\s*`?([^)`\r\n]+?)`?\s*\)/.exec(rest);
+    push(partName, folderMatch ? folderMatch[1] : '');
+  }
+  return out.filter(item => item.part && item.folder);
 }
 
 function stripFrontmatterAndComments(raw) {
@@ -389,6 +447,20 @@ export function auditProductPlan({ mapText = '', planText = '', promptFiles = []
     }
   }
 
+  const unparseableBoundaries = [];
+  for (const tbl of boundariesInfo.unparseableTables ?? []) {
+    unparseableBoundaries.push({
+      filePath: 'product/plan.md',
+      line: tbl.line,
+      order: 24,
+      code: 'product-boundaries-unparseable',
+      category: 'product plan',
+      relatedPrompts: [],
+      detail: `Table in product/plan.md ## Boundaries has unrecognized headers (${tbl.headers.join(' | ')}); use canonical columns "From | To | What crosses | Contract" (or Consumer/Provider + Interface/Boundary/Operations).`,
+      statusWarning: `Warning: Unparseable boundaries table: product/plan.md:${tbl.line} ## Boundaries headers (${tbl.headers.join(' | ')}) do not match recognized boundary columns.`,
+    });
+  }
+
   const unwiredBoundaries = [];
   if (boundariesInfo.hasSection && boundariesInfo.operations.length > 0) {
     const indexedPrompts = normalizedPrompts.map(item => ({
@@ -439,6 +511,6 @@ export function auditProductPlan({ mapText = '', planText = '', promptFiles = []
       }
     }
   }
-  const findings = [...drift, ...unwiredBoundaries];
-  return { drift, unwiredBoundaries, findings, warnings: findings.map(f => f.statusWarning) };
+  const findings = [...drift, ...unparseableBoundaries, ...unwiredBoundaries];
+  return { drift, unwiredBoundaries, unparseableBoundaries, findings, warnings: findings.map(f => f.statusWarning) };
 }

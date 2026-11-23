@@ -17,6 +17,7 @@ import {
   extractFrontmatterPorts,
   hasNativeOnlyFrontmatter,
   isMarkdownTableSeparator,
+  isNativeOnlyPrompt,
   scanMarkdownLinesAndFences,
   splitMarkdownTableRow,
   stripPromptMetadataPreservingLines,
@@ -24,24 +25,29 @@ import {
 
 const SQL_FENCE_LANGS = new Set(['sql', 'ddl', 'sqlite', 'postgres', 'postgresql', 'mysql']);
 const SQL_KEYWORDS = new Set(['primary', 'foreign', 'unique', 'check', 'constraint', 'index', 'key', 'create', 'alter', 'insert', 'select', 'references', 'exclude', 'like']);
+const EMPTY_SQL_COLS = new Set();
 const BARE_PAIR_RE = /^([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)$/;
 const CALL_PAIR_RE = /^([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)\s*\(/;
 const BRACE_PAIR_RE = /^([a-z][a-zA-Z0-9_-]*)\.\{\s*([a-z][a-zA-Z0-9_-]*(?:\s*,\s*[a-z][a-zA-Z0-9_-]*)+)\s*\}$/;
 const PORT_SECTION_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?)\b/i;
+const HOST_PORT_HEADING_RE = /\bhost\s+ports?\b/i;
 const TABLE_PORT_COL_RE = /\b(?:port|ports|bound\s+port|wired\s+port|injected\s+port|port\s+op(?:eration)?)\b/i;
 const NATIVE_TABLE_ROUTING_COL_RE = /\b(?:prompt|module|handler|target|delegate|dispatch|tool|command|subcommand)\b/i;
 const WIRE_CUE_RE = /\b(?:wire|wires|wired|wiring|ports?)\b/i;
-const NON_PORT_IDIOM_RE = /\b(?:(?:tcp|udp|http|https|grpc|ws|wss|stdio|ipc|unix|listen(?:ing)?|server|socket|host|local|remote|network|container|service)\s+ports?|(?:on|to|at|from)\s+port(?:\s+`?\d+`?|\s+`?[A-Z0-9_]+`?)?|ports?\s+(?:`?\d+`?|numbers?|env|variables?|range)|wire\s+(?:formats?|protocols?|encodings?|types?|frames?|bytes|payloads?|schemas?|representations?|level|compatib\w+)|(?:on|over)\s+the\s+wire|bind(?:s|ing)?\s+(?:(?:sql|query|statement|prepared|positional|named|input|output|request|response|form|body|route|routes|endpoint|endpoints|path|header|env|template|data|event|key|signal|mcp|rpc|cli)\s+)*(?:param|params|parameter|parameters|value|values|column|columns|variable|variables|arg|args|argument|arguments|placeholder|placeholders|field|fields|handler|handlers|listener|listeners|event|events|key|keys|route|routes|endpoint|endpoints|tool|tools|command|commands|subcommand|subcommands|method|methods|request|requests)|(?:sql|query|statement|param|parameter|value|column|variable|data|event|key|route|endpoint|tool|command)\s+bindings?)\b/gi;
+const NON_PORT_IDIOM_RE = /\b(?:(?:tcp|udp|http|https|grpc|ws|wss|stdio|ipc|unix|listen(?:ing)?|server|socket|host|local|remote|network|container|service)\s+ports?|(?:on|to|at|from)\s+port(?:\s+`?\d+`?|\s+`?[A-Z0-9_]+`?)?|ports?\s+(?:`?\d+`?|numbers?|env|variables?|range|spellings?)|port-consuming|wire\s+(?:formats?|protocols?|encodings?|types?|frames?|bytes|payloads?|schemas?|representations?|level|compatib\w+)|(?:on|over)\s+the\s+wire|bind(?:s|ing)?\s+(?:(?:sql|query|statement|prepared|positional|named|input|output|request|response|form|body|route|routes|endpoint|endpoints|path|header|env|template|data|event|key|signal|mcp|rpc|cli)\s+)*(?:param|params|parameter|parameters|value|values|column|columns|variable|variables|arg|args|argument|arguments|placeholder|placeholders|field|fields|handler|handlers|listener|listeners|event|events|key|keys|route|routes|endpoint|endpoints|tool|tools|command|commands|subcommand|subcommands|method|methods|request|requests)|(?:sql|query|statement|param|parameter|value|column|variable|data|event|key|route|endpoint|tool|command)\s+bindings?)\b/gi;
 
 function isSingleCall(span, openIdx) {
-  if (openIdx < 0 || !span.endsWith(')')) return false;
+  if (openIdx < 0) return false;
   let depth = 0, quote = null;
   for (let i = openIdx; i < span.length; i++) {
     const ch = span[i];
     if (quote) { if (ch === '\\') i++; else if (ch === quote) quote = null; continue; }
     if (ch === '\'' || ch === '"' || ch === '`') { quote = ch; continue; }
     if (ch === '(') depth++;
-    else if (ch === ')' && --depth === 0) return i === span.length - 1;
+    else if (ch === ')' && --depth === 0) {
+      const tail = span.slice(i + 1).trim();
+      return !tail || /^(?:->|=>|:|—|–|returns?\b)/i.test(tail);
+    }
   }
   return false;
 }
@@ -99,31 +105,36 @@ function extractSqlColumns(fences) {
 
 function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
   const firstLine = new Map();
-  const record = (port, op, lineNo) => {
-    if (!isValidPortPair(port, op, sqlCols, declaredPrefixes)) return;
+  const record = (port, op, lineNo, { ignoreSql = false, explicit = false, fromFrontmatter = false } = {}) => {
+    if (!isValidPortPair(port, op, ignoreSql ? EMPTY_SQL_COLS : sqlCols, declaredPrefixes)) return;
     const key = `${port}.${op}`;
-    if (!firstLine.has(key)) firstLine.set(key, lineNo);
+    if (!firstLine.has(key)) firstLine.set(key, { line: lineNo, explicit, fromFrontmatter });
+    else {
+      const cur = firstLine.get(key);
+      if (explicit) cur.explicit = true;
+      if (fromFrontmatter) cur.fromFrontmatter = true;
+    }
   };
-  const scanSpans = (spans, lineNo, onlyDeclared = false) => {
+  const scanSpans = (spans, lineNo, onlyDeclared = false, opts = {}) => {
     for (const rawSpan of spans) {
       const span = rawSpan.trim();
       let m = BARE_PAIR_RE.exec(span);
-      if (m) { if (!onlyDeclared || declaredPrefixes.has(m[1])) record(m[1], m[2], lineNo); continue; }
+      if (m) { if (!onlyDeclared || declaredPrefixes.has(m[1])) record(m[1], m[2], lineNo, opts); continue; }
       m = CALL_PAIR_RE.exec(span);
-      if (m && isSingleCall(span, m[0].length - 1)) { if (!onlyDeclared || declaredPrefixes.has(m[1])) record(m[1], m[2], lineNo); continue; }
+      if (m && isSingleCall(span, m[0].length - 1)) { if (!onlyDeclared || declaredPrefixes.has(m[1])) record(m[1], m[2], lineNo, opts); continue; }
       m = BRACE_PAIR_RE.exec(span);
-      if (m && (!onlyDeclared || declaredPrefixes.has(m[1]))) for (const op of m[2].split(',').map(s => s.trim()).filter(Boolean)) record(m[1], op, lineNo);
+      if (m && (!onlyDeclared || declaredPrefixes.has(m[1]))) for (const op of m[2].split(',').map(s => s.trim()).filter(Boolean)) record(m[1], op, lineNo, opts);
     }
   };
-  const scanChunk = (chunk, lineNo) => {
+  const scanChunk = (chunk, lineNo, opts = {}) => {
     const { spans, outside } = splitBackticks(chunk);
-    scanSpans(spans, lineNo, false);
-    if (outside.includes('.')) scanDottedTokens(stripUrlsAndLinks(outside), (p, o) => record(p, o, lineNo));
+    scanSpans(spans, lineNo, false, opts);
+    if (outside.includes('.')) scanDottedTokens(stripUrlsAndLinks(outside), (p, o) => record(p, o, lineNo, opts));
   };
 
   for (const { port, line } of extractFrontmatterPorts(raw)) {
     const m = BARE_PAIR_RE.exec(port);
-    if (m) record(m[1], m[2], line);
+    if (m) record(m[1], m[2], line, { ignoreSql: true, explicit: true, fromFrontmatter: true });
   }
 
   let inPorts = false, portsDepth = 0, inTable = false, portCols = [], splitCols = null;
@@ -133,7 +144,7 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
     const hm = /^ {0,3}(#{2,6})\s+(.+)$/.exec(line);
     if (hm) {
       const depth = hm[1].length, title = hm[2].trim();
-      if (!NET_PORT_HEADING_RE.test(title) && PORT_SECTION_RE.test(title)) { inPorts = true; portsDepth = depth; }
+      if (!NET_PORT_HEADING_RE.test(title) && !HOST_PORT_HEADING_RE.test(title) && PORT_SECTION_RE.test(title)) { inPorts = true; portsDepth = depth; }
       else if (depth <= portsDepth) { inPorts = false; portsDepth = 0; }
       inTable = false; portCols = []; splitCols = null;
       cuePending = false; cueBlankLeft = 0; inCueBullets = false;
@@ -146,14 +157,16 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
       let pCol = -1, oCol = -1;
       for (let c = 0; c < headers.length; c++) {
         const h = headers[c];
-        if (TABLE_EXCL_COL_RE.test(h)) continue;
-        const isExplicitPortCol = TABLE_PORT_COL_RE.test(h);
+        const isExplicitPortCol = !NET_PORT_HEADING_RE.test(h) && !HOST_PORT_HEADING_RE.test(h) && TABLE_PORT_COL_RE.test(h);
+        if (!isExplicitPortCol && TABLE_EXCL_COL_RE.test(h)) continue;
         if (!inPorts && !isExplicitPortCol && NATIVE_TABLE_ROUTING_COL_RE.test(h)) continue;
-        if (isExplicitPortCol || (inPorts && /\b(?:operation|operations|binding|bindings)\b/i.test(h))) portCols.push(c);
+        if (isExplicitPortCol || (inPorts && /\b(?:operation|operations|binding|bindings)\b/i.test(h))) {
+          portCols.push({ col: c, explicit: inPorts || isExplicitPortCol, ignoreSql: inPorts || isExplicitPortCol });
+        }
         if (oCol < 0 && TABLE_OP_COL_RE.test(h) && !TABLE_NAME_COL_RE.test(h)) oCol = c;
         else if (pCol < 0 && !TABLE_OP_COL_RE.test(h) && (isExplicitPortCol || (inPorts && TABLE_NAME_COL_RE.test(h)))) pCol = c;
       }
-      if (pCol >= 0 && oCol >= 0) splitCols = { pCol, oCol };
+      if (pCol >= 0 && oCol >= 0) splitCols = { pCol, oCol, explicit: inPorts, ignoreSql: inPorts };
       continue;
     }
     if (inTable) {
@@ -161,26 +174,34 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
       if (!line.includes('|')) { inTable = false; portCols = []; splitCols = null; }
       else {
         const cells = splitMarkdownTableRow(line) ?? [];
-        for (const c of portCols) if (c < cells.length) scanChunk(cells[c], lineNo);
+        for (const colInfo of portCols) {
+          if (colInfo.col < cells.length) scanChunk(cells[colInfo.col], lineNo, { ignoreSql: colInfo.ignoreSql, explicit: colInfo.explicit });
+        }
         if (splitCols && splitCols.pCol < cells.length && splitCols.oCol < cells.length) {
           const pn = cleanIdent(cells[splitCols.pCol], false);
-          if (pn) for (const op of splitCellOps(cells[splitCols.oCol])) record(pn, op, lineNo);
+          if (pn) for (const op of splitCellOps(cells[splitCols.oCol])) record(pn, op, lineNo, { ignoreSql: splitCols.ignoreSql, explicit: splitCols.explicit });
         }
         continue;
       }
     }
     const { spans } = splitBackticks(line);
-    const hasCue = WIRE_CUE_RE.test(splitBackticks(line.replace(NON_PORT_IDIOM_RE, ' ')).outside);
+    const hasCue = WIRE_CUE_RE.test(splitBackticks(line.replace(NON_PORT_IDIOM_RE, ' ')).outside.replace(NON_PORT_IDIOM_RE, ' '));
     const bm = BULLET_RE.exec(line);
     if (bm && (inPorts || hasCue || cuePending || inCueBullets)) {
       if (!inPorts && (cuePending || inCueBullets)) { inCueBullets = true; cuePending = false; cueBlankLeft = 0; }
       const body = bm[2].trim();
       const lead = /^`([^`\r\n]+)`/.exec(body) ?? /^([a-z][a-zA-Z0-9_-]*\.[a-z][a-zA-Z0-9_-]*)(?:\s*\([^()\r\n]*\))?(?=\s*(?::|—|–|->|=>|-\s|$))/.exec(body);
       const sepMatch = lead ? /(?::|—|–|->|=>| - )/.exec(body.slice(lead[0].length)) : null;
+      const bulletOpts = { ignoreSql: inPorts, explicit: inPorts };
       if (lead && sepMatch) {
-        scanChunk(body.slice(0, lead[0].length + sepMatch.index), lineNo);
-        scanSpans(splitBackticks(body.slice(lead[0].length + sepMatch.index + sepMatch[0].length)).spans, lineNo, true);
-      } else scanChunk(body, lineNo);
+        scanChunk(body.slice(0, lead[0].length + sepMatch.index), lineNo, bulletOpts);
+        scanSpans(
+          splitBackticks(body.slice(lead[0].length + sepMatch.index + sepMatch[0].length)).spans,
+          lineNo,
+          !inPorts,
+          { ignoreSql: false, explicit: inPorts },
+        );
+      } else scanChunk(body, lineNo, bulletOpts);
       continue;
     }
     if (!line.trim()) {
@@ -194,21 +215,26 @@ function extractWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
     const listIntroCue = /:\s*$/.test(trimmedLine) || /\b(?:following|below|these)\b/i.test(trimmedLine) || (!/[.!?]\s*$/.test(trimmedLine) && spans.length === 0);
     cuePending = !inPorts && hasCue && listIntroCue;
     cueBlankLeft = cuePending ? 1 : 0;
-    if (inPorts || hasCue) scanChunk(line, lineNo);
+    if (inPorts || hasCue) scanChunk(line, lineNo, { ignoreSql: false, explicit: inPorts });
     else scanSpans(spans, lineNo, true);
   }
-  return [...firstLine.entries()].map(([port, line]) => ({ port, line })).sort((a, b) => a.line - b.line || a.port.localeCompare(b.port));
+  return [...firstLine.entries()]
+    .map(([port, info]) => ({ port, line: info.line, explicit: info.explicit, fromFrontmatter: info.fromFrontmatter }))
+    .sort((a, b) => a.line - b.line || a.port.localeCompare(b.port));
 }
 
-export function collectNativeOnlyPortParityFindings(text, dependencySources, { path = 'prompts/service.prompt.md', dependencyPaths = [] } = {}) {
-  if (!hasNativeOnlyFrontmatter(text)) return [];
+export function collectNativeOnlyPortParityFindings(
+  text,
+  dependencySources,
+  { path = 'prompts/service.prompt.md', dependencyPaths = [], explicitFrontmatterOnly = false } = {},
+) {
+  if (!isNativeOnlyPrompt(text)) return [];
   const rawDeps = Array.isArray(dependencySources) ? dependencySources : (dependencySources ? [dependencySources] : []);
   const deps = rawDeps
     .map((item, idx) => (typeof item === 'string'
       ? { path: typeof dependencyPaths[idx] === 'string' ? dependencyPaths[idx] : '', text: item, isPrompt: true }
       : item))
     .filter(item => item && typeof item.text === 'string');
-  if (!deps.length) return [];
 
   const mentionedInDeps = new Set(), displayPorts = new Set(), declaredPrefixes = new Set(), exportedPeerOps = new Set();
   for (const dep of deps) {
@@ -223,11 +249,16 @@ export function collectNativeOnlyPortParityFindings(text, dependencySources, { p
   }
 
   const { fences, proseLines } = scanMarkdownLinesAndFences(stripPromptMetadataPreservingLines(text));
-  const refs = extractWiredRefs(text, proseLines, extractSqlColumns(fences), declaredPrefixes);
+  const allRefs = extractWiredRefs(text, proseLines, extractSqlColumns(fences), declaredPrefixes);
+  const refs = explicitFrontmatterOnly
+    ? allRefs.filter(r => r.fromFrontmatter)
+    : ((deps.length > 0 && hasNativeOnlyFrontmatter(text)) ? allRefs : allRefs.filter(r => r.explicit));
   if (!refs.length) return [];
 
   const linkedLabels = (dependencyPaths.length ? dependencyPaths : deps.map(d => d.path).filter(Boolean)).sort();
-  const depSummary = linkedLabels.length ? linkedLabels.join(', ') : 'linked checkable dependencies';
+  const depSummary = linkedLabels.length
+    ? linkedLabels.join(', ')
+    : (deps.length ? 'linked checkable dependencies' : 'no linked checkable dependencies');
   const sortedDisplay = [...displayPorts].sort();
   const declaredHint = sortedDisplay.length ? `; declared ports: ${sortedDisplay.slice(0, 12).join(', ')}${sortedDisplay.length > 12 ? ', …' : ''}` : '';
 
