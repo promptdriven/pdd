@@ -165,10 +165,11 @@ test('10 adversarial fence/injection hardening tests + Findings #14, #15, #19, #
   assert.equal(parsedMarkerFence.value.summary, markerReview.summary);
 
   // Linear O(N) performance on >= 256 KiB (262,145 B) repeated unclosed `<!--`, >= 131 KB (131,080 B) nested splice,
-  // AND >= 256 KiB plain multiline prose (270,000 B across 15,000 lines with zero `<!--`)!
+  // >= 256 KiB plain multiline prose (270,000 B across 15,000 lines), AND 2 lines with 10,000 inline comments!
   const stressInput1 = '<!-- '.repeat(52_429);
   const stressInput2 = `${'<!'.repeat(32_768)}<!--x-->${'--'.repeat(32_768)}`;
   const stressInput3 = 'plain review line\n'.repeat(15_000);
+  const stressInput4 = `${'ok <!-- c --> '.repeat(5_000)}\n${'ok <!-- c --> '.repeat(5_000)}`;
   assert.ok(stressInput1.length >= 256 * 1024);
   assert.ok(stressInput2.length >= 131_072);
   assert.ok(stressInput3.length >= 256 * 1024);
@@ -176,13 +177,16 @@ test('10 adversarial fence/injection hardening tests + Findings #14, #15, #19, #
   const stress1 = stripInjectionContainers(stressInput1);
   const stress2 = stripInjectionContainers(stressInput2);
   const stress3 = stripInjectionContainers(stressInput3);
+  const stress4 = stripInjectionContainers(stressInput4);
   const elapsedMs = Date.now() - t0;
   assert.equal(stress1.includes('<!--'), false);
   assert.equal(stress2.includes('<!--'), false);
   assert.equal(stress3.length, stressInput3.length - 1);
-  assert.ok(elapsedMs < 250, `expected linear O(N) HTML comment stripping across all 3 stress inputs (<250ms), took ${elapsedMs}ms`);
+  assert.equal(stress4.includes('<!--'), false);
+  assert.ok(elapsedMs < 250, `expected linear O(N) HTML comment stripping across all 4 stress inputs (<250ms), took ${elapsedMs}ms`);
 
-  // Loop 16 Astra P1 #1: Quoted ```diff fence documenting an ordinary `status` object MUST NOT poison a valid FAIL review!
+  // Loop 16/17 Astra P1 #1: Quoted ```diff fence documenting an ordinary `status` object MUST NOT poison a valid FAIL review,
+  // AND an unlabeled closed fence containing a heading + FAIL JSON object MUST still parse cleanly (and participate in conflict detection)!
   const failReview = { ...VALID_REVIEW, verdict: 'FAIL', mustFix: ['fix status check'], summary: 'see quoted diff' };
   const quotedDiffPlusFail = [
     'Review details:',
@@ -197,6 +201,18 @@ test('10 adversarial fence/injection hardening tests + Findings #14, #15, #19, #
   const parsedDiffFail = parseTypedOrLegacyOutput(quotedDiffPlusFail, { schemaName: 'review' });
   assert.equal(parsedDiffFail.ok, true, 'quoted ```diff block with status object must not reject valid FAIL review');
   assert.equal(parsedDiffFail.value.verdict, 'FAIL');
+
+  const headingFenceFail = ['```', 'Review result', JSON.stringify(failReview), '```'].join('\n');
+  const parsedHeadingFail = parseTypedOrLegacyOutput(headingFenceFail, { schemaName: 'review' });
+  assert.equal(parsedHeadingFail.ok, true, 'unlabeled closed fence with heading + FAIL JSON must be accepted');
+  assert.equal(parsedHeadingFail.value.verdict, 'FAIL');
+  const conflictWithHeadingFail = [
+    '```json',
+    JSON.stringify(VALID_REVIEW),
+    '```',
+    headingFenceFail,
+  ].join('\n');
+  assert.equal(parseTypedOrLegacyOutput(conflictWithHeadingFail, { schemaName: 'review' }).ok, false, 'heading + FAIL inside unlabeled fence participates in conflict detection');
 
   // Loop 16 Astra P1 #2: Completed `@@ -1,1 +1,1 @@` hunk ends cleanly without swallowing the immediately following bullet or indented fence!
   const hunkThenBullet = [

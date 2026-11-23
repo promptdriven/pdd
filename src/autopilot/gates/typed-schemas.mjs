@@ -207,6 +207,7 @@ export function stripInjectionContainersDetailed(raw) {
   let unclosedComment = false;
   let activeHunk = null;
   let pos = 0;
+  let nextNewlinePos = src.indexOf('\n', 0);
   let nextCommentPos = src.indexOf('<!--', 0);
 
   const flushProse = () => {
@@ -268,7 +269,10 @@ export function stripInjectionContainersDetailed(raw) {
 
   while (pos < src.length && !unclosedComment) {
     const atLineStart = pos === 0 || src[pos - 1] === '\n';
-    const nl = src.indexOf('\n', pos);
+    if (nextNewlinePos >= 0 && nextNewlinePos < pos) {
+      nextNewlinePos = src.indexOf('\n', pos);
+    }
+    const nl = nextNewlinePos;
     const lineEnd = nl < 0 ? src.length : nl;
     const nextLinePos = nl < 0 ? src.length : nl + 1;
 
@@ -565,10 +569,18 @@ export function parseTypedOrLegacyOutput(raw, { schemaName = null, schema = null
   if (unclosedComment) return fail('legacy-fallback', 'Unclosed HTML comment rejected.', true);
   const { blocks, outsideText, unclosedFence } = extractClosedJsonFences(stripped);
   if (unclosedFence) return fail('legacy-fallback', 'Unclosed fenced block rejected.', true);
+  if (blocks.some((b) => String(b ?? '').split(/\r?\n/).some((ln) => Boolean(parseFenceOpenLine(ln))))) {
+    return fail('legacy-fallback', 'Desynced nested fence rejected.', true);
+  }
 
-  // Collect JSON candidates from closed json/unlabeled fences and prose outside other fences
-  // (never treating quoted code inside ```diff / ```js / ```markdown fences as review decisions).
-  const candidateTexts = [...new Set([...blocks.filter((b) => b.startsWith('{')), ...scanBalancedJsonStrings(outsideText)])];
+  // Collect JSON candidates from closed json/unlabeled fences (including heading + JSON blocks)
+  // and prose outside other fences (never treating quoted code inside ```diff / ```js / ```markdown fences as review decisions).
+  const candidateTexts = [
+    ...new Set([
+      ...blocks.flatMap((b) => (b.startsWith('{') ? [b] : scanBalancedJsonStrings(b))),
+      ...scanBalancedJsonStrings(outsideText),
+    ]),
+  ];
   const validCandidates = [], allDecisionObjects = [];
   for (const snippet of candidateTexts) {
     const p = safeJsonParse(snippet, { maxBytes, maxDepth });
