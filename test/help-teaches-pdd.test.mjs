@@ -113,11 +113,12 @@ test('prompting is a help topic, not a command, and takes no other word', async 
 test('root help keeps its first line, grouped commands, learn paths and closing lines; command help shows wrapped manifest forms without root footer', async () => {
   const outputs = await Promise.all(ROOT_HELP.map(argv => pdd(argv)));
   for (const output of outputs) assert.equal(output.stdout, outputs[0].stdout);
-  const rootHelp = lines(outputs[0].stdout), scoped = lines((await pdd(['test', '--help'])).stdout);
+  const rootHelp = lines(outputs[0].stdout), scopedRaw = (await pdd(['test', '--help'])).stdout;
+  const scoped = lines(scopedRaw), scopedUnwrapped = lines(scopedRaw.replace(/\n      /g, ' '));
   const testForms = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.split(' ')[1] === 'test').map(({ form }) => `  ${form}`);
-  // Command help: first line, empty line, its own forms with wrapped descriptions, and no root closing/learn footer.
+  // Command help: first line, empty line, its own wrapped forms + descriptions, and no root closing/learn footer.
   assert.equal(scoped[1], '');
-  for (const formHeader of testForms) assert.ok(scoped.includes(formHeader), `missing form header: ${formHeader}`);
+  for (const formHeader of testForms) assert.ok(scopedUnwrapped.includes(formHeader), `missing form header: ${formHeader}`);
   for (const closingLine of PUBLIC_HELP_TEXT.closingLines) assert.ok(!scoped.includes(closingLine), `subcommand help should omit root closingLine: ${closingLine}`);
   assert.doesNotMatch(scoped.join('\n'), /help prompting|skills\/pdd\/SKILL\.md|references\/prompting\.md/);
   // Root help: the same first line, usage, quick start, grouped summaries, focused help note, learn/path lines, and closing lines.

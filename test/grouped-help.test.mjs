@@ -52,7 +52,7 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   const statusIdx = baseline.indexOf('  pdd status [--changed]', coreIdx);
   assert.ok(statusIdx > coreIdx && statusIdx < productIdx);
   assert.ok(baseline.indexOf('  pdd autopilot status|logs') > autopilotIdx);
-  assert.ok(baseline.includes('  pdd --version | -V | -VV   Show CLI version (and interpreter build).'));
+  assert.ok(baseline.includes('  pdd --version | -V | -VV       Show CLI version & interpreter build.'));
 
   // No duplicate approval heredoc blocks or stale removed-engine migration note on root help
   assert.doesNotMatch(baseline, /<<'PDD_SAID'/);
@@ -65,6 +65,9 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   for (const line of PUBLIC_HELP_TEXT.closingLines) {
     assert.ok(line.length <= 80, `closingLine exceeds 80 columns (${line.length}): "${line}"`);
   }
+  for (const line of PUBLIC_HELP_TEXT.promptingLines) {
+    assert.ok(line.length <= 80, `promptingLine exceeds 80 columns (${line.length}): "${line}"`);
+  }
 
   // Preserves Focused help guidance and installed PDD skill / Prompting guide paths
   assert.match(baseline, /Run pdd <command> --help for full options/);
@@ -72,20 +75,21 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   assert.match(baseline, /Prompting guide: \/opt\/pdd\/skills\/pdd\/references\/prompting\.md/);
 });
 
-test('3496: focused family and command help exposes complete options, defaults, constraints and approval heredocs', async () => {
-  const families = ['test', 'lint', 'simulate', 'approve', 'accounts', 'product', 'autopilot', 'metrics'];
+test('3496: focused family and command help exposes complete options, defaults, constraints and approval heredocs within 80 columns', async () => {
+  const families = ['test', 'lint', 'prove', 'simulate', 'approve', 'accounts', 'product', 'autopilot', 'metrics'];
   for (const family of families) {
     const res = await runHelp([family, '--help']);
     assert.equal(res.exit, 0, `${family} --help`);
     assert.equal(res.stderr, '', `${family} --help`);
+    const unwrapped = res.stdout.replace(/\|\n      /g, '|').replace(/\n      /g, ' ');
     const expectedForms = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.slice(4).split(/\s+/)[0] === family);
     assert.ok(expectedForms.length > 0, `manifest has forms for ${family}`);
     for (const entry of expectedForms) {
-      assert.ok(res.stdout.includes(`  ${entry.form}\n`), `${family} --help includes ${entry.form}`);
+      assert.ok(unwrapped.includes(`  ${entry.form}\n`), `${family} --help includes ${entry.form}`);
     }
-    // Wrapped descriptions keep subcommand help readable instead of multi-hundred-char single lines
-    for (const descLine of res.stdout.split('\n').filter(l => l.startsWith('    '))) {
-      assert.ok(descLine.length <= 86, `${family} --help description line too wide (${descLine.length}): "${descLine}"`);
+    // Every rendered line (both wrapped usage forms and wrapped descriptions) fits in <= 80 columns
+    for (const renderedLine of res.stdout.split('\n')) {
+      assert.ok(renderedLine.length <= 80, `${family} --help line exceeds 80 columns (${renderedLine.length}): "${renderedLine}"`);
     }
   }
 

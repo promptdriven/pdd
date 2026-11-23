@@ -43,10 +43,21 @@ export function headerEntries(content) {
       if (fm && canonicalPath(fm[1]) && !rows.has(fm[1])) rows.set(fm[1], { prompt: fm[1], sha256: null });
     }
   }
-  let inFence = false;
+  let fence = null;
   for (const line of lines) {
-    if (/^\s*(?:```|~~~)/.test(line)) { inFence = !inFence; continue; }
-    if (inFence || line.length > LINE) continue;
+    const fenceOpen = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fenceOpen) {
+      const char = fenceOpen[1][0], len = fenceOpen[1].length, rest = fenceOpen[2];
+      if (!fence) {
+        fence = { char, len };
+        continue;
+      }
+      if (char === fence.char && len >= fence.len && !rest.trim()) {
+        fence = null;
+        continue;
+      }
+    }
+    if (fence || line.length > LINE) continue;
     const match = HEADER_PARTS.exec(line);
     if (match && canonicalPath(match[2]) && !rows.has(match[2])) rows.set(match[2], { prompt: match[2], sha256: match[4] ?? match[7] ?? null });
   }

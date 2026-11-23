@@ -302,9 +302,16 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
 
     basePhase = execShellCommand(test, { cwd: baseWorktree, env, timeoutMs }, ports);
     const baseTextHasExpect = !basePhase.signal && !basePhase.timedOut && (basePhase.stdout.includes(expect) || basePhase.stderr.includes(expect));
-    // If --expect explicitly targets a runtime error name (e.g. SyntaxError/FileNotFoundError), don't mask a matching bug symptom as a setup error.
-    const baseRealSetupError = basePhase.setupError && !(baseTextHasExpect && /^(?:SyntaxError|ImportError|FileNotFoundError):/i.test(basePhase.setupError));
-    if (!baseRealSetupError && basePhase.setupError) basePhase.setupError = '';
+    // Clear SyntaxError/ImportError/FileNotFoundError ONLY when --expect itself explicitly names that error class
+    // AND matches on an actual error line (never clearing a crash just because a test banner matched stdout).
+    const baseSetupClassMatch = /^(SyntaxError|ImportError|FileNotFoundError):/i.exec(basePhase.setupError || '');
+    const expectTargetsErrorClass = Boolean(
+      baseSetupClassMatch
+      && new RegExp(`\\b${baseSetupClassMatch[1]}\\b`, 'i').test(expect)
+      && `${basePhase.stderr}\n${basePhase.stdout}`.split(/\r?\n/).some(line =>
+        new RegExp(`\\b${baseSetupClassMatch[1]}:`, 'i').test(line) && line.includes(expect)),
+    );
+    if (expectTargetsErrorClass) basePhase.setupError = '';
     basePhase.expectedFound = !basePhase.setupError && baseTextHasExpect;
     headPhase = execShellCommand(test, { cwd: headWorktree, env, timeoutMs }, ports);
   } catch (err) {

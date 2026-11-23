@@ -344,6 +344,9 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
   const codexMultiAgent = typeof a.codexMultiAgent === 'boolean'
     ? a.codexMultiAgent
     : (typeof a.multiAgent === 'boolean' ? a.multiAgent : undefined);
+  const strictEvidenceContract = typeof a.strictEvidenceContract === 'boolean'
+    ? a.strictEvidenceContract
+    : undefined;
   const ciRaw = a.ci ?? a.ciPolicy;
   const ci = ciRaw !== undefined ? (['local', 'github'].includes(ciRaw) ? ciRaw : 'github') : undefined;
   const hygieneGate = a.hygieneGate !== undefined
@@ -365,7 +368,8 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
     ...(siblingRepos !== undefined ? { siblingRepos } : {}),
     ...(minIntakeConfidence !== undefined ? { minIntakeConfidence } : {}),
     ...(forensics !== undefined ? { forensics } : {}),
-    ...(codexMultiAgent !== undefined ? { codexMultiAgent } : {}) };
+    ...(codexMultiAgent !== undefined ? { codexMultiAgent } : {}),
+    ...(strictEvidenceContract !== undefined ? { strictEvidenceContract } : {}) };
 }
 const hygieneGateMode = ctx => ['off', 'observe', 'enforce'].includes(ctx?.settings?.hygieneGate) ? ctx.settings.hygieneGate : 'observe';
 function scanZeroManifestTests(cwd, fs) {
@@ -7862,7 +7866,10 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
 
 async function runValidatorV2Gate(ctx, job, pr, { suite }) {
   let changed = [];
-  try { changed = await changedFiles(ctx, job, job.head); } catch { changed = []; }
+  let allTouched = [];
+  let changedFilesError = false;
+  try { changed = await changedFiles(ctx, job, job.head); } catch { changed = []; changedFilesError = true; }
+  try { allTouched = await prDiffAllPaths(ctx, job, job.head); } catch { allTouched = [...changed]; changedFilesError = true; }
   let headTree = null;
   try { headTree = await treeAt(ctx, job, 'agent', job.head); } catch { headTree = null; }
   const nativeCtx = collectNativeOnlyContext(ctx, headTree, changed);
@@ -7951,13 +7958,17 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
   if (outcome.eligible && contractInput === null) {
     const suiteCmd = resolveSuiteCommand(ctx, job) || 'npm test';
     const suiteLog = job.suite?.agent?.log ? cleanLogText(readTail(ctx.fs, job.suite.agent.log)) : '';
+    const suiteTree = job.suite?.head === job.head && named(job.suite?.cwd) ? job.suite.cwd : null;
     liveEvidence = await collectLiveEvidenceContract({
       repo: ctx.repo,
       job,
       headTree,
+      suiteTree,
       baseTree,
       baseTip,
       changedFiles: changed,
+      allTouchedFiles: allTouched,
+      changedFilesError,
       suite,
       suiteCmd,
       suiteLog,
@@ -8006,7 +8017,7 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
           humanVerificationCard: formatHumanVerificationCard({
             offlineSummary: 'Evidence contract Check 4',
             unverifiedBoundary: `Protected path approval required (${paths})`,
-            verifyCommand: `Review protected path change(s) (${paths}) and explicitly approve`,
+            verifyCommand: `Review protected path change(s) (${paths}) and merge this PR manually on GitHub (Autopilot never auto-merges protected policy, workflow, or package files)`,
           }),
         });
         return { handled: true, outcome, evidenceContract: contract };
@@ -8023,8 +8034,7 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
       }
       const red = `[Evidence Contract HOLD (${contract.holdReason})] ${contract.summary}${proveDetail}`;
       await repairOrEnd(ctx, job, [red], [red], null, {
-        skipRepeatStop: true,
-        maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS, (job.repairs ?? 0) + 1),
+        maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS),
       });
       return { handled: true, outcome, evidenceContract: contract };
     }

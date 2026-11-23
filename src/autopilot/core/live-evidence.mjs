@@ -215,9 +215,12 @@ export async function collectLiveEvidenceContract({
   repo = 'local/repo',
   job = {},
   headTree = null,
+  suiteTree = null,
   baseTree = null,
   baseTip = null,
   changedFiles = [],
+  allTouchedFiles = null,
+  changedFilesError = false,
   suite = null,
   suiteCmd = 'npm test',
   suiteLog = '',
@@ -235,10 +238,15 @@ export async function collectLiveEvidenceContract({
   const cleanHead = nonEmpty(job?.head) ? job.head.trim() : '0'.repeat(40);
   const cleanBaseTip = nonEmpty(baseTip) ? baseTip.trim() : 'base-unresolved';
   const cleanFiles = [...new Set((Array.isArray(changedFiles) ? changedFiles : []).filter(nonEmpty))].sort();
+  const protectedCheckFiles = [...new Set([
+    ...cleanFiles,
+    ...(Array.isArray(allTouchedFiles) ? allTouchedFiles.filter(nonEmpty) : []),
+  ])].sort();
   const effectiveSuiteCmd = nonEmpty(suiteCmd) ? suiteCmd.trim() : 'npm test';
+  const baseTipValid = GIT_SHA_RE.test(cleanBaseTip);
 
   // 1. Load verify config strictly from trusted merge-base (`baseTip:pdd.json` or `baseTree/pdd.json`).
-  let baseVerify = headTree && GIT_SHA_RE.test(cleanBaseTip)
+  let baseVerify = headTree && baseTipValid
     ? loadVerifyConfig(headTree, { gitRef: cleanBaseTip })
     : { configured: false, source: 'pdd.json', test: null, report: null, paths: [], errors: [] };
   if (!baseVerify.configured && baseTree) {
@@ -248,7 +256,7 @@ export async function collectLiveEvidenceContract({
   const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, cleanFiles);
 
   // 2. Load 0600 test-env metadata & probe host capabilities ONLY when merge-base verify.paths (or explicit probeOptions) need them;
-  // inject sandbox credentials ONLY post-review!
+  // inject sandbox credentials ONLY post-review and strictly scoped per matched recipe!
   const hasCustomProbeOptions = isObj(probeOptions) && Object.keys(probeOptions).length > 0;
   const shouldLoadTestEnv = hasVerifyPaths || hasCustomProbeOptions || nonEmpty(testEnvPath);
   const rawTestEnv = shouldLoadTestEnv
@@ -270,7 +278,7 @@ export async function collectLiveEvidenceContract({
       .filter(Boolean),
   )];
   let postReviewSandbox = null;
-  let recipeEnv = env;
+  const recipeSandboxesByCommand = new Map();
   if (hasVerifyPaths && neededAccounts.length > 0 && reviewApproved && rawTestEnv.ok === true) {
     postReviewSandbox = buildPostReviewSandboxEnv({
       baseEnv: env,
@@ -280,7 +288,24 @@ export async function collectLiveEvidenceContract({
       currentHead: cleanHead,
       allowedAccounts: neededAccounts,
     });
-    recipeEnv = postReviewSandbox.env;
+    for (const m of matched) {
+      const recipeAccounts = [...new Set(
+        (m.needs ?? [])
+          .filter(c => typeof c === 'string' && c.startsWith('account:'))
+          .map(c => c.slice('account:'.length))
+          .filter(Boolean),
+      )];
+      if (recipeAccounts.length > 0) {
+        recipeSandboxesByCommand.set(m.run, buildPostReviewSandboxEnv({
+          baseEnv: env,
+          testEnv: rawTestEnv,
+          reviewApproved: true,
+          approvedHead: job.review.head,
+          currentHead: cleanHead,
+          allowedAccounts: recipeAccounts,
+        }));
+      }
+    }
   } else if (neededAccounts.length > 0 && !reviewApproved) {
     // Never treat account:* credentials as usable before blind review approves this exact head!
     for (const acct of neededAccounts) {
@@ -323,21 +348,31 @@ export async function collectLiveEvidenceContract({
     recipeDigest,
   };
 
-  // 4. Parse head/base structured test reports (reading merge-base configured verify.report when present)
-  // & run G3 polyglot diffTestReports when both exist.
+  // 4. Parse head/base structured test reports (reading merge-base configured verify.report from suiteTree first,
+  // then headTree; always auto-detecting JUnit/TAP/Go/Cargo format) & run G3 polyglot diffTestReports.
   const strictMode = hasVerifyPaths || strictWithoutVerifyPaths === true;
-  const readConfiguredReport = (treeDir) => {
-    if (!baseVerify.report || !nonEmpty(treeDir)) return null;
-    try { return readSafeUtf8(treeDir, baseVerify.report); } catch { return null; }
+  const readConfiguredReport = (...treeDirs) => {
+    if (!baseVerify.report) return null;
+    for (const dir of treeDirs) {
+      if (!nonEmpty(dir)) continue;
+      try {
+        const text = readSafeUtf8(dir, baseVerify.report);
+        if (nonEmpty(text)) return text;
+      } catch { /* try next candidate tree */ }
+    }
+    return null;
   };
   const resolvedHeadReport = headReport !== null && headReport !== undefined
     ? headReport
-    : (baseVerify.report ? readConfiguredReport(headTree) : (nonEmpty(suiteLog) ? suiteLog : null));
+    : (baseVerify.report ? readConfiguredReport(suiteTree, headTree) : (nonEmpty(suiteLog) ? suiteLog : null));
   const resolvedBaseReport = baseReport !== null && baseReport !== undefined
     ? baseReport
     : (baseVerify.report ? readConfiguredReport(baseTree) : null);
+  const reportParseFormat = (baseVerify.report || (headReport !== null && headReport !== undefined))
+    ? 'auto'
+    : (detectedRunner?.reportFormat ?? 'auto');
   const parsedHead = nonEmpty(resolvedHeadReport)
-    ? parseStandardTestReport(resolvedHeadReport, detectedRunner?.reportFormat ?? 'auto')
+    ? parseStandardTestReport(resolvedHeadReport, reportParseFormat)
     : { ok: false, cases: [] };
   let reportDiff = null;
   if (nonEmpty(resolvedBaseReport) && nonEmpty(resolvedHeadReport)) {
@@ -348,7 +383,7 @@ export async function collectLiveEvidenceContract({
       toolchain,
       platform: process.platform,
       profile: detectedRunner?.kind ?? 'default',
-      format: detectedRunner?.reportFormat ?? 'auto',
+      format: reportParseFormat,
     };
     reportDiff = diffTestReports({
       baseReport: resolvedBaseReport,
@@ -369,9 +404,13 @@ export async function collectLiveEvidenceContract({
         source: 'harness',
       });
     }
-  } else if (strictMode && (Boolean(baseVerify.report) || headReport !== null && headReport !== undefined)) {
+  } else if (strictMode && (Boolean(baseVerify.report) || (headReport !== null && headReport !== undefined))) {
     // Missing, empty, or unreadable configured/supplied test report MUST fail closed as `unknown`, never green.
     testResults.push({ id: 'report:unreadable', status: 'unknown', source: 'harness' });
+  }
+  if (strictMode && Boolean(baseVerify.report) && !nonEmpty(resolvedBaseReport)) {
+    // Configured verify.report without a base baseline MUST fail closed as `unknown`, never silently skip diffing.
+    testResults.push({ id: 'report:base-missing', status: 'unknown', source: 'harness' });
   }
   if (reportDiff) {
     for (const id of reportDiff.missingIds) expectedTestIds.push(id);
@@ -380,6 +419,14 @@ export async function collectLiveEvidenceContract({
     }
     for (const id of reportDiff.newlyFailingIds) {
       if (!testResults.some(t => t.id === id)) testResults.push({ id, status: 'fail', source: 'harness' });
+    }
+    // Preserve report-diff comparator HOLD verdicts (malformed base report, reduced duplicate-ID counts, metadata mismatch).
+    if (reportDiff.verdict !== 'ALLOW' || reportDiff.status !== 'pass') {
+      const diffStatus = reportDiff.status === 'fail' ? 'fail' : 'unknown';
+      const diffId = `report-diff:${reportDiff.status || 'hold'}`;
+      if (!testResults.some(t => t.id === diffId)) {
+        testResults.push({ id: diffId, status: diffStatus, source: 'harness' });
+      }
     }
   }
 
@@ -407,7 +454,7 @@ export async function collectLiveEvidenceContract({
       testCommand: oracleCmd,
       intendedChanges: Array.isArray(job?.intendedTestChanges) ? job.intendedTestChanges : [],
       format: detectedRunner?.reportFormat ?? 'auto',
-      env: recipeEnv,
+      env,
     });
     baseOracle = {
       status: oracleResult.status === 'pass' ? 'passed' : (oracleResult.status === 'fail' ? 'failed' : 'unknown'),
@@ -430,19 +477,16 @@ export async function collectLiveEvidenceContract({
 
   if (hasVerifyPaths && headTree) {
     const sink = { write() {} };
-    // When blind review approved this exact head and matched verify.paths recipes require `account:*`
-    // credentials, forward ONLY the strictly allowlisted `postReviewSandbox` injected keys to those
-    // matched post-review recipes (never pre-review, never unrelated env vars).
-    const accountRecipeCommands = new Set(
-      matched.filter(m => (m.needs ?? []).some(c => typeof c === 'string' && c.startsWith('account:'))).map(m => m.run),
-    );
+    // Forward ONLY each matched recipe's own allowlisted `account:*` keys inside that recipe's spawn,
+    // NEVER passing post-review credentials into the general `verify.test` suite or unrelated recipes.
     const provePorts = { stdout: sink, stderr: sink };
-    if (postReviewSandbox && accountRecipeCommands.size > 0 && runProveFn === runProve) {
+    if (recipeSandboxesByCommand.size > 0 && runProveFn === runProve) {
       provePorts.spawnSync = (cmd, opts) => {
-        if (accountRecipeCommands.has(cmd)) {
+        const recipeSandbox = recipeSandboxesByCommand.get(cmd);
+        if (recipeSandbox) {
           const mergedEnv = { ...(opts?.env ?? {}) };
-          for (const key of postReviewSandbox.injectedKeys) {
-            if (typeof postReviewSandbox.env[key] === 'string') mergedEnv[key] = postReviewSandbox.env[key];
+          for (const key of recipeSandbox.injectedKeys) {
+            if (typeof recipeSandbox.env[key] === 'string') mergedEnv[key] = recipeSandbox.env[key];
           }
           return spawnSync(cmd, { ...opts, env: mergedEnv });
         }
@@ -452,29 +496,37 @@ export async function collectLiveEvidenceContract({
     proveResult = await runProveFn(
       {
         cwd: headTree,
-        base: GIT_SHA_RE.test(cleanBaseTip) ? cleanBaseTip : undefined,
+        base: baseTipValid ? cleanBaseTip : undefined,
         capabilities: availableCapabilities,
-        env: recipeEnv,
+        env,
         json: true,
       },
       provePorts,
     );
     proveOutcome = proveResult?.outcome ?? OUTCOME_NOT_PROVED;
+    const proveDirty = proveResult?.receipt?.dirty === true || proveResult?.receipt?.proofScope === 'working-tree';
     const rawNotProved = Array.isArray(proveResult?.receipt?.notProvedReasons) ? proveResult.receipt.notProvedReasons : [];
     const rawLintErrors = Array.isArray(proveResult?.receipt?.lint?.errors) ? proveResult.receipt.lint.errors : [];
     const rawDiffErrors = Array.isArray(proveResult?.receipt?.diff?.errors) ? proveResult.receipt.diff.errors : [];
     const testFailedReason = proveResult?.receipt?.test && proveResult.receipt.test.ok === false
       ? [`pdd prove test suite failed (exit ${proveResult.receipt.test.exitCode ?? 'null'}): ${proveResult.receipt.test.summary || ''}`.trim()]
       : [];
-    proveReasons = [...rawLintErrors, ...rawDiffErrors, ...testFailedReason, ...rawNotProved].filter(nonEmpty);
+    const provePaths = Array.isArray(proveResult?.receipt?.paths) ? proveResult.receipt.paths : [];
+    const failedPathReasons = provePaths
+      .filter(p => p.status === 'failed')
+      .map(p => `Verify path "${p.id}" failed (exit ${p.exitCode ?? 'null'}): ${p.summary || ''}`.trim());
+    const dirtyReasons = proveDirty
+      ? ['Candidate checkout was dirty (working-tree proof cannot authorize commit-bound merge).']
+      : [];
+    if (proveDirty && proveOutcome === OUTCOME_PROVED) proveOutcome = OUTCOME_NOT_PROVED;
+    proveReasons = [...rawLintErrors, ...rawDiffErrors, ...testFailedReason, ...failedPathReasons, ...dirtyReasons, ...rawNotProved].filter(nonEmpty);
 
     touchedPaths = matched.map(m => m.id);
     for (const m of matched) requiredCapabilitiesByPath[m.id] = [...(m.needs ?? [])];
 
-    const provePaths = Array.isArray(proveResult?.receipt?.paths) ? proveResult.receipt.paths : [];
     for (const p of provePaths) {
       const outcome = p.status === 'proved'
-        ? 'proved'
+        ? (proveDirty ? 'failed' : 'proved')
         : (Array.isArray(p.missingCapabilities) && p.missingCapabilities.length > 0 ? 'missing_capability' : 'failed');
       const rawSummary = postReviewSandbox ? postReviewSandbox.redact(p.summary ?? '') : String(p.summary ?? '');
       receipts.push({
@@ -495,8 +547,8 @@ export async function collectLiveEvidenceContract({
     }
     const anyMissingCap = receipts.find(r => r.outcome === 'missing_capability');
     const anyFailed = receipts.find(r => r.outcome === 'failed');
-    // Overall receipt outcome MUST strictly honor `proveOutcome`; NEVER stamp `proved` when `pdd prove` returned Failed or Not proved.
-    const overallOutcome = proveOutcome === OUTCOME_PROVED
+    // Overall receipt outcome MUST strictly honor `proveOutcome` and clean-commit scope; NEVER stamp `proved` otherwise.
+    const overallOutcome = (proveOutcome === OUTCOME_PROVED && !proveDirty)
       ? 'proved'
       : (anyMissingCap ? 'missing_capability' : 'failed');
     if (proveOutcome === OUTCOME_FAILED && !anyFailed) {
@@ -525,39 +577,93 @@ export async function collectLiveEvidenceContract({
       outcome: overallOutcome,
       artifactDigest: computeCanonicalDigest({
         proveOutcome,
+        proveDirty,
         proveReasons,
         paths: provePaths.map(p => ({ id: p.id, status: p.status, exitCode: p.exitCode ?? null })),
         unmappedSurfaces,
       }),
     };
+  } else if (hasVerifyPaths && !headTree) {
+    // Configured Feature Map with unavailable head checkout MUST fail closed, never MERGE.
+    proveOutcome = OUTCOME_NOT_PROVED;
+    proveReasons = ['Head checkout unavailable; cannot execute merge-base verify.paths recipes.'];
+    gapCheck = { missingPathIds: matched.map(m => m.id), unprovedAcIds: [], flags: ['INSUFFICIENT_SCOPE'] };
+    requireGapCheck = true;
   } else {
     // No merge-base verify.paths configured: remain explicitly `Not proved` with zero forged `proved` receipt.
-    proveReasons = ['No merge-base verify.paths Feature Map configured in pdd.json.'];
-    if (strictWithoutVerifyPaths === true) {
+    if (!baseTipValid && !baseTree && headTree) {
+      proveReasons = ['Verified merge-base commit could not be resolved; cannot inspect base verify.paths policy.'];
       gapCheck = { missingPathIds: [], unprovedAcIds: [], flags: ['INSUFFICIENT_SCOPE'] };
       requireGapCheck = true;
+    } else {
+      proveReasons = ['No merge-base verify.paths Feature Map configured in pdd.json.'];
+      if (strictWithoutVerifyPaths === true) {
+        gapCheck = { missingPathIds: [], unprovedAcIds: [], flags: ['INSUFFICIENT_SCOPE'] };
+        requireGapCheck = true;
+      }
     }
+  }
+
+  if (changedFilesError === true) {
+    proveOutcome = OUTCOME_NOT_PROVED;
+    proveReasons.push('Git diff failed; changed and deleted files could not be enumerated safely.');
+    gapCheck = { missingPathIds: [], unprovedAcIds: [], flags: ['INSUFFICIENT_SCOPE'] };
+    requireGapCheck = true;
+    if (stampReceipt) stampReceipt = { ...stampReceipt, outcome: 'failed' };
   }
 
   // Never manufacture or infer human approvals for protected paths; only genuine caller/job approvals count.
   const humanApprovedPaths = Array.isArray(job?.humanApprovedPaths) ? [...job.humanApprovedPaths] : [];
 
-  // Detect whether changed Stories in this PR carry numbered acceptance criteria so missing frozenAcs fail closed in strict mode.
-  let changedStoryHasAcs = false;
+  // Parse ALL numbered acceptance criteria from changed Stories so partial or duplicated frozenAcs (e.g. 1 of 5) cannot pass.
+  const changedStoryAcRefs = [];
+  let changedStoryCount = 0;
   if (strictMode && headTree && !nonEmpty(job?.acNotApplicableReason)) {
     for (const rel of cleanFiles) {
       if (!isLintableStoryPath(rel)) continue;
       const storyText = readSafeUtf8(headTree, rel);
-      if (typeof storyText === 'string' && /^##\s+Acceptance(?:\s+criteria)?\b/im.test(storyText) && /^\s*\d+[.)]\s+\S/m.test(storyText)) {
-        changedStoryHasAcs = true;
-        break;
+      if (typeof storyText !== 'string') continue;
+      let inCriteria = false;
+      let acIndex = 0;
+      for (const line of storyText.split(/\r?\n/)) {
+        if (/^##\s+/.test(line)) {
+          inCriteria = /^##\s+Acceptance(?:\s+criteria)?\s*$/i.test(line.trim());
+          continue;
+        }
+        if (inCriteria && /^\s*\d+[.)]\s+\S/.test(line)) {
+          acIndex += 1;
+          changedStoryAcRefs.push({ ref: `${rel}#AC${acIndex}`, index: acIndex });
+        }
+      }
+      if (acIndex > 0) changedStoryCount += 1;
+    }
+  }
+  const suppliedFrozenAcs = Array.isArray(job?.frozenAcs) ? [...job.frozenAcs] : [];
+  const effectiveFrozenAcs = [...suppliedFrozenAcs];
+  if (changedStoryAcRefs.length > 0) {
+    const singleChangedStory = changedStoryCount === 1;
+    const suppliedIdSet = new Set(
+      suppliedFrozenAcs
+        .map(ac => (typeof ac === 'string' ? ac : (isObj(ac) ? ac.id : '')))
+        .filter(nonEmpty)
+        .map(id => id.trim().toLowerCase()),
+    );
+    for (const item of changedStoryAcRefs) {
+      const refLower = item.ref.toLowerCase();
+      const matched = suppliedIdSet.has(refLower)
+        || (singleChangedStory && (
+          suppliedIdSet.has(`ac${item.index}`)
+          || suppliedIdSet.has(`ac-${item.index}`)
+          || suppliedIdSet.has(String(item.index))
+        ));
+      if (!matched) {
+        effectiveFrozenAcs.push({ id: item.ref, testIds: [], pathIds: [] });
       }
     }
   }
-  const frozenAcs = Array.isArray(job?.frozenAcs) ? job.frozenAcs : [];
-  const requireFrozenAcs = frozenAcs.length > 0
+  const requireFrozenAcs = effectiveFrozenAcs.length > 0
     || job?.requireFrozenAcs === true
-    || (strictMode && !nonEmpty(job?.acNotApplicableReason) && (job?.hasAcceptanceCriteria === true || changedStoryHasAcs));
+    || (strictMode && !nonEmpty(job?.acNotApplicableReason) && (job?.hasAcceptanceCriteria === true || changedStoryAcRefs.length > 0));
 
   return {
     source: 'live-production',
@@ -573,9 +679,9 @@ export async function collectLiveEvidenceContract({
     testEnvMeta,
     availableCapabilities,
     contractInput: {
-      changedFiles: cleanFiles,
+      changedFiles: protectedCheckFiles,
       humanApprovedPaths,
-      frozenAcs,
+      frozenAcs: effectiveFrozenAcs,
       requireFrozenAcs,
       touchedPaths,
       receipts,

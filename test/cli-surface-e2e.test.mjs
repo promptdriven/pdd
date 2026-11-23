@@ -954,9 +954,10 @@ test('every public command renders focused --help via real bin/pdd.mjs subproces
   });
   for (const { route, res } of results) {
     assert.equal(res.code, 0, `${route.id} (--help) exited ${res.code}: ${res.stderr}`);
+    const unwrappedHelp = res.stdout.replace(/\|\n      /g, '|').replace(/\n      /g, ' ');
     for (const entry of route.forms) {
       assert.ok(
-        res.stdout.includes(entry.form),
+        unwrappedHelp.includes(entry.form),
         `${route.id} --help missing documented form: ${entry.form}\nActual stdout:\n${res.stdout}`,
       );
     }

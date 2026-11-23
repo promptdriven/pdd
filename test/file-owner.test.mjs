@@ -423,4 +423,18 @@ test('3447/3203 per-module derived hashes, header refresh, and linear-time heade
   assert.deepEqual(headerEntries(`${leadingSpaces}\n${trailingSpaces}\n`), []);
   assert.equal(updateHeaderHash(`${leadingSpaces}\n${trailingSpaces}\n`, 'prompts/widget.prompt.md', baseHash).changed, false);
   assert.ok(Date.now() - t0 < 200, 'header matching must stay linear time');
+
+  // Outer 4-backtick Markdown fence containing a nested 3-backtick example must NEVER claim ownership.
+  const nestedFenceDoc = [
+    '# Guide',
+    '',
+    '````md',
+    '```js',
+    '// Prompt: prompts/fake.prompt.md',
+    '```',
+    '// Prompt: prompts/still-inside-4-ticks.prompt.md',
+    '````',
+    '',
+  ].join('\n');
+  assert.deepEqual(headerEntries(nestedFenceDoc), []);
 });

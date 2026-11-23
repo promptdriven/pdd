@@ -103,7 +103,7 @@ Reports (anyone with a link can open it):
 | `DRAFT` | A prompt is still a draft. A DRAFT pass is not an approval. |
 | A report link | A page with each step, check, and answer. Anyone with the link can open it; it expires after 7 days. |
 
-Checks show `✓` when all passed and `✗` when a check failed. Exit codes use this order: 3, 5, 4, 1, 0.
+Checks show `✓` when all passed and `✗` when a check failed. Exit codes: `0` passed, `1` check failed, `3` unknown or still running, `4` refused, `5` access or service unavailable.
 
 ### 3. Simulate (try before coding)
 
@@ -154,7 +154,7 @@ pdd lint --diff origin/main
 pdd prove --base origin/main
 ```
 
-- In interactive chat, your agent opens **one pull request** only when you ask (the only exception is `pdd product --through prompt-pr`, which explicitly stages a prompt PR first).
+- In interactive chat, your agent opens **one pull request** only when you ask (the only exception is a multi-part product run explicitly configured with `Through: prompt-pr` or `pdd product start RUN --through prompt-pr`, which stages a prompt PR first).
 - The `pdd` CLI has no merge command. In manual workflows, ask your agent to merge under [Prompting guide §5](skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges).
 
 ## Commands
@@ -196,7 +196,7 @@ The `/pdd` skill and all other commands (`pdd setup`, `pdd init`, `pdd status`, 
 
 ## Autopilot on your own repository
 
-Autopilot runs headless background workers on GitHub issues you mark with an opt-in label. For each issue, it opens one pull request, runs a fresh blind reviewer, runs your full test suite, and verifies the mechanical evidence contract (`pdd prove` + merge-base `verify.paths`). In `auto` mode, Autopilot merges the PR when CI, blind review, full tests, and the evidence contract pass. In `observe` mode, it runs the same checks and posts `"would merge"` for a person to merge. Required branch reviews, checks, and `strict_approvals` still apply.
+Autopilot runs headless background workers on GitHub issues you mark with an opt-in label. For each issue, it opens one pull request, runs a fresh Blind Read-Only Reviewer, runs your full test suite, and verifies the mechanical evidence contract (`pdd prove` + merge-base `verify.paths`). In `auto` mode, Autopilot merges the PR when CI, blind review, full tests, and the evidence contract pass; repositories with merge-base `verify.paths` (or `autopilot.strictEvidenceContract: true`) require clean commit-bound `Proved` receipts, while repositories without `verify.paths` run path receipts in compatibility advisory mode (emitting `Not proved` with zero forged `proved` receipts). Protected paths (`pdd.json`, `package.json`, `.github/workflows/**`, `CODEOWNERS`, gate scripts) always hold for manual human review and merge on GitHub. In `observe` mode, Autopilot runs the same checks and posts `"would merge"` for a person to merge. Required branch reviews, checks, and `strict_approvals` still apply.
 
 Use a repository you own or can write to (fork first if needed), with **Node.js 22.20.0 or newer**.
 

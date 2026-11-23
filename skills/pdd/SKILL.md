@@ -24,7 +24,7 @@ In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned mo
 - Read the relevant code, prompts, tests, and ownership *before* asking questions. Settle convention-decided details silently as stated defaults.
 - Skip clarifying questions when there are no consequential forks (public API/schema, UX flow, security/data loss, or major rework).
 - When real forks exist, batch them concisely with **bold recommended defaults** (*"Reply `ok` for defaults, or override by number"*). Keep interactive design checks brief (reserve deeper planning trees for `product`).
-- **Interactive vs. headless:** Use structured question UI (`ask_question`, `AskUserQuestion`, `request_user_input`) only when available and interactive. In headless or Autopilot runs, follow `src/autopilot/job-rules.md` for real human blockers; for non-blocking defaults, choose the safest option and record it.
+- **Interactive vs. headless:** Use structured question UI (`ask_question`, `AskUserQuestion`, `request_user_input`) only when available and interactive. In headless or Autopilot runs, follow Autopilot's job rules for real human blockers; for non-blocking defaults, choose the safest option and record it.
 
 ## Step 2 — Author Story, Prompt, and scenarios before code
 
@@ -36,9 +36,9 @@ In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned mo
 
 ## Step 3 — Pre-code check, prompt approval, and 1 PR
 
-- Before writing implementation code, pause with a 1-screen plain-English Story/cases check unless the person said *"all the way"* (pure code bugs and `small-change` skip this pause). For UI work, recommend `pdd sim` so the person can try the live screen first.
+- Before writing implementation code, pause with a 1-screen plain-English Story/cases check unless the person said *"all the way"* (pure code bugs and `small-change` skip this pause; *"all the way"* skips only the pause, not prompt approval). For UI work, recommend `pdd sim` so the person can try the live screen first.
 - Record the person's approval for changed prompts via `pdd approve PROMPT` (see [references/prompting.md §5](references/prompting.md#5-expected-values-approvals-and-merges)).
-- Deliver **1 PR** when authorized to open a PR (never 2 stacked PRs; the only exception is `pdd product --through prompt-pr`, which explicitly stages a prompt PR first). Never merge unless explicitly requested by the person.
+- Deliver **1 PR** when authorized to open a PR (never 2 stacked PRs; the only exception is a multi-part product run using `Through: prompt-pr` / `pdd product start RUN --through prompt-pr`, which explicitly stages a prompt PR first). Never merge unless explicitly requested by the person.
 
 ## Step 4 — Build, prove the real user path, and verify
 
@@ -51,7 +51,7 @@ Load [references/verification.md](references/verification.md) before finalizing 
 ## Independent verification (scaled to risk)
 
 - **Trivial interactive pure-code fix** (human reviewing a tiny diff with causal `pdd prove --base ... --expect ...` Red→Green): verify in the same session.
-- **Normal or high-risk changes** (behavior/prompt edits, multi-file changes, security/state logic, or any unattended run): use a **writable Fresh Verifier** (runs real checks + Deliberate-Break Probe) and a **Blind Read-Only Reviewer** (strictly read-only; receives only clean file paths and Verifier/harness outputs — zero Builder chat history). Inside Autopilot, builders skip self-spawning a verifier because Autopilot runs its own Blind Fresh Reviewer next.
+- **Normal or high-risk changes** (behavior/prompt edits, multi-file changes, security/state logic, or any unattended run): use a **writable Fresh Verifier** (runs real checks + Deliberate-Break Probe) and a **Blind Read-Only Reviewer** (strictly read-only; receives only clean file paths and Verifier/harness outputs — zero Builder chat history). Inside Autopilot, builders skip self-spawning a verifier because Autopilot runs its own Blind Read-Only Reviewer next.
 - On hosts without subagents, run `pdd lint --diff` + `pdd prove` and disclose same-session verification honestly. Escalate to the human if repair loops do not converge.
 
 ## References (load strictly on demand)

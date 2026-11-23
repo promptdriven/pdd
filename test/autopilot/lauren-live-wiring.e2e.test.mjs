@@ -294,6 +294,7 @@ test('P0-1..P0-3 live evidence contract fails closed on non-Proved prove outcome
   const head = git('rev-parse', 'HEAD');
 
   // P0-1a: Passing suite + lint failure (proveOutcome === 'Failed') MUST hold and NEVER stamp outcome === 'proved'.
+  const tapOk = 'TAP version 13\nok 1 - ok\n1..1\n';
   const lintFail = await collectLiveEvidenceContract({
     repo: 'acme/app',
     job: { issue: 1, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
@@ -302,7 +303,8 @@ test('P0-1..P0-3 live evidence contract fails closed on non-Proved prove outcome
     changedFiles: ['src/app.mjs'],
     suite: { state: 'pass' },
     suiteCmd: 'node --test',
-    headReport: 'TAP version 13\nok 1 - ok\n1..1\n',
+    baseReport: tapOk,
+    headReport: tapOk,
     runProveFn: async () => ({
       exitCode: 1,
       outcome: 'Failed',
@@ -329,7 +331,8 @@ test('P0-1..P0-3 live evidence contract fails closed on non-Proved prove outcome
     changedFiles: ['src/app.mjs'],
     suite: { state: 'pass' },
     suiteCmd: 'node --test',
-    headReport: 'TAP version 13\nok 1 - ok\n1..1\n',
+    baseReport: tapOk,
+    headReport: tapOk,
     runProveFn: async () => ({
       exitCode: 3,
       outcome: 'Not proved',
@@ -376,7 +379,8 @@ test('P0-1..P0-3 live evidence contract fails closed on non-Proved prove outcome
     changedFiles: ['src/app.mjs', 'user_stories/app.md'],
     suite: { state: 'pass' },
     suiteCmd: 'node --test',
-    headReport: 'TAP version 13\nok 1 - ok\n1..1\n',
+    baseReport: tapOk,
+    headReport: tapOk,
     runProveFn: async () => ({
       exitCode: 0,
       outcome: 'Proved',
@@ -413,6 +417,296 @@ test('P0-1..P0-3 live evidence contract fails closed on non-Proved prove outcome
   const protectedContract = evaluateEvidenceContract(protectedNoMap.contractInput);
   assert.equal(protectedContract.ok, false);
   assert.equal(protectedContract.holdReason, 'protected_path');
+});
+
+test('Loop 2 P0/P1 regressions: base report diffing, suiteTree JUnit auto-parse, dirty/missing-head fail-closed, allTouchedFiles deletions, partial 1-of-5 Story ACs, per-recipe account isolation, and strictEvidenceContract', async t => {
+  const dir = makeTmpDir(t, 'pdd-live-loop2-');
+  const baseDir = makeTmpDir(t, 'pdd-live-loop2-base-');
+  const suiteDir = makeTmpDir(t, 'pdd-live-loop2-suite-');
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+  git('init', '-b', 'main');
+  git('config', 'user.email', 'dev@example.com');
+  git('config', 'user.name', 'Dev');
+
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  mkdirSync(join(dir, 'test'), { recursive: true });
+  mkdirSync(join(dir, 'user_stories'), { recursive: true });
+  mkdirSync(join(baseDir, 'reports'), { recursive: true });
+  mkdirSync(join(suiteDir, 'reports'), { recursive: true });
+
+  const junitOne = '<?xml version="1.0"?><testsuite tests="1" failures="0"><testcase classname="app" name="works"/></testsuite>\n';
+  const junitDupTwo = '<?xml version="1.0"?><testsuite tests="2" failures="0"><testcase classname="app" name="dup"/><testcase classname="app" name="dup"/></testsuite>\n';
+  const junitDupOne = '<?xml version="1.0"?><testsuite tests="1" failures="0"><testcase classname="app" name="dup"/></testsuite>\n';
+  writeFileSync(join(baseDir, 'reports/junit.xml'), junitOne);
+  writeFileSync(join(suiteDir, 'reports/junit.xml'), junitOne);
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'demo', scripts: { test: 'node --test' } }));
+  writeFileSync(join(dir, 'pdd.json'), JSON.stringify({
+    verify: {
+      test: 'node -e "if (process.env.SERVICE_SESSION) process.exit(99)"',
+      report: 'reports/junit.xml',
+      paths: [
+        {
+          id: 'app',
+          when: ['src/app.mjs'],
+          needs: ['account:staging'],
+          run: 'node -e "if (process.env.SERVICE_SESSION !== \'scoped_secret_token_88\') process.exit(1)"',
+        },
+        {
+          id: 'other',
+          when: ['src/other.mjs'],
+          run: 'node -e "if (process.env.SERVICE_SESSION) process.exit(98)"',
+        },
+      ],
+    },
+  }, null, 2));
+  writeFileSync(join(baseDir, 'pdd.json'), readFileSync(join(dir, 'pdd.json'), 'utf8'));
+  writeFileSync(join(dir, 'src/app.mjs'), 'export const x = 1;\n');
+  writeFileSync(join(dir, 'src/other.mjs'), 'export const y = 1;\n');
+  git('add', '.');
+  git('commit', '-m', 'base');
+  const baseTip = git('rev-parse', 'HEAD');
+
+  writeFileSync(join(dir, 'src/app.mjs'), 'export const x = 2;\n');
+  writeFileSync(join(dir, 'src/other.mjs'), 'export const y = 2;\n');
+  writeFileSync(join(dir, 'user_stories/five.md'), [
+    '# Five criteria',
+    '',
+    'As a person, I want five checks.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '1. First criterion.',
+    '2. Second criterion.',
+    '3. Third criterion.',
+    '4. Fourth criterion.',
+    '5. Fifth criterion.',
+  ].join('\n') + '\n');
+  git('add', '.');
+  git('commit', '-m', 'head');
+  const head = git('rev-parse', 'HEAD');
+
+  const provedStub = async () => ({
+    exitCode: 0,
+    outcome: 'Proved',
+    receipt: {
+      dirty: false, proofScope: 'commit',
+      lint: { ok: true, errors: [] }, diff: { ok: true, errors: [] },
+      test: { ok: true, exitCode: 0, summary: 'pass' },
+      paths: [{ id: 'app', status: 'proved', exitCode: 0, summary: 'ok', run: 'node -e ""', needs: [] }],
+      notProvedReasons: [],
+    },
+  });
+
+  // 1. suiteTree Node JUnit XML auto-parse + matching base report -> MERGE!
+  const cleanSuiteTree = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 10, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    suiteTree: suiteDir,
+    baseTree: baseDir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    runProveFn: provedStub,
+  });
+  assert.equal(cleanSuiteTree.reportDiff?.verdict, 'ALLOW');
+  assert.equal(evaluateEvidenceContract(cleanSuiteTree.contractInput).decision, 'MERGE');
+
+  // 2. Missing base report when verify.report is configured -> report:base-missing:unknown -> HOLD!
+  const noBaseReport = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 11, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    suiteTree: suiteDir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    runProveFn: provedStub,
+  });
+  const noBaseContract = evaluateEvidenceContract(noBaseReport.contractInput);
+  assert.equal(noBaseContract.decision, 'HOLD');
+  assert.ok(noBaseContract.checks.testOracle.badTestIds.includes('report:base-missing:unknown'));
+
+  // 3. Malformed base report -> report-diff:unknown:unknown -> HOLD!
+  const malformedBase = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 12, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    baseReport: '<not-valid-xml',
+    headReport: junitOne,
+    runProveFn: provedStub,
+  });
+  const malformedContract = evaluateEvidenceContract(malformedBase.contractInput);
+  assert.equal(malformedContract.decision, 'HOLD');
+  assert.ok(malformedContract.checks.testOracle.badTestIds.includes('report-diff:unknown:unknown'));
+
+  // 4. Duplicate-ID reduction (2 passing -> 1 passing) -> report-diff:fail:fail -> HOLD!
+  const dupDrop = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 13, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    baseReport: junitDupTwo,
+    headReport: junitDupOne,
+    runProveFn: provedStub,
+  });
+  const dupContract = evaluateEvidenceContract(dupDrop.contractInput);
+  assert.equal(dupContract.decision, 'HOLD');
+  assert.ok(dupContract.checks.testOracle.badTestIds.includes('report-diff:fail:fail'));
+
+  // 5. Missing headTree on configured Feature Map -> HOLD (insufficient_scope), never MERGE!
+  const noHead = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 14, head },
+    headTree: null,
+    baseTree: baseDir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    baseReport: junitOne,
+    headReport: junitOne,
+  });
+  assert.equal(evaluateEvidenceContract(noHead.contractInput).decision, 'HOLD');
+
+  // 6. Dirty pdd prove receipt (`dirty: true`, `proofScope: 'working-tree'`) -> HOLD and NEVER stamps `proved`!
+  const dirtyProve = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 15, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    baseReport: junitOne,
+    headReport: junitOne,
+    runProveFn: async () => ({
+      exitCode: 0,
+      outcome: 'Proved',
+      receipt: {
+        dirty: true, proofScope: 'working-tree',
+        lint: { ok: true, errors: [] }, diff: { ok: true, errors: [] },
+        test: { ok: true, exitCode: 0, summary: 'pass' },
+        paths: [{ id: 'app', status: 'proved', exitCode: 0, summary: 'ok', run: 'node -e ""', needs: [] }],
+        notProvedReasons: [],
+      },
+    }),
+  });
+  assert.equal(dirtyProve.proveOutcome, 'Not proved');
+  assert.notEqual(dirtyProve.contractInput.stampReceipt.outcome, 'proved');
+  assert.equal(evaluateEvidenceContract(dirtyProve.contractInput).decision, 'HOLD');
+
+  // 7. Deleted/renamed protected path passed via allTouchedFiles (omitted from changedFiles) -> HOLD (protected_path)!
+  const deletedProtected = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 16, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    allTouchedFiles: ['src/app.mjs', 'CODEOWNERS'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    baseReport: junitOne,
+    headReport: junitOne,
+    runProveFn: provedStub,
+  });
+  assert.equal(evaluateEvidenceContract(deletedProtected.contractInput).holdReason, 'protected_path');
+
+  // 8. 1 frozen AC (or 5 duplicate AC1 entries) CANNOT satisfy a 5-criterion Story!
+  const partialAcs = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 17, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs', 'user_stories/five.md'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    baseReport: junitOne,
+    headReport: junitOne,
+    runProveFn: provedStub,
+  });
+  const partialContract = evaluateEvidenceContract(partialAcs.contractInput);
+  assert.equal(partialContract.decision, 'HOLD');
+  assert.deepEqual(partialContract.checks.acCoverage.unprovedAcIds, [
+    'user_stories/five.md#AC2',
+    'user_stories/five.md#AC3',
+    'user_stories/five.md#AC4',
+    'user_stories/five.md#AC5',
+  ]);
+  const dupAcs = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 18, head, frozenAcs: Array.from({ length: 5 }, () => ({ id: 'AC1', pathIds: ['app'] })) },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs', 'user_stories/five.md'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    baseReport: junitOne,
+    headReport: junitOne,
+    runProveFn: provedStub,
+  });
+  assert.equal(evaluateEvidenceContract(dupAcs.contractInput).decision, 'HOLD');
+
+  // 9. Failed path recipe populates proveReasons with recipe ID + summary!
+  const failedRecipe = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 19, head, frozenAcs: [{ id: 'AC1', pathIds: ['app'] }] },
+    headTree: dir,
+    baseTip,
+    changedFiles: ['src/app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    baseReport: junitOne,
+    headReport: junitOne,
+    runProveFn: async () => ({
+      exitCode: 1,
+      outcome: 'Failed',
+      receipt: {
+        dirty: false, proofScope: 'commit',
+        lint: { ok: true, errors: [] }, diff: { ok: true, errors: [] },
+        test: { ok: true, exitCode: 0, summary: 'pass' },
+        paths: [{ id: 'app', status: 'failed', exitCode: 1, summary: 'assertion boom', run: 'node -e ""', needs: [] }],
+        notProvedReasons: [],
+      },
+    }),
+  });
+  assert.ok(failedRecipe.proveReasons.some(r => r.includes('app') && r.includes('assertion boom')));
+
+  // 10. Per-recipe scoped account:* isolation: SERVICE_SESSION enters ONLY `app`, NEVER `verify.test` or `other`!
+  const cfgDir = makeTmpDir(t, 'pdd-loop2-env-');
+  chmodSync(cfgDir, 0o700);
+  const testEnvPath = join(cfgDir, 'autopilot-test-env.json');
+  writeFileSync(testEnvPath, JSON.stringify({
+    accounts: { staging: { SERVICE_SESSION: 'scoped_secret_token_88' } },
+  }), { mode: 0o600 });
+  chmodSync(testEnvPath, 0o600);
+  const scopedEnvRes = await collectLiveEvidenceContract({
+    repo: 'acme/app',
+    job: { issue: 20, head, review: { verdict: 'PASS', head } },
+    headTree: dir,
+    suiteTree: suiteDir,
+    baseTree: baseDir,
+    baseTip,
+    changedFiles: ['src/app.mjs', 'src/other.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    testEnvPath,
+    env: { PATH: process.env.PATH },
+  });
+  assert.equal(scopedEnvRes.proveOutcome, 'Proved', JSON.stringify(scopedEnvRes.proveReasons));
+  assert.equal(evaluateEvidenceContract(scopedEnvRes.contractInput).decision, 'MERGE');
+
+  // 11. coreSettings passes through strictEvidenceContract boolean cleanly.
+  assert.equal(coreSettings({ autopilot: { mode: 'auto', engine: 'core', strictEvidenceContract: true } }).strictEvidenceContract, true);
 });
 
 test('G3 polyglot base-control and diffTestReports detect missing/skipped/failing tests across ecosystems', async t => {

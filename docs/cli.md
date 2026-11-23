@@ -1187,29 +1187,29 @@ Each tick, without AI calls:
    pdd, the job log and `pdd autopilot status` say so). `PDD_SKILLS` names the skills
    of that same pdd, and the job reads its skills from there; when the installed skills
    (`~/.agents/skills` or `~/.claude/skills`) have another version, the job log and
-   status say so too. It makes one PR with prompt,
-   tests and code where the files are owned by a prompt, and changes other files
-   directly: a file is owned when `pdd-bindings.json`, a `Generated from` header or the
-   opening sentence of a prompt names it (`pdd owner FILE` gives the same answer). The
-   job gets this owner table and writes one `Path:` line per path in the PR body.
-   Autopilot takes the changed files from Git and checks the lines against the owners
-   on the base: an owned file must be on a path a or b line, a file that the PR adds
-   never takes path e, and a new prompt needs a binding or a `Generated from` header.
-   When `pdd-bindings.json` on the base branch cannot be read, the PR is not red: its
-   merge waits, and after the quiet period the run ends with one report. Existing code
-   that no prompt owns changes directly with a regression test, and when the PR passed
-   every check, Autopilot files one report that proposes adopting PDD for it. A config
-   or metadata file (`package.json`, a lock file, CI settings) needs no prompt, and the
-   review never asks for a new prompt for one. The job writes one `Runtime:` line for each changed
-   Story, the verdict first and the Story file path first in the parentheses
-   (`Runtime: PASS (STORY, N/N checks)`, `Runtime: FAIL (STORY, N of M checks failed:
-   STEPS)` or `Runtime: not run (STORY: REASON)`), and one `Evidence:` line in the PR
-   body ([verification reference](../skills/pdd/references/verification.md)). A
-   single line with no Story is valid only when the PR changes one Story or none. Two
-   lines for the same Story are red. It writes no review verdict: only the
-   fresh reviewer gives one. In `auto` and
-   `observe` mode your `pdd autopilot start` is the approval of the job's prompt
-   changes: the job records it for each changed prompt with `pdd approve PROMPT --said
+   status say so too. It makes one Hybrid Brownfield PR: for files owned by a prompt,
+   it updates the prompt, Story, tests, and code together; for unowned files, it edits
+   code and tests directly without forcing a speculative prompt. A file is owned only
+   when `pdd-bindings.json` or a top-of-file `// Prompt: <path>` header (legacy
+   `Generated from` headers stay readable) names its prompt (`pdd owner FILE` gives the
+   same answer; prose mentions never confer ownership). When `pdd-bindings.json` on the
+   base branch cannot be read, the PR is not red: its merge waits, and after the quiet
+   period the run ends with one report. Config or metadata files (`package.json`, lock
+   files, CI workflows) need no prompt, and protected paths (`pdd.json`, `package.json`,
+   `.github/workflows/**`, `CODEOWNERS`, gate scripts) always hold for manual human
+   review and merge on GitHub — Autopilot never auto-merges edits, deletions, or renames
+   of protected paths. The Autopilot harness owns verification receipts, `Runtime:`,
+   and `Evidence:` reporting (builders do not fabricate receipts or review verdicts;
+   only the fresh blind read-only reviewer produces a review verdict). When merge-base
+   `pdd.json` defines `verify.paths` (or `autopilot.strictEvidenceContract: true`),
+   Autopilot enforces the full 4-check non-compensatory Evidence Contract (clean commit
+   `Proved` `pdd prove` receipt, merge-base report comparison, complete frozen Story AC
+   coverage, base-owned edited-test oracle, and Check 4 protected paths). Repositories
+   without `verify.paths` run path-receipt checks in compatibility advisory mode
+   (emitting `Not proved` with zero forged `proved` receipts while still strictly
+   enforcing protected paths, real-E2E validation, blind review, full tests, and CI).
+   In `auto` and `observe` mode your `pdd autopilot start` is the approval of the job's
+   prompt changes: the job records it for each changed prompt with `pdd approve PROMPT --said
    -`, in the PR. The words start with "Operator action: pdd autopilot start" and
    name the real mode, the repository, the machine id and the time of the start. A changed prompt that
    still has a draft interface is red: a draft, a stale or broken interface, or an

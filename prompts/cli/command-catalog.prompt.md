@@ -77,12 +77,13 @@ The catalog owns the Learn PDD and `pdd help prompting` templates; the CLI subst
 
 ```text
 In PDD, prompts are the source. Code follows the prompts.
-1. Orient: run pdd status [--changed] to see prompts, Stories, owners, and the Feature Map.
-2. Prompt: prompts/NAME.prompt.md. State behavior and domain rules in plain English, plus ## Dependencies.
-3. Story & Test: user_stories/STORY.md (numbered ## Acceptance criteria) and tests/STORY.json (or tests/runtime/).
-4. Check: run pdd lint first (offline, 0 AI), then pdd test --files STORY && pdd test STORY.
+1. Orient: run pdd status [--changed] for prompts, Stories, and Feature Map.
+2. Prompt: prompts/NAME.prompt.md — plain English rules + ## Dependencies.
+3. Story & Test: user_stories/STORY.md (## Acceptance criteria) +
+   tests/STORY.json (or tests/runtime/ when native tests live in tests/).
+4. Check: run pdd lint first (offline, 0 AI), then pdd test STORY.
 5. Approve: review each changed prompt and run pdd approve PROMPT.
-6. Build & Prove: implement from approved prompts and run pdd prove [--base REF].
+6. Build & Prove: code from approved prompts, then run pdd prove.
 ```
 
 ## Dependencies

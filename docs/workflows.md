@@ -43,7 +43,7 @@ Open Codex, Claude Code, Gemini CLI, or Antigravity in your repository and invok
    - Implement code from the approved prompts and keep `// Prompt: ...` headers or `pdd-bindings.json` current (`pdd update --check`).
    - Run `pdd prove --base origin/main` to verify offline lint, diff checks, the repository test suite, and merge-base trusted `verify.paths` recipes. For bug fixes, prove base-vs-head contrast with `pdd prove --base origin/main --test "CMD" --expect "DEFECT_TEXT"`.
    - Use a writable Fresh Verifier (running real checks and a Deliberate-Break Probe) plus a Blind Read-Only Reviewer with clean file paths only.
-   - Open one PR when authorized by the person (or staged prompt PR when `pdd product --through prompt-pr` is explicitly set); merge only on an explicit human request under [Prompting guide §5](../skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges).
+   - Open one PR when authorized by the person (or a staged prompt PR when `product/plan.md` sets `Through: prompt-pr` / `pdd product start RUN --through prompt-pr`); merge only on an explicit human request under [Prompting guide §5](../skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges).
 
 ## Two ways to run PDD
 

@@ -107,6 +107,58 @@ const staleLine = ({ found, stale, staleSkills = [] }, version, cwd) => {
 };
 const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));
 const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '', ...PUBLIC_HELP_TEXT.promptingLines, '', ...packageLines(packageRoot).slice(1)].join('\n');
+function tokenizeHelpForm(form) {
+  const units = [];
+  let cur = '';
+  let depth = 0;
+  for (const ch of String(form ?? '').trim()) {
+    if (ch === '[') { depth += 1; cur += ch; continue; }
+    if (ch === ']') { depth = Math.max(0, depth - 1); cur += ch; continue; }
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) { units.push(cur); cur = ''; }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) units.push(cur);
+  return units;
+}
+function wrapHelpForm(form, width = 80) {
+  const firstIndent = '  ';
+  const contIndent = '      ';
+  const lines = [];
+  let line = '';
+  const flush = () => {
+    if (!line) return;
+    lines.push(`${lines.length === 0 ? firstIndent : contIndent}${line}`);
+    line = '';
+  };
+  for (const unit of tokenizeHelpForm(form)) {
+    const indent = lines.length === 0 ? firstIndent : contIndent;
+    const maxBody = width - indent.length;
+    if (!line && unit.length <= maxBody) { line = unit; continue; }
+    if (line && line.length + 1 + unit.length <= maxBody) { line += ` ${unit}`; continue; }
+    flush();
+    const nextMax = width - contIndent.length;
+    if (unit.length <= nextMax || !unit.includes('|')) {
+      line = unit;
+      continue;
+    }
+    // Wrap overlong pipe-delimited enums cleanly at `|` boundaries within 80 columns.
+    const parts = unit.split('|');
+    let chunk = '';
+    for (let i = 0; i < parts.length; i += 1) {
+      const sep = i < parts.length - 1 ? '|' : '';
+      const seg = `${parts[i]}${sep}`;
+      if (!chunk) { chunk = seg; continue; }
+      if (chunk.length + seg.length <= nextMax) chunk += seg;
+      else { lines.push(`${lines.length === 0 ? firstIndent : contIndent}${chunk}`); chunk = seg; }
+    }
+    line = chunk;
+  }
+  flush();
+  return lines;
+}
 function wrapHelpDescription(text, width = 76, indent = '    ') {
   const out = [];
   for (const rawLine of String(text ?? '').split('\n')) {
@@ -129,8 +181,8 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
       prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
     const blocks = rows.flatMap(({ form, description }, index) => [
       ...(index ? [''] : []),
-      `  ${form}`,
-      ...wrapHelpDescription(description),
+      ...wrapHelpForm(form, 80),
+      ...wrapHelpDescription(description, 76, '    '),
     ]);
     return [PUBLIC_HELP_TEXT.heading, '', ...blocks].join('\n');
   }

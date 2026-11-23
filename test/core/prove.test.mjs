@@ -764,4 +764,28 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
   assert.equal(timedOutProve.exitCode, EXIT_NOT_PROVED);
   assert.equal(timedOutProve.outcome, OUTCOME_NOT_PROVED);
   assert.ok(timedOutProve.receipt.notProvedReasons.some(r => /timed out.*--timeout/i.test(r)));
+
+  // 5. Bug-contrast SyntaxError with unrelated stdout banner matching --expect MUST stay Not proved (setup-error)!
+  const synRepo = initGitRepo(t, 'pdd-prove-syn-banner-');
+  writeFileSync(join(synRepo, 'app.mjs'), 'export const broken = true;\n');
+  commitAll(synRepo, 'base');
+  execFileSync('git', ['checkout', '-q', '-b', 'fix-syn'], { cwd: synRepo });
+  writeFileSync(join(synRepo, 'app.mjs'), 'export const broken = false;\n');
+  writeFileSync(
+    join(synRepo, 'app.test.mjs'),
+    "import { broken } from './app.mjs';\nif (broken) { console.log('running order total tests'); console.error('SyntaxError: invalid syntax'); process.exit(1); }\n",
+  );
+  const synBanner = runProve(
+    { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'order total', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(synBanner.exitCode, EXIT_NOT_PROVED, JSON.stringify(synBanner.receipt));
+  assert.equal(synBanner.receipt.reason, 'setup-error');
+
+  // When --expect explicitly targets the SyntaxError error line itself, bug-contrast proves cleanly.
+  const synTargeted = runProve(
+    { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'SyntaxError: invalid syntax', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(synTargeted.exitCode, EXIT_PROVED, JSON.stringify(synTargeted.receipt));
 });

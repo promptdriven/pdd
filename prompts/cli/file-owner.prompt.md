@@ -11,6 +11,7 @@ Own `src/file-owner.mjs`. Answer which `.prompt.md` owns a repository file using
   - `certain` is `false` only when a binding or header names a prompt not in Git-visible files, when `pdd-bindings.json` is unreadable/malformed/oversized (`> 64 KiB`), or when an un-bound file head cannot be read.
 - **Top-of-file (first 4 KiB) header parser (<a id="generated-from-header"></a>`Generated from` / `Prompt:` headers):**
   - Inspect complete lines inside the first `4,096` UTF-8 bytes (drop a cut final line when file size exceeds `4,096`; skip lines `> 1,100` chars).
+  - Skip Markdown fenced code blocks while tracking exact opening delimiter character (`` ` `` or `~`) and length (`>= 3`) so an outer four-backtick fence containing a nested three-backtick example never closes early and documentation examples never claim file ownership.
   - Recognize `Prompt: <path>.prompt.md` and legacy `Generated from <path>.prompt.md` inside comment forms (`//`, `#`, `--`, `;`, `/* ... */`, `*`, `<!-- ... -->`, `{/* ... */}`, `"""..."""`, `'''...'''`, plus optional legacy `(sha256: HEX)` or `sha256=HEX` suffix), as well as YAML frontmatter `prompt: <path>.prompt.md` inside a leading `---` block, using linear-time non-backtracking matching.
   - Drop non-canonical paths (absolute, backslashes, control chars, `.`, `..`, empty, or `.git` segments).
 - **Single-scan repository loader & 3 correctness invariants:**
