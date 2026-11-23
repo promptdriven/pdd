@@ -344,7 +344,7 @@ test('G1/G2 polyglot prove works offline on real Python (pytest/pyproject.toml) 
   writeFileSync(join(pyRepo, 'pkg', 'tax.py'), 'def calc(cents):\n    if cents < 0:\n        raise ValueError("NEGATIVE_CENTS")\n    return cents\n');
   writeFileSync(
     join(pyRepo, 'tests', 'test_tax.py'),
-    'import unittest\nfrom pkg.tax import calc\nclass T(unittest.TestCase):\n    def test_neg(self):\n        with self.assertRaisesRegex(ValueError, "NEGATIVE_CENTS"):\n            calc(-1)\n',
+    'import unittest\nfrom pkg.tax import calc\nclass T(unittest.TestCase):\n    def test_calc(self):\n        self.assertEqual(calc(100), 100)\n    def test_neg(self):\n        with self.assertRaisesRegex(ValueError, "NEGATIVE_CENTS"):\n            calc(-1)\n',
   );
 
   const pyContrast = runProve(

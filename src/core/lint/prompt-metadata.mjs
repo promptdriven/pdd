@@ -163,7 +163,7 @@ export function extractFrontmatterPorts(raw) {
       }
       continue;
     }
-    const itemMatch = /^[ \t]+-[ \t]+(.+)$/.exec(line);
+    const itemMatch = /^[ \t]*-[ \t]+(.+)$/.exec(line);
     if (itemMatch) {
       const val = itemMatch[1].replace(/#[^\r\n]*$/, '').trim().replace(/^['"`]|['"`]$/g, '').trim();
       if (val) found.push({ port: val, line: lineNo });

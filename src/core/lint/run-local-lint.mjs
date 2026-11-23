@@ -79,6 +79,10 @@ export function runLocalLint(
   try { repoFiles = (ports.gitFiles ?? gitFiles)(root); } catch { repoFiles = []; }
 
   const { promptPaths, tests } = resolveScopedTargets(repoFiles, words);
+  const resolvedDiffBase = typeof diff === 'string' && diff.trim()
+    ? diff.trim()
+    : (typeof baseRef === 'string' && baseRef.trim() ? baseRef.trim() : undefined);
+  const enforceBaseTrust = Boolean(diff !== undefined && diff !== false && !trustWorkingTree);
 
   const project = lintRepoProject({
     root,
@@ -88,6 +92,8 @@ export function runLocalLint(
     config,
     workspaceRoot,
     workspacePolicy,
+    enforceBaseTrust,
+    trustBaseRef: resolvedDiffBase,
   });
 
   const svgWarnings = [];
@@ -102,7 +108,6 @@ export function runLocalLint(
   }
 
   let diffResult = null;
-  const resolvedDiffBase = typeof diff === 'string' && diff.trim() ? diff.trim() : (typeof baseRef === 'string' && baseRef.trim() ? baseRef.trim() : undefined);
   if (diff !== undefined && diff !== false) {
     diffResult = (ports.runDiffSpotlight ?? runDiffSpotlight)({ cwd: root, baseRef: resolvedDiffBase });
   }

@@ -11,9 +11,10 @@ import { workspace } from '../../shared/workspace-policy.mjs';
 import { HEAD_BYTES, canonicalRepoPath, formatDiagnosticLine, formatTeachingDetail, readSafeHeadUtf8, readSafeUtf8, scrubChildEnv } from './diagnostics.mjs';
 import { collectNativeOnlyContractFindings } from './native-only-contract.mjs';
 import { collectNativeOnlyPortParityFindings } from './native-port-parity.mjs';
-import { evaluateCustomRulesOnFile, loadProjectLintConfig, matchesAnyCustomRule } from './project-config.mjs';
-import { extractDependencyLinkTargets, hasNativeOnlyFrontmatter, isNativeOnlyPrompt } from './prompt-metadata.mjs';
+import { evaluateCustomRulesOnFile, loadBaseTrustedLintOverrides, loadProjectLintConfig, matchesAnyCustomRule } from './project-config.mjs';
+import { extractDependencyLinkTargets, isNativeOnlyPrompt } from './prompt-metadata.mjs';
 import { collectPromptCodeBlockFindings, collectPromptDependencyFindings, collectPromptSizeFindings, collectPromptStructureFindings } from './prompt-rules.mjs';
+import { collectStoryUnboundCriteriaFindings } from './story-criteria-parity.mjs';
 
 const CODE_FILE_EXT = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift|c|cc|cpp|h|hpp|php|scala|lua|sh)$/i;
 const TEST_CODE_EXT = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift)$/i;
@@ -23,6 +24,8 @@ const NON_CODE_DIR = /^(?:user_stories|docs?|\.github)\//i;
 const PROMPT_SIZE_MIN_CODE_LINES = 25;
 // Corpus-proven Story hard-error rules (0/8 false alarms across all 8 clean corpus repos).
 const STORY_HARD_ERROR_RULES = new Set(['story-code-internals', 'story-missing-criteria']);
+const NON_SUPPRESSIBLE_CONFIG_CODES = new Set(['lint-config-invalid', 'lint-config-untrusted']);
+const isContractDocPath = p => /(?:^|\/)contracts\/.+\.md$/i.test(p) && !p.endsWith('.prompt.md');
 
 const isEligibleProductionCodeFile = p => canonicalRepoPath(p) && CODE_FILE_EXT.test(p) && !p.endsWith('.prompt.md') && !isTestOwnedPath(p) && !FIXTURE_DIR.test(p) && !EXAMPLE_DIR.test(p) && !NON_CODE_DIR.test(p);
 const isCustomRuleTestFile = p => canonicalRepoPath(p) && isTestOwnedPath(p) && TEST_CODE_EXT.test(p) && !/(?:^|\/)(?:fixtures|helpers)\//i.test(p);
@@ -105,8 +108,8 @@ export function runConfiguredLintCommands({ root, commands = [], timeoutMs = 120
   return { ok: errors.length === 0, results, errors };
 }
 
-export function lintRepoProject({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy } = {}) {
-  const empty = { ok: true, configured: false, warnings: [], errors: [], findings: [], commands: [] };
+export function lintRepoProject({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy, trustBaseRef, enforceBaseTrust = false } = {}) {
+  const empty = { ok: true, configured: false, warnings: [], errors: [], findings: [], commands: [], untrustedConfigOverrides: [] };
   if (!root || typeof root !== 'string') return empty;
   let realRoot, policy;
   try {
@@ -118,6 +121,37 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
   try { rawFiles = Array.isArray(files) ? files : gitFiles(realRoot); } catch { return empty; }
 
   const lintConfig = loadProjectLintConfig(config !== undefined ? config : realRoot);
+  let effectiveDisabled = lintConfig.disabledRules;
+  let effectiveSeverities = lintConfig.ruleSeverities;
+  const untrustedConfigOverrides = [];
+  if (config === undefined && (enforceBaseTrust || trustBaseRef !== undefined)) {
+    const baseTrusted = loadBaseTrustedLintOverrides(realRoot, { baseRef: trustBaseRef });
+    effectiveDisabled = new Set(baseTrusted.disabledRules);
+    effectiveSeverities = new Map(baseTrusted.ruleSeverities);
+    for (const id of lintConfig.disabledRules) {
+      if (!baseTrusted.disabledRules.has(id)) {
+        untrustedConfigOverrides.push(`${id} (disable)`);
+      }
+    }
+    for (const [id, wtSev] of lintConfig.ruleSeverities.entries()) {
+      const baseSev = baseTrusted.ruleSeverities.get(id);
+      if (wtSev === 'error') {
+        effectiveSeverities.set(id, 'error');
+        effectiveDisabled.delete(id);
+      } else if (wtSev === 'off') {
+        if (baseSev !== 'off' && !baseTrusted.disabledRules.has(id)) {
+          if (!untrustedConfigOverrides.includes(`${id} (disable)`)) untrustedConfigOverrides.push(`${id}: off`);
+        }
+      } else if (wtSev === 'warn') {
+        if (baseSev === 'warn' || baseSev === 'off') {
+          effectiveSeverities.set(id, 'warn');
+          effectiveDisabled.delete(id);
+        } else {
+          untrustedConfigOverrides.push(`${id}: warn`);
+        }
+      }
+    }
+  }
   const allowedFiles = [...new Set(rawFiles)].filter(p => canonicalRepoPath(p) && !isSecretPath(p) && workspace.allows(policy, p)).sort();
   const allowedSet = new Set(allowedFiles);
   const selectedInputs = [
@@ -135,6 +169,21 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
   const getFull = p => (fullCache.has(p) ? fullCache.get(p) : (fullCache.set(p, readSafeUtf8(realRoot, p)), fullCache.get(p)));
 
   const rawFindings = [...lintConfig.configErrors.map(err => ({ ...err, defaultSeverity: 'error' }))];
+  if (untrustedConfigOverrides.length > 0) {
+    rawFindings.push({
+      filePath: 'pdd.json',
+      line: 1,
+      order: 0,
+      code: 'lint-config-untrusted',
+      category: 'lint config',
+      defaultSeverity: 'warn',
+      detail: formatTeachingDetail({
+        invariant: `Working-tree/branch lint overrides (${untrustedConfigOverrides.join(', ')}) are not yet trusted on merge base and were ignored`,
+        fix: 'Fix the underlying lint errors instead of disabling or weakening lint rules in pdd.json or rules/lint/*.json',
+        rerun: 'pdd lint --diff',
+      }),
+    });
+  }
   const ownedByPrompt = new Map(), ownersByCode = new Map(), heads = [];
   const rawBindings = scopedSet.has('pdd-bindings.json') ? readSafeUtf8(realRoot, 'pdd-bindings.json') : null;
 
@@ -195,33 +244,40 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
       ...collectPromptStructureFindings(content, { path: promptPath, hasOwnedCode: ownedPaths.length > 0 }),
       ...collectPromptSizeFindings(content, ownedCode, { path: promptPath, minCodeLines: PROMPT_SIZE_MIN_CODE_LINES }),
     );
-    if (isNativeOnlyPrompt(content)) rawFindings.push(...collectNativeOnlyContractFindings(content, { path: promptPath }));
-    if (hasNativeOnlyFrontmatter(content)) {
+    if (isNativeOnlyPrompt(content)) {
+      rawFindings.push(...collectNativeOnlyContractFindings(content, { path: promptPath }));
       const direct = extractDependencyLinkTargets(content, promptPath).filter(p => scopedSet.has(p));
       const directCheckable = direct.filter(t => t.endsWith('.prompt.md') && typeof getPrompt(t) === 'string' && !isNativeOnlyPrompt(getPrompt(t)));
-      const directContracts = direct.filter(t => !t.endsWith('.prompt.md') && t.endsWith('.md'));
-      if (directCheckable.length) {
-        const visited = new Set([promptPath]);
-        const queue = [...directCheckable.map(p => ({ path: p, isPrompt: true })), ...directContracts.map(p => ({ path: p, isPrompt: false }))];
-        const depSources = [];
-        while (queue.length) {
-          const cur = queue.shift();
-          if (visited.has(cur.path)) continue;
-          visited.add(cur.path);
-          const depText = cur.isPrompt ? getPrompt(cur.path) : readSafeUtf8(realRoot, cur.path);
-          if (typeof depText !== 'string' || (cur.isPrompt && isNativeOnlyPrompt(depText))) continue;
-          depSources.push({ path: cur.path, text: depText, isPrompt: cur.isPrompt });
-          for (const next of extractDependencyLinkTargets(depText, cur.path)) {
-            if (!visited.has(next) && scopedSet.has(next) && next.endsWith('.md')) queue.push({ path: next, isPrompt: next.endsWith('.prompt.md') });
+      const directNativePeers = direct.filter(t => t.endsWith('.prompt.md') && typeof getPrompt(t) === 'string' && isNativeOnlyPrompt(getPrompt(t)));
+      const directContracts = direct.filter(isContractDocPath);
+      const visited = new Set([promptPath]);
+      const queue = [...directCheckable.map(p => ({ path: p, isPrompt: true })), ...directContracts.map(p => ({ path: p, isPrompt: false }))];
+      const depSources = [];
+      while (queue.length) {
+        const cur = queue.shift();
+        if (visited.has(cur.path)) continue;
+        visited.add(cur.path);
+        const depText = cur.isPrompt ? getPrompt(cur.path) : readSafeUtf8(realRoot, cur.path);
+        if (typeof depText !== 'string' || (cur.isPrompt && isNativeOnlyPrompt(depText))) continue;
+        depSources.push({ path: cur.path, text: depText, isPrompt: cur.isPrompt });
+        for (const next of extractDependencyLinkTargets(depText, cur.path)) {
+          if (!visited.has(next) && scopedSet.has(next) && (next.endsWith('.prompt.md') || isContractDocPath(next))) {
+            queue.push({ path: next, isPrompt: next.endsWith('.prompt.md') });
           }
         }
-        rawFindings.push(...collectNativeOnlyPortParityFindings(content, depSources, { path: promptPath, dependencyPaths: directCheckable }));
       }
+      const explicitFrontmatterOnly = directCheckable.length === 0 && (directNativePeers.length > 0 || directContracts.length > 0);
+      rawFindings.push(...collectNativeOnlyPortParityFindings(content, depSources, {
+        path: promptPath,
+        dependencyPaths: directCheckable,
+        explicitFrontmatterOnly,
+      }));
     }
     if (lintConfig.customRules.length) rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: promptPath, kind: 'prompt', rawText: content }));
   }
 
-  for (const storyPath of resolveTargetStories({ realRoot, scopedFiles, scopedSet, promptPaths, tests, targetPrompts })) {
+  const targetStories = resolveTargetStories({ realRoot, scopedFiles, scopedSet, promptPaths, tests, targetPrompts });
+  for (const storyPath of targetStories) {
     const content = readSafeUtf8(realRoot, storyPath);
     if (typeof content !== 'string') continue;
     for (const problem of lintStory(content, { path: storyPath, criteriaHygiene: true }).problems) {
@@ -233,6 +289,9 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
       });
     }
     if (lintConfig.customRules.length) rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: storyPath, kind: 'story', rawText: content }));
+  }
+  if (targetStories.length) {
+    rawFindings.push(...collectStoryUnboundCriteriaFindings({ realRoot, storyPaths: targetStories, scopedFiles, readFile: getFull }));
   }
 
   const promptFilterSet = Array.isArray(promptPaths) ? new Set(targetPrompts) : null;
@@ -267,8 +326,10 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
   rawFindings.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line || (a.order ?? 0) - (b.order ?? 0) || a.code.localeCompare(b.code));
   const warnings = [], errors = [], findings = [], seen = new Set();
   for (const item of rawFindings) {
-    if (item.code !== 'lint-config-invalid' && lintConfig.disabledRules.has(item.code)) continue;
-    const severity = item.code === 'lint-config-invalid' ? 'error' : (lintConfig.ruleSeverities.get(item.code) ?? item.defaultSeverity ?? 'warn');
+    if (!NON_SUPPRESSIBLE_CONFIG_CODES.has(item.code) && effectiveDisabled.has(item.code)) continue;
+    const severity = NON_SUPPRESSIBLE_CONFIG_CODES.has(item.code)
+      ? (item.defaultSeverity ?? 'error')
+      : (effectiveSeverities.get(item.code) ?? item.defaultSeverity ?? 'warn');
     if (severity === 'off') continue;
     const formatted = formatDiagnosticLine(item, severity);
     if (seen.has(formatted)) continue;
@@ -276,5 +337,5 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
     findings.push({ path: item.filePath, line: item.line, code: item.code, category: item.category, severity, message: item.detail, formatted });
     if (severity === 'error') errors.push(formatted); else warnings.push(formatted);
   }
-  return { ok: errors.length === 0, configured: lintConfig.configured, warnings, errors, findings, commands: lintConfig.commands };
+  return { ok: errors.length === 0, configured: lintConfig.configured, warnings, errors, findings, commands: lintConfig.commands, untrustedConfigOverrides };
 }

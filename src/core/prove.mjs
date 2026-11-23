@@ -8,7 +8,7 @@ import { causeText } from '../shared/safe-read.mjs';
 import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBaseRef, scrubChildEnv } from './lint/diagnostics.mjs';
 import { lintRepoProject } from './lint/project-lint.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
-import { runDiffSpotlight } from './lint/test-inventory.mjs';
+import { detectShadowBinaries, runDiffSpotlight } from './lint/test-inventory.mjs';
 import { detectHostCapabilities, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths } from './verify-paths.mjs';
 
 export const OUTCOME_PROVED = 'Proved';
@@ -168,6 +168,54 @@ function rawVerifyFingerprint(rawText) {
   } catch { return '__INVALID__'; }
 }
 
+const NPM_BUILTIN_SUBCMDS = new Set([
+  'install', 'i', 'ci', 'exec', 'dlx', 'add', 'remove', 'rm', 'update', 'up', 'publish', 'pack',
+  'version', 'audit', 'list', 'ls', 'outdated', 'config', 'cache', 'whoami', 'login', 'logout',
+  'info', 'view', 'init', 'create', 'link', 'unlink', 'prune', 'dedupe', 'why', 'explain', 'help', 'run',
+]);
+
+function extractReferencedNpmScripts(commands = []) {
+  const names = new Set(['test', 'pretest', 'posttest']);
+  for (const cmd of commands) {
+    if (typeof cmd !== 'string' || !cmd.trim()) continue;
+    for (const m of cmd.matchAll(/(?:^|[;&|]\s*)(?:npm|pnpm|yarn)\s+(?:run\s+)?([A-Za-z0-9_.:-]+)/g)) {
+      const token = m[1];
+      if (!token || token.startsWith('-') || NPM_BUILTIN_SUBCMDS.has(token)) continue;
+      const script = (token === 't' || token === 'tst') ? 'test' : token;
+      names.add(script);
+      names.add(`pre${script}`);
+      names.add(`post${script}`);
+    }
+  }
+  return [...names];
+}
+
+function detectUntrustedPackageTestScriptEdits(root, baseSha, commands) {
+  const baseRes = gitExec(root, ['show', `${baseSha}:package.json`]);
+  const baseRaw = baseRes.status === 0 && typeof baseRes.stdout === 'string' ? baseRes.stdout : null;
+  const wtRaw = readSafeUtf8(root, 'package.json');
+  if (baseRaw === null && wtRaw === null) return [];
+  if (baseRaw === wtRaw) return [];
+
+  let baseScripts = null, wtScripts = null;
+  let baseInvalid = false, wtInvalid = false;
+  if (baseRaw !== null) {
+    try { baseScripts = JSON.parse(baseRaw)?.scripts ?? {}; } catch { baseInvalid = true; }
+  }
+  if (wtRaw !== null) {
+    try { wtScripts = JSON.parse(wtRaw)?.scripts ?? {}; } catch { wtInvalid = true; }
+  }
+  if (baseInvalid || wtInvalid) return ['package.json'];
+
+  const changed = [];
+  for (const name of extractReferencedNpmScripts(commands)) {
+    const bVal = typeof baseScripts?.[name] === 'string' ? baseScripts[name] : undefined;
+    const wVal = typeof wtScripts?.[name] === 'string' ? wtScripts[name] : undefined;
+    if (bVal !== wVal) changed.push(`scripts.${name}`);
+  }
+  return changed;
+}
+
 function runBugContrastProve({ root, base, test, expect, overlay, setup, timeoutMinutes, json, env }, ports = {}) {
   const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr;
   if (typeof test !== 'string' || !test.trim() || typeof expect !== 'string' || !expect.trim()) {
@@ -289,7 +337,7 @@ export function runProve(
   const baseSha = mb?.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : null;
   const timeoutMs = timeoutMinutes * 60_000;
 
-  const lint = lintRepoProject({ root });
+  const lint = lintRepoProject({ root, enforceBaseTrust: true, trustBaseRef: baseSha || baseRef || undefined });
   const diff = runDiffSpotlight({ cwd: root, baseRef: baseSha || baseRef || undefined });
   const notProvedReasons = [];
 
@@ -318,28 +366,51 @@ export function runProve(
   } else if (baseVerify.configured && worktreeFp !== baseFp) {
     notProvedReasons.push('Working-tree/branch edits to "verify" in pdd.json are not yet trusted on merge base; executed merge-base recipes only.');
   }
-
-  const testCommand = baseVerify.test || detectRepoTestCommand(root);
-  let testResult = null;
-  if (testCommand) {
-    const r = execShellCommand(testCommand, { cwd: root, env, timeoutMs }, ports);
-    testResult = { command: testCommand, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs, setupError: r.setupError, summary: r.summary };
-  } else {
-    notProvedReasons.push('No verify.test command configured in merge-base pdd.json and no standard test runner detected.');
+  if (lint.untrustedConfigOverrides?.length > 0) {
+    notProvedReasons.push(`Working-tree/branch lint overrides (${lint.untrustedConfigOverrides.join(', ')}) are not yet trusted on merge base; human review required.`);
   }
 
-  const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, diff.touchedFiles);
-  const capState = detectHostCapabilities(matched.flatMap(r => r.needs), { env, capabilities, probe: ports.probeCapability, isTTY: ports.isTTY });
-  const pathResults = [];
-  for (const recipe of matched) {
-    const { satisfied, missing } = matchCapabilities(recipe.needs, capState);
-    if (!satisfied) {
-      pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', missingCapabilities: missing, ok: false });
-      notProvedReasons.push(`Recipe "${recipe.id}" (${recipe.name}) skipped: missing required capability [${missing.join(', ')}].`);
-      continue;
+  const testCommand = baseVerify.test || detectRepoTestCommand(root);
+  const changedPkgScripts = detectUntrustedPackageTestScriptEdits(root, baseSha, [testCommand, ...baseVerify.paths.map(r => r.run)]);
+  if (changedPkgScripts.length > 0) {
+    notProvedReasons.push(`Working-tree/branch edits to package.json test scripts (${changedPkgScripts.join(', ')}) are not yet trusted on merge base; human review required.`);
+  }
+
+  const shadowBins = detectShadowBinaries(root, { touchedFiles: diff.touchedFiles, baseSha });
+  const extraShadowErrors = [];
+  for (const hit of shadowBins) {
+    if (!diff.errors.some(e => e.code === 'diff-shadow-bin' && e.path === hit.path)) {
+      const detail = formatTeachingDetail({
+        invariant: `Shadow binary "${hit.path}" detected (${hit.reason})`,
+        fix: `Remove "${hit.path}" so repository commands execute the authentic host toolchain`,
+        rerun: 'pdd prove',
+      });
+      extraShadowErrors.push(`Error: diff gate: ${hit.path}:1 [diff-shadow-bin] ${detail}`);
     }
-    const r = execShellCommand(recipe.run, { cwd: root, env, timeoutMs }, ports);
-    pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
+  }
+
+  let testResult = null;
+  const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, diff.touchedFiles);
+  const pathResults = [];
+  if (shadowBins.length === 0) {
+    if (testCommand) {
+      const r = execShellCommand(testCommand, { cwd: root, env, timeoutMs }, ports);
+      testResult = { command: testCommand, ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs, setupError: r.setupError, summary: r.summary };
+    } else {
+      notProvedReasons.push('No verify.test command configured in merge-base pdd.json and no standard test runner detected.');
+    }
+
+    const capState = detectHostCapabilities(matched.flatMap(r => r.needs), { env, capabilities, probe: ports.probeCapability, isTTY: ports.isTTY });
+    for (const recipe of matched) {
+      const { satisfied, missing } = matchCapabilities(recipe.needs, capState);
+      if (!satisfied) {
+        pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', missingCapabilities: missing, ok: false });
+        notProvedReasons.push(`Recipe "${recipe.id}" (${recipe.name}) skipped: missing required capability [${missing.join(', ')}].`);
+        continue;
+      }
+      const r = execShellCommand(recipe.run, { cwd: root, env, timeoutMs }, ports);
+      pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
+    }
   }
   if (unmappedSurfaces.length > 0) notProvedReasons.push(`No verify.paths recipe covers changed production surface(s): ${unmappedSurfaces.join(', ')}.`);
   const multiPartGuard = inspectMultiPartIntegrationGuard(root, baseVerify);
@@ -347,10 +418,45 @@ export function runProve(
     notProvedReasons.push(multiPartGuard.reason);
   }
 
+  const touchedSet = new Set(diff.touchedFiles);
+  for (const finding of lint.findings) {
+    if (finding.code === 'product-boundary-unwired' || finding.code === 'product-boundaries-unparseable') {
+      notProvedReasons.push(`${finding.path}:${finding.line} [${finding.code}] ${finding.message}`);
+    } else if (finding.code === 'story-unbound-criteria') {
+      const slug = finding.path.split('/').at(-1).replace(/\.md$/i, '');
+      const touched = touchedSet.has(finding.path)
+        || diff.touchedFiles.some(tf => /(?:^|\/)(?:tests?|__tests__)\/.*\.json$/i.test(tf) && (tf.endsWith(`/${slug}.json`) || tf.includes(`/${slug}.`)));
+      if (touched) notProvedReasons.push(`${finding.path}:${finding.line} [story-unbound-criteria] ${finding.message}`);
+    }
+  }
+  if (diff.newSkips.length > 0) {
+    notProvedReasons.push(`[diff-new-skips] Diff introduces ${diff.newSkips.length} new skipped test(s) (${diff.newSkips.slice(0, 6).map(s => `${s.path}:${s.line} ${s.name}`).join(', ')}); human review required.`);
+  }
+  if (diff.assertionDrops.length > 0) {
+    notProvedReasons.push(`[diff-assertion-drops] Diff reduces assertion count in ${diff.assertionDrops.length} kept test(s) (${diff.assertionDrops.slice(0, 6).map(a => `${a.path}::${a.name} ${a.before}->${a.after}`).join(', ')}); human review required.`);
+  }
+  if (diff.removedTests.length > 0) {
+    notProvedReasons.push(`[diff-removed-tests] Diff removes ${diff.removedTests.length} test(s) (${diff.removedTests.slice(0, 6).map(r => `${r.path}::${r.name}`).join(', ')}); human review required.`);
+  }
+  if (diff.tableDrops.length > 0) {
+    notProvedReasons.push(`[diff-table-drops] Diff reduces table-driven test case count in ${diff.tableDrops.map(t => `${t.path} (${t.before}->${t.after})`).join(', ')}; human review required.`);
+  }
+  if (diff.mockOnlyBoundaryTests?.length > 0) {
+    for (const entry of diff.mockOnlyBoundaryTests) {
+      const detail = formatTeachingDetail({
+        invariant: `Changed I/O/subprocess boundary file(s) (${entry.prodFiles.join(', ')}) are only covered by mocked tests (${entry.testFiles.join(', ')}) with zero real unmocked boundary calls`,
+        fix: `Add a real non-mocked integration test exercising ${entry.prodFiles.join(', ')} against an actual local server or subprocess`,
+        rerun: 'pdd prove',
+      });
+      notProvedReasons.push(`${entry.testFiles[0]}:1 [diff-mock-only-boundary] ${detail}`);
+    }
+  }
+
   const failedErrors = [
     ...baseVerify.errors.map(e => formatTeachingDetail({ invariant: e, fix: 'Fix the invalid "verify" block in pdd.json', rerun: 'pdd prove' })),
     ...lint.errors,
     ...diff.errors.filter(e => e.code !== 'diff-base-unavailable').map(e => e.formatted),
+    ...extraShadowErrors,
     ...(testResult && !testResult.ok ? [`Test suite failed (\`${testResult.command}\`, exit ${testResult.exitCode}): ${testResult.summary}`] : []),
     ...pathResults.filter(p => p.status === 'failed').map(p => `Verify path "${p.id}" failed (\`${p.run}\`, exit ${p.exitCode}): ${p.summary}`),
   ];

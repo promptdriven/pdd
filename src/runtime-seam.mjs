@@ -167,7 +167,7 @@ const initialFstatSync = fs.fstatSync;
 const TRY_LAUNCHER_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
 
 export const NO_TESTS =
-  'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.';
+  'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See skills/pdd/references/stories.md.';
 export const STATE_EXIT_CODES = Object.freeze({
   passed: 0,
   failed: 1,
@@ -893,7 +893,7 @@ function rawShortStoryComplexityWarning({ path, storyPath, doc }, rawLines) {
   if (lines > STORY_LINE_LIMIT) reasons.push(`${lines} lines (limit: ${STORY_LINE_LIMIT})`);
   if (!reasons.length) return null;
   const storyLabel = storyPath ?? (typeof doc.story_path === 'string' && doc.story_path.trim() ? doc.story_path.trim() : null) ?? path;
-  return `Warning: oversized Story: ${storyLabel} (${path}) has ${reasons.join(' and ')}. Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests (RUNBOOK.md §17, §18).`;
+  return `Warning: oversized Story: ${storyLabel} (${path}) has ${reasons.join(' and ')}. Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests (see skills/pdd/references/stories.md and skills/pdd/references/verification.md).`;
 }
 
 function enrichFoundWithCompiledScenarios(found, readText) {

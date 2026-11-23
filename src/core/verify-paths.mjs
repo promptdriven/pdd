@@ -1,12 +1,12 @@
 // Universal G2 Feature Map (`verify.test`, `verify.paths[]`) schema parser, glob matcher, and open capability prober.
 import { spawnSync } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isTestOwnedPath } from '../file-owner.mjs';
 import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8 } from './lint/diagnostics.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
-import { SHARED_SURFACE_COLS, csv, rowsWithMeta } from './product/markdown-utils.mjs';
+import { SHARED_SURFACE_COLS, clean, csv, findSectionLines, isSeparatorRow, tableCells } from './product/markdown-utils.mjs';
 
 const MAX_VERIFY_PATHS = 100;
 const PATH_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
@@ -200,34 +200,131 @@ export function matchCapabilities(needs = [], capabilityState) {
 const INTEGRATION_SCOPE_RE = /^(?:integration|cross[-_]?part|journey|e2e|end[-_]?to[-_]?end)$/i;
 const INTEGRATION_LABEL_RE = /\b(?:integration|cross[-_\s]?part|journey|end[-_\s]?to[-_\s]?end|e2e)\b/i;
 const IGNORED_PART_NAMES = new Set(['', '-', '*', 'all']);
+const PLAN_PART_COLS = new Set(['part', 'service', 'app', 'component', 'module']);
+const PLAN_FOLDER_COLS = new Set(['folder', 'path', 'dir', 'directory', 'root']);
+const PLAN_FROM_COLS = new Set(['from', 'consumer']);
+const PLAN_TO_COLS = new Set(['to', 'provider']);
 const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function parseSectionTableRows(text, sectionName) {
+  const sec = findSectionLines(text, sectionName, { caseInsensitive: true });
+  if (!sec) return { heading: null, rows: [], section: null };
+  const tableLines = sec.lines
+    .filter(item => /^\s*\|/.test(item.text))
+    .map(item => tableCells(item.text));
+  const heading = tableLines.shift() ?? null;
+  const rows = heading
+    ? tableLines.filter(cells => !isSeparatorRow(cells))
+    : [];
+  return { heading, rows, section: sec };
+}
 
 function extractProductPartsFromPlan(planText, mapText = '') {
   const partSet = new Set();
   const folderByPart = new Map();
   const addPart = (raw, folder = '') => {
-    const name = String(raw ?? '').trim();
+    const name = clean(raw);
     if (!name || IGNORED_PART_NAMES.has(name.toLowerCase())) return;
     partSet.add(name);
-    const cleanFolder = String(folder ?? '').trim().replace(/^\.\//, '').replace(/\/+$/, '');
+    const cleanFolder = clean(folder).replace(/^\.\//, '').replace(/\/+$/, '');
     if (cleanFolder && !folderByPart.has(name)) folderByPart.set(name, cleanFolder);
   };
 
-  for (const [text, file] of [[mapText, 'product/map.md'], [planText, 'product/plan.md']]) {
+  for (const text of [mapText, planText]) {
     if (!text) continue;
-    const partsMeta = rowsWithMeta(text, 'Parts', file, { required: false });
-    for (const row of partsMeta.rows) addPart(row.values.Part, row.values.Folder);
+    const partsTable = parseSectionTableRows(text, 'Parts');
+    if (partsTable.heading) {
+      const pIdx = partsTable.heading.findIndex(c => PLAN_PART_COLS.has(c.toLowerCase()));
+      const fIdx = partsTable.heading.findIndex(c => PLAN_FOLDER_COLS.has(c.toLowerCase()));
+      if (pIdx >= 0) {
+        for (const cells of partsTable.rows) addPart(cells[pIdx], fIdx >= 0 ? cells[fIdx] : '');
+      }
+    }
+    if (partsTable.section) {
+      for (const item of partsTable.section.lines) {
+        const bm = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(.+)$/.exec(item.text);
+        if (!bm) continue;
+        const body = bm[1].trim();
+        const lead = /^(?:\*\*`?([a-zA-Z0-9][a-zA-Z0-9_-]*)`?\*\*|`([a-zA-Z0-9][a-zA-Z0-9_-]*)`)/.exec(body);
+        if (!lead) continue;
+        const partName = lead[1] ?? lead[2];
+        const rest = body.slice(lead[0].length);
+        const folderMatch = /^\s*\(\s*`?([^)`\r\n]+?)`?\s*\)/.exec(rest);
+        addPart(partName, folderMatch ? folderMatch[1] : '');
+      }
+    }
   }
-  const runsMeta = rowsWithMeta(planText, 'Runs', 'product/plan.md', { required: false });
-  const sharedCol = (runsMeta.heading ?? []).find(col => SHARED_SURFACE_COLS.has(col.toLowerCase()));
-  for (const row of runsMeta.rows) {
-    for (const token of csv(row.values.Part)) addPart(token);
-    if (sharedCol) for (const token of csv(row.values[sharedCol])) addPart(token);
+
+  const runsTable = parseSectionTableRows(planText, 'Runs');
+  if (runsTable.heading) {
+    const pIdx = runsTable.heading.findIndex(c => PLAN_PART_COLS.has(c.toLowerCase()));
+    const sharedIdx = runsTable.heading.findIndex(c => SHARED_SURFACE_COLS.has(c.toLowerCase()));
+    for (const cells of runsTable.rows) {
+      if (pIdx >= 0) for (const token of csv(cells[pIdx])) addPart(token);
+      if (sharedIdx >= 0) for (const token of csv(cells[sharedIdx])) addPart(token);
+    }
   }
-  const promptsMeta = rowsWithMeta(planText, 'Prompts', 'product/plan.md', { required: false });
-  for (const row of promptsMeta.rows) addPart(row.values.Part);
+
+  const promptsTable = parseSectionTableRows(planText, 'Prompts');
+  if (promptsTable.heading) {
+    const pIdx = promptsTable.heading.findIndex(c => PLAN_PART_COLS.has(c.toLowerCase()));
+    if (pIdx >= 0) {
+      for (const cells of promptsTable.rows) addPart(cells[pIdx]);
+    }
+  }
+
+  const boundariesTable = parseSectionTableRows(planText, 'Boundaries');
+  if (boundariesTable.heading) {
+    const fromIdx = boundariesTable.heading.findIndex(c => PLAN_FROM_COLS.has(c.toLowerCase()));
+    const toIdx = boundariesTable.heading.findIndex(c => PLAN_TO_COLS.has(c.toLowerCase()));
+    for (const cells of boundariesTable.rows) {
+      if (fromIdx >= 0) for (const token of csv(cells[fromIdx])) addPart(token);
+      if (toIdx >= 0) for (const token of csv(cells[toIdx])) addPart(token);
+    }
+  }
 
   return { parts: [...partSet].sort(), folderByPart };
+}
+
+function hasContractMarkdownFiles(realRoot) {
+  const contractsDir = join(realRoot, 'contracts');
+  try {
+    const st = lstatSync(contractsDir);
+    if (st.isSymbolicLink() || !st.isDirectory()) return false;
+    const walk = (dir, depth) => {
+      if (depth > 3) return false;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isSymbolicLink() || entry.name.startsWith('.')) continue;
+        if (entry.isFile() && /\.md$/i.test(entry.name)) return true;
+        if (entry.isDirectory() && walk(join(dir, entry.name), depth + 1)) return true;
+      }
+      return false;
+    };
+    return walk(contractsDir, 0);
+  } catch {
+    return false;
+  }
+}
+
+function listMultiPartCandidateSubdirs(realRoot) {
+  const found = [];
+  for (const base of ['prompts', 'src', 'services']) {
+    const abs = join(realRoot, base);
+    try {
+      const st = lstatSync(abs);
+      if (st.isSymbolicLink() || !st.isDirectory()) continue;
+      const subs = [];
+      for (const entry of readdirSync(abs, { withFileTypes: true })) {
+        if (entry.isSymbolicLink() || !entry.isDirectory() || entry.name.startsWith('.') || entry.name === '__pycache__') continue;
+        subs.push(`${base}/${entry.name}`);
+      }
+      if (subs.length >= 2) return subs.sort();
+      found.push(...subs);
+    } catch {
+      // absent
+    }
+  }
+  return [];
 }
 
 function recipeCoversCrossPartIntegration(recipe, parts, folderByPart) {
@@ -254,17 +351,37 @@ function recipeCoversCrossPartIntegration(recipe, parts, folderByPart) {
 /**
  * #3575 Multi-part integration guard: when product/plan.md defines >=2 distinct product parts
  * and pdd.json verify.paths declares no unmocked cross-part integration recipe, emit a 4-part Not proved reason.
+ * Also fails closed when product/plan.md + (product/map.md or contracts/*.md) exist alongside >=2 subdirs
+ * under prompts/, src/, or services/ yet fewer than 2 parts could be parsed.
  */
 export function inspectMultiPartIntegrationGuard(root, verifyConfig) {
-  const clean = { applicable: false, parts: [], covered: true, reason: null };
-  if (!root || typeof root !== 'string') return clean;
+  const cleanRes = { applicable: false, parts: [], covered: true, reason: null };
+  if (!root || typeof root !== 'string') return cleanRes;
   let realRoot;
-  try { realRoot = realpathSync(root); } catch { return clean; }
+  try { realRoot = realpathSync(root); } catch { return cleanRes; }
   const planText = readSafeUtf8(realRoot, 'product/plan.md');
-  if (!planText || !planText.trim()) return clean;
+  if (!planText || !planText.trim()) return cleanRes;
   const mapText = readSafeUtf8(realRoot, 'product/map.md') ?? '';
   const { parts, folderByPart } = extractProductPartsFromPlan(planText, mapText);
-  if (parts.length < 2) return { applicable: false, parts, covered: true, reason: null };
+  if (parts.length < 2) {
+    const hasMap = Boolean(mapText.trim());
+    const hasContracts = hasContractMarkdownFiles(realRoot);
+    const subdirs = (hasMap || hasContracts) ? listMultiPartCandidateSubdirs(realRoot) : [];
+    if ((hasMap || hasContracts) && subdirs.length >= 2) {
+      const detail = formatTeachingDetail({
+        invariant: `product/plan.md exists alongside ${hasMap ? 'product/map.md' : 'contracts/*.md'} and >=2 subdirectories (${subdirs.slice(0, 4).join(', ')}), yet only ${parts.length} product part(s) could be parsed`,
+        fix: 'Format product/map.md "## Parts" as a "| Part | Folder | What it is |" table (or bullet list) and product/plan.md "## Runs" with a "Part" column so multi-part integration checks can verify wiring',
+        rerun: 'pdd prove',
+      });
+      return {
+        applicable: true,
+        parts,
+        covered: false,
+        reason: `product/plan.md:1 [multi-part-plan-unparseable] ${detail}`,
+      };
+    }
+    return { applicable: false, parts, covered: true, reason: null };
+  }
   const recipes = Array.isArray(verifyConfig?.paths) ? verifyConfig.paths : [];
   const covered = recipes.some(recipe => recipeCoversCrossPartIntegration(recipe, parts, folderByPart));
   if (covered) return { applicable: true, parts, covered: true, reason: null };

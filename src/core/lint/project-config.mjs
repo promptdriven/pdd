@@ -332,6 +332,59 @@ export function loadBaseTrustedLintCommands(root, { baseRef } = {}) {
   return { baseSha, source: `${baseSha}:pdd.json`, commands: baseCommands, skippedUntrusted };
 }
 
+export function loadBaseTrustedLintOverrides(root, { baseRef } = {}) {
+  const empty = { baseAvailable: false, baseSha: null, disabledRules: new Set(), ruleSeverities: new Map() };
+  if (!root || typeof root !== 'string') return empty;
+  let realRoot;
+  try { realRoot = realpathSync(root); } catch { return empty; }
+  const ref = baseRef || resolveDefaultBaseRef(realRoot);
+  if (!ref) return empty;
+  const resolved = spawnSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const commit = resolved.status === 0 && resolved.stdout.trim() ? resolved.stdout.trim() : null;
+  if (!commit) return empty;
+  const mb = spawnSync('git', ['merge-base', 'HEAD', commit], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  if (mb.status !== 0 || !mb.stdout.trim()) return empty;
+  const baseSha = mb.stdout.trim();
+
+  const target = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), configErrors: [] };
+  const lsRules = spawnSync('git', ['ls-tree', '--name-only', baseSha, '--', 'rules/lint/'], {
+    cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  if (lsRules.status === 0 && typeof lsRules.stdout === 'string') {
+    const ruleFiles = lsRules.stdout.split(/\r?\n/).map(s => s.trim()).filter(s => s.endsWith('.json')).sort();
+    for (const relPath of ruleFiles) {
+      const showRule = spawnSync('git', ['show', `${baseSha}:${relPath}`], {
+        cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      if (showRule.status !== 0 || typeof showRule.stdout !== 'string') continue;
+      try {
+        const parsed = JSON.parse(showRule.stdout);
+        const section = Array.isArray(parsed)
+          ? { custom_rules: parsed }
+          : (parsed && typeof parsed === 'object' && typeof parsed.id === 'string'
+            && !Object.hasOwn(parsed, 'disable') && !Object.hasOwn(parsed, 'rules') && !Object.hasOwn(parsed, 'custom_rules')
+            ? { custom_rules: [parsed] }
+            : parsed);
+        mergeLintConfigSection(section, { sourcePath: `${baseSha}:${relPath}`, allowCommands: false, ...target });
+      } catch {}
+    }
+  }
+
+  const showPkg = spawnSync('git', ['show', `${baseSha}:pdd.json`], {
+    cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  if (showPkg.status === 0 && typeof showPkg.stdout === 'string') {
+    try {
+      const parsed = JSON.parse(showPkg.stdout);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.lint && typeof parsed.lint === 'object' && !Array.isArray(parsed.lint)) {
+        mergeLintConfigSection(parsed.lint, { sourcePath: `${baseSha}:pdd.json`, allowCommands: true, ...target });
+      }
+    } catch {}
+  }
+
+  return { baseAvailable: true, baseSha, disabledRules: target.disabledRules, ruleSeverities: target.ruleSeverities };
+}
+
 export function matchesAnyCustomRule(customRules, kind, filePath) {
   for (const rule of customRules) {
     if (rule.severity === 'off') continue;
