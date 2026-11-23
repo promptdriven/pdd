@@ -14,8 +14,7 @@ Do not self-spawn a Fresh Verifier subagent during build or repair: Autopilot ru
 - Use `small-change` mode only when every planned file is an unowned path `d` file outside PDD (docs, guides, CI, lock
   files, packages, non-behavior config or metadata, or test-only maintenance — never `*.prompt.md`,
   `user_stories/*.md`, or product/app code), also when the issue is written as a bug.
-- If an issue touches prompt-owned or product/app code (`src/`, `app/`, etc.), even when no prompt exists yet, pick
-  `bug` or `feature` mode instead so the PR creates or updates the owning prompt.
+- If an issue touches prompt-owned or product/app code (`src/`, `app/`, etc.), pick `bug` or `feature` mode instead. Follow the 100% Truth Rule in `prompting.md`: update any existing owning prompt before code; for unowned legacy code, either adopt/extract a clean pure PDD module with a top-of-file `Prompt:` header or apply a surgical brownfield code fix verified with Red→Green TDD (never write half-prompts).
 - Write no new Story and no new prompt for a path `d` non-code file.
 - If a `small-change` run already touched owned or product code, note it and include the Story test, replay and
   `Runtime:` evidence or rerun under `bug` or `feature` mode.
@@ -101,11 +100,11 @@ Do not self-spawn a Fresh Verifier subagent during build or repair: Autopilot ru
   HH:MM UTC)` with the end time that pdd printed.
 - Autopilot sends the check itself when maintenance ends and rewrites the line. Never cut short an already-sent check.
 
-## Vectors in the Evidence line
+## Vectors and formal proofs in the Evidence line
 
-- `vectors=` counts the replay files (`*.vectors.test.*`) that the PR changes or that read a changed scenario file.
-- Count `node:test` tests (the `# tests` and `# pass` lines), not steps or checks, for example `vectors=pass (36/36)`.
-- Give only the counts that you saw.
+- `vectors=` counts the replay test files (`*.vectors.test.*`, `test_vectors*.py`, `*_vectors_test.go`, `tests/*vectors*.rs`) that the PR changes or that read a changed scenario file.
+- `formal=` uses `proved_solver_code` (or `bounded`) ONLY when the formal suite imports/executes production code and passes a production-code mutation control (never claim `proved` for disconnected Z3 spec models — report `proved_spec_model` or `not-applicable`).
+- Report exact observed counts (`passed/total`) from the repo's native test runner (`node:test`, `pytest`, `vitest`, `go test`, `cargo test`), never steps or checks, for example `vectors=pass (36/36)`. Give only counts you actually ran and saw.
 
 ## After a merge from the base
 
@@ -140,8 +139,8 @@ Do not self-spawn a Fresh Verifier subagent during build or repair: Autopilot ru
 
 ## For the reviewer
 
-- Never read the whole PR's diff in one call: run `git diff --stat` first, then read one file per command. End the
-  summary with `Read: FILE, FILE, ...`.
+- Read strictly the diff, owning prompts/Stories, and harness evidence — never trust PR prose alone. Run `git diff --stat` first, then read one file per command. End the summary with `Read: FILE, FILE, ...`.
+- Verify every touched user-facing path is backed by real unmocked execution (`pdd prove` / `verify.paths` Feature Map, real CLI/HTTP/DB/browser/host probes — not mocked-only stubs) and run a fast 1-to-3 line Deliberate-Break Probe (flip 1–3 changed logic conditions/returns in a scratch edit, confirm an assertion fails, revert) on medium/big diffs.
 - A Runtime PASS counts only for a changed Story (above). A failed step inside a `no verdict` check is a FAIL.
 - A `not run` line needs a cause from "When `not run` is allowed". A cause that pdd gives a fix for is a must-fix.
 - Non-code path `d` files (docs, config, CI, `package.json`, lock files, tests/fixtures) need no prompt and no Story;

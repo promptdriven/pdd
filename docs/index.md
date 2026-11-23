@@ -11,7 +11,7 @@ Start with the [README](../README.md).
   - [Verification](../skills/pdd/references/verification.md): native tests, bug TDD, Feature Maps (`verify.paths`), Deliberate-Break Probe, and `pdd prove`.
 - [Build a whole product](build-a-whole-product.md): map a product and plan its runs.
 - [Usage guide](USAGE.md): install, setup, `pdd init`, `pdd status`, runs, gates, checks on the PDD interpreter, clean up, and fixes.
-- [Workflows in depth](workflows.md): areas, steps, gates, the run folder, tests, and custom workflows.
+- [Workflows in depth](workflows.md): interactive `/pdd` modes, headless `pdd autopilot`, product plans, and skill locations.
 - [Interpreter boundaries](runtime-boundaries.md): offline review, server lint, native factory bindings, and call-accounting evidence.
 - [CLI reference](cli.md): every command, and how to run from a source checkout.
 - [Refactor runbook](refactor-runbook.md): separate structural cleanup from behavior changes and prevent pattern drift.

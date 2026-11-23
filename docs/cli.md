@@ -44,7 +44,7 @@ Settings live in the repository's `pdd.json`, for example `{"autopilot":{"mode":
 
 When another change of `pdd.json` on GitHub comes between pdd's read and its write, pdd reads the file again and tries once more. When GitHub cannot be reached or `gh` is not signed in, the local setting stays, the exit code is 0, and the line tells you to run the same command again. `pdd autopilot start` and `pdd autopilot status` print a warning when the copy on GitHub has another mode or trust list, with the commands that change it, or when a settings PR is still open, with its URL. The warning says that Autopilot on this machine uses this checkout's settings (and this machine's `--mode` and `--label`, when set), and that other machines and people read the GitHub copy. Invalid saved modes count as `off` with a notice; a mode command replaces them. Names match ignoring case. The repository owner, people with write access (including access through an organization team), and explicitly added names are trusted independently. An incomplete lookup never establishes trust for an unknown person.
 
-These commands store settings and determine trust. Selecting a mode starts no run and makes no interpreter call. Approval policy, including `strict_approvals`, stays independent. Code replay reads `replay.base_scenarios` (`"linked"` or `"all"`) from `pdd.json` on each run's base commit; see [add all approved base scenarios](replay-evidence.md#add-all-approved-base-scenarios).
+These commands store settings and determine trust. Selecting a mode starts no run and makes no interpreter call. Approval policy, including `strict_approvals`, stays independent.
 
 ## Inspect authored files
 
@@ -84,7 +84,7 @@ pdd reads two explicit ownership records, in this order:
 | Source | Record | Certain |
 |---|---|---|
 | `binding` | An entry of the root `pdd-bindings.json` with `module` PATH and a `prompt` | yes |
-| `header` | A `Prompt: PROMPT` or `Generated from PROMPT` comment line (`//`, `#`, `--`, `/* ... */`, `<!-- ... -->`, MDX `{/* ... */}`, or YAML frontmatter `prompt:`) in the first 4 KiB of the file ([header form](replay-evidence.md#approved-scenarios-on-the-base)) | yes |
+| `header` | A `Prompt: PROMPT` or `Generated from PROMPT` comment line (`//`, `#`, `--`, `/* ... */`, `<!-- ... -->`, MDX `{/* ... */}`, or YAML frontmatter `prompt:`) in the first 4 KiB of the file ([header form](../skills/pdd/references/prompting.md#2-100-truth-rule-top-of-file-headers-and-hybrid-brownfield-prs)) | yes |
 
 Prose mentions and filename stem matches never claim ownership: when no binding or header exists, pdd reports `owner: null`, `owners: []`, `source: null`, `certain: true`, and prints an advisory `note` suggesting an explicit `// Prompt: ...` header or `pdd-bindings.json` entry when a prompt mentions the path. The answer is `certain: false` when a binding or header names a prompt that does not exist, when `pdd-bindings.json` cannot be read and no owner is found, or when the file cannot be read and no binding names a prompt.
 

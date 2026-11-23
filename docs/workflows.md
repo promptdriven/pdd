@@ -66,7 +66,7 @@ Autopilot runs headless agent workers (`codex`, `claude`, `gemini`, or `agy`) on
 
 ## Product plans (`pdd product`)
 
-For multi-part products with shared contracts, use `/pdd` in `product` mode to plan `user_stories/PRODUCT-PLAN.md` and `contracts/`, then track and prepare runs with:
+For multi-part products with shared contracts, use `/pdd` in `product` mode to plan `product/map.md`, `product/plan.md`, and `contracts/`, then track and prepare runs with:
 
 - `pdd product status [--json] [--through prompt-pr|code]`
 - `pdd product next [--through prompt-pr|code]`

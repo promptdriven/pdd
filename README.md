@@ -258,14 +258,14 @@ pdd approve prompts/NAME.prompt.md
 
 Show the gate, then reply to your agent in your own words. Your agent records your approval for the gate and all its draft prompts in one call. Questions and change requests keep the gate open.
 
-See [Record a chat approval](docs/cli.md#record-a-chat-approval) for safe commands, prompt snapshots and terminal or strict-mode approval. Approval of PR 1 does not approve the later code-or-stop gate.
+See [Record a chat approval](docs/cli.md#record-a-chat-approval) for safe commands, prompt snapshots and terminal or strict-mode approval.
 
 ### 5. Code space
 
-Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code. A `small-change` or `product` workflow opens one PR. A `feature` or `bug` workflow can open two:
+Code space is the PDD compiler: your agent writes the code from the approved prompts, and runs the prompt-space checks alongside native tests and `pdd prove`. Every workflow (`feature`, `bug`, `product`, and `small-change`) opens **one pull request**:
 
-1. **Prompt space.** The prompts, the Stories and the tests. The pull request starts with a readable summary and checks; its Details section includes `Prompt tests` lines and report links.
-2. **Code space.** The code. After you approve the prompts, the agent writes the code, runs the unchanged tests from prompt space plus native tests, and verifies the branch with `pdd prove`.
+1. **Prompt space first:** author or update the prompts, Stories, and scenarios, check them with `pdd lint` and `pdd test` (and `pdd sim` for interactive screens), and pause for a 1-screen pre-code check.
+2. **Code space on the same branch:** write the code from the approved prompts, run the native test suite against the real user path, run `pdd lint --diff` and `pdd prove`, and verify with an independent fresh reviewer.
 
 The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [Prompting guide §5](skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
 
@@ -355,7 +355,7 @@ Follow [docs/ISSUES.md](docs/ISSUES.md). Your agent can follow it too, so you ca
 - [Documentation](docs/index.md): the [usage guide](docs/USAGE.md), [workflows](docs/workflows.md), the [CLI reference](docs/cli.md), and the [Prompting guide](skills/pdd/references/prompting.md).
 - [`skills/pdd/SKILL.md`](skills/pdd/SKILL.md): the single `/pdd` skill and co-located guides (`skills/pdd/references/`).
 - [The skills](skills/).
-- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.19).
+- [Release notes](https://github.com/promptdriven/pdd/releases).
 - [Contributing](CONTRIBUTING.md).
 
 ## License
