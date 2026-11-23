@@ -47,7 +47,7 @@ function findCriterionLines(storyText, acs) {
   return result;
 }
 
-export function collectStoryUnboundCriteriaFindings({ realRoot, storyPaths = [], scopedFiles = [], readFile } = {}) {
+export function collectStoryUnboundCriteriaFindings({ realRoot, storyPaths = [], scopedFiles = [], readFile, allowExplicitSubset = true } = {}) {
   if (!Array.isArray(storyPaths) || !storyPaths.length) return [];
   const read = typeof readFile === 'function' ? readFile : (p => readSafeUtf8(realRoot, p));
   const candidateJsons = scopedFiles.filter(isCandidateScenarioJson);
@@ -97,8 +97,10 @@ export function collectStoryUnboundCriteriaFindings({ realRoot, storyPaths = [],
     const coveredIds = new Set();
     const coveredIdsLower = new Set();
     const declaredCriteriaTextToId = new Map();
+    const declaredCriteriaIds = new Set();
     let hasSingleImplicitCheck = false;
     let hasBoundOrCheckedScenario = false;
+    let allExplicitV1Subsets = true;
 
     for (const jp of [...matchedCandidates].sort()) {
       const doc = getDoc(jp);
@@ -109,12 +111,18 @@ export function collectStoryUnboundCriteriaFindings({ realRoot, storyPaths = [],
       if (explicitStory && explicitStory !== storyPath) continue;
 
       matchedFiles.push(jp);
+      const isExplicitV1Subset = doc.schema_version === V1_SCENARIO_SCHEMA && Array.isArray(doc.criteria) && doc.criteria.length > 0 && doc.criteria.length < acs.length;
+      if (!isExplicitV1Subset) allExplicitV1Subsets = false;
       if (doc.schema_version === V1_SCENARIO_SCHEMA || Array.isArray(doc.criteria) || Array.isArray(doc.bound_criteria)) {
         hasBoundOrCheckedScenario = true;
       }
       for (const c of Array.isArray(doc.criteria) ? doc.criteria : []) {
         if (c && typeof c === 'object' && typeof c.id === 'string' && typeof c.text === 'string') {
-          declaredCriteriaTextToId.set(normalizeCriterionText(c.text), c.id.trim());
+          const cid = c.id.trim();
+          if (cid) {
+            declaredCriteriaTextToId.set(normalizeCriterionText(c.text), cid);
+            declaredCriteriaIds.add(cid);
+          }
         }
       }
       for (const ex of Array.isArray(doc.check_exemptions) ? doc.check_exemptions : []) {
@@ -153,6 +161,12 @@ export function collectStoryUnboundCriteriaFindings({ realRoot, storyPaths = [],
     if (!matchedFiles.length) continue;
     // Skip only when a single-AC shorthand scenario has implicit checks without explicit criterion_id.
     if (acs.length === 1 && hasSingleImplicitCheck && !hasBoundOrCheckedScenario) continue;
+    // Honor valid v1 subset-criteria tests in `pdd lint --local` when every explicitly declared criterion is covered
+    // (while `pdd prove` passes `allowExplicitSubset: false` to verify full Story coverage before merge).
+    if (allowExplicitSubset && allExplicitV1Subsets && declaredCriteriaIds.size > 0
+      && [...declaredCriteriaIds].every(cid => coveredIds.has(cid) || coveredIdsLower.has(cid.toLowerCase()))) {
+      continue;
+    }
 
     const acLines = findCriterionLines(storyText, acs);
     const missing = [];

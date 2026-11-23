@@ -337,7 +337,7 @@ export function runProve(
   const baseSha = mb?.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : null;
   const timeoutMs = timeoutMinutes * 60_000;
 
-  const lint = lintRepoProject({ root, enforceBaseTrust: true, trustBaseRef: baseSha || baseRef || undefined });
+  const lint = lintRepoProject({ root, enforceBaseTrust: true, trustBaseRef: baseSha || baseRef || undefined, requireFullStoryCriteria: true });
   const diff = runDiffSpotlight({ cwd: root, baseRef: baseSha || baseRef || undefined });
   const notProvedReasons = [];
 

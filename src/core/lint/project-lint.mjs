@@ -108,7 +108,7 @@ export function runConfiguredLintCommands({ root, commands = [], timeoutMs = 120
   return { ok: errors.length === 0, results, errors };
 }
 
-export function lintRepoProject({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy, trustBaseRef, enforceBaseTrust = false } = {}) {
+export function lintRepoProject({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy, trustBaseRef, enforceBaseTrust = false, requireFullStoryCriteria = false } = {}) {
   const empty = { ok: true, configured: false, warnings: [], errors: [], findings: [], commands: [], untrustedConfigOverrides: [] };
   if (!root || typeof root !== 'string') return empty;
   let realRoot, policy;
@@ -291,7 +291,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
     if (lintConfig.customRules.length) rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: storyPath, kind: 'story', rawText: content }));
   }
   if (targetStories.length) {
-    rawFindings.push(...collectStoryUnboundCriteriaFindings({ realRoot, storyPaths: targetStories, scopedFiles, readFile: getFull }));
+    rawFindings.push(...collectStoryUnboundCriteriaFindings({ realRoot, storyPaths: targetStories, scopedFiles, readFile: getFull, allowExplicitSubset: !requireFullStoryCriteria }));
   }
 
   const promptFilterSet = Array.isArray(promptPaths) ? new Set(targetPrompts) : null;
