@@ -148,7 +148,7 @@ export function lintScenarioFiles({
     const cached = parsedTests.get(testFile);
     if (!cached || cached.error) {
       if (pairedWithStory && !promptFilter) {
-        const text = `Warning: ${testFile}: scenario test file is not valid JSON; write a JSON object with "schema_version": "prompt-runtime.program-scenario.v1".`;
+        const text = `Warning: ${testFile}: scenario test file is not valid JSON; fix JSON syntax (omit "schema_version" for compact scenario JSON or set "schema_version": "prompt-runtime.program-scenario.v1").`;
         warnings.push({ key: `${testFile}\0testjson`, text });
       }
       continue;
@@ -171,7 +171,26 @@ export function lintScenarioFiles({
         try { storySource = safeRead(root, targetStoryPath); } catch { storySource = null; }
       }
       const compiled = compileScenario(doc, { path: testFile, storyPath: pairedStoryPath, storySource });
-      if (!compiled.refusal) doc = compiled.doc;
+      const candidateSteps = Array.isArray(doc.steps) ? doc.steps : [];
+      const matchesShortFilter = !promptFilter
+        || (typeof doc.entry_path === 'string' && promptFilter.has(doc.entry_path))
+        || candidateSteps.some(s => typeof s?.entry_path === 'string' && promptFilter.has(s.entry_path));
+      if (compiled.refusal) {
+        if (matchesShortFilter) {
+          const r = compiled.refusal;
+          const loc = r.section ? ` (${r.section})` : '';
+          const text = `Warning: ${testFile}${loc}: compact scenario compile failed [${r.code}]: ${r.message}`;
+          warnings.push({ key: `${testFile}\0shortrefusal\0${r.code}`, text });
+        }
+      } else {
+        if (matchesShortFilter) {
+          for (const w of Array.isArray(compiled.warnings) ? compiled.warnings : []) {
+            const msg = typeof w?.message === 'string' && w.message.trim() ? w.message.trim() : null;
+            if (msg) warnings.push({ key: `${testFile}\0shortwarn\0${msg}`, text: msg });
+          }
+        }
+        doc = compiled.doc;
+      }
     }
     const looksLikeScenario = !isFixtureJson && !isNativeCaseDoc && doc && typeof doc === 'object' && !Array.isArray(doc) && (
       pairedWithStory
@@ -182,7 +201,7 @@ export function lintScenarioFiles({
       const candidateSteps = Array.isArray(doc.steps) ? doc.steps : [];
       const matchesFilter = !promptFilter || candidateSteps.some(s => typeof s?.entry_path === 'string' && promptFilter.has(s.entry_path));
       if (matchesFilter) {
-        const text = `Warning: ${testFile}: scenario schema_version ${JSON.stringify(doc.schema_version ?? null)} is invalid; set "schema_version": "prompt-runtime.program-scenario.v1".`;
+        const text = `Warning: ${testFile}: scenario schema_version ${JSON.stringify(doc.schema_version ?? null)} is invalid; omit "schema_version" for compact scenario JSON or set "schema_version": "prompt-runtime.program-scenario.v1".`;
         warnings.push({ key: `${testFile}\0testschema`, text });
       }
     }

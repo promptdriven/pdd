@@ -513,7 +513,30 @@ function normalizeRuntimeHints(text) {
   if (out.includes('impossible-result-value-pointer') && !out.includes('result_value_pointer to ""')) {
     out = out.replace(/impossible-result-value-pointer(?![^\n]*result_value_pointer to "")/g, `impossible-result-value-pointer (${IMPOSSIBLE_RVP_HINT})`);
   }
+  if (out.includes('checked SVG layout only')) {
+    out = out
+      .replace(/partial: checked SVG layout only; prompts not checked \(local-only\)\./g, 'local-only: offline structural, scenario, and SVG checks completed; run pdd lint --remote for hosted cross-prompt checks (0 AI calls).')
+      .replace(/checked SVG layout only; prompts not checked/g, 'offline structural, scenario, and SVG checks completed; hosted cross-prompt checks not run');
+  }
+  if (out.includes('RUNBOOK')) {
+    out = out
+      .replace(/\bRUNBOOK(?:\.md)?\s*§\s*13\b/g, 'the pdd skill reference ui-and-screens.md')
+      .replace(/\bRUNBOOK(?:\.md)?\s*§\s*(?:4|5|6|17)\b/g, 'the pdd skill reference stories.md')
+      .replace(/\bRUNBOOK(?:\.md)?\s*§\s*(?:18|19|20|21)\b/g, 'the pdd skill reference ports-and-cli.md')
+      .replace(/\bRUNBOOK(?:\.md)?(?:\s*§\s*\d+[a-z]?)?/g, 'pdd help prompting');
+  }
   return out;
+}
+
+function normalizeRuntimeHintsValue(value) {
+  if (typeof value === 'string') return normalizeRuntimeHints(value);
+  if (Array.isArray(value)) return value.map(normalizeRuntimeHintsValue);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = normalizeRuntimeHintsValue(v);
+    return out;
+  }
+  return value;
 }
 
 function normalizeHintStream(stream) {
@@ -893,7 +916,7 @@ function rawShortStoryComplexityWarning({ path, storyPath, doc }, rawLines) {
   if (lines > STORY_LINE_LIMIT) reasons.push(`${lines} lines (limit: ${STORY_LINE_LIMIT})`);
   if (!reasons.length) return null;
   const storyLabel = storyPath ?? (typeof doc.story_path === 'string' && doc.story_path.trim() ? doc.story_path.trim() : null) ?? path;
-  return `Warning: oversized Story: ${storyLabel} (${path}) has ${reasons.join(' and ')}. Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests (see skills/pdd/references/stories.md and skills/pdd/references/verification.md).`;
+  return `Warning: oversized Story: ${storyLabel} (${path}) has ${reasons.join(' and ')}. Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests (see the pdd skill references stories.md and verification.md, or run pdd help prompting).`;
 }
 
 function enrichFoundWithCompiledScenarios(found, readText) {
@@ -1426,7 +1449,7 @@ export function storyLines(rows, ports = {}) {
 }
 
 export function renderJson(input, ports = {}) {
-  return normalizeRuntimeHints(rawRenderJson(input, withPortDefaults(ports, { promptTestsLabel: PROMPT_TESTS_LABEL })));
+  return normalizeRuntimeHintsValue(rawRenderJson(input, withPortDefaults(ports, { promptTestsLabel: PROMPT_TESTS_LABEL })));
 }
 
 export function renderText(input, ports = {}) {
