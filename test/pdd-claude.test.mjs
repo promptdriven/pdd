@@ -713,3 +713,89 @@ test('adversarial P0/P1 regressions: auto fail-open, gateway URL & proxy isolati
     sb.cleanup();
   }
 });
+
+test('SEC-7 & REL-4: releaseSharedClaudeRuntimeSession unlinks settingsPath first on unsafe runtime error and ENOENT exits 127', async () => {
+  const sb = makeSandbox();
+  try {
+    // 1. SEC-7: Even if the runtime parent becomes an unsafe symlink before release, settingsPath is unlinked FIRST!
+    const rogueTarget = join(sb.root, 'rogue-target');
+    mkdirSync(rogueTarget, { recursive: true, mode: 0o700 });
+    const symlinkParent = join(sb.root, 'unsafe-parent-link');
+    symlinkSync(rogueTarget, symlinkParent);
+    const leakedSettings = join(sb.root, 'session-secret.json');
+    writeFileSync(leakedSettings, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'pddg_lse_must_delete_first' } }), { mode: 0o600 });
+    assert.equal(existsSync(leakedSettings), true);
+
+    await assert.rejects(
+      () => releaseSharedClaudeRuntimeSession(
+        {
+          runtimeDir: join(symlinkParent, 'pdd-claude-1000'),
+          pidsDir: join(symlinkParent, 'pdd-claude-1000', 'pids'),
+          pidFile: join(symlinkParent, 'pdd-claude-1000', 'pids', '999999'),
+          leasePath: join(symlinkParent, 'pdd-claude-1000', 'lease.json'),
+          settingsPath: leakedSettings,
+          leaseId: 'lse_sec7',
+        },
+        { cwd: sb.root, env: sb.env },
+      ),
+      /Refusing unsafe pdd-claude runtime path/,
+    );
+    assert.equal(existsSync(leakedSettings), false, 'session.settingsPath must be unlinked before any runtime dir validation can throw');
+
+    // 2. REL-4: ENOENT when spawning claude returns standard shell exit code 127.
+    let errText = '';
+    const enoentRes = await runPddClaudeCli(
+      ['--version'],
+      { cwd: sb.root, env: sb.env, stdout: { write() {} }, stderr: { write: s => { errText += s; } } },
+      {
+        spawn: () => {
+          const child = new EventEmitter();
+          queueMicrotask(() => {
+            const err = new Error('spawn claude ENOENT');
+            err.code = 'ENOENT';
+            child.emit('error', err);
+          });
+          return child;
+        },
+      },
+    );
+    assert.equal(enoentRes.exitCode, 127);
+    assert.match(errText, /Failed to launch "claude".*ENOENT/i);
+
+    // 3. Pass-through & fail-open spawns strip ALL PDD_* vars, and security/uncoded errors fail closed.
+    const captured = [];
+    const capSpawn = (bin, args, opts) => {
+      captured.push({ bin, args, env: opts.env });
+      const child = new EventEmitter();
+      process.nextTick(() => child.emit('close', 0, null));
+      return child;
+    };
+    const dirtyEnv = { ...sb.env, PDD_CLAUDE_AUTO_FAIL_OPEN: '1', PDD_TOKEN: 'tok-secret', PDD_ACCOUNTS_TOKEN: 'acct-secret' };
+    assert.equal((await runPddClaudeCli(['--version'], { cwd: sb.root, env: dirtyEnv, stdout: { write() {} }, stderr: { write() {} } }, { spawn: capSpawn })).exitCode, 0);
+    assert.deepEqual(Object.keys(captured.at(-1).env).filter(k => k.startsWith('PDD_')), [], 'pass-through must strip ALL PDD_* vars');
+    assert.equal((await runPddClaudeCli(['-p', 'hi'], { cwd: sb.root, env: dirtyEnv, stdout: { write() {} }, stderr: { write() {} } }, {
+      spawn: capSpawn,
+      leaseCloudAccount: async () => { throw new CloudAccountsError('503 down', { code: 'service_unavailable', status: 503 }); },
+    })).exitCode, 0);
+    assert.deepEqual(Object.keys(captured.at(-1).env).filter(k => k.startsWith('PDD_')), [], 'fail-open must strip ALL PDD_* vars');
+
+    const beforeClosed = captured.length;
+    for (const closedErr of [
+      new CloudAccountsError('unsafe dir', { code: 'unsafe_runtime_dir' }),
+      new CloudAccountsError('symlink', { code: 'symlink_refused' }),
+      new CloudAccountsError('bad settings', { code: 'invalid_settings' }),
+      new CloudAccountsError('bad lease', { code: 'invalid_lease' }),
+      new CloudAccountsError('reauth', { code: 'reauth_required' }),
+      new Error('uncoded state-dir error'),
+    ]) {
+      const rClosed = await runPddClaudeCli(['-p', 'hi'], { cwd: sb.root, env: dirtyEnv, stdout: { write() {} }, stderr: { write() {} } }, {
+        spawn: capSpawn,
+        leaseCloudAccount: async () => { throw closedErr; },
+      });
+      assert.equal(rClosed.exitCode, 1, `pdd-claude must fail closed on ${closedErr.code || closedErr.message}`);
+    }
+    assert.equal(captured.length, beforeClosed, 'fail-closed cases must never spawn stock claude');
+  } finally {
+    sb.cleanup();
+  }
+});

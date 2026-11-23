@@ -1,6 +1,120 @@
 {
+  "verify": {
+    "test": "npm test",
+    "paths": [
+      {
+        "id": "cli-surface",
+        "name": "CLI parser, help catalog, status, setup, init and update-sync",
+        "when": [
+          "bin/pdd.mjs",
+          "src/pdd-cli.mjs",
+          "src/command-catalog.mjs",
+          "src/argument-parser.mjs",
+          "src/project-setup.mjs",
+          "src/agent-mcp-setup.mjs",
+          "src/shared/skills-install.mjs",
+          "src/core/status.mjs",
+          "src/core/changed-map.mjs",
+          "src/update-sync.mjs",
+          "src/setup/**"
+        ],
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/cli.test.mjs test/docs-commands.test.mjs test/project-setup.test.mjs test/update-sync.test.mjs"
+      },
+      {
+        "id": "lint-and-prove",
+        "name": "Offline PDD lint, verify.paths and pdd prove",
+        "when": [
+          "src/core/lint/**",
+          "src/core/prove.mjs",
+          "src/core/verify-paths.mjs",
+          "src/repo-hygiene-lint.mjs",
+          "src/story-lint.mjs"
+        ],
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/core/lint/*.test.mjs test/core/prove.test.mjs"
+      },
+      {
+        "id": "accounts",
+        "name": "P1 Accounts offline PTY harness and zero-mutation isolation (live rotation requires live host)",
+        "when": [
+          "bin/pdd-codex.mjs",
+          "bin/pdd-claude.mjs",
+          "src/accounts/**",
+          "src/accounts-cli.mjs",
+          "src/login-pool.mjs",
+          "src/pdd-codex.mjs",
+          "src/pdd-claude.mjs",
+          "src/codex-limits.mjs"
+        ],
+        "run": "node scripts/verify-accounts-pty.mjs --offline"
+      },
+      {
+        "id": "autopilot",
+        "name": "Autopilot validator, evidence contract, auto-deps, investigator and polyglot runners",
+        "when": [
+          "src/autopilot/**",
+          "src/autopilot*.mjs",
+          "src/agent-adapters.mjs",
+          "src/agent-job.mjs",
+          "src/codex-lint.mjs",
+          "src/cost-ledger.mjs",
+          "src/machine-guard.mjs",
+          "src/metrics-*.mjs",
+          "src/issue-*.mjs",
+          "src/test-suite-*.mjs"
+        ],
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/autopilot/*.test.mjs"
+      },
+      {
+        "id": "product",
+        "name": "Product plans, boundary audits, waves and workflow-free handoff",
+        "when": [
+          "src/core/product/**",
+          "src/product.mjs",
+          "src/product-documents.mjs"
+        ],
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/product.test.mjs test/product-rules-and-audits-3573.test.mjs test/product-workflow-free-s6.test.mjs"
+      },
+      {
+        "id": "runtime-seam",
+        "name": "Runtime seam, prompt approvals and human boundary cards",
+        "when": [
+          "src/runtime-seam.mjs",
+          "src/prompt-approve.mjs",
+          "src/core/approve-prompt.mjs",
+          "src/human-boundary-card.mjs",
+          "src/core/human-boundary-card-core.mjs"
+        ],
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/runtime-seam.test.mjs test/human-boundary-card.test.mjs test/prompt-approve.test.mjs"
+      },
+      {
+        "id": "ui-screens",
+        "name": "SVG layout lint and screen design checks",
+        "when": [
+          "src/core/ui/**",
+          "src/svg-layout.mjs",
+          "src/screen-design-check.mjs",
+          "src/screen-compare.mjs"
+        ],
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/svg-layout.test.mjs test/screen-design-check.formal.test.mjs test/screen-design-check.vectors.test.mjs"
+      },
+      {
+        "id": "architecture",
+        "name": "Module layering and dependency boundary rules",
+        "when": [
+          "scripts/check-architecture.mjs",
+          "scripts/architecture-ratchet.json"
+        ],
+        "run": "npm run check:arch"
+      }
+    ]
+  },
   "autopilot": {
-    "mode": "auto",
-    "trust": []
+    "mode": "observe",
+    "trust": [],
+    "siblingRepos": [
+      "promptdriven/pdd_cloud",
+      "promptdriven/pdd-workflow",
+      "promptdriven/prompt-runtime"
+    ]
   }
 }

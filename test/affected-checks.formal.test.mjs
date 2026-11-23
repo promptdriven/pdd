@@ -5,7 +5,6 @@ import {mkdtempSync, mkdirSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {baselineReport, buildCheckPlan, checkPlanResults, selectCheckTests} from '../src/runtime-seam.mjs';
-import {fullCheckPass} from '../src/workflow-story-card.mjs';
 
 // Oracles: the Rules to check in affected-story-selection.md and
 // affected-baseline-report.md, qualified by the approved planner/client contracts.
@@ -32,11 +31,6 @@ function sandbox(t) {
   const root = mkdtempSync(join(tmpdir(), 'pdd-affected-formal-'));
   t.after(() => rmSync(root, {recursive:true, force:true}));
   return root;
-}
-function json(root, relative, value) {
-  const full = join(root, relative);
-  mkdirSync(join(full, '..'), {recursive:true});
-  writeFileSync(full, JSON.stringify(value));
 }
 
 test('formal: every supplied target variant survives selection; empty target set falls back to full', t => {
@@ -184,39 +178,4 @@ test('formal: planner uncertainty preserves all obligations within supplied chan
   }
   assert.equal(count, 64);
   t.diagnostic(`planner: ${count} cases; supplied Git answers, closure availability and old metadata`);
-});
-
-test('formal: historical baseline snapshots cannot grant the real fullCheckPass gate', t => {
-  const root = sandbox(t), state = join(root,'state'), batchA = '20261101-100000-aaaa', batchC = '20261101-090000-cccc';
-  for (const name of ['A','C']) json(root,path(name),{schema_version:'prompt-runtime.program-scenario.v1',
-    story_path:`user_stories/${name}.md`,criteria:[{id:'AC1'},{id:'AC2'}],steps:[]});
-  const plan = planOf([{role:'target',tests:[path('A')]},{role:'baseline',tests:[path('C')]}]);
-  const domain = ['missing','passed','failed','refused','partial','waiting','sent','not run','unknown','running'];
-  let count = 0;
-  for (const currentState of domain) for (const source of ['current','stale','unavailable'])
-    for (const passedCriteria of [0,1,2]) for (const historicalState of ['passed','failed','local-unsent']) {
-      const report = baselineReport({plan,observations:[observation(historicalState,0,'C','current','current')],availability:'available',warnings:[]});
-      const save = (id,name,row,metadata = {}) => {
-        const common = {batch:id,source_sha256:(name === 'A' ? 'a' : 'c').repeat(64),rows:[row],...metadata};
-        json(state,`batches/${id}/batch.json`,{...common,intent:'check',root,created_at:'2026-11-01T10:00:00Z'});
-        json(state,`batches/${id}/summary.json`,{...common,repo:root});
-      };
-      save(batchA,'A',{test:path('A'),state:'passed',criteria:{total:2,passed:2}},
-        {baseline_report:report,check_selection:{mode:'affected',tests:[path('A')],baseline_tests:[path('C')]}});
-      rmSync(join(state,'batches',batchC),{recursive:true,force:true});
-      if (currentState !== 'missing') save(batchC,'C',{test:path('C'),state:currentState,criteria:{total:2,passed:passedCriteria}});
-      const got = fullCheckPass({root},{env:{PDD_STATE_DIR:state},
-        findTests:() => ({tests:['A','C'].map(name => ({path:path(name)}))}),
-        capture(_root,selection) {
-          if (selection.tests.includes(path('C')) && source === 'unavailable') throw Error('Synthetic capture unavailable');
-          return {sha256:(selection.tests.includes(path('C')) ? source === 'current' ? 'c' : 'd' : 'a').repeat(64)};
-        }});
-      const expected = currentState === 'passed' && source === 'current' && passedCriteria === 2;
-      assert.equal(got.pass, expected,
-        `FORMAL_FULL_GATE ${JSON.stringify({currentState,source,passedCriteria,historicalState})}`);
-      if (currentState === 'missing') assert.ok(got.problems.some(row => row.path === path('C') && row.kind === 'missing'));
-      count++;
-    }
-  assert.equal(count, 270);
-  t.diagnostic(`fullCheckPass: ${count} cases; saved row state, source freshness, criterion count and historical snapshot`);
 });

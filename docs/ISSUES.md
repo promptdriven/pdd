@@ -2,7 +2,7 @@
 
 Use this guide to report a problem with pdd itself: the `pdd` command, the PDD skills, the PDD interpreter (`pdd test`, remote `pdd lint`, `pdd simulate` and the Try tools in `pdd mcp`) or these docs. The guide is for people and for their coding agents. Most issues come from agents, so each step is an instruction that an agent can follow.
 
-For a bug in your own project, use the `pdd-bug` skill. For access to the interpreter, see [Access](../README.md#access).
+For a bug in your own project, use the `pdd` skill (`/pdd` or `$pdd`). For access to the interpreter, see [Access](../README.md#access).
 
 **Agent:** do the steps in order. Get each fact from a command or from the person. Never invent a fact. When you do not know a fact, ask the person.
 
@@ -24,7 +24,7 @@ If the version is older than the version in [Install](../README.md#install), upd
 
 ## 2. Look for the problem first
 
-1. Read the tables in [When something goes wrong](../README.md#when-something-goes-wrong) and [USAGE §13](USAGE.md#13-troubleshooting), and the known limits in [USAGE §12](USAGE.md#12-known-limits) and [RUNBOOK §16](../skills/pdd-prompting/runbook/testing-and-simulation.md#16-known-limits-today). If a table tells what to do, do it.
+1. Read the tables in [When something goes wrong](../README.md#when-something-goes-wrong) and [USAGE §13](USAGE.md#13-troubleshooting), and the known limits in [USAGE §12](USAGE.md#12-known-limits) and [Prompting guide](../skills/pdd/references/prompting.md). If a table tells what to do, do it.
 2. Search the open issues with 2 or 3 words from the error message or the command:
 
    ```sh
@@ -54,7 +54,7 @@ Then collect:
 - **The goal.** What the person tried to do, in one sentence.
 - **The command.** The exact command that failed.
 - **The output.** The full output, copied as text. Do not retype it. Add the exit code: run `echo $?` directly after the command.
-- **The link or ID.** The report link that `pdd test` printed (`https://…/r/…`), or a request ID that pdd printed. For a workflow run, the issue number and the output of `pdd workflow status N`, `git --version` and `herdr --version`.
+- **The link or ID.** The report link that `pdd test` printed (`https://…/r/…`), or a request ID that pdd printed. For an Autopilot run, the issue number and the output of `pdd autopilot status`, `pdd autopilot logs N`, and `git --version`.
 - **The expected result.** What the person expected to see.
 - **The smallest example.** The smallest repo or set of files that shows the problem. For example: one prompt, one Story with 2 criteria and its test file. `pdd test --files` lists the files that a check sends.
 - **The agent.** The name and version of the agent that ran pdd. Write "none" when the person typed the command.

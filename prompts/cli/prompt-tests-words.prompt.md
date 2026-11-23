@@ -13,7 +13,7 @@ None.
 
 ## Caller navigation
 
-[Workflow runner](workflow-runner.prompt.md#prompt-tests-lines) and [Workflow view](workflow-view.prompt.md) import these constants to parse and normalize PR evidence lines; [PDD to Runtime seam](runtime-seam.prompt.md) re-exports them and supplies `PROMPT_TESTS_LABEL` as `promptTestsLabel` to `@promptdriven/runtime-client`.
+Workflow runner and Workflow view import these constants to parse and normalize PR evidence lines; [PDD to Runtime seam](runtime-seam.prompt.md) re-exports them and supplies `PROMPT_TESTS_LABEL` as `promptTestsLabel` to `@promptdriven/runtime-client`.
 
 <details><summary>Runtime interface</summary>
 

@@ -1,12 +1,12 @@
 # SVG layout lint
 
-Own `src/svg-layout.mjs`. Its module function `lintSvgLayouts({root, files, promptPaths})` returns a deterministic array of warning strings for disagreements between screen prompts and their linked `.ui.svg` drawings. It reads local files only, makes no AI or network call and changes no file. Preserve existing Check admission: these warnings never refuse a test or approve a prompt.
+Own `src/svg-layout.mjs` (backed by focused modules under `src/core/ui/{svg-layout,svg-xml,svg-controls,app-map-lint,scenario-lint}.mjs`). Its module function `lintSvgLayouts({root, files, promptPaths})` returns a deterministic array of warning strings for disagreements between screen prompts and their linked `.ui.svg` drawings. It reads each local file in a single pass, makes no AI or network call and changes no file. Preserve existing Check admission: these warnings never refuse a test or approve a prompt.
 
 `root` is the repository root; `files` is its Git-visible repository-relative file list. With `promptPaths`, inspect those prompts only; without it, inspect every Git-visible `*.prompt.md`. Read local inline and reference-style Markdown image/link destinations ending in `.ui.svg`, relative to their prompt; ignore remote links, fragments and duplicate destinations. Files must stay inside root and be regular files with no symlink ancestors. An unreadable, missing, escaping or malformed drawing produces a warning naming the prompt and drawing; never silently claim it matches.
 
 ## Workspace advice
 
-Use the [workspace authority](runtime-seam.prompt.md) (`loadRuntimeWorkspace`, `allowsRuntimePath`) before prompt/drawing content access, including no-Story local scans. Filter optional excluded candidates without opening them; report unavailable advice where relevant. Required linked drawings remain preflight's capture responsibility and cannot be silently pruned. Keep advisory warnings advisory and retain strict no-link reads.
+Use the shared workspace authority (`src/shared/workspace-policy.mjs`) before prompt/drawing content access, including no-Story local scans, with zero imports from `src/runtime-seam.mjs`. Filter optional excluded candidates without opening them; report unavailable advice where relevant. Required linked drawings remain preflight's capture responsibility and cannot be silently pruned. Keep advisory warnings advisory and retain strict no-link reads.
 
 
 ## Parts and advice
@@ -41,7 +41,7 @@ Screen drawing and stylesheet warnings start `Warning: SVG layout` (ordered by p
 - [Screen design check](screen-design-check.prompt.md): required generation/runtime/verification context for HTML screen stylesheet and CSS-class warnings.
 - [Short scenario compiler](scenario-compile.prompt.md): required generation/runtime/verification context for compiling Short JSON scenario files in-memory before scenario schema, `app_maps`, `simulation`, and `simulation_overrides` checks.
 
-- [Screen rules](../../skills/pdd-prompting/runbook/screens-and-svg.md#13-give-your-app-a-screen-app-map): authoring and verification context.
+- [Screen rules](../../skills/pdd/references/ui-and-screens.md): authoring and verification context.
 
 ## Local app-map timer, scenario schema_version, native-only dependency, and simulation override advisories
 

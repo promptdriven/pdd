@@ -1,4 +1,4 @@
-// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: a06173e5ccb8cba91dcfa2479fe9a08d6238292952ef18833976fdfaf2e129a5).
+// Prompt: prompts/cli/path-diagnostic.prompt.md
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
@@ -57,7 +57,7 @@ export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
   const { foreign: foreignNpm, legacy: rawLegacyNpm } = findUnscopedNpmPdd(cwd, env, paths);
   const legacyNpm = rawLegacyNpm && (mode === 'setup' || identity(join(rawLegacyNpm, 'bin/pdd.mjs')) !== current) ? rawLegacyNpm : null;
   const conflict = shadowed || paths.some(path => !isAlpha(path)) || Boolean(foreignNpm) || Boolean(legacyNpm);
-  if (mode === 'version' && !conflict || mode === 'workflow' && !shadowed) return [];
+  if ((mode === 'version' && !conflict) || (mode === 'setup' && !conflict && selected) || (mode === 'workflow' && !shadowed)) return [];
   let selectedVersion = `pdd ${version}`;
   if (shadowed) {
     selectedVersion = 'version unavailable';
@@ -76,7 +76,7 @@ export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
     const alpha = paths.find(path => basename(path) === 'pdd' && isAlpha(path));
     if (alpha) lines.push(`After environment activation, run: export PATH=${quote(dirname(alpha))}:"$PATH"; hash -r`);
   }
-  if (foreignNpm) lines.push(`Found the unrelated npm package "pdd" at ${clean(foreignNpm)}. Run: npm uninstall -g pdd && npm install -g github:promptdriven/pdd`);
-  if (legacyNpm) lines.push(`Found unscoped npm package "pdd" at ${clean(legacyNpm)} (blocks @promptdriven/pdd on bin/pdd). Run: npm uninstall -g pdd && npm install -g github:promptdriven/pdd`);
+  if (foreignNpm) lines.push(`Found the unrelated npm package "pdd" at ${clean(foreignNpm)}. Run: npm uninstall -g pdd && npm install -g @promptdriven/pdd`);
+  if (legacyNpm) lines.push(`Found unscoped npm package "pdd" at ${clean(legacyNpm)} (blocks @promptdriven/pdd on bin/pdd). Run: npm uninstall -g pdd && npm install -g @promptdriven/pdd`);
   return lines;
 }

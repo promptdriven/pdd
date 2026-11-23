@@ -15,7 +15,7 @@ import { runPdd } from '../src/pdd-cli.mjs';
 const root = realpathSync(fileURLToPath(new URL('..', import.meta.url)));
 const ROOT_HELP = [[], ['--help'], ['-h'], ['-help'], ['help']];
 const TOPIC = ['help', 'prompting'];
-const FILES = { guide: 'docs/prompting-guide.md', runbook: 'RUNBOOK.md' };
+const FILES = { skill: 'skills/pdd/SKILL.md', guide: 'skills/pdd/references/prompting.md' };
 const sink = () => ({ text: '', write(value) { this.text += value; return true; } });
 const temp = t => { const p = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-help-'))); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
 const lines = text => text.replace(/\n$/, '').split('\n');
@@ -57,11 +57,11 @@ test('the paths come from the module location, never from the cwd', async t => {
   for (const argv of [['help'], TOPIC]) {
     assertPackagePaths((await pdd(argv, { cwd: elsewhere })).stdout, root);
     const injected = (await pdd(argv, { packageRoot: join(elsewhere, 'pkg') })).stdout;
-    assert.deepEqual(namedPaths(injected), { guide: join(elsewhere, 'pkg', FILES.guide), runbook: join(elsewhere, 'pkg', FILES.runbook) });
+    assert.deepEqual(namedPaths(injected), { skill: join(elsewhere, 'pkg', FILES.skill), guide: join(elsewhere, 'pkg', FILES.guide) });
   }
   // A copy of the package, run from another folder, names its own files.
   const copy = join(elsewhere, 'copy'), cwd = join(elsewhere, 'work');
-  for (const part of ['bin', 'src', 'docs', 'RUNBOOK.md', 'package.json']) cpSync(join(root, part), join(copy, part), { recursive: true });
+  for (const part of ['bin', 'src', 'skills', 'package.json']) cpSync(join(root, part), join(copy, part), { recursive: true });
   symlinkSync(join(root, 'node_modules'), join(copy, 'node_modules'), 'dir');
   mkdirSync(cwd);
   for (const argv of [['help'], TOPIC]) {
@@ -110,17 +110,19 @@ test('prompting is a help topic, not a command, and takes no other word', async 
   }
 });
 
-test('root help keeps its first line, grouped commands, learn paths and closing lines; command help shows full manifest forms', async () => {
+test('root help keeps its first line, grouped commands, learn paths and closing lines; command help shows wrapped manifest forms without root footer', async () => {
   const outputs = await Promise.all(ROOT_HELP.map(argv => pdd(argv)));
   for (const output of outputs) assert.equal(output.stdout, outputs[0].stdout);
-  const rootHelp = lines(outputs[0].stdout), scoped = lines((await pdd(['test', '--help'])).stdout);
-  const testRows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.split(' ')[1] === 'test').map(formLine);
-  // Command help: first line, empty line, its own forms, empty line and closingLines; no learn or path lines.
-  assert.equal(scoped[1], ''); assert.deepEqual(scoped.slice(2, 2 + testRows.length), testRows); assert.equal(scoped[2 + testRows.length], '');
-  const closing = scoped.slice(3 + testRows.length);
-  assert.deepEqual(closing, PUBLIC_HELP_TEXT.closingLines);
-  assert.doesNotMatch(scoped.join('\n'), /help prompting|prompting-guide\.md|RUNBOOK\.md/);
+  const rootHelp = lines(outputs[0].stdout), scopedRaw = (await pdd(['test', '--help'])).stdout;
+  const scoped = lines(scopedRaw), scopedUnwrapped = lines(scopedRaw.replace(/\n      /g, ' '));
+  const testForms = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.split(' ')[1] === 'test').map(({ form }) => `  ${form}`);
+  // Command help: first line, empty line, its own wrapped forms + descriptions, and no root closing/learn footer.
+  assert.equal(scoped[1], '');
+  for (const formHeader of testForms) assert.ok(scopedUnwrapped.includes(formHeader), `missing form header: ${formHeader}`);
+  for (const closingLine of PUBLIC_HELP_TEXT.closingLines) assert.ok(!scoped.includes(closingLine), `subcommand help should omit root closingLine: ${closingLine}`);
+  assert.doesNotMatch(scoped.join('\n'), /help prompting|skills\/pdd\/SKILL\.md|references\/prompting\.md/);
   // Root help: the same first line, usage, quick start, grouped summaries, focused help note, learn/path lines, and closing lines.
+  const closing = PUBLIC_HELP_TEXT.closingLines;
   const expectedBody = [
     PUBLIC_HELP_TEXT.usageLine, '',
     'Quick start:', ...PUBLIC_HELP_TEXT.quickStartLines, '',
@@ -133,7 +135,7 @@ test('root help keeps its first line, grouped commands, learn paths and closing 
   const rest = rootHelp.slice(2 + expectedBody.length);
   assert.equal(rest[3], ''); assert.deepEqual(rest.slice(4), closing);
   assert.ok(rest[0].includes('pdd help prompting'), rest[0]);
-  assert.ok(rest[1].endsWith(`/${FILES.guide}`) && rest[2].endsWith(`/${FILES.runbook}`), rest.join('\n'));
+  assert.ok(rest[1].endsWith(`/${FILES.skill}`) && rest[2].endsWith(`/${FILES.guide}`), rest.join('\n'));
   // The topic: the same first line, the steps, then only the two path lines; no closing lines.
   const topic = lines((await pdd(TOPIC)).stdout);
   assert.equal(topic[0], rootHelp[0]); assert.equal(topic[1], ''); assert.equal(topic.at(-3), '');
@@ -141,7 +143,7 @@ test('root help keeps its first line, grouped commands, learn paths and closing 
   for (const line of closing) assert.ok(!topic.includes(line), line);
   const text = topic.join('\n');
   for (const name of ['prompts/NAME.prompt.md', '## Dependencies', 'user_stories/STORY.md', 'Acceptance criteria',
-    'tests/STORY.json', 'pdd test', 'pdd lint', 'pdd approve']) assert.ok(text.includes(name), name);
+    'tests/STORY.json', 'pdd test', 'pdd lint', 'pdd approve', 'pdd prove']) assert.ok(text.includes(name), name);
   for (const pattern of [/\bpdd check\b/, /\bpdd try\b/, /\bworkflow start\b/, /simulat/i]) {
     assert.doesNotMatch(text, pattern); assert.doesNotMatch(rest.join('\n'), pattern);
   }

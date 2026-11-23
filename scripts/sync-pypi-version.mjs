@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -11,6 +11,16 @@ export function normalizeReleaseTag(tag) {
   const trimmed = tag.trim().replace(/^refs\/tags\//, '');
   const match = /^(?:alpha-)?v?(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)$/.exec(trimmed);
   return match ? match[1] : null;
+}
+
+/** Convert a SemVer version (including -alpha/-beta/-rc prereleases) to its PEP 440 PyPI equivalent. */
+export function toPep440Version(version) {
+  const raw = String(version).trim();
+  const match = /^(\d+\.\d+\.\d+)-(alpha|a|beta|b|rc)\.?(\d+)$/i.exec(raw);
+  if (!match) return raw;
+  const [, base, label, num] = match;
+  const l = label.toLowerCase();
+  return `${base}${l.startsWith('a') ? 'a' : l.startsWith('b') ? 'b' : 'rc'}${num}`;
 }
 
 export function readPyprojectField(pyprojectText, fieldName) {
@@ -55,11 +65,12 @@ export function checkVersionParity({ root = DEFAULT_ROOT, tag = null } = {}) {
   if (typeof npmVersion !== 'string' || !npmVersion) {
     problems.push('package.json is missing a valid version string.');
   }
-  if (pyprojectVersion !== npmVersion) {
-    problems.push(`python/pyproject.toml version (${pyprojectVersion ?? 'missing'}) != package.json version (${npmVersion}).`);
+  const expectedPyVersion = typeof npmVersion === 'string' && npmVersion ? toPep440Version(npmVersion) : npmVersion;
+  if (pyprojectVersion !== expectedPyVersion) {
+    problems.push(`python/pyproject.toml version (${pyprojectVersion ?? 'missing'}) != expected PEP 440 version (${expectedPyVersion}) for package.json (${npmVersion}).`);
   }
-  if (pyInitVersion !== npmVersion) {
-    problems.push(`python/pdd_cli/__init__.py __version__ (${pyInitVersion ?? 'missing'}) != package.json version (${npmVersion}).`);
+  if (pyInitVersion !== expectedPyVersion) {
+    problems.push(`python/pdd_cli/__init__.py __version__ (${pyInitVersion ?? 'missing'}) != expected PEP 440 version (${expectedPyVersion}) for package.json (${npmVersion}).`);
   }
   if (tag !== null && tag !== undefined && String(tag).trim() !== '') {
     const tagVersion = normalizeReleaseTag(tag);
@@ -73,6 +84,7 @@ export function checkVersionParity({ root = DEFAULT_ROOT, tag = null } = {}) {
   return {
     ok: problems.length === 0,
     version: npmVersion,
+    pyVersion: expectedPyVersion,
     pyprojectVersion,
     pyInitVersion,
     tagVersion: tag ? normalizeReleaseTag(tag) : null,
@@ -86,6 +98,7 @@ export function syncPypiVersion({ root = DEFAULT_ROOT } = {}) {
   if (typeof version !== 'string' || !version) {
     throw new Error('package.json is missing a valid version string.');
   }
+  const pyVersion = toPep440Version(version);
 
   const pyprojectPath = join(root, 'python', 'pyproject.toml');
   const pyprojectText = readFileSync(pyprojectPath, 'utf8');
@@ -101,7 +114,7 @@ export function syncPypiVersion({ root = DEFAULT_ROOT } = {}) {
       }
       if (inProject && !replacedPyproject && /^version\s*=\s*"[^"]+"/.test(trimmed)) {
         replacedPyproject = true;
-        return line.replace(/version\s*=\s*"[^"]+"/, `version = "${version}"`);
+        return line.replace(/version\s*=\s*"[^"]+"/, `version = "${pyVersion}"`);
       }
       return line;
     })
@@ -116,10 +129,10 @@ export function syncPypiVersion({ root = DEFAULT_ROOT } = {}) {
   if (!/^__version__\s*=\s*"[^"]+"/m.test(pyInitText)) {
     throw new Error('Could not find __version__ = "..." in python/pdd_cli/__init__.py.');
   }
-  const updatedInit = pyInitText.replace(/^__version__\s*=\s*"[^"]+"/m, `__version__ = "${version}"`);
+  const updatedInit = pyInitText.replace(/^__version__\s*=\s*"[^"]+"/m, `__version__ = "${pyVersion}"`);
   writeFileSync(pyInitPath, updatedInit);
 
-  return version;
+  return pyVersion;
 }
 
 const STAGE_SCRUB_EXACT_KEYS = new Set([
@@ -136,6 +149,58 @@ const STAGE_SCRUB_CI_KEYS = new Set([
   'npm_config_pypi_only',
   'npm_config_cache',
 ]);
+
+function findInstalledDep(rootDir, fromDir, depName) {
+  const parts = depName.split('/');
+  const rootResolved = resolve(rootDir);
+  let cursor = resolve(fromDir);
+  while (true) {
+    const candidate = join(cursor, 'node_modules', ...parts);
+    if (existsSync(join(candidate, 'package.json'))) return candidate;
+    if (cursor === rootResolved) return null;
+    const parent = dirname(cursor);
+    if (parent === cursor) return null;
+    cursor = parent;
+  }
+}
+
+export function resolveProductionDependencies(root = DEFAULT_ROOT) {
+  const rootResolved = resolve(root);
+  const rootManifest = JSON.parse(readFileSync(join(rootResolved, 'package.json'), 'utf8'));
+  const visited = new Map();
+  const queue = [{ dir: rootResolved, manifest: rootManifest, label: rootManifest.name || 'root' }];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const optionalSet = new Set(Object.keys(current.manifest.optionalDependencies ?? {}));
+    const requiredDeps = Object.keys(current.manifest.dependencies ?? {}).filter(name => !optionalSet.has(name));
+    const peerDeps = Object.keys(current.manifest.peerDependencies ?? {});
+
+    const enqueueDep = (depName, optional) => {
+      const resolvedDir = findInstalledDep(rootResolved, current.dir, depName);
+      if (!resolvedDir) {
+        if (optional) return;
+        throw new Error([
+          `Location: ${join(rootResolved, 'node_modules', ...depName.split('/'))}`,
+          `Invariant: PyPI bundle staging requires the full resolved production dependency closure on disk (missing "${depName}" required by "${current.label}").`,
+          'Fix: Run `npm ci --ignore-scripts` in the repository root to install all production dependencies.',
+          'Rerun: node scripts/sync-pypi-version.mjs --stage-bundle',
+        ].join('\n'));
+      }
+      const relPath = relative(rootResolved, resolvedDir);
+      if (visited.has(relPath)) return;
+      const depManifest = JSON.parse(readFileSync(join(resolvedDir, 'package.json'), 'utf8'));
+      visited.set(relPath, { name: depName, srcDir: resolvedDir, relPath });
+      queue.push({ dir: resolvedDir, manifest: depManifest, label: depManifest.name || depName });
+    };
+
+    for (const depName of requiredDeps) enqueueDep(depName, false);
+    for (const depName of optionalSet) enqueueDep(depName, true);
+    for (const depName of peerDeps) enqueueDep(depName, true);
+  }
+
+  return [...visited.values()].sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
+}
 
 export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDir = null, env: sourceEnv = process.env } = {}) {
   const parity = checkVersionParity({ root });
@@ -171,17 +236,26 @@ export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDi
 
     const extractedPkg = join(extractDir, 'package');
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-    for (const dep of Object.keys(manifest.dependencies ?? {})) {
-      const srcDep = join(root, 'node_modules', dep);
-      if (!existsSync(srcDep)) {
-        throw new Error(`Missing installed dependency ${dep} at ${srcDep}. Run npm ci first.`);
-      }
-      const dstDep = join(extractedPkg, 'node_modules', dep);
+    const prodDeps = resolveProductionDependencies(root);
+    for (const dep of prodDeps) {
+      const dstDep = join(extractedPkg, dep.relPath);
+      const nestedModulesDir = join(dep.srcDir, 'node_modules');
       mkdirSync(dirname(dstDep), { recursive: true });
-      cpSync(srcDep, dstDep, { recursive: true, dereference: true });
+      cpSync(dep.srcDir, dstDep, {
+        recursive: true,
+        dereference: true,
+        filter: src => src !== nestedModulesDir,
+      });
     }
 
     cpSync(extractedPkg, bundleDir, { recursive: true, dereference: true });
+    const binEntries = typeof manifest.bin === 'string'
+      ? [manifest.bin]
+      : Object.values(manifest.bin ?? {});
+    for (const relBin of binEntries) {
+      const binPath = join(bundleDir, relBin);
+      if (existsSync(binPath)) chmodSync(binPath, 0o755);
+    }
     const entryMjs = join(bundleDir, 'bin', 'pdd.mjs');
     chmodSync(entryMjs, 0o755);
 

@@ -96,23 +96,6 @@ test('native execution passes the CPU list and hint through an injected spawner'
   }
 });
 
-test('native run admission enforces calculated capacity while coordinator identity stays current',async()=>{
-  const {checkDependencyStart}=await import('../src/issue-dependencies-intake.mjs');
-  const repository='example/repo', issue=`https://github.com/${repository}/issues/99`;
-  const coordinator={repository,coordinatorId:'c',machine:'m',activation:'a',claim:{commentId:'1',labelEventId:'2'}};
-  const claim={issue,active:true,owner:'c',coordinatorId:'c',machine:'m',commentId:'1',labelEventId:'2'};
-  for(const [cap,explicit,expected] of [[1,undefined,false],[2,undefined,false],[3,undefined,true],[3,1,false],[1,3,true]]) {
-    const ports={
-      github:{issue:async args=>({json:JSON.stringify(args.repository===repository&&args.issue===99?{number:99,labels:[]}: {error:'not-found'})})},
-      settings:{read:async()=>({mode:'auto',activation:'a',capacityRuns:cap,...(explicit?{runs:explicit}:{})})},
-      owners:{read:async()=>({json:JSON.stringify({localOwner:'c',runsKnown:true,claims:[claim],runs:[{issue:'https://github.com/example/repo/issues/1',runId:'one',state:'working'},{issue:'https://github.com/example/repo/issues/2',runId:'two',state:'working'}]})})},
-      snapshots:{read:async()=>({snapshot:{repository,complete:true,issues:[{key:issue,nodeId:'99',title:'Ready',revision:'a'.repeat(64),state:'open',authority:'trusted',assignees:[],conditions:[],execution:'idle',holds:[]}],edges:[],reviews:[{id:'review',issue,authority:'trusted',intact:true,outcome:'complete',analysis:'Independent work',base:[],continuation:'',inputs:[{key:issue,revision:'a'.repeat(64)}],candidates:[{key:issue,revision:'a'.repeat(64)}],dependencies:[],questions:[],effects:'none'}],impacts:[],inputs:[]}})},
-    };
-    const result=await checkDependencyStart({repository,issue,coordinator:{...coordinator,...(explicit?{runs:explicit}:{})}},ports);
-    assert.deepEqual(result,{allowed:expected,reason:expected?'ok':'runs'},'current machine capacity controls native admission');
-  }
-});
-
 test('enabling affinity waits for an unconstrained running check to finish',async t=>{
   const f=fixture(t,{count:64,taskset:null});
   await queue.configureCheckCapacity({env:f.env},f.ports);f.run();await until(()=>f.calls.length===1);
@@ -138,15 +121,25 @@ test('invalid observations fail before heavy execution',async t=>{
 });
 
 test('native settings reads the saved machine run cap separately from an explicit override',async t=>{
-  const {fixture:workflowFixture}=await import('./helpers/workflow-runner-fixture.mjs');
+  const {execFileSync}=await import('node:child_process');
   const {createDependencyReadPorts}=await import('../src/issue-dependencies-github.mjs');
   const {createHash}=await import('node:crypto');
-  const {writeFileSync}=await import('node:fs');
-  const f=await workflowFixture(t), stateRoot=join(f.base,'autopilot'), repository='example/project';mkdirSync(stateRoot);
-  writeFileSync(join(f.source,'pdd.json'),JSON.stringify({autopilot:{mode:'auto'}}));
-  const path=join(stateRoot,`${createHash('sha256').update(f.source).digest('hex').slice(0,20)}.json`);
-  const state={repo:repository,cwd:f.source,enabled:true,activatedAt:'a',checkCapacity:{runs:10}};
-  const read=()=>createDependencyReadPorts({cwd:f.source},{...f.ports,autopilotStateRoot:stateRoot}).settings.read({cwd:f.source,repository});
+  const {realpathSync,writeFileSync}=await import('node:fs');
+  const base=realpathSync(mkdtempSync(join(tmpdir(),'pdd-machine-settings-')));
+  t.after(()=>rmSync(base,{recursive:true,force:true}));
+  const source=join(base,'repo'), stateRoot=join(base,'autopilot'), repository='example/project';
+  mkdirSync(source); mkdirSync(stateRoot);
+  execFileSync('git',['init','-q'],{cwd:source});
+  execFileSync('git',['remote','add','origin',`https://github.com/${repository}.git`],{cwd:source});
+  writeFileSync(join(source,'pdd.json'),JSON.stringify({autopilot:{mode:'auto'}}));
+  const execFile=async(file,args,opts={})=>{
+    if(file==='git')return {code:0,stdout:execFileSync(file,args,{cwd:opts.cwd??source,encoding:'utf8'}),stderr:''};
+    if(file==='gh'&&args[0]==='repo')return {code:0,stdout:JSON.stringify({nameWithOwner:repository,defaultBranchRef:{name:'main'},url:`https://github.com/${repository}`}),stderr:''};
+    throw Error(`unexpected command ${file} ${args.join(' ')}`);
+  };
+  const path=join(stateRoot,`${createHash('sha256').update(source).digest('hex').slice(0,20)}.json`);
+  const state={repo:repository,cwd:source,enabled:true,activatedAt:'a',checkCapacity:{runs:10}};
+  const read=()=>createDependencyReadPorts({cwd:source},{execFile,autopilotStateRoot:stateRoot}).settings.read({cwd:source,repository});
   writeFileSync(path,JSON.stringify(state));
   assert.deepEqual(await read(),{mode:'auto',activation:'a',capacityRuns:10});
   state.checkCapacity.runs=2;state.runs=7;writeFileSync(path,JSON.stringify(state));

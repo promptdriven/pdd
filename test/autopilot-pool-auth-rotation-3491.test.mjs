@@ -10,9 +10,9 @@ import {
   isQuotaExhaustionMessage,
   listCloudAccounts,
   readCloudAccountsState,
-  selectPoolLogin,
   writeCloudAccountsState,
 } from '../src/login-pool.mjs';
+import { selectPoolLogin } from '../src/autopilot/local-pool.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 
 const MIN = 60_000, HOUR = 60 * MIN;

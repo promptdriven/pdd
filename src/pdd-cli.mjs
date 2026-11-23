@@ -1,31 +1,53 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 781319c7b1844d0be7a6d9cae4a5b4005b074a0042fb38a875fabbf5cbbb000c).
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+// Prompt: prompts/cli/pdd-cli.prompt.md
+import { spawnSync } from 'node:child_process';
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { basename, delimiter, isAbsolute, join } from 'node:path';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
-import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
-import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
-import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
-import { findSkills as defaultFindSkills, setupSkills as defaultSetupSkills, syncOwnedUserSkills as defaultSyncOwnedUserSkills } from './skills-install.mjs';
-import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
-import { checkWorkflowAgents } from './workflow-agents.mjs';
-import { setupMayAsk } from './setup-interaction.mjs';
-import { setupWithWorkflowAgent } from './workflow-setup.mjs';
-import { causeText, runtimeOutputSlice } from './runtime-seam.mjs';
+import { gitContext as defaultGitContext, gitFiles } from './shared/git-context.mjs';
+import { PACKAGE_ROOT } from './shared/package-root.mjs';
+import { causeText } from './shared/safe-read.mjs';
+import { resolvePddStateBase } from './shared/state-dir.mjs';
 
-runtimeOutputSlice();
-
-const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 async function maybeCheckReleaseNotice(releaseNotice, input, ports) {
   if (releaseNotice) return releaseNotice(input, ports);
-  const home = input.env?.HOME || homedir();
-  const stateHome = ports?.stateHome ?? (input.env?.XDG_STATE_HOME || (home ? join(home, '.local', 'state') : null));
-  if (!input.interactive && !ports?.fetchLatestRelease && !(stateHome && existsSync(join(stateHome, 'pdd', 'release-check.json')))) return null;
+  const resolvedHome = input.env?.HOME || homedir();
+  const stateDir = ports?.stateHome
+    ? join(ports.stateHome, 'pdd')
+    : resolvePddStateBase(resolvedHome ? { ...input.env, HOME: resolvedHome } : input.env);
+  if (!input.interactive && !ports?.fetchLatestRelease && !(stateDir && existsSync(join(stateDir, 'release-check.json')))) return null;
   const { checkReleaseNotice } = await import('./release-notice.mjs');
   return checkReleaseNotice(input, ports);
+}
+
+function hasExecutableOnPath(name, env) {
+  return (env?.PATH ?? '').split(delimiter).filter(Boolean).some(dir => {
+    try { accessSync(join(dir, name), constants.X_OK); return true; } catch { return false; }
+  });
+}
+
+function hasGhHostsConfig(env) {
+  const configDir = (env?.GH_CONFIG_DIR && env.GH_CONFIG_DIR.trim())
+    || (env?.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim()
+      ? join(env.XDG_CONFIG_HOME.trim(), 'gh')
+      : join(env?.HOME || homedir(), '.config', 'gh'));
+  try { return existsSync(join(configDir, 'hosts.yml')); } catch { return false; }
+}
+
+function checkPddAccountNonBlocking(env) {
+  if (!hasExecutableOnPath('gh', env)) return { checked: false, connected: false };
+  if ((env?.GH_TOKEN && env.GH_TOKEN.trim()) || (env?.GITHUB_TOKEN && env.GITHUB_TOKEN.trim())) {
+    return { checked: true, connected: true };
+  }
+  // Avoid spawning `gh` when unconfigured, because `gh` creates `$HOME/.local/state/gh` on startup.
+  if (!hasGhHostsConfig(env)) return { checked: false, connected: false };
+  try {
+    const res = spawnSync('gh', ['auth', 'token'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500 });
+    return { checked: true, connected: !res.error && res.status === 0 && Boolean(res.stdout?.trim()) };
+  } catch {
+    return { checked: true, connected: false };
+  }
 }
 const defaultReadPackageVersion = ({ packageRoot }) => {
   try { const { version } = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
@@ -42,86 +64,36 @@ function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
     for (const row of rows) {
       if (row.native_only?.length) {
         const nativePaths = new Set(row.native_only.map(item => item.path));
-        const checkableEntries = (row.steps ?? [])
-          .map(step => step?.entry_path)
-          .filter(entry => typeof entry === 'string' && !nativePaths.has(entry));
-        if (checkableEntries.length) {
-          const entryPath = checkableEntries[0];
-          const adapter = row.native_only[0];
-          return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: adapter.path, native_only_reason: adapter.reason };
-        }
+        const entryPath = (row.steps ?? []).map(s => s?.entry_path).find(e => typeof e === 'string' && !nativePaths.has(e));
+        if (entryPath) return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: row.native_only[0].path };
       }
-      // Plain-Markdown prompts without embedded interfaces may still link kind: native-only adapters
-      // via Markdown links; walk their dependency closure using runtime's prompt/link readers.
-      const nativeInfoFor = prompt => {
-        if (!prompt) return null;
-        if (prompt.interface?.kind === 'native-only') return { reason: prompt.interface.reason ?? '' };
-        const fm = prompt.frontmatter ?? (typeof prompt.text === 'string' ? runtime.parsePromptFrontmatter?.(prompt.text)?.frontmatter : null);
-        if (fm?.kind === 'native-only') return { reason: fm.reason ?? '' };
-        return null;
-      };
-      const entryPaths = [...new Set((row.steps ?? []).map(step => step?.entry_path).filter(p => typeof p === 'string' && p.endsWith('.prompt.md')))];
+      const isNative = p => p?.interface?.kind === 'native-only' || (p?.frontmatter ?? (typeof p?.text === 'string' ? runtime.parsePromptFrontmatter?.(p.text)?.frontmatter : null))?.kind === 'native-only';
+      const entryPaths = [...new Set((row.steps ?? []).map(s => s?.entry_path).filter(p => typeof p === 'string' && p.endsWith('.prompt.md')))];
       for (const entryPath of entryPaths) {
         if (!found.visible?.has(entryPath)) continue;
         let entryPrompt;
         try { entryPrompt = runtime.readPrompt(cwd, found.visible, entryPath, found.workspace); } catch { continue; }
-        if (nativeInfoFor(entryPrompt)) continue;
-        const visited = new Set([entryPath]);
-        const queue = [];
-        const enqueueTargets = (prompt, fromPath) => {
-          for (const call of Array.isArray(prompt?.interface?.calls) ? prompt.interface.calls : []) {
-            if (typeof call?.target === 'string' && !visited.has(call.target)) queue.push(call.target);
-          }
-          if (typeof prompt?.text === 'string' && typeof runtime.promptMarkdownTargets === 'function') {
-            for (const target of runtime.promptMarkdownTargets(prompt.text, fromPath, found.visible)) {
-              if (typeof target === 'string' && !visited.has(target)) queue.push(target);
-            }
-          }
+        if (isNative(entryPrompt)) continue;
+        const visited = new Set([entryPath]), queue = [];
+        const enqueue = (p, from) => {
+          for (const c of Array.isArray(p?.interface?.calls) ? p.interface.calls : []) if (typeof c?.target === 'string' && !visited.has(c.target)) queue.push(c.target);
+          if (typeof p?.text === 'string' && typeof runtime.promptMarkdownTargets === 'function')
+            for (const t of runtime.promptMarkdownTargets(p.text, from, found.visible)) if (typeof t === 'string' && !visited.has(t)) queue.push(t);
         };
-        enqueueTargets(entryPrompt, entryPath);
+        enqueue(entryPrompt, entryPath);
         while (queue.length > 0 && visited.size < 64) {
           const depPath = queue.shift();
           if (visited.has(depPath) || !found.visible?.has(depPath)) continue;
           visited.add(depPath);
           let depPrompt;
           try { depPrompt = runtime.readPrompt(cwd, found.visible, depPath, found.workspace); } catch { continue; }
-          const nativeInfo = nativeInfoFor(depPrompt);
-          if (nativeInfo) {
-            return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: depPath, native_only_reason: nativeInfo.reason };
-          }
-          enqueueTargets(depPrompt, depPath);
+          if (isNative(depPrompt)) return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: depPath };
+          enqueue(depPrompt, depPath);
         }
       }
     }
-  } catch { /* delegate workspace/selection errors to runtime[action] */ }
+  } catch {}
   return null;
-}
-function resolveProjectLintRoot(cwd) {
-  try {
-    const gitTop = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 10_000,
-    }).trim();
-    return gitTop ? realpathSync(gitTop) : null;
-  } catch { return null; }
-}
-async function collectProjectLintErrors(runtime, root, words, options) {
-  try {
-    const { lintRepoProject } = await import('./repo-hygiene-lint.mjs');
-    if (!words.length) return lintRepoProject({ root }).errors;
-    const found = runtime.findTests({ root });
-    const { selected, unknown } = runtime.selectTests(found, words, options);
-    if (unknown?.length || !selected?.length) return [];
-    const { rows } = runtime.preflight({ root, found, selected, allowMissingInterfaces: true });
-    const promptSet = new Set();
-    for (const row of rows) {
-      for (const step of row.steps ?? []) if (typeof step?.entry_path === 'string') promptSet.add(step.entry_path);
-      for (const p of row.prompts ?? []) if (typeof p === 'string') promptSet.add(p);
-    }
-    return lintRepoProject({ root, promptPaths: [...promptSet], tests: selected }).errors;
-  } catch { return []; }
 }
 const line = (stream, text) => stream.write(`${text}\n`);
 // The real reason of an unexpected error, after the fixed safe line.
@@ -138,12 +110,6 @@ async function autopilotGithub(module, name, input, ports, fallback = '') {
   try { return (await (module ?? await import('./autopilot-github.mjs'))[name](input, ports))?.message || ''; }
   catch { return fallback; }
 }
-// The autopilot value of the root pdd.json, or undefined when there is none.
-function savedAutopilot(root) {
-  if (!root) return undefined;
-  try { const config = JSON.parse(readFileSync(join(root, 'pdd.json'), 'utf8')); return config !== null && typeof config === 'object' ? config.autopilot : undefined; }
-  catch { return undefined; }
-}
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
@@ -152,35 +118,86 @@ const staleLine = ({ found, stale, staleSkills = [] }, version, cwd) => {
     ? `${name} is ${version ?? 'unknown'}` : `${name} differs (version ${version ?? 'unknown'})`).join(', ');
   return `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}.${details ? ` ${details}.` : ''} For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.codex/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
 };
-const profileOptions = plan => Object.fromEntries([['--model','model'],['--herdr-agent-name','herdrAgentName'],['--codex-threads','codexThreads']].filter(([flag]) => plan.options[flag] !== undefined).map(([flag,key]) => [key,plan.options[flag]]));
-const RUNNER_ROUTES = {
-  'workflow-suite': plan => ['runSuite', {command:plan.options['--command'], ...(plan.options['--timeout'] !== undefined ? {timeout:Number(plan.options['--timeout'])} : {})}],
-  'workflow-request-uptake': plan => ['acknowledgeRequest', { requestId: plan.operands[0], summary: plan.options['--summary'] }],
-  'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], ...profileOptions(plan), agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--origin'] !== undefined ? {origin:plan.options['--origin']} : {}), ...(plan.options['--decision-id'] !== undefined ? {decisionId:plan.options['--decision-id']} : {}), ...(plan.options['--outcome'] !== undefined ? {outcome:plan.options['--outcome']} : {}), ...(plan.options['--through'] !== undefined ? {through:plan.options['--through']} : {}) }],
-  'workflow-evidence-associate': plan => ['associateEvidenceWorkspace', { ref: plan.operands[0], workspace: plan.options['--workspace'], stage: plan.options['--stage'], ...(plan.options['--commit'] !== undefined ? { commit: plan.options['--commit'] } : {}), tests: plan.options['--test'] }],
-  'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
-  'workflow-park': plan => ['parkAutomaticRun', { reason: plan.options['--reason'], ...(plan.options['--route'] === undefined ? {} : {route: plan.options['--route']}), step: plan.options['--step'], runtime: plan.options['--interpreter'] === true, ...(plan.options['--blocker'] === undefined ? {} : {blocker: plan.options['--blocker']}), ...(plan.options['--until'] === undefined ? {} : {until: plan.options['--until']}) }],
-  'workflow-yield': plan => ['yieldAutomaticCapacity', { ref: plan.operands[0] }],
-  'workflow-publish': plan => ['publishRun', { ref: plan.operands[0] }],
-  'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}), ...(plan.options['--skipped'] !== undefined ? { skipped: plan.options['--skipped'] } : {}), ...(plan.options['--no-publish'] ? { noPublish: true } : {}) }],
-  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--said'] !== undefined ? { said: plan.options['--said'] } : {}), ...(plan.options['--draft'] !== undefined ? { draft: plan.options['--draft'] } : {}), ...(plan.options['--through'] !== undefined ? { through: plan.options['--through'] } : {}) }],
-  'workflow-resend': plan => ['resendChecks', { refs: plan.operands, ...(plan.options['--said'] !== undefined ? {said:plan.options['--said']} : {}) }],
-  'workflow-card': plan => ['showStoryCard', { ref: plan.operands[0] }],
-  'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
-  'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
-  'workflow-tidy': plan => ['tidyRuns', { dryRun: Boolean(plan.options['--dry-run']) }],
-  'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
-  'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json', 'local'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
-  'workflow-open': plan => ['openRun', { ...profileOptions(plan), ref: plan.operands[0], ...(plan.operands[1] !== undefined ? { area: plan.operands[1] } : {}), ...(plan.options['--new'] ? { newSession: true } : {}) }],
-};
 const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));
 const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '', ...PUBLIC_HELP_TEXT.promptingLines, '', ...packageLines(packageRoot).slice(1)].join('\n');
+function tokenizeHelpForm(form) {
+  const units = [];
+  let cur = '';
+  let depth = 0;
+  for (const ch of String(form ?? '').trim()) {
+    if (ch === '[') { depth += 1; cur += ch; continue; }
+    if (ch === ']') { depth = Math.max(0, depth - 1); cur += ch; continue; }
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) { units.push(cur); cur = ''; }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) units.push(cur);
+  return units;
+}
+function wrapHelpForm(form, width = 80) {
+  const firstIndent = '  ';
+  const contIndent = '      ';
+  const lines = [];
+  let line = '';
+  const flush = () => {
+    if (!line) return;
+    lines.push(`${lines.length === 0 ? firstIndent : contIndent}${line}`);
+    line = '';
+  };
+  for (const unit of tokenizeHelpForm(form)) {
+    const indent = lines.length === 0 ? firstIndent : contIndent;
+    const maxBody = width - indent.length;
+    if (!line && unit.length <= maxBody) { line = unit; continue; }
+    if (line && line.length + 1 + unit.length <= maxBody) { line += ` ${unit}`; continue; }
+    flush();
+    const nextMax = width - contIndent.length;
+    if (unit.length <= nextMax || !unit.includes('|')) {
+      line = unit;
+      continue;
+    }
+    // Wrap overlong pipe-delimited enums cleanly at `|` boundaries within 80 columns.
+    const parts = unit.split('|');
+    let chunk = '';
+    for (let i = 0; i < parts.length; i += 1) {
+      const sep = i < parts.length - 1 ? '|' : '';
+      const seg = `${parts[i]}${sep}`;
+      if (!chunk) { chunk = seg; continue; }
+      if (chunk.length + seg.length <= nextMax) chunk += seg;
+      else { lines.push(`${lines.length === 0 ? firstIndent : contIndent}${chunk}`); chunk = seg; }
+    }
+    line = chunk;
+  }
+  flush();
+  return lines;
+}
+function wrapHelpDescription(text, width = 76, indent = '    ') {
+  const out = [];
+  for (const rawLine of String(text ?? '').split('\n')) {
+    if (!rawLine.trim()) { out.push(''); continue; }
+    // Preserve short code/heredoc lines (like `pdd approve ... <<'PDD_SAID'`) verbatim without re-wrapping.
+    if (/^(?:pdd\s|<|PDD_SAID$)/.test(rawLine)) { out.push(`${indent}${rawLine}`); continue; }
+    let line = '';
+    for (const word of rawLine.trim().split(/\s+/)) {
+      if (!line) { line = word; continue; }
+      if (line.length + 1 + word.length <= width) line += ` ${word}`;
+      else { out.push(`${indent}${line}`); line = word; }
+    }
+    if (line) out.push(`${indent}${line}`);
+  }
+  return out;
+}
 export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
   if (prefix.length > 0) {
     const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) =>
       prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
-    return [PUBLIC_HELP_TEXT.heading, '', ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-      ...PUBLIC_HELP_TEXT.closingLines].join('\n');
+    const blocks = rows.flatMap(({ form, description }, index) => [
+      ...(index ? [''] : []),
+      ...wrapHelpForm(form, 80),
+      ...wrapHelpDescription(description, 76, '    '),
+    ]);
+    return [PUBLIC_HELP_TEXT.heading, '', ...blocks].join('\n');
   }
   return [
     PUBLIC_HELP_TEXT.heading, '',
@@ -192,41 +209,80 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
     ...PUBLIC_HELP_TEXT.closingLines,
   ].join('\n');
 }
+const LINT_FORBIDDEN_TEST_FLAGS = [
+  '--affected', '--journeys', '--lf', '--cache-clear', '--fresh', '--read', '--retry',
+  '--reconcile', '--explain-bindings', '--files', '--screen', '--drawing', '--look',
+  '--target', '--max-total-calls', '--no-restart-replacement', '--app-map', '--request',
+];
+const SCENARIO_JSON_RE = /(?:^|\/)(?:tests?|__tests__)\/(?:runtime\/)?[^/]+\.json$/i;
+const NATIVE_STORY_MARKER_RE = /^(?:##\s+Native\s+validation\b|kind:\s*native\b)/im;
+const SKIP_SKILL_SYNC_ROUTES = new Set([
+  'help', 'version', 'version-detailed', 'completion',
+  'autopilot-alerts', 'autopilot-alert',
+  'project-files', 'file-owner', 'status', 'init', 'lint', 'prove', 'update-sync',
+  'mcp', 'setup', 'upgrade', 'autopilot-logs',
+]);
+
+function resolveLintRoot(cwd) {
+  try {
+    const out = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+    if (out.status === 0 && out.stdout?.trim()) return out.stdout.trim();
+  } catch {}
+  return cwd;
+}
+
+async function collectProjectLintErrors(runtime, root, words, options) {
+  try {
+    const { lintRepoProject } = await import('./repo-hygiene-lint.mjs');
+    if (!words.length) return lintRepoProject({ root }).errors;
+    const found = runtime.findTests({ root });
+    const { selected, unknown } = runtime.selectTests(found, words, options);
+    if (unknown?.length || !selected?.length) return [];
+    const { rows } = runtime.preflight({ root, found, selected, allowMissingInterfaces: true });
+    const promptSet = new Set();
+    for (const row of rows) {
+      for (const step of row.steps ?? []) if (typeof step?.entry_path === 'string') promptSet.add(step.entry_path);
+      for (const p of row.prompts ?? []) if (typeof p === 'string') promptSet.add(p);
+    }
+    return lintRepoProject({ root, promptPaths: [...promptSet], tests: selected }).errors;
+  } catch { return []; }
+}
+
+function inspectLocalLintRepoFeatures(cwd) {
+  let hasNativeStory = false;
+  let hasScenarioJson = false;
+  const root = resolveLintRoot(cwd);
+  let files = [];
+  try { files = gitFiles(root); } catch { files = []; }
+  for (const rel of files) {
+    if (!hasScenarioJson && SCENARIO_JSON_RE.test(rel)) hasScenarioJson = true;
+    if (!hasNativeStory && /^(?:user_stories|stories)\/.*\.md$/i.test(rel)) {
+      try {
+        const text = readFileSync(join(root, rel), 'utf8');
+        if (NATIVE_STORY_MARKER_RE.test(text)) hasNativeStory = true;
+      } catch {}
+    }
+    if (hasNativeStory && hasScenarioJson) break;
+  }
+  return { hasNativeStory, hasScenarioJson };
+}
+
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
-  autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, syncOwnedUserSkills = defaultSyncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
+  autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents, workflowAgentPorts = {}, setupSkills,
+  setupProject, initProject, projectStatus, localLint, localLintPorts = {}, proveRunner, proveRunnerPorts = {}, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic,
+  readPackageVersion = defaultReadPackageVersion, findSkills, syncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
-  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'update-sync', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
-    && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
-    && plan.options['--json'] !== true
-    && !argv.includes('--json')) {
+  if (['setup', 'version'].includes(plan.local)) {
     try {
-      const { updated } = syncOwnedUserSkills({
-        packageRoot,
-        home: env.HOME || homedir(),
-        claudeConfigDir: env.CLAUDE_CONFIG_DIR,
-        ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
-        ...(env.PDD_STATE_DIR ? { stateRoot: env.PDD_STATE_DIR } : {}),
-      });
-      if (updated?.length > 0 && stderr?.isTTY === true) {
-        const metadata = await readPackageVersion({ packageRoot });
-        if (metadata?.ok && typeof metadata.version === 'string' && metadata.version)
-          line(stderr, `Updated PDD skills to ${metadata.version} (${updated.join(', ')}).`);
-      }
-    } catch { /* Post-upgrade skill sync never blocks or fails a CLI command. */ }
-  }
-  if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
-    try {
-      const mode = plan.local === 'workflow-run' ? 'workflow' : plan.local;
-      for (const message of pathDiagnostic({ packageRoot, cwd, env, mode })) line(stderr, message);
+      const diagFn = pathDiagnostic ?? (await import('./path-diagnostic.mjs')).pathDiagnostic;
+      for (const message of diagFn({ packageRoot, cwd, env, mode: plan.local })) line(stderr, message);
     } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
   const code = await (async () => { switch (plan.local) {
@@ -235,19 +291,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const result = await module.runIssueGraph({cwd, repository:plan.options['--repo'], issue:plan.options['--issue'], open:!!plan.options['--open']}, issueGraphPorts);
         (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
       } catch (error) { line(stderr, `Graph failed.${reason(error)}`); return 1; }
-    }
-    case 'dependencies-prepare': case 'dependencies-complete': {
-      if (plan.local === 'dependencies-complete' && plan.options['--input'] !== '-') { line(stderr, 'Use pdd dependencies complete --input -.'); return 2; }
-      if (plan.local === 'dependencies-prepare' && plan.options['--issue'] !== undefined && !/^[1-9]\d*$/.test(plan.options['--issue'])) { line(stderr, 'Use pdd dependencies prepare --issue N with a positive issue number.'); return 2; }
-      try { const module = dependencyIntake ?? await import('./issue-dependencies-intake.mjs');
-        let payload = stdin;
-        if (plan.local === 'dependencies-complete' && typeof stdin !== 'string' && stdin?.[Symbol.asyncIterator]) {
-          const chunks = []; for await (const chunk of stdin) chunks.push(Buffer.from(chunk));
-          payload = Buffer.concat(chunks).toString('utf8');
-        }
-        const result = await module.runDependencyIntake(plan.local === 'dependencies-prepare' ? {command:'prepare',cwd,issue:plan.options['--issue']} : {command:'complete',cwd,stdin:payload},dependencyIntakePorts);
-        (result.exitCode ? stderr : stdout).write(result.message); return result.exitCode;
-      } catch(error) { line(stderr, `Dependency intake failed.${reason(error)}`); return 1; }
     }
     case 'autopilot-regressions': {
       try {
@@ -303,10 +346,25 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return result.exitCode;
       } catch (error) { line(stderr, `Autopilot logs failed.${reason(error)}`); return 1; }
     }
-    case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
+    case 'autopilot-suite': {
+      const command = plan.options['--command'];
+      if (!command?.trim()) { line(stderr, 'Use pdd autopilot suite --command COMMAND [--timeout MIN].'); return 2; }
+      try {
+        const { runTestSuite } = await import('./test-suite-queue.mjs');
+        const timeout = plan.options['--timeout'] !== undefined ? Number(plan.options['--timeout']) : undefined;
+        const result = await runTestSuite(
+          { cwd, env, command, ...(timeout !== undefined ? { timeout } : {}) },
+          { say: text => line(stdout, text) },
+        );
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string') throw Error('Invalid suite reply');
+        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch (error) { line(stderr, `Autopilot suite failed.${reason(error)}`); return 1; }
+    }
+    case 'autopilot-doctor': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
       try {
         const module = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
-        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), ...(plan.options['--agent'] !== undefined ? { agent: plan.options['--agent'] } : {}), ...(plan.options['--pool'] !== undefined ? { pool: plan.options['--pool'] } : {}), ...(plan.options['--auto-update'] ? { autoUpdate: plan.options['--auto-update'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
+        const result = await module.runAutopilotLauncher({ command: plan.local.slice(10), issues: [...plan.operands], ...(plan.options['--issues'] !== undefined ? { allowedIssues: plan.options['--issues'] } : {}), ...(plan.options['--issue'] !== undefined ? { issue: plan.options['--issue'] } : {}), runs: plan.options['--runs'], checks: plan.options['--checks'], ...(plan.options['--engine'] ? { engine: plan.options['--engine'] } : {}), ...(plan.options['--label'] ? { label: plan.options['--label'] } : {}), ...(plan.options['--mode'] ? { mode: plan.options['--mode'] } : {}), ...(plan.options['--report'] ? { report: plan.options['--report'] } : {}), ...(plan.options['--decisions'] ? { decisions: plan.options['--decisions'] } : {}), ...(plan.options['--intake'] ? { intake: plan.options['--intake'] } : {}), ...(plan.options['--share'] !== undefined ? { share: plan.options['--share'] } : {}), ...(plan.options['--agent'] !== undefined ? { agent: plan.options['--agent'] } : {}), ...(plan.options['--pool'] !== undefined ? { pool: plan.options['--pool'] } : {}), ...(plan.options['--auto-update'] ? { autoUpdate: plan.options['--auto-update'] } : {}), all: plan.options['--all'] === true, ...(plan.options['--json'] === true ? { json: true } : {}), cwd, packageRoot, env }, autopilotLauncherPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid Autopilot reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode === 0 && ['autopilot-start', 'autopilot-status'].includes(plan.local) && plan.options['--all'] !== true && plan.options['--json'] !== true) {
@@ -365,7 +423,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
       line(stdout, metadata.version);
       try {
-        for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) }))
+        const findFn = findSkills ?? (await import('./skills-install.mjs')).findSkills;
+        for (const result of findFn({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) }))
           if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd));
       } catch { /* The skills check never changes --version. */ }
       try {
@@ -401,7 +460,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'product-status': case 'product-next': case 'product-start': {
       try {
-        const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd, productPorts);
+        const context = await (gitContext ?? defaultGitContext)(cwd, productPorts);
         if (!context?.toplevel) throw Error('No product repository was found.');
         const module = product ?? await import('./product.mjs');
         if (typeof module.runProduct !== 'function') throw Error('Missing product export');
@@ -416,73 +475,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return result.exitCode;
       } catch (error) { line(stderr, `The product command failed.${reason(error)}`); return 1; }
     }
-    case 'workflow-resend': case 'workflow-suite': case 'workflow-park': case 'workflow-yield': case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-publish': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
-    case 'workflow-tidy': case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': case 'workflow-evidence-associate': case 'workflow-card': {
-      if (plan.local === 'workflow-suite' && !plan.options['--command']?.trim()) { line(stderr, 'Use pdd workflow suite --command COMMAND [--timeout MIN].'); return 2; }
-      if (plan.local === 'workflow-evidence-associate' && (!plan.options['--workspace']?.trim() || !plan.options['--stage'] || !plan.options['--test']?.length)) {
-        line(stderr, 'Use pdd workflow evidence-associate ISSUE --workspace PATH --stage current|pr1|before [--commit SHA] --test PATH... .'); return 2;
-      }
-      if (plan.local === 'workflow-evidence' && !plan.options['--summary']) { line(stderr, 'Use pdd workflow evidence ISSUE --summary FILE.'); return 2; }
-      if (plan.local === 'workflow-request-uptake' && !plan.options['--summary']?.trim()) {
-        const route = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'workflow.request-uptake');
-        line(stderr, `Use pdd ${route.prefix.join(' ')} REQUEST_ID --summary TEXT.`); return 2;
-      }
-      const [name, input] = RUNNER_ROUTES[plan.local](plan);
-      if (plan.local === 'workflow-run') {
-        let selected;
-        try { selected = await workflowAgents.checkWorkflowAgents({ cwd, env, ...(plan.options['--agent'] !== undefined ? { requested: plan.options['--agent'] } : {}) }, workflowAgentPorts); }
-        catch { line(stderr, 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
-        if (!selected?.ok) { line(stderr, selected?.message || 'Agent sign-in could not be checked. Run codex login status or claude auth status.'); return 1; }
-        if (typeof selected.hint === 'string' && selected.hint) line(stderr, selected.hint);
-        // A named agents.json entry goes to the runner by name; the runner resolves it again and saves it.
-        input.agent = typeof selected.name === 'string' ? selected.name : selected.agent;
-      }
-      try {
-        const runner = workflowRunner ?? await import('./workflow-runner.mjs');
-        if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot, ...(plan.local === 'workflow-suite' ? {env} : {}) }, { say: text => line(plan.local === 'workflow-suite' ? stdout : stderr, text), ...(['workflow-run', 'workflow-open', 'workflow-yield','workflow-tidy','workflow-resend'].includes(plan.local) ? { env } : {}), ...(plan.local === 'workflow-resend' ? {stdin} : {}) });
-        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
-          || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
-        line(result.exitCode === 0 ? stdout : stderr, result.message);
-        return result.exitCode;
-      } catch (error) {
-        line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`);
-        return 1;
-      }
-    }
-    case 'workflow-cost': {
-      let input;
-      if (plan.options['--input'] !== undefined) {
-        if (plan.options['--input'] !== '-') { line(stderr, 'Use --input - for cost JSON on stdin.'); return 2; }
-        try { input = JSON.parse(await readText(stdin)); } catch { line(stderr, 'Invalid cost JSON.'); return 2; }
-      }
-      try {
-        const runner = workflowRunner ?? await import('./workflow-runner.mjs');
-        const result = await runner.runCosts({ ref: plan.operands[0], cwd, input }, { env });
-        line(result.exitCode ? stderr : stdout, result.message); return result.exitCode;
-      } catch { line(stderr, 'Local issue costs are unavailable.'); return 1; }
-    }
-    case 'workflow-prove': {
-      if (!plan.options['--test'] || !plan.options['--expect']) {
-        line(stderr, 'pdd workflow prove requires nonblank --test and --expect.'); return 2;
-      }
-      try {
-        const module = workflowProve ?? await import('./workflow-prove.mjs');
-        const result = await module.proveRun({ ref: plan.operands[0], test: plan.options['--test'], expect: plan.options['--expect'], cwd, ...(plan.options['--timeout'] !== undefined ? { timeoutMinutes: Number(plan.options['--timeout']) } : {}) }, provePorts);
-        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid proof reply');
-        line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
-      } catch (error) {
-        line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`); return 1;
-      }
-    }
-    case 'workflow-view': {
-      try {
-        const { viewRun } = await import('./workflow-view.mjs');
-        const result = await viewRun({ ref: plan.operands[0], cwd });
-        line(result.exitCode === 0 ? stdout : stderr, result.message);
-        return result.exitCode;
-      } catch (error) { line(stderr, `The saved run could not be read. Check pdd workflow status.${reason(error)}`); return 1; }
-    }
     case 'mcp': {
       try {
         if (mcpServer) return await (mcpServer.mcp ?? mcpServer.runMcp).call(mcpServer, { cwd, env }, { stdin, stdout, stderr });
@@ -491,55 +483,83 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd mcp could not start.${reason(error)}`); return 1; }
     }
     case 'setup': {
-      const interactive = setupMayAsk({ yes: plan.options['--yes'], stdinIsTTY: stdin.isTTY, stdoutIsTTY: stdout.isTTY });
-      return setupWithWorkflowAgent({ cwd, env }, { ...workflowAgentPorts, checkWorkflowAgents: workflowAgents.checkWorkflowAgents, stderr, setup: async () => {
+      // Laptop-wide setup: non-blocking PDD account hint, global skills sync, optional Simulator MCP registration.
+      // Never probes coding-agent logins, never edits repositories, and never prompts for Autopilot settings.
+      const yes = plan.options['--yes'] === true;
+      const interactive = Boolean(confirm) || Boolean(stdin?.isTTY && stdout?.isTTY);
       let code = 0;
-      for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(setupSkills === defaultSetupSkills && env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) })) {
-        if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
-        if (result.found && result.stale) {
-          const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
-          line(stdout, staleLine(result, version, cwd));
-        } else if (result.found) line(stdout, `PDD skills found in ${result.found}`);
-        else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${result.root}: ${skillNames(result.installed)}`);
-        if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
-      }
+      const account = checkPddAccountNonBlocking(env);
+      if (account.connected) line(stdout, 'GitHub CLI (gh) sign-in detected (for promptdriven.ai).');
+      else line(stdout, 'GitHub CLI (gh) is not signed in — run `gh auth login` or visit https://promptdriven.ai/login (continuing setup).');
       try {
-        const { file, changed } = setupProject({ cwd, packageRoot });
-        line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
-      } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
-      // One Git context serves the .gitignore part and the Autopilot part.
-      let context = null;
-      try { context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd); }
-      catch (error) { line(stderr, `pdd setup: the Git repository could not be read.${reason(error)}`); code = 1; }
-      try {
-        if (context?.toplevel) {
-          const { file, changed, negated } = ignorePddFolder({ root: context.toplevel });
-          if (changed) line(stdout, `Added .pdd/ to ${file}. pdd test keeps its local cache there.`);
-          else if (negated) line(stdout, `${file} has a "!" line for .pdd/, so pdd setup did not change the file.`);
+        const skillsFn = setupSkills ?? (await import('./skills-install.mjs')).setupSkills;
+        const skillOpts = {
+          packageRoot,
+          cwd,
+          home: env.HOME || homedir(),
+          claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+          env,
+          ...(!setupSkills && env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
+          ...(plan.options['--skills-dir'] !== undefined ? { skillsDir: plan.options['--skills-dir'] } : {}),
+        };
+        for (const result of skillsFn(skillOpts)) {
+          if (result.pluginManaged) {
+            if (result.removed?.length) line(stdout, `Removed retired PDD skills from ${result.root}: ${skillNames(result.removed)}`);
+            line(stdout, `PDD skills for ${result.agent} are managed by an installed plugin (${result.found}). Skipping duplicate copy.`);
+            if (result.error) { line(stderr, `pdd setup: the PDD skills could not be cleaned in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
+            continue;
+          }
+          if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
+          if (result.found && result.stale) {
+            const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
+            line(stdout, staleLine(result, version, cwd));
+          } else if (result.found) line(stdout, `PDD skills found in ${result.found}`);
+          else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${result.root}: ${skillNames(result.installed)}`);
+          if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
         }
-      } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
+      } catch (error) { line(stderr, `pdd setup: skills sync failed.${reason(error)}`); code = 1; }
       try {
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
-        if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm: interactive ? confirm : undefined, interactive })) code = 1;
+        if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm: interactive ? confirm : undefined, interactive, yes })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
-      try {
-        const module = autopilot ?? await import('./autopilot.mjs');
-        const before = savedAutopilot(context?.toplevel);
-        const result = await module.runAutopilot({ action: 'setup', interactive, inRepo: !!context?.toplevel },
-          { cwd: context?.toplevel ?? cwd, stdin, stdout, ...autopilotPorts });
-        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
-        if (result.exitCode) code = result.exitCode;
-        // Setup saves a first mode only in this checkout and never writes to GitHub, where the workers read it.
-        const saved = savedAutopilot(context?.toplevel)?.mode;
-        if (result.exitCode === 0 && before === undefined && ['off', 'observe', 'auto'].includes(saved))
-          line(stdout, `Setup saved pdd.json, the PDD block and .gitignore only in this checkout. Commit and push them so that GitHub, other machines and Autopilot jobs have them, or run pdd autopilot ${saved} to put the Autopilot mode on GitHub.`);
-      } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
+      if (code === 0) line(stdout, 'Done! Use /pdd in Claude Code or $pdd in Codex. Run `pdd init` inside a repo to add the 4-line PDD block.');
       return code;
-      } });
+    }
+    case 'init': {
+      try {
+        if (setupProject && !initProject) {
+          const { file, changed } = setupProject({ cwd, packageRoot });
+          line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
+          return 0;
+        }
+        const runInit = initProject ?? (await import('./project-setup.mjs')).initProject;
+        const result = await runInit({ cwd, packageRoot });
+        line(stdout, result.changed ? `Wrote the PDD block in ${result.file}.` : `${result.file} already has this PDD block. No change.`);
+        if (result.language || result.testCommand) {
+          const details = [result.language, result.testCommand ? `test: ${result.testCommand}` : null].filter(Boolean).join(' · ');
+          line(stdout, `Detected project: ${details}.`);
+        }
+        line(stdout, 'Next: invoke /pdd (or $pdd) in your coding agent, or run `pdd status`.');
+        return 0;
+      } catch (error) {
+        line(stderr, `pdd init: ${error.message}`);
+        return 1;
+      }
+    }
+    case 'status': {
+      try {
+        const mod = projectStatus ?? await import('./core/status.mjs');
+        return await mod.runStatus({
+          cwd,
+          paths: [...plan.operands],
+          changed: plan.options['--changed'] === true,
+          json: plan.options['--json'] === true,
+        }, { stdout, stderr });
+      } catch (error) { line(stderr, `pdd status failed.${reason(error)}`); return 1; }
     }
     case 'upgrade': {
       try {
-        const module = cliUpgrade ?? await import('./autopilot-update.mjs');
+        const module = cliUpgrade ?? await import('./setup/cli-upgrade.mjs');
         const result = await module.runCliUpgrade({
           env,
           stdout,
@@ -570,14 +590,16 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const { contracts: run } = await import('./runtime-seam.mjs');
         return await run(input, ports);
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
-    case 'runtime-check':
-    case 'runtime-try':
-      if (plan.local === 'runtime-check' && plan.options['--issue'] !== undefined && plan.options['--codex'] !== true) {
+    case 'lint': {
+      if (LINT_FORBIDDEN_TEST_FLAGS.some(flag => plan.options[flag] !== undefined)) {
+        line(stderr, `This mix of options does not work together. Run pdd ${NAMES.lint} --help.`);
+        return 2;
+      }
+      if (plan.options['--issue'] !== undefined && plan.options['--codex'] !== true) {
         line(stderr, `Use --issue only with pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`);
         return 2;
       }
-      if (plan.local === 'runtime-check' && plan.options['--codex'] === true) {
-        if (plan.options['--lint'] !== true) { line(stderr, `Use pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`); return 2; }
+      if (plan.options['--codex'] === true) {
         if (Object.keys(plan.options).some(key => !['--lint', '--codex', '--issue', '--json', '--timeout'].includes(key))) {
           line(stderr, `pdd ${NAMES.lint} --codex accepts only Story or prompt paths, --json, and --timeout MIN, plus optional --issue N|FILE.`); return 2;
         }
@@ -595,6 +617,126 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           line(stderr, `Codex lint failed before completing.${reason(error)}`);
           return 1;
         }
+      }
+      if (plan.options['--remote'] === true && plan.options['--local'] === true) {
+        line(stderr, `Use either --local or --remote with pdd ${NAMES.lint}, not both.`);
+        return 2;
+      }
+      if (plan.options['--max-calls'] !== undefined && plan.options['--remote'] !== true) {
+        line(stderr, `Use --max-calls only with pdd ${NAMES.lint} --remote (default pdd ${NAMES.lint} runs offline with 0 AI calls).`);
+        return 2;
+      }
+      if (plan.options['--timeout'] !== undefined && plan.options['--remote'] !== true && plan.options['--codex'] !== true) {
+        line(stderr, `Use --timeout only with pdd ${NAMES.lint} --remote or pdd ${NAMES.lint} --codex.`);
+        return 2;
+      }
+      const needsRemoteOrCompiler = Boolean(
+        plan.options['--remote'] === true
+        || plan.options['--emit-v1'] === true
+        || plan.options['--write'] === true
+        || plan.options['--bind-criteria'] === true,
+      );
+      const repoFeatures = (!needsRemoteOrCompiler && !localLint && plan.options['--diff'] === undefined && plan.options['--base'] === undefined)
+        ? inspectLocalLintRepoFeatures(cwd)
+        : { hasNativeStory: false, hasScenarioJson: false };
+      const needsRuntimeLocalAssessment = plan.options['--local'] === true && repoFeatures.hasScenarioJson;
+      if (needsRemoteOrCompiler || needsRuntimeLocalAssessment) {
+        try {
+          const runtime = await import('./runtime-seam.mjs');
+          const { '--remote': _remote, '--diff': _diff, '--base': _base, ...forwardOptions } = plan.options;
+          const opts = { ...forwardOptions, '--lint': true };
+          const inverted = findInvertedNativeOnlyStory(runtime, cwd, [...plan.operands], opts);
+          if (inverted) line(stderr, `Advisory [inverted-native-only-dependency]: Story test ${inverted.test} enters checkable prompt ${inverted.entry_path}, which links kind: native-only prompt ${inverted.native_only_path} under ## Dependencies. Invert the dependency so ${inverted.native_only_path} depends on ${inverted.entry_path} and inject a <port>.<op> port.`);
+          const isLintCheckMode = !['--emit-v1', '--write', '--bind-criteria'].some(flag => opts[flag]);
+          const lintRoot = isLintCheckMode ? resolveLintRoot(cwd) : null;
+          let seamProjectErrors = null;
+          const onProjectLintResult = lintRoot && !plan.operands.length && opts['--local'] === true
+            ? result => {
+                if (!result || !Array.isArray(result.errors)) return;
+                if (!seamProjectErrors) seamProjectErrors = [];
+                for (const err of result.errors) if (!seamProjectErrors.includes(err)) seamProjectErrors.push(err);
+              }
+            : undefined;
+          if (lintRoot && opts['--json'] === true) {
+            let captured = '';
+            const bufferedStdout = { write: chunk => { captured += String(chunk); return true; } };
+            const runtimeCode = await runtime.lint({ words: [...plan.operands], options: opts, cwd }, { stdout: bufferedStdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
+            if (runtimeCode === 0 || runtimeCode === 1) {
+              const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], opts);
+              if (projectErrors.length > 0 || opts['--local'] === true) {
+                try {
+                  const parsed = JSON.parse(captured.trim());
+                  if (opts['--local'] === true && !parsed.schema_version) parsed.schema_version = 'pdd.local-lint.v1';
+                  if (projectErrors.length > 0) {
+                    parsed.problems = [...(Array.isArray(parsed.problems) ? parsed.problems : []), ...projectErrors];
+                    parsed.ok = false;
+                    parsed.exit_code = 1;
+                    stdout.write(`${JSON.stringify(parsed)}\n`);
+                    return 1;
+                  }
+                  stdout.write(`${JSON.stringify(parsed)}\n`);
+                  return runtimeCode;
+                } catch {}
+              }
+            }
+            if (captured) stdout.write(captured);
+            return runtimeCode;
+          }
+          const runtimeCode = await runtime.lint({ words: [...plan.operands], options: opts, cwd }, { stdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
+          if (lintRoot && (runtimeCode === 0 || runtimeCode === 1)) {
+            const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], opts);
+            if (projectErrors.length > 0) {
+              for (const errLine of projectErrors) line(stderr, errLine);
+              return 1;
+            }
+          }
+          return runtimeCode;
+        } catch (error) {
+          line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
+          return 3;
+        }
+      }
+      try {
+        const mod = localLint ?? await import('./core/lint/run-local-lint.mjs');
+        const diffOpt = plan.options['--diff'];
+        return await mod.runLocalLint({
+          cwd,
+          words: [...plan.operands],
+          json: plan.options['--json'] === true,
+          ...(diffOpt !== undefined ? { diff: diffOpt } : {}),
+          ...(plan.options['--base'] !== undefined ? { baseRef: plan.options['--base'] } : {}),
+          env,
+        }, { stdout, stderr, ...localLintPorts });
+      } catch (error) {
+        line(stderr, `Local lint failed.${reason(error)}`);
+        return 2;
+      }
+    }
+    case 'prove': {
+      try {
+        const mod = proveRunner ?? await import('./core/prove.mjs');
+        const res = await mod.runProve({
+          cwd,
+          ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}),
+          ...(plan.options['--test'] !== undefined ? { test: plan.options['--test'] } : {}),
+          ...(plan.options['--expect'] !== undefined ? { expect: plan.options['--expect'] } : {}),
+          ...(plan.options['--overlay'] !== undefined ? { overlay: plan.options['--overlay'] } : {}),
+          ...(plan.options['--setup'] !== undefined ? { setup: plan.options['--setup'] } : {}),
+          ...(plan.options['--timeout'] !== undefined ? { timeoutMinutes: Number(plan.options['--timeout']) } : {}),
+          json: plan.options['--json'] === true,
+          env,
+        }, { stdout, stderr, ...proveRunnerPorts });
+        return typeof res === 'number' ? res : (Number.isInteger(res?.exitCode) ? res.exitCode : 1);
+      } catch (error) {
+        line(stderr, `pdd prove failed.${reason(error)}`);
+        return 2;
+      }
+    }
+    case 'runtime-check':
+    case 'runtime-try':
+      if (plan.local === 'runtime-check' && (plan.options['--issue'] !== undefined || plan.options['--codex'] === true)) {
+        line(stderr, `Use pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`);
+        return 2;
       }
       if (plan.local === 'runtime-check' && plan.options['--reconcile'] !== undefined) {
         if (plan.operands.length > 0 || Object.keys(plan.options).some(key => !['--reconcile', '--json'].includes(key))) {
@@ -635,52 +777,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const runtime = await import('./runtime-seam.mjs');
         if (plan.local === 'runtime-check') {
           const inverted = findInvertedNativeOnlyStory(runtime, cwd, [...plan.operands], { ...plan.options });
-          if (inverted) {
-            line(stderr, `Advisory [inverted-native-only-dependency]: Story test ${inverted.test} enters checkable prompt ${inverted.entry_path}, which links kind: native-only prompt ${inverted.native_only_path} under ## Dependencies. Invert the dependency so ${inverted.native_only_path} depends on ${inverted.entry_path} and inject a <port>.<op> port.`);
-          }
+          if (inverted) line(stderr, `Advisory [inverted-native-only-dependency]: Story test ${inverted.test} enters checkable prompt ${inverted.entry_path}, which links kind: native-only prompt ${inverted.native_only_path} under ## Dependencies. Invert the dependency so ${inverted.native_only_path} depends on ${inverted.entry_path} and inject a <port>.<op> port.`);
         }
-        const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
-        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--reconcile', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => plan.options[flag]);
-        const lintRoot = isLintCheckMode ? resolveProjectLintRoot(cwd) : null;
-        let seamProjectErrors = null;
-        const onProjectLintResult = lintRoot && !plan.operands.length && plan.options['--local'] === true
-          ? result => {
-              if (!result || !Array.isArray(result.errors)) return;
-              if (!seamProjectErrors) seamProjectErrors = [];
-              for (const err of result.errors) {
-                if (!seamProjectErrors.includes(err)) seamProjectErrors.push(err);
-              }
-            }
-          : undefined;
-        if (lintRoot && plan.options['--json'] === true) {
-          let captured = '';
-          const bufferedStdout = { write: chunk => { captured += String(chunk); return true; } };
-          const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout: bufferedStdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
-          if (runtimeCode === 0 || runtimeCode === 1) {
-            const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
-            if (projectErrors.length > 0) {
-              try {
-                const parsed = JSON.parse(captured.trim());
-                parsed.problems = [...(Array.isArray(parsed.problems) ? parsed.problems : []), ...projectErrors];
-                parsed.ok = false;
-                parsed.exit_code = 1;
-                stdout.write(`${JSON.stringify(parsed)}\n`);
-                return 1;
-              } catch { /* fall through to write raw output */ }
-            }
-          }
-          if (captured) stdout.write(captured);
-          return runtimeCode;
-        }
-        const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
-        if (lintRoot && (runtimeCode === 0 || runtimeCode === 1)) {
-          const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
-          if (projectErrors.length > 0) {
-            for (const errLine of projectErrors) line(stderr, errLine);
-            return 1;
-          }
-        }
-        return runtimeCode;
+        const action = plan.local === 'runtime-try' ? 'simulate' : 'check';
+        return await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
@@ -695,11 +795,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'update-sync': {
       try {
-        const { runUpdate } = await import('./update-sync.mjs');
+        const mod = await import('./update-sync.mjs');
+        const runUpdate = mod.runUpdateSync ?? mod.runUpdate;
         return runUpdate({
           cwd,
           files: [...plan.operands],
           ...(plan.options['--from'] !== undefined ? { from: plan.options['--from'] } : {}),
+          branch: plan.options['--branch'] === true,
+          all: plan.options['--all'] === true,
           check: plan.options['--check'] === true,
           write: plan.options['--write'] === true,
           json: plan.options['--json'] === true,
@@ -710,17 +813,38 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       const { runApprove } = await import('./prompt-approve.mjs');
       return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });
     }
-    case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
-    case 'workflow-list':
-      try {
-        const areas = workflowAreas ?? { listWorkflowAreas, formatWorkflowList };
-        const workflows = await areas.listWorkflowAreas({ packageRoot, cwd, home: env.HOME });
-        if (!Array.isArray(workflows)) throw Error('Invalid workflow listing');
-        line(stdout, areas.formatWorkflowList(workflows, { json: plan.options['--json'] === true }));return 0;
-      } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
+    case 'completion': {
+      const { renderCompletion } = await import('./completion.mjs');
+      stdout.write(renderCompletion(plan.operands[0]));
+      return 0;
+    }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  const hasSafeHome = env.HOME === undefined || (typeof env.HOME === 'string' && env.HOME.trim().length > 0 && isAbsolute(env.HOME));
+  if (code === 0
+    && hasSafeHome
+    && !SKIP_SKILL_SYNC_ROUTES.has(plan.local)
+    && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
+    && plan.options['--json'] !== true
+    && !argv.includes('--json')) {
+    try {
+      const syncFn = syncOwnedUserSkills ?? (await import('./skills-install.mjs')).syncOwnedUserSkills;
+      const { updated } = syncFn({
+        packageRoot,
+        home: env.HOME || homedir(),
+        claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+        ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
+        ...(env.PDD_STATE_DIR ? { stateRoot: env.PDD_STATE_DIR } : {}),
+        env,
+      });
+      if (updated?.length > 0 && stderr?.isTTY === true) {
+        const metadata = await readPackageVersion({ packageRoot });
+        if (metadata?.ok && typeof metadata.version === 'string' && metadata.version)
+          line(stderr, `Updated PDD skills to ${metadata.version} (${updated.join(', ')}).`);
+      }
+    } catch { /* Post-upgrade skill sync never blocks or fails a CLI command. */ }
+  }
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'init', 'status', 'lint', 'prove'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

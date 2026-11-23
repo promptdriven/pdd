@@ -234,7 +234,7 @@ new one.
 
 Record every call that reaches the diagram, also one that sends nothing, in
 `<state root>/alerts/<ID>.json`, with mode 0600. The state root is
-`ports.stateRoot`, else `<home folder>/.local/state/pdd/autopilot` (the
+`ports.stateRoot`, else `<PDD_STATE_DIR>/autopilot` when `PDD_STATE_DIR` is an absolute path, else `<home folder>/.local/state/pdd/autopilot` (the
 launcher's state folder), with the [home folder](#an-absolute-home-folder)
 above. ID is the first 20 hex characters of the SHA-256 of the lowercase
 `OWNER/REPO`. The record keeps the open incidents (kind, affected issues,
@@ -341,14 +341,11 @@ An open `unconfirmed` incident still counts without resending.
 
 ## Dependencies
 
-- [Prompting guide](../../docs/prompting-guide.md): authoring.
+- [Prompting guide](../../skills/pdd/references/prompting.md): authoring.
 - [CLI](pdd-cli.prompt.md#autopilot-dispatch): generation and testing of dispatch, stdin and streams.
 - [Autopilot launcher](autopilot-launcher.prompt.md#stop-status-and-the-other-commands): status calls
   `alertStatusLine` with its saved repository and state root.
-- [Workflow runner attention](workflow-runner.prompt.md#automatic-attention-projection): required native context for
-  `automaticAttention` rows.
-- [Workflow runner lock](workflow-runner.prompt.md#native-admission-lock): required native context for
-  `acquireRunLock` and shared record custody.
+- Layer-0 `src/shared/file-lock.mjs`: required native context for `acquireRunLock` and shared record custody.
 - Native runtime: Node `fs`, `crypto`, `os`, timers and `fetch`.
 - Input `env` (default: the process environment) gives HOME and
   XDG_CONFIG_HOME; a relative or empty value is ignored, as
@@ -361,5 +358,5 @@ An open `unconfirmed` incident still counts without resending.
   `repository({cwd})` returns `{nameWithOwner}`; `now()`; `hostname()`;
   `userInfo()` returns `{homedir}` or throws (default `os.userInfo`);
   `stateRoot`; `recordLock(directory, filename)` returns a release callback or
-  throws `run_busy` (default: workflow runner `acquireRunLock`); `sleep(ms)`
+  throws `run_busy` (default: `acquireRunLock` from `src/shared/file-lock.mjs`); `sleep(ms)`
   waits between lock attempts (default: native timer). Tests inject `http`; no test sends a real webhook request.

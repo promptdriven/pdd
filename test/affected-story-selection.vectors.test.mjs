@@ -5,7 +5,7 @@ import {appendFileSync,existsSync,readFileSync,symlinkSync,unlinkSync,writeFileS
 import {join} from 'node:path';
 import {runCheck,captureSource,fillHashes,findTests} from '../src/runtime-seam.mjs';
 import {portsFor} from './helpers/runtime-fake.mjs';
-import {affectedFixture,affectedRuntime,batch,check,checks,cli,commit,disclaimer,git,hasState,historicalAssociation,installGh,put,vectors} from './helpers/affected-check-fixture.mjs';
+import {affectedFixture,affectedRuntime,batch,check,checks,cli,commit,disclaimer,git,hasState,installGh,put,vectors} from './helpers/affected-check-fixture.mjs';
 const cases=vectors('affected-story-selection').cases;
 const vector=id=>{const found=cases.find(item=>item.id===id);assert.ok(found);return found;};
 const sorted=values=>[...values].sort();
@@ -129,7 +129,7 @@ test('3146 invalid-option-combinations rejects before state/auth/network',async 
 
 test('3146 public-help-completion-and-docs publishes exact form and accepts flag',async t=>{
   const data=vector('public-help-completion-and-docs'),setup=affectedFixture(t);
-  const help=await cli(setup,['test','--help']);assert.equal(help.code,0);assert.ok(help.stdout.includes(data.given.new_form));
+  const help=await cli(setup,['test','--help']);assert.equal(help.code,0);assert.ok(help.stdout.replace(/\n      /g,' ').includes(data.given.new_form));
   const completion=await cli(setup,['completion','bash']);assert.equal(completion.code,0);assert.match(completion.stdout,/--affected/);
   assert.ok(readFileSync(new URL('../docs/cli.md',import.meta.url),'utf8').includes(data.given.new_form));
 });
@@ -218,13 +218,16 @@ test('3146 staged-unstaged-untracked-saved-base: real untracked closure and comm
   const data=vector('staged-unstaged-untracked-saved-base');
   for(const variant of ['untracked dependency A','committed A against saved run base'])await t.test(variant,async t=>{
     const setup=affectedFixture(t);
+    let extra={};
     if(variant.startsWith('untracked')){
       const path=join(setup.repo,'prompts/A.prompt.md');writeFileSync(path,readFileSync(path,'utf8').replace('../docs/shared.md','../docs/untracked-A.md'));
       setup.change('prompts/A.prompt.md');commit(setup.repo);put(setup.repo,'docs/untracked-A.md','Untracked A-only required dependency.');
     }else{
-      await historicalAssociation(setup,'pr1');setup.change('prompts/A.prompt.md');commit(setup.repo);
+      const baseSha=git(setup.repo,'rev-parse','HEAD');
+      setup.change('prompts/A.prompt.md');commit(setup.repo);
+      extra={allRuns:()=>[{root:setup.repo,baseSha}]};
     }
-    const fake=await affectedRuntime(t,setup),result=await check(setup,fake);assert.equal(result.code,0,result.ports.stderr.text);
+    const fake=await affectedRuntime(t,setup),result=await check(setup,fake,{extra});assert.equal(result.code,0,result.ports.stderr.text);
     assert.deepEqual(sorted(checks(fake).map(row=>row.request.scenario)),sorted(data.expected.check_tests));
   });
 });

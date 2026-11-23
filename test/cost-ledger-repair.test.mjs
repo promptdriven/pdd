@@ -1,10 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fixture } from './helpers/workflow-runner-fixture.mjs';
-import { updateRun } from '../src/workflow-runs.mjs';
 import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
 import { captureCosts, applyCostMeasurement } from '../src/cost-ledger.mjs';
 
@@ -27,13 +26,29 @@ function sessions(t) {
 }
 
 test('machine JSON retains archived attempts at reused paths in totals and merged percentiles', async t => {
-  const f = await fixture(t); f.ports.skipMetricsDelivery = true; assert.equal((await f.run()).exitCode, 0);
-  const old = updateRun(f.record().runDir, run => applyCostMeasurement(run, { id: 'old', suiteMinutes: 2, outcome: 'closed' }, f.clock), f.ports);
+  const base = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'pdd-cost-repair-machine-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const source = join(base, 'repo'), home = join(base, 'home');
+  fs.mkdirSync(source, { recursive: true }); fs.mkdirSync(home, { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: source });
+  const commonDir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: source, encoding: 'utf8' }).trim();
+  const runDir = join(commonDir, 'pdd', 'runs', '17');
+  fs.mkdirSync(runDir, { recursive: true });
+  let clock = at;
+  const ports = { env: { HOME: home, PATH: process.env.PATH }, now: () => clock, fs };
+  const old = { v: 1, runId: 'old-attempt', number: 17, repo: 'example/project', startedAt: clock, updatedAt: clock, runDir, commonDir, sourceRoot: source, root: source, state: 'running', agent: 'codex', chats: [], pr: [], areas: [{ name: 'code' }] };
+  applyCostMeasurement(old, { id: 'old', suiteMinutes: 2, outcome: 'closed' }, clock);
+  old.cost = captureCosts(null, old, ports);
+  fs.writeFileSync(join(old.runDir, 'status.json'), JSON.stringify(old));
   const archive = `${old.runDir}-cancelled-aabbcc`; fs.renameSync(old.runDir, archive); fs.mkdirSync(old.runDir);
-  const current = { ...old, runId: 'new-attempt', startedAt: f.clock + 1000, state: 'running', cost: undefined };
-  applyCostMeasurement(current, { id: 'new', suiteMinutes: 5, outcome: 'merged' }, f.clock + 1000);
-  fs.writeFileSync(join(current.runDir, 'status.json'), JSON.stringify(current)); f.tick(2000);
-  const reply = await runAutopilotLauncher({ command: 'status', json: true, all: true, cwd: f.source, env: f.ports.env }, f.ports);
+  const current = { ...old, runId: 'new-attempt', startedAt: clock + 1000, state: 'running', cost: undefined };
+  applyCostMeasurement(current, { id: 'new', suiteMinutes: 5, outcome: 'merged' }, clock + 1000);
+  fs.writeFileSync(join(current.runDir, 'status.json'), JSON.stringify(current));
+  const runsIndexDir = join(home, '.local', 'state', 'pdd');
+  fs.mkdirSync(runsIndexDir, { recursive: true });
+  fs.writeFileSync(join(runsIndexDir, 'runs.json'), JSON.stringify({ runs: [{ number: 17, repo: 'example/project', runDir }] }));
+  clock += 2000;
+  const reply = await runAutopilotLauncher({ command: 'status', json: true, all: true, cwd: source, env: ports.env }, ports);
   assert.equal(reply.exitCode, 0); const report = JSON.parse(reply.message);
   assert.equal(report.runs.length, 2);
   assert.deepEqual(report.runs.map(row => row.suiteMinutes).sort((a,b) => a-b), [2,5]);
@@ -82,23 +97,4 @@ test('a mutation retains prior abandoned and replacement custody while the new i
   run.cost = captureCosts(before, run, ports);
   assert.equal(run.cost.tokens.reduce((sum, row) => sum + row.total, 0), 60);
   assert.equal(Object.keys(run.cost.sessions).length, 2);
-});
-
-test('workflow cost reads and explicit measurements preserve progress, index and completion journal', async t => {
-  const f = await fixture(t); f.ports.skipMetricsDelivery = true; assert.equal((await f.run()).exitCode, 0);
-  const { runCosts } = await import('../src/workflow-runner.mjs');
-  const before = f.record(), file = join(before.runDir, 'status.json'), changedAt = f.clock - 2 * 60 * 60000;
-  fs.utimesSync(file, new Date(changedAt), new Date(changedAt));
-  const index = fs.readFileSync(join(f.state, 'runs.json'), 'utf8');
-  f.tick(120000);
-  for (const input of [undefined, { id: 'suite-repair', suiteMinutes: 2 }, undefined]) {
-    assert.equal((await runCosts({ ref: '17', cwd: f.source, input }, f.ports)).exitCode, 0);
-    const after = f.record();
-    assert.equal(after.updatedAt, before.updatedAt); assert.equal(after.journalSeq, before.journalSeq);
-    assert.deepEqual(after.metrics, before.metrics); assert.deepEqual(after.done, before.done);
-    assert.deepEqual(after.gate, before.gate); assert.equal(after.progressAt, changedAt);
-    assert.equal(fs.readFileSync(join(f.state, 'runs.json'), 'utf8'), index);
-    f.tick(120000);
-  }
-  assert.equal(f.record().cost.suiteMinutes, 2);
 });

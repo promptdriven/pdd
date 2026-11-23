@@ -134,8 +134,9 @@ export function createGithubRepoFake({ repository = 'acme/widgets', owner = 'acm
     }
     return { data: { repository: data } };
   }
-  // The fake gh: `gh api --include …`, `gh repo view`, `gh auth status`.
+  // The fake gh: `gh --version`, `gh api --include …`, `gh repo view`, `gh auth status`.
   f.gh = async (args, options = {}) => {
+    if (args[0] === '--version') return { code: 0, stdout: 'gh version 2.83.0\n', stderr: '' };
     if (args[0] === 'auth') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'repo') return { code: 0, stdout: JSON.stringify({ nameWithOwner: repo, url: `https://github.com/${repo}`, defaultBranchRef: { name: 'main' }, owner: { login: owner } }), stderr: '' };
     if (args[0] !== 'api') return { code: 1, stdout: '', stderr: `unsupported gh ${args[0]}` };

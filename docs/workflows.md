@@ -1,358 +1,90 @@
 # Workflows in depth
 
-A PDD workflow is a skill: a folder of plain Markdown and one JSON file. Your agent follows it. pdd itself does only four things: it starts the run, it holds the gates, it opens the PRs and it shows the status.
+PDD provides one router skill, [`/pdd`](../skills/pdd/SKILL.md) (`$pdd` in Codex, `/pdd` in Claude Code), backed by focused references in `skills/pdd/references/` and headless background execution via `pdd autopilot`.
 
-## The four workflows
+## The four modes inside `/pdd`
 
-| Workflow | Use it for |
+| Mode | Use it for |
 |---|---|
-| `pdd-feature` | New behavior. |
-| `pdd-bug` | The code breaks an accepted expectation. |
-| `pdd-small-change` | A change outside PDD (docs, guides, packages, config, CI, lockfiles or tests — never prompts, Stories or product code). Product or prompt-owned code uses `bug` or `feature`. |
-| `pdd-product` | Map a whole product and plan its runs. |
+| `feature` | New behavior: author or update the owning prompt, Story, tests, and implementation. |
+| `bug` | Broken behavior: reproduce with a failing-first test, fix the owning prompt and code, and prove base-vs-head contrast. |
+| `small-change` | Changes outside PDD (docs, guides, packages, config, CI, lockfiles, or test-only maintenance — never prompts, Stories, or product code). Product or prompt-owned code uses `bug` or `feature`. |
+| `product` | Map a multi-part product, shared contracts, and staged runs (`pdd product status`, `pdd product next`, `pdd product start`). |
 
-Each workflow has areas. Each area has steps and ends at a gate. `?` marks an optional step.
+## Interactive workflow in your coding agent (`/pdd`)
 
-| Workflow | Area 1 | Area 2 | Area 3 (only when you ask) |
-|---|---|---|---|
-| `feature` | story: understand, visual?, prompt-story. Gate **approve** | prompt PR: check, try?. pdd opens **PR 1** at the applicable gate | code: build, verify, formal, review. pdd opens **PR 2** |
-| `bug` | story: reproduce, prompt-story. Gate **approve** | prompt PR: check, try?. pdd opens **PR 1** at the applicable gate | code: build, verify, formal, review. pdd opens **PR 2** |
-| `small-change` | plan: scope. Gate **approve** | build: change, verify, formal. pdd opens **one PR** | |
-| `product` | map: understand, map. Gate **approve** | plan: parts, contracts, plan. pdd opens **one PR** | |
+Open Codex, Claude Code, Gemini CLI, or Antigravity in your repository and invoke `/pdd` (or `$pdd`):
 
-PR 1 holds the prompt, the Story and the test cases (`tests/*.json`). Repo tests that fail on today's code go to PR 2, so merging PR 1 never breaks the main branch. PR 2 holds the code. You can stop at PR 1, merge it, and make PR 2 later.
+```text
+/pdd Add CSV export to the orders command.
+/pdd Fix off-by-one pagination on empty results.
+/pdd Update the README installation steps.
+```
 
-In a normal feature or bug run, the Story card includes the code-or-stop choice. A valid Story approval and full saved check pass open PR 1, then pdd follows that choice. In strict mode, you can try the result when available and approve before PR 1, then choose whether to make the code PR.
+1. **Orient offline:** the agent runs `pdd status --json` (and `pdd owner PATH...` for planned files) to inspect prompts, Stories, tests, ownership headers, and the `pdd.json` `verify.paths` Feature Map.
+2. **Load only the needed references on demand:**
+   - [`skills/pdd/references/prompting.md`](../skills/pdd/references/prompting.md): module ownership, contracts, and prompt authoring.
+   - [`skills/pdd/references/stories.md`](../skills/pdd/references/stories.md): Stories (`user_stories/*.md`) and scenario JSON (`tests/*.json`).
+   - [`skills/pdd/references/ports-and-cli.md`](../skills/pdd/references/ports-and-cli.md): ports, interfaces, CLI programs, HTTP routes, and persistence.
+   - [`skills/pdd/references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md): screens, `.ui.svg` drawings, app maps, and Simulator verification.
+   - [`skills/pdd/references/product.md`](../skills/pdd/references/product.md): multi-part roadmaps and shared contracts.
+   - [`skills/pdd/references/verification.md`](../skills/pdd/references/verification.md): real-path verification, `pdd prove`, and independent review.
+   - [`skills/pdd/references/formal.md`](../skills/pdd/references/formal.md): code-bound formal verification and mutation control (loaded only for invariant-heavy work).
+3. **Author prompt space first (`feature` and prompt-level `bug`):**
+   - For a `bug`, reproduce the defect first with the smallest failing test and check ownership. If the owning prompt is already right (a pure code bug), skip prompt edits and proceed straight to Red→Green TDD.
+   - For a `feature` or prompt-level `bug`, edit the owning `prompts/*.prompt.md`, `user_stories/*.md`, and `tests/*.json` before changing product code. Keep 1 Story per cohesive user loop (ask before creating more than 3 Stories). Expected values come from the person and Stories, never from reading code output.
+   - For `small-change` (non-product files only with zero owned/product code touched), skip prompts and Stories.
+4. **Check and simulate:**
+   - Run offline `pdd lint` (0 AI, 0 network) to catch structural, SVG, scenario, and diff problems immediately.
+   - Run `pdd test --files STORY && pdd test STORY` on the PDD interpreter, or `pdd simulate STORY` (short: `pdd sim`) to try the program interactively before writing code.
+5. **Approve prompts:**
+   - Review prompt changes and approve with `pdd approve PROMPT` in a terminal, or reply in chat so your agent records your exact words with `pdd approve PROMPT --said - <<'PDD_SAID'`. Strict mode (`"strict_approvals": true` in root `pdd.json`) requires a person terminal.
+6. **Build, prove, and review:**
+   - Implement code from the approved prompts and keep `// Prompt: ...` headers or `pdd-bindings.json` current (`pdd update --check`).
+   - Run `pdd prove --base origin/main` to verify offline lint, diff checks, the repository test suite, and merge-base trusted `verify.paths` recipes. For bug fixes, prove base-vs-head contrast with `pdd prove --base origin/main --test "CMD" --expect "DEFECT_TEXT"`.
+   - Use a writable Fresh Verifier (running real checks and a Deliberate-Break Probe) plus a Blind Read-Only Reviewer with clean file paths only.
+   - Open one PR when authorized by the person (or a staged prompt PR when `product/plan.md` sets `Through: prompt-pr` / `pdd product start RUN --through prompt-pr`); merge only on an explicit human request under [Prompting guide §5](../skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges).
 
-### A big request: a plan and many Stories
+## Two ways to run PDD
 
-In `feature`, the understand step counts the separate behaviors in the issue. One behavior gets one Story and no plan. More behaviors get a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order.
+| | Interactive (`/pdd` in your coding agent) | Autonomous (`pdd autopilot`) |
+|---|---|---|
+| Start | Invoke `/pdd` (Claude Code) or `$pdd` (Codex) in your repo | `pdd autopilot add N` and `pdd autopilot start --label pdd:autopilot` |
+| Isolation | Works directly in your checkout or chosen branch | Isolated worktree, branch, and headless worker job per issue |
+| Inspection | `pdd status`, `pdd lint`, `pdd update`, `pdd prove` | `pdd autopilot status`, `pdd autopilot logs [ISSUE] [-f]`, `pdd graph` |
+| Approvals | Person approves prompts in chat or terminal (`pdd approve`) | Operator's `pdd autopilot start` delegates ordinary prompt approvals in `auto`/`observe` mode; `strict_approvals` still requires a person |
+| PRs and merges | Agent opens PRs and merges only on explicit human request | Autopilot opens one PR per issue; in `auto` mode merges after CI, fresh review, and full test suite pass (in `observe` mode posts "would merge") |
 
-- Each Story in the plan has its own test file, `tests/<story>.json`.
-- At the story gate, the chat shows pdd's Story card as pdd prints it: the issue and what you asked, the verdict line, each Story with its acceptance criteria, what must not change and its rules to check, the test cases (case, input, expected), the prompts that change with their changed lines, the full file paths, the next step and "Approve, or tell me what to change." `pdd workflow card N` prints the same card at any time. In strict mode (`strict_approvals: true`), pdd prints no card: the chat gives the paths of the Story files and the plan, and asks for approval or changes. You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
-- The check step prints one `Prompt tests (<story>)` line for each Story, then the overall line. If a Story fails, it fixes and checks only the Stories that failed.
-- `pdd workflow status` shows the count, for example `Stories: 4 of 5 Stories pass (✗ refunds)`.
+## Headless Autopilot workflow (`pdd autopilot`)
 
-What each step does:
+Autopilot runs headless agent workers (`codex`, `claude`, `gemini`, or `agy`) on a 10-minute user timer (`systemd` on Linux, `LaunchAgent` on macOS). Empty ticks make zero AI calls.
 
-| Step | What the subagent does |
+1. **Preflight:** `pdd autopilot doctor` checks tools, sign-ins, permissions, GitHub `pdd.json` parity, and interpreter access read-only.
+2. **Queue and execute:** Each tick claims ready opt-in issues (`pdd:autopilot` or vetted ready cards under `--intake active`), allocates an isolated worktree, and runs a headless worker following [`src/autopilot/job-rules.md`](../src/autopilot/job-rules.md).
+3. **Inspect live progress:** Run `pdd autopilot status` for an overview, `pdd autopilot logs` to list active workers, or `pdd autopilot logs ISSUE -f` to follow one worker live without disturbing it.
+4. **Full-suite queue:** Parallel jobs serialize heavy test suites through the shared machine queue (`pdd autopilot suite --command "npm test"`), sizing check slots to CPU and memory limits.
+5. **Merge lane and verification:** Before merging in `auto` mode, Autopilot verifies green CI, a passing full test suite on the current head, verified `Runtime:` and `Evidence:` records, and a fresh independent reviewer PASS.
+
+## Product plans (`pdd product`)
+
+For multi-part products with shared contracts, use `/pdd` in `product` mode to plan `product/map.md`, `product/plan.md`, and `contracts/`, then track and prepare runs with:
+
+- `pdd product status [--json] [--through prompt-pr|code]`
+- `pdd product next [--through prompt-pr|code]`
+- `pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy|ENTRY] [--through prompt-pr|code] [--base BRANCH]` (creates or reuses the scoped run issue and prints a `/pdd` handoff prompt)
+- `pdd product contracts` (alias: `pdd contracts`)
+- `pdd graph [--open] [--issue N]`
+
+See [Build a whole product](build-a-whole-product.md) and [the CLI reference](cli.md).
+
+## Where skills live
+
+`pdd setup` installs the single `/pdd` skill globally into user skill folders without touching repository files:
+
+| Agent | Global skills folder |
 |---|---|
-| scope | Checks `pdd owner` on planned files and switches to `bug` or `feature` if the issue touches prompts, Stories, prompt-owned files or product code. States the result, the non-PDD files, why the change stays outside PDD, how to undo it and the test command. For a CI, config, package or test defect, records `Defect:` and `Not caught because:`. |
-| change | Edits only the approved non-PDD files (docs, guides, packages, config, CI, lockfiles or tests — never prompts or Stories). Adds or updates checks or tests when planned. |
-| reproduce | Finds the smallest safe input that shows the bug. Writes the expected and the actual result. |
-| understand | States the wanted result, what must not change and what is out of scope. Counts the behaviors. With more than one, writes `user_stories/PLAN.md`. |
-| visual? | For a visible interface, sketches 2 or 3 options, with empty and error states. For a page or a screen, it also writes the app map and its SVG mockups from the chosen design, so the Simulator shows the real screen (the Screen tab). The chat asks you first, and recommends this step for a page or a screen. |
-| prompt-story | Reads the full Prompting guide and `RUNBOOK.md` sections 2 to 4, then the sections that fit: a CLI, a prompt that calls another, check paths, money and dates, a page or screen, AI calls and test patterns. A page gets a `render` operation that returns its HTML and an app map, so you can try the page on the Screen, and its tests check what the page shows. Writes or changes the smallest prompt that owns the behavior, each Story in the person's words, and one `tests/<story>.json` for each Story. Takes the expected results from the requirement, not from the code. |
-| check | Runs `pdd test` once for all Stories as `RUNBOOK.md` says, when the `pdd-prompting` skill has that file. After a fix, it checks again only the Stories that failed, by name. It never sends the same check on the same files again: it reads a result again with `pdd test --read`. In `bug`, it checks every Story whose prompt changed. Puts one `Prompt tests` line and one report link for each Story in its summary. Else it reviews the prompt and the cases by hand with the review rules. |
-| try? | Runs `pdd simulate` and makes a Simulator link for each Story that you want to try, as `RUNBOOK.md` says. Else it shows the plan or the bug in a safe local preview or demo. In a normal run, pdd skips this step and asks nothing: to try it, ask at the Story card. In strict mode, the chat asks you. |
-| build | Builds only what you approved. Tests through the public interface. |
-| verify | Runs the replay test of `RUNBOOK.md` section 17 on the code and on a planted mistake, then the tests and the repo's required checks. Writes the tables first, and the exact commands and their real output last, in a closed `<details>` block. |
-| formal | A fresh subagent that did not write the code runs the formal check of `RUNBOOK.md` section 17 for each Story with `## Rules to check`. Adds one result to `verify.md`, after the tables. |
-| review | A fresh independent subagent that neither built nor verified gets only the issue, Story, Defect block, diff, available old-code proof and test comparison evidence, PR 1 body and supplied step summaries, never builder notes or chat history. It must not open build.md, verify.md or formal.md in the run folder. It answers the six questions in `steps/review.md`, inspects source and tests, exercises a real changed path and writes the actual verdict and findings to the run folder. |
-
-If verify or formal finds a failing case, or review finds must-fixes, the chat returns to a fresh build, then verify, formal and fresh review. There are at most two repair rounds after the initial review. In an Autopilot run, the chat keeps repairing while a useful correction exists, up to 5 repair rounds in one area (a round returns to an earlier step; a retry of the PR open is not one); pdd then refuses another round, marks the run stuck and the issue takes the stuck path. If vectors still fail, PR 2 keeps "✗ N vectors fail" at the top. The PR then opens with the actual `Review: N must-fix` or `Review: no must-fix` verdict and any remaining must-fix list at the top. There is no new human gate. These are agent instructions; metadata orders steps but does not enforce reviewer independence or judgment.
-
-Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting` core rules and review rules.
-
-## Two ways to use a workflow
-
-| | In your chat | As a run on an issue |
-|---|---|---|
-| Start | Call `pdd-feature`, `pdd-bug` or `pdd-small-change` in Codex or Claude Code | `pdd workflow run NAME ISSUE` |
-| Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
-| Chats | One | One for each area, in Herdr |
-| Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
-| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. Your agent may merge on your explicit chat request under [RUNBOOK §2](../skills/pdd-prompting/runbook/files-and-runtime-block.md#2-the-files) | pdd opens them. Your agent may merge on your explicit chat request under [RUNBOOK §2](../skills/pdd-prompting/runbook/files-and-runtime-block.md#2-the-files) |
-
-## How a run works
-
-```
-pdd workflow run feature 42        returns at once
-  |
-chat 1  story: understand, visual?, prompt-story
-  |     gate: the Story card; you approve it and choose: stop after PR 1, or the code PR too
-chat 2  prompt PR: check (pdd skips try)
-  |     a full check pass: pdd opens PR 1 (prompt, Story, tests) and asks nothing
-  |     a changed Story or expected value: the Story card again, for you
-chat 3  code (only when you chose it): build, verify, formal, review
-  |     pdd opens PR 2 (code), stacked on PR 1
-you     review and merge on GitHub
-```
-
-Strict mode (`strict_approvals: true`) and Autopilot runs keep their own gates. In strict mode, chat 2 asks you to try it and approve before PR 1, and the chat asks the code question after PR 1.
-
-1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. An issue has one active run. A second `pdd workflow run` on the same issue still starts: it marks the old active run replaced and names it (id, worktree, last activity) in one warning. The old worktree and branch stay. Then it returns. You can close the terminal.
-2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
-3. The main chat coordinates and talks with you. It writes no code and performs no checks.
-4. The main chat gives steps to fresh subagents; builders are never reused and never check their own code. Before checking, close finished agents if supported and try fresh startup. Only after startup fails may verify or formal reuse an agent that wrote no code, tests or prompts in this run. Review always needs a fresh agent with no build, verify, formal or prior review of this change and no prior review context, including every repair round. If no fresh reviewer can start, write `Not checked: review (agent limit)`, stop and tell the person. Follow pdd-prompting RUNBOOK §17 for missing-check records, new-session recovery and replacing them after actual checks. Each subagent gets its full brief at once, with file paths, not chat history; the chat waits once with a long time-out and no small follow-ups.
-5. Hold review completion while must-fixes remain and fewer than two repair rounds have run: start a fresh build with the must-fix list. Only after the final review (clear or two repairs used), run `pdd workflow done review`; it opens PR 2. For other steps, the agent runs `pdd workflow done STEP --summary "..."`. pdd records the step and tells the agent what comes next: the next step, a gate, or "pdd opens the PR now". An unknown or out-of-order step gives a warning. It does not stop the run.
-6. At a gate, the chat shows the result, asks you and stops. There is no time limit. When the chat needs your answer in the middle of a step, the agent runs `pdd workflow ask "<question>"` first, so `status` shows that the run waits for you.
-7. If you ask for changes, the same chat revises and asks you again. The gate stays open.
-8. If you approve, pdd starts a new chat for the next area. That chat gets the outputs of the approved area: the files, the summaries and the run folder.
-9. After the last step of an area with a PR gate, pdd pushes the branch and opens the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate. For bug and feature, the review-completion hold in point 5 overrides generic completion after each step: keep PR 2 unopened during repairs.
-10. You merge the PRs on GitHub. `pdd workflow status` reads the PR state. When the last PR is merged, the run is completed.
-
-A workflow can start from any checkout of a repository in one of the four Git layouts in the table: a normal clone and its linked worktrees, a bare `project.git`, a bare repository stored in `project/.git`, and a bare `project/.bare` named by a `project/.git` file. All checkouts of one repository share the same issue claims and allocation records in the common Git directory. pdd reads what Git reports for your checkout: the common Git directory, the primary registration in `git worktree list`, `core.bare` and the origin. It allocates only when they agree and every origin names the same GitHub repository. New run worktrees live in one folder beside the primary repository:
-
-| Layout | Run worktrees folder | Herdr parent |
-|---|---|---|
-| Normal clone `project/`, or a linked worktree of it | `project.pdd-worktrees/` | `project/` |
-| Bare `project.git/` with linked worktrees | `project.git.pdd-worktrees/` | `project.git/` |
-| Bare repository stored in `project/.git` with linked worktrees | `project.pdd-worktrees/` | `project/` |
-| Bare `project/.bare/` and a file `project/.git` with `gitdir: ./.bare` | `project.pdd-worktrees/` | `project/.bare/` |
-
-When the bare repository is inside a project folder, the run worktrees go beside that folder, not inside it. pdd runs Git commands that need a work tree only in your checkout or in the run worktree. It keeps `core.bare` unchanged and does not fetch to allocate. When the facts disagree, pdd refuses and names what disagrees and the next step, for example two origins that name different repositories. pdd refuses a separate Git directory (`git clone --separate-git-dir`), from its main checkout and from its linked worktrees. Git lists the Git directory itself as the primary worktree and records no path to the main checkout, so pdd cannot verify the primary checkout or choose one run worktrees folder for every checkout. A path with a control character is also refused. A refusal before saving allocation intent leaves no issue claim or allocation record. If intent was saved but allocation is unconfirmed, preserve it and inspect that exact run before trying recovery.
-
-Herdr uses the verified primary repository workspace (the Herdr parent in the table) as the parent when a run
-starts from a linked checkout; the invoking source checkout and the allocated run worktree keep their own
-identities. Herdr opens a linked worktree only from such a parent: it refuses a linked checkout and a folder outside Git.
-For a bare parent, pdd opens the run worktree directly from the new parent workspace; Herdr then gives the parent its
-repository identity, and pdd checks it. The chat starts in the run worktree. Until that check passes, each
-`pdd workflow open ISSUE` checks the parent identity and its first tab again before it starts the chat. If Herdr confirms `linked_worktree_source` before any native agent starts, run
-`pdd workflow open ISSUE` to finish that same allocated run. A saved linked-parent failure can recover through
-this command even after an earlier open failed. pdd preserves the old parent shell workspace unchanged and opens the verified parent under an unused label. It does not allocate another Git worktree.
-An uncertain or lost allocation reply remains blocked for inspection; it never authorizes another native chat.
-
-Review a run without entering its chat with `pdd workflow view ISSUE`; `status` prints this command. The terminal view brings together the saved state and gate, recorded human approvals, pending decisions, PRs, Prompt tests lines, report links and the Simulator link. It links to the full issue and to current Stories (including acceptance criteria), plan, prompts, tests and gate notes. The commit and uncommitted-change indicator identify what you are reading. These are current files; a recorded approval does not certify later edits. Prompt approval and permission to start code work remain separate decisions. Missing artifacts or links are shown as unavailable or not recorded.
-
-The view uses saved local records and local Git/file reads. It works with Herdr and the network offline and changes no state. Use `pdd workflow open ISSUE` when you want to focus or resume the chat.
-
-### Simulate before PR 1
-
-The check comes first, then the simulation. The ordinary `pdd simulate <story>` command automatically opens a shell, localhost with an example request, the Simulator screen, or its Form tab according to the program. `pdd simulate` opens the whole project; `--page` explicitly selects the page. At the story gate, the chat can offer a simulation before the check: `pdd simulate <story>`, or `pdd simulate <story> --new` when visual made an app map. The Story card says that you can ask for it.
-
-In a normal run, pdd reads its own saved check results after the check. When every criterion of every Story scenario in the default project check scope passes, and each saved result belongs to its batch and matches the current files, pdd opens PR 1 with no question and records the route `automatic-check-pass`. A failed check goes back to the agent: it repairs and checks again. A prompt-only repair that passes the check keeps your Story approval. A repair that changes a Story, the plan or an expected value shows the Story card again, with the change, and waits for you. These checks also apply when pdd updates an open PR 1. A Story or expected-value change must be approved before that update or code entry. A selective recheck can keep earlier results whose source is still current. An AI-service failure is no verdict: it is not a failed check, and the chat does not ask you to approve.
-
-In strict mode, after the check and try steps, the chat shows one `Prompt tests` line for each Story (✓, ✗ or no verdict) with its report link, and simulation details (the Simulator link when applicable). You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
-
-The PR 1 body starts with a part for people: a status line, the user story, a summary (Problem, This PR, Verdict), the expected cases, what changed, a Checks table from pdd's own records (Prompt tests with one report link, lint, CI, checker), the Approval line and the Next line. In an Autopilot `auto` run the Approval line is "Automatic approval: Autopilot `auto` mode, started by <login> on <date>. No person was asked." and the Next line links PR 2, which starts by itself; in a manual run they show your approval words and "The code PR starts when you ask for it." The agent gives the summary and the cases as labeled lines in its `done` summaries ([RUNBOOK §15](../skills/pdd-prompting/runbook/autopilot-and-checklists.md#15-pr-text)). Then one closed "Details for tools and audits" section holds:
-
-1. pdd's own results: one `pdd result:` line for the newest `pdd test` and the newest `pdd lint` that ran in the run worktree after the run started (batch id, time, whether the source is still the same, the interpreter build and model when known, and the result). With none, the line is `pdd result: none. … (pdd:no-verdict)`. This is a label, not a stop.
-2. For a bug: the verdict line and the `Before ✗ … → after ✓ …` line with its report links.
-3. One `Prompt tests (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Prompt tests (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days). When these lines come from a step summary, they start with `Agent note — not checked by pdd:`, because the agent typed them. Lines that `pdd workflow evidence` checked against a saved result have no label.
-4. `Part of #N`.
-5. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
-6. One short line for each step. A step that `pdd workflow done STEP --skipped REASON` recorded says `skipped (recorded by pdd)`.
-
-### pdd results and agent notes
-
-`pdd workflow status` counts Stories only from these pdd results, never from `Prompt tests` lines in a summary.
-
-`pdd workflow done check`, `try` and `verify` attach pdd's own latest results to the step: the newest `pdd test` and `pdd lint` batch for the run worktree, and the run's `pdd workflow prove` result. pdd reads them from its saved files. It does not run anything. The agent's `--summary` is kept apart, as an agent note. When pdd has no result of its own, `done` prints a warning and records the step anyway.
-
-In a normal run, pdd records the try step as skipped itself. When no person is at the Try step in strict mode, the agent runs `pdd workflow done try --skipped "REASON"`. pdd records the skip and the reason. No agent writes run files by hand.
-
-`pdd workflow prove` results count as pdd's own proof: the code PR shows them in its `Old-code proof:` line. Each phase has a 10-minute limit by default. Use `--timeout MIN` (1 to 120) to change it.
-
-PR 1 has no `verify.md`, no Simulator links and no local paths.
-
-### The code question
-
-In a normal run, you choose at the Story card: stop after PR 1 (the default), or go on to the code PR. The chat records the choice with the approval (`--through code`), or you give it at the start: `pdd workflow run NAME ISSUE --through code`. After PR 1 opens, pdd follows the choice and asks nothing.
-
-In strict mode, the chat shows the PR 1 link and asks: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, tell your agent, or run `pdd workflow approve N` in a terminal."
-
-| You choose | What happens |
-|---|---|
-| Code now: say it in the chat, or run `pdd workflow approve N` | The code area starts in a new chat. It works on top of PR 1. PR 2 is stacked on PR 1's branch. Merge PR 1 first, except when PR 1's CI fails: then PR 2 says "This PR also merges PR 1 (#N). Do not merge PR 1 alone.", its base is set to the base branch and only PR 2 is merged |
-| Stop | The run waits. `status` says that PR 1 is open. If PR 1 is merged and you do not go on, the run ends as "done at PR 1" |
-| Code later: `pdd workflow approve N` at any time | The code area starts. If PR 1 is merged, PR 2 starts from the merged prompts on the saved base branch (`--base BRANCH`, else the repository default) |
-
-The code area is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code.
-
-PR 2 says `Closes #N` and that it builds on PR 1. Warning-light-only work instead starts with `Not fixed yet: this helps find the cause`, uses `Refs #N` and keeps the issue open. If PR 1 names draft prompts, approve through the chat route above or approve each with `pdd approve PROMPT` at a terminal. The agent runs pdd and never sets approval fields. The later code-or-stop decision remains separate.
-
-### Who can approve
-
-See [Record a chat approval](cli.md#record-a-chat-approval) for the safe agent commands, prompt snapshots and terminal or strict-mode approval. One workflow approval covers the ready gate and its draft prompts. The later code-or-stop decision is separate, except that in a normal run the Story approval can carry it.
-
-- In a terminal: `pdd workflow approve N` asks y/N. The question shows the repo, the issue and its title. At the PR 1 gate, in strict mode or at a gate without a Story card, it asks whether to make the code PR now.
-- Several runs: `pdd workflow status` names the runs that wait for a Story approval. The chat shows the cards one after another, and you answer each card.
-
-### The run folder
-
-Each run has a run folder: `.git/pdd/runs/N/` in your clone, where N is the issue number. It is in the Git folder of your clone, not in the run's worktree. The first message of each chat names it.
-
-| File | What it holds |
-|---|---|
-| `status.json` | The area, the step, what the run waits for and the PRs |
-| `AREA-start.md` (one for each area) | The start message of that area's chat |
-| `STEP.md` (one for each step) | The notes of that step |
-| `verify.md` | The exact test commands and their real output |
-| `review.md` | The independent verdict, six answers and concrete must-fix findings |
-
-The code that the steps write is committed on the run's branch, in the run's worktree.
-
-## Tests and evidence
-
-Agents run tests. `pdd workflow prove` also runs its supplied command on base and head.
-
-- The verify step runs in a fresh subagent that did not write the code.
-- It runs the new cases, the regression tests and the repo's required checks. When it can, it shows that a new test fails on the old or wrong code, in a throwaway copy.
-- For a small-change defect fix it writes `Proof (defect fixed):` and `Proof (gap closed):`, and a reason for each removed test or changed assertion.
-- It writes the exact commands, the exit codes and the real output to `verify.md`. It names what no test covers.
-- The body of PR 2, or of the one `small-change` PR, starts with the same kind of part for people: a status line, the user story, a summary (PR 2: Problem, Cause, Fix, Result; small change: Problem, Change, Result), before and after cases, what changed, a Proof table (approved cases on the new and the old code, or on a planted mistake in a feature run; the formal result; the regression tests; CI; the review; the checker) and the Merge line. Its status line says `✅ Ready to merge` only when each of these records is there and current, and `⛔ Not fixed yet` for a PR that only helps find the cause. `pdd workflow status N` refreshes the status line and the rows of each open PR of the run (CI, the checker verdict, PR 1's CI and a new base) and says when ("Updated <time>"). A stacked PR 2 follows PR 1's CI: "Builds on PR 1 (#N): merge it first." when PR 1 is green, "This PR also merges PR 1 (#N). Do not merge PR 1 alone." when PR 1 is red or PR 2 already targets the base branch, and "Builds on PR 1 (#N)." while PR 1's CI has no result. Its Details section has the step summaries and `verify.md`. The Details section starts with pdd's own `pdd result:` lines (or `pdd result: none. … (pdd:no-verdict)`) and the `Old-code proof:` line. `Prompt tests` lines and report links that come from a step summary follow, each starting with `Agent note — not checked by pdd:`. Report links expire after 7 days.
-- The readable Result uses the recorded Proof rows. Agent Result claims stay in Details. A one-PR small-change with only test files and test helpers, added executable test lines, and a current `old-passes` record shows **Coverage validation**. Executable tests include JSON files in test folders whose published-head content has `schema_version: "prompt-runtime.program-scenario.v1"` and nonempty `steps`. Arbitrary JSON fixtures and empty scenarios do not qualify. Both snapshots pass. This closes a coverage gap and does not establish a runtime defect fix. Old code passing alone does not block this coverage work. Production changes, fixture-only work and bug/feature proofs keep the old-code failure requirement.
-- A code area with a formal step reads `replay-evidence.json` even without scenario replay. Its formal header and Proof row share the validated result, scope, reason and control. A missing, malformed or stale block cannot become Proved from an agent summary. Reading this block does not add a scenario replay requirement to small-change.
-
-Bundled feature/bug code areas declare `replay_evidence: "pdd.replay-evidence.v1"`. The agent writes
-`replay-evidence.json` in the run folder using the [structured replay contract](replay-evidence.md).
-[Corpus adoption](replay-evidence.md#adopt-an-unchanged-approved-corpus) supplies a frozen declared anchor for an existing approved corpus.
-Without it, the anchor also holds the [approved scenarios on the base](replay-evidence.md#approved-scenarios-on-the-base) that link to the run's changes, or all of them when the base `pdd.json` sets `replay.base_scenarios` to `"all"`.
-The Proof table shows the replay counts, and the Details section includes the validated replay status and exact counts, original vector and current source hashes,
-public-boundary execution coverage, semantic mutation control, and the [formal status](replay-evidence.md#the-formal-result) with scope, reason and a repair step.
-Missing, malformed or stale records appear as blocked/not replayed. Assertion failures remain publishable.
-Saved areas and custom workflows without this field retain their behavior. pdd checks structure and identity;
-agents execute the tests. A replay status does not independently prove execution or prompt/code equivalence.
-
-Read that output before you merge. Passing tests are useful evidence. They are not proof of all behavior. A test that was only written is not a test that ran.
-
-<a id="make-your-own-workflow"></a>
-
-## Make your own workflow
-
-### Where skills live
-
-| Level | Codex reads | Claude Code reads |
-|---|---|---|
-| For one project (commit it) | `.agents/skills/` in the repo | `.claude/skills/` in the repo |
-| For you, in all projects | `~/.agents/skills/` | `~/.claude/skills/` |
-
-When `CLAUDE_CONFIG_DIR` is an absolute path, pdd uses `$CLAUDE_CONFIG_DIR/skills/` as the Claude user skills folder.
-
-`pdd workflow run NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first eligible one found wins; only a project copy can override a bundled workflow.
-
-1. `.agents/skills/` in the project
-2. `.claude/skills/` in the project
-3. `~/.agents/skills/`
-4. `~/.claude/skills/`
-5. `skills/` in the pdd package
-
-The project is the top folder of the Git repo of your current folder. Put your copy where your agent reads it too, or in both folders of a level.
-
-`npx skills add promptdriven/pdd` installs the seven PDD skills at the project level, or at the "for you" level with `-g`. `pdd setup` copies them to the "for you" level only when they are missing: `~/.agents/skills/` for Codex, and `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/` when it is an absolute path) for Claude Code. `pdd setup` replaces marked user copies when older, when the same version has different files, or when the marker is invalid. A newer marker version is kept. It also removes marked copies of `pdd-autopilot`, `pdd-check` and `pdd-merge`, because pdd does not ship them. It never touches a copy without the marker, or a symlink. Do not edit these installed folders: an update replaces them.
-
-Give your workflow a new name. A project copy with the same name as a PDD skill (for example `pdd-bug`) works only in Codex:
-
-| Project folder | Codex | Claude Code |
-|---|---|---|
-| New name, for example `pdd-mybug` | Uses it | Uses it |
-| Same name as a PDD skill, for example `pdd-bug` | Uses the project copy first | Uses only the user copy. The project copy has no effect |
-
-### Copy and edit
-
-This example makes the workflow `mybug` for one repo. Run it in your repo:
-
-```sh
-mkdir -p .agents/skills
-cp -RL ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug   # or from .agents/skills/pdd-bug
-rm -f .agents/skills/pdd-mybug/.pdd-skill.json
-```
-
-Then edit the copy:
-
-1. In `SKILL.md`, set `name: pdd-mybug` and a new `description`. The description tells the agent when to use the skill, for example "Use when the person reports a bug in the billing module."
-2. Edit the areas in `SKILL.md` and in `workflow.json`. Keep them the same.
-3. Edit, add or remove the step files in `steps/`. Keep each one short.
-4. If you use Claude Code, also copy the folder to `.claude/skills/pdd-mybug`.
-
-Then use it:
-
-```sh
-pdd workflow list            # mybug is in the list
-pdd workflow run mybug 42    # a run on issue 42
-```
-
-In a chat, call `$pdd-mybug` in Codex or `/pdd-mybug` in Claude Code. Commit the folder so that your team gets the same workflow.
-
-`cp -RL` copies the files, also when the installed skill is a symlink. Then your edits do not change the PDD skill.
-
-### The files
-
-```
-pdd-mybug/
-  SKILL.md          frontmatter (name, description), when to use it, the areas, the rules
-  workflow.json     the areas, their steps and their gates
-  steps/
-    reproduce.md    one short brief for each step
-    prompt-story.md
-    check.md
-    try.md
-    build.md
-    verify.md
-    formal.md
-    review.md
-```
-
-`workflow.json` lists the areas in order:
-
-```json
-{"version":2,"areas":[
-{"name":"story","steps":["reproduce","prompt-story"],"optional":[],"gate":"approve"},
-{"name":"prompt-pr","steps":["check","try"],"optional":["try"],"gate":"pr","before":"approve","then":"ask-code"},
-{"name":"code","steps":["build","verify","formal","review"],"optional":[],"gate":"pr","replay_evidence":"pdd.replay-evidence.v1"}]}
-```
-
-- Each area has a `name`, its `steps` in order, the `optional` steps and a `gate`.
-- `gate` is `approve` (the person approves, then a new chat starts) or `pr` (pdd opens a PR).
-- `"before":"approve"` on a `pr` area provides an approval gate before the PR. In a normal run with Story approval, a full saved check pass can open PR 1 automatically; strict and other routes retain the person gate.
-- `"then":"ask-code"` on a `pr` area makes it PR 1; the next area makes PR 2. A normal run follows the choice saved on the Story card; strict and other routes ask about the code PR. Leave it out for a workflow with one PR, like `small-change`.
-- `replay_evidence` may declare `pdd.replay-evidence.v1` on a PR area.
-- Each step has a file `steps/STEP.md`.
-- The last area ends with `pr`. It should have a `verify` step, so that the PR body has the test output.
-
-Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent records only the person's actual approval and merges only by the explicit-request rules above. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.
-
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../skills/pdd-prompting/runbook/files-and-runtime-block.md#2-the-files). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
-
-Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.
-
-In auto mode, each Autopilot tick resumes a stopped current-area chat through the same recovery used by `pdd workflow open`. It rebuilds a closed workspace and resumes the saved conversation. Delivered change requests that have no agent acknowledgement appear in the resumed chat. Login failures and usage limits require a person and prevent automatic resume. Gates, questions, uncertain launches and paused or ended runs stay on hold. Each area can resume automatically up to three times in a rolling hour. If it stops again within that hour, the run becomes stuck with a reason and one alert. Manual open does not use that allowance.
-
-Recovery can use a unique matching native session to confirm that an acknowledged launch ran, even if status never saw it running. A saved launch UUID alone does not prove that Claude ran. A run layout that pdd is deliberately closing or has closed stays closed. A chat with a saved intentional-close mark also stays closed, including when closure is pending or the server restarts. It uses no automatic resume allowance and sends no resume-exhaustion alert. After a successful automatic resume, status shows `resumed after the chat stopped (1 of 3)` with that attempt's number. The notice lasts for one hour for the same current chat. A newer gate, question or chat problem keeps its own status. Failed or uncertain dispatches use an attempt but do not report a successful recovery.
-
-`pdd workflow open ISSUE [AREA] [--new]` focuses or resumes the current area's saved session by default. AREA opens a recorded current or earlier area's chat without moving the run or changing its gate and approvals; this does not enforce read-only execution. `--new` replaces only the current area's verified owned chat with one fresh session in the same worktree and saved agent configuration. It archives the old chat, native session identity and original first message, and the continuation explains completed work and any pending gate. Run it from another terminal: replacement refuses from an agent session, from the pane it would close and for an earlier area. Eligibility or ownership refusal before replacement intent leaves the saved run unchanged. Once intent is saved, an interruption retains the pending recovery record. Repeat `pdd workflow open ISSUE --new` to inspect and continue the same current-area attempt or roll it back without a duplicate native session. If its area differs from the current area, recovery only restores a verified usable original or safely ends the attempt; it never launches a fresh agent or resumes a stopped historical agent. Both status State and Next lines name the pending phase and this resolving command. If external inspection is temporarily unavailable or ambiguous, retry that command later; cancel remains available, as do the usual progress and approval commands. Plain open, AREA open and `--new` share the same short run lock; status holds no lock during external calls. Replacement keeps completed work, decisions, approvals and PRs and never approves new work.
-
-Full-suite validation in parallel runs uses `pdd workflow suite --command COMMAND`
-with the repository's actual test command. The machine queue sizes running slots from CPU and memory observations and reports each waiter's position. Waiting and suite execution
-pause stuck detection. A failed or timed out suite is reported as a `test-suite`
-incident with its cause. See [the queue command](cli.md#shared-full-suite-queue).
-
-## Finished chat cleanup
-
-Run `pdd workflow tidy --dry-run` to count eligible finished chat tabs, then
-`pdd workflow tidy` to close them. A live run keeps its current area chat,
-including a gate waiting for a person. Finished chats need verified Herdr IDs,
-a saved native session and safe occupancy. The grace period is 15 minutes from
-area/run end and from the last explicit open. Budget pressure can remove the
-grace period. Personal tabs and busy chats remain protected. An idle or done
-agent is safe. If the agent has
-exited, cleanup also requires process information that proves only the shell
-occupies the foreground. Foreground work or uncertain inspection keeps the tab.
-These checks repeat after the saved close intent, before the close request.
-
-After its last chat closes, an ended run can release its original shell workspace.
-Cleanup keeps the shell if it is the caller's pane, has live work, or cannot be
-checked. Tidy counts retained shells and status shows the reason. A failed shell
-close stays pending. The next tidy confirms absence or retries only after it
-checks the same workspace, original shell IDs and occupancy again. This also
-applies when startup failed before the run recorded its first area chat.
-
-An intentional close saves `chats[].closed = {at, reason, screen, confirmedAt?}` in status.json
-before sending the close request. This is the integration contract for automatic
-stopped-chat recovery (#3068): skip any chat with `closed`, even when a close
-request failed or the process/server restarted. `at` is epoch milliseconds;
-`reason` is `area-end`, `run-end`, `budget` or `cancel`; `screen` is the private
-screen file path, or null if capture failed. Optional `confirmedAt` is the epoch-ms time when inventory confirms absence. Without it, status shows a pending close. Keep this mark until an explicit
-successful open clears it and saves `openedAt`. Run state or an absent pane alone
-does not remove it. Keep the saved native session, account folder, worktree,
-branch and first message. A failed close can be retried safely by tidy. Native `openRun` with an
-`automaticResume` context returns `recovery: "skipped"` for a marked chat before
-Herdr effects. Keep this guard and a fresh mark check at automatic dispatch when
-integrating the stopped-chat recovery branch.
-
-Open an ended run to read the saved screen path and a shell-quoted native resume
-command. For a live run, open can resume a closed historical area chat. A manual
-start of the same completed issue makes a fresh run and retains the prior run.
-A replaced agent must stop; commands from its worktree show both run identities.
-To close retained busy chats, cancel from that retained worktree.
+| Codex & Gemini CLI | `~/.agents/skills/` (also syncs existing marked `~/.codex/skills/` and `$CODEX_HOME/skills/`) |
+| Claude Code | `~/.claude/skills/` or `$CLAUDE_CONFIG_DIR/skills/` (skips copying `/pdd` when the Claude Code plugin is installed, while cleaning marked retired skills) |
+| Antigravity | `~/.gemini/config/skills/` (when Antigravity is detected or holds marked skills) |
+
+Each copy managed by `pdd` carries `.pdd-skill.json`. `pdd setup`, `pdd upgrade`, and once-per-version automatic sync update older or changed marked copies and remove marked retired split skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`, `pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`) while preserving unmarked copies and symlinks untouched.

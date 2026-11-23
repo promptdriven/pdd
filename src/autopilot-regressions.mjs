@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { githubReply } from './github-calls.mjs';
-import { githubOriginRepository } from './workflow-worktree.mjs';
+import { githubOriginRepository } from './shared/github-repo.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -378,7 +378,7 @@ export async function regressionScan(ports) {
           if (!later(event.created_at)) continue;
           if (event.event === 'reopened' && allIssues.includes(number)) {
             const marked = machineMarker(event.body) || events.some(comment => comment.event === 'commented' && machineMarker(comment.body) && comment.user?.login && comment.user.login === event.actor?.login && Math.abs(time(comment.created_at) - time(event.created_at)) <= 5 * 60 * 1000);
-            if (!marked) add('reopened', 'suspect', event.created_at, `https://github.com/${ports.repo}/issues/${number}#event-${event.id ?? ''}`, `Issue #${number} reopened after merge`);
+            if (!marked) add('reopened', 'proven', event.created_at, `https://github.com/${ports.repo}/issues/${number}#event-${event.id ?? ''}`, `Issue #${number} reopened after merge`);
           }
           if (event.event === 'cross-referenced') {
             const source = event.source?.issue;
@@ -1260,11 +1260,9 @@ export async function checkPostMergeRegressions(ports) {
                 })),
             ],
           });
-          let foundTimelineReopen = false;
-          let sawMachineReopen = false;
           for (const ev of events) {
             if (ev.event !== 'reopened' || time(ev.created_at) === null) continue;
-            if (time(ev.created_at) <= time(mergedAt) || time(ev.created_at) > now) continue;
+            if (time(ev.created_at) < time(mergedAt) || time(ev.created_at) > now) continue;
             const marked = ev.marked || events.some(c =>
               c.event === 'commented'
               && c.marked
@@ -1272,11 +1270,7 @@ export async function checkPostMergeRegressions(ports) {
               && c.actorLogin === ev.actorLogin
               && time(c.created_at) !== null
               && Math.abs(time(c.created_at) - time(ev.created_at)) <= 5 * 60 * 1000);
-            if (marked) {
-              sawMachineReopen = true;
-              continue;
-            }
-            foundTimelineReopen = true;
+            if (marked) continue;
             const reopenAt = iso(ev.created_at);
             signals.push({
               kind: 'reopened',
@@ -1287,21 +1281,6 @@ export async function checkPostMergeRegressions(ports) {
               parentUrl: null,
               detail: safe(`Issue #${issueNum} reopened after PR #${entry.pr} merged`),
               key: `reopened:${issueNum}:${reopenAt}`,
-            });
-          }
-          if (!foundTimelineReopen && !sawMachineReopen && issueObj.state === 'open') {
-            const openAt = iso(issueObj.updated_at) && time(issueObj.updated_at) >= time(mergedAt) && time(issueObj.updated_at) <= now
-              ? iso(issueObj.updated_at)
-              : mergedAt;
-            signals.push({
-              kind: 'reopened',
-              level: 'proven',
-              issue: issueNum,
-              at: openAt,
-              url: link(issueObj.html_url) ?? `https://github.com/${ports.repo}/issues/${issueNum}`,
-              parentUrl: null,
-              detail: safe(`Issue #${issueNum} reopened after PR #${entry.pr} merged`),
-              key: `reopened:${issueNum}:open`,
             });
           }
           recordProvenSignals(entry, signals, newlyDetected);
@@ -1335,8 +1314,6 @@ export async function checkPostMergeRegressions(ports) {
   }
 
   let sharedComplete = !midMergeBudgetStopped;
-  let commits = [];
-  let pulls = [];
   if (drafts.length > 0 && !midMergeBudgetStopped) {
     const since = drafts.map(d => d.mergedAt).filter(Boolean).sort()[0];
     const applyCommitPage = pageRows => {
@@ -1400,7 +1377,7 @@ export async function checkPostMergeRegressions(ports) {
             date: c.commit.committer.date,
             targets: [...String(c.commit.message).matchAll(/\bThis reverts commit ([a-f\d]{40})(?:\.|,\s+reversing\s+changes made to [a-f\d]{40}\.)/gi)].map(m => m[1].toLowerCase()),
           }));
-        commits = await api.readStream(`shared:commits:${since}`, `commits?since=${encodeURIComponent(since)}&per_page=100`, {
+        await api.readStream(`shared:commits:${since}`, `commits?since=${encodeURIComponent(since)}&per_page=100`, {
           valid: row => sha(row.sha) && typeof row.commit?.message === 'string' && time(row.commit?.committer?.date) !== null,
           mergePage: (acc, rows) => [...acc, ...compactCommitRows(rows)],
           onPage: rows => applyCommitPage(compactCommitRows(rows)),
@@ -1420,7 +1397,7 @@ export async function checkPostMergeRegressions(ports) {
             };
           })
           .filter(p => p.targets.length > 0 || /^Revert "/.test(p.title));
-        pulls = await api.readStream(`shared:pulls:${since}`, 'pulls?state=all&sort=updated&direction=desc&per_page=100', {
+        await api.readStream(`shared:pulls:${since}`, 'pulls?state=all&sort=updated&direction=desc&per_page=100', {
           valid: row => positive(row.number) && (row.created_at == null || time(row.created_at) !== null) && (row.merged_at == null || time(row.merged_at) !== null),
           mergePage: (acc, rows) => [...acc, ...compactPullRows(rows)],
           stopAfterPage: rows => isDescendingPastSince(rows, since),
@@ -1449,40 +1426,6 @@ export async function checkPostMergeRegressions(ports) {
     entry.parentObservations = draft.parentObservations;
     entry.title = draft.title;
     entry.mergedAt = draft.mergedAt;
-
-    if (sharedComplete) {
-      const later = at => time(at) !== null && time(at) > time(draft.mergedAt) && time(at) <= now;
-      for (const c of commits) {
-        if (later(c.date) && c.targets.includes(draft.mergeCommit)) {
-          draft.signals.push({
-            kind: 'revert',
-            level: 'proven',
-            issue: entry.issue,
-            at: iso(c.date),
-            url: c.html_url,
-            parentUrl: null,
-            detail: safe(`Commit ${c.sha} reverts merge ${draft.mergeCommit}`),
-            key: `revert:commit:${c.sha.toLowerCase()}`,
-          });
-        }
-      }
-      for (const p of pulls) {
-        if (p.number === entry.pr || !later(p.at)) continue;
-        const exact = Array.isArray(p.targets) ? p.targets.includes(entry.pr) : exactReference(p.body, 'Reverts', ports.repo, entry.pr);
-        if (exact || (draft.title && p.title === `Revert "${draft.title}"`)) {
-          draft.signals.push({
-            kind: 'revert',
-            level: exact && p.merged ? 'proven' : 'suspect',
-            issue: entry.issue,
-            at: iso(p.at),
-            url: p.html_url,
-            parentUrl: null,
-            detail: safe(`PR #${p.number} ${p.merged ? 'merged' : 'proposed'} revert of #${entry.pr}`),
-            key: `revert:pr:${p.number}:${p.merged ? 'merged' : 'proposed'}`,
-          });
-        }
-      }
-    }
 
     recordProvenSignals(entry, draft.signals, newlyDetected);
     if (!draft.mergeComplete || !sharedComplete || !draft.parentChecked) continue;
@@ -1550,7 +1493,7 @@ export async function runAutopilotRegressions({ cwd, env = process.env, json = f
       const checkout = await execute('git', ['rev-parse', '--show-toplevel']);
       if (!checkout) throw Error();
       const id = createHash('sha256').update(checkout).digest('hex').slice(0, 20);
-      const folder = ports.stateRoot ?? join(env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+      const folder = ports.stateRoot ?? join((typeof env?.PDD_STATE_DIR === 'string' && env.PDD_STATE_DIR.trim()) || join(env.HOME || homedir(), '.local', 'state', 'pdd'), 'autopilot');
       root = join(folder, `${id}-core`);
       let state;
       try { state = JSON.parse(fs.readFileSync(join(folder, `${id}.json`), 'utf8')); }

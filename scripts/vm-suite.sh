@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9a6fbeb4f0e51d65db80cee642a73f0977c1943b8a6548f9c24281b66b319d3c).
+# Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 4c4cd0ed65db915e86970da711be6744ce1ce42f2247f556b7d6f5a54b8d8631).
 # Run on pdd-vm: scripts/vm-suite.sh <full commit SHA>. Logs stay outside the repo.
 # The suite waits for its turn in vm-suite-lock.sh next to this script. See its header.
 # Caller validation logs use a nonempty PDD_STATE_DIR, else PDD_SUITE_QUEUE.state
@@ -11,7 +11,8 @@ if [[ $# != 1 || ! $1 =~ ^[0-9a-fA-F]{40}$ ]]; then
   exit 2
 fi
 requested=${1,,}
-lock_runner="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vm-suite-lock.sh"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+lock_runner="$script_dir/vm-suite-lock.sh"
 if [[ ! -x $lock_runner ]]; then
   echo "vm-suite: lock runner not found or not executable: $lock_runner" >&2
   exit 1
@@ -31,7 +32,11 @@ test "$tested" = "$requested"
 test -z "$(git status --porcelain)"
 npm ci --ignore-scripts --no-audit --no-fund
 mkdir "$run_dir/home" "$run_dir/state"
-printf -v suite 'env HOME=%q PDD_STATE_DIR=%q POCKET_BROWSER_BIN=/usr/bin/google-chrome node --import ./test/helpers/test-net-guard.mjs --test --test-reporter=tap --test-concurrency=4 test/*.test.mjs' "$run_dir/home" "$run_dir/state"
+list_tests="$script_dir/list-tests.mjs"
+if [[ -f ./scripts/list-tests.mjs ]]; then
+  list_tests="./scripts/list-tests.mjs"
+fi
+printf -v suite 'HOME=%q PDD_STATE_DIR=%q POCKET_BROWSER_BIN=/usr/bin/google-chrome; export HOME PDD_STATE_DIR POCKET_BROWSER_BIN; files=$(node %q) && [ -n "$files" ] && node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-reporter=tap --test-concurrency=4 $files' "$run_dir/home" "$run_dir/state" "$list_tests"
 suite_result=0
 SUITE="$suite" "$lock_runner" > "$run_dir/suite.log" 2>&1 || suite_result=$?
 

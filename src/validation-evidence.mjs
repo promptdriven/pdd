@@ -133,26 +133,73 @@ export function redactingLines(emit, values = knownSecretValues()) {
   };
 }
 
-export function validationLog(write, append) {
+export function validationLog(write, append, { flushBytes } = {}) {
   const partBytes = (MAX_VALIDATION_LOG_BYTES - 128) / 2;
-  let head = Buffer.alloc(0), tail = Buffer.alloc(0), total = 0, suppressed = 0, overflow = false;
-  const evidence = {outputBytes:0,logBytes:0,omittedBytes:0,truncated:false};
+  const checkpointBytes = Number.isInteger(flushBytes) && flushBytes > 0 ? flushBytes : partBytes;
+  let head = Buffer.alloc(0);
+  let tailChunks = [];
+  let tailBytes = 0;
+  let total = 0;
+  let suppressed = 0;
+  let overflow = false;
+  let dirtyBytes = 0;
+  const evidence = { outputBytes: 0, logBytes: 0, omittedBytes: 0, truncated: false };
+
+  const materializeTail = () => {
+    if (tailChunks.length === 0) return Buffer.alloc(0);
+    const merged = tailChunks.length === 1 ? tailChunks[0] : Buffer.concat(tailChunks, tailBytes);
+    const bounded = merged.length > partBytes ? merged.subarray(merged.length - partBytes) : merged;
+    tailChunks = bounded.length > 0 ? [bounded] : [];
+    tailBytes = bounded.length;
+    return bounded;
+  };
+
+  const commitOverflow = () => {
+    const tail = materializeTail();
+    const omittedNow = Math.max(0, total - head.length - tail.length);
+    const saved = Buffer.concat([head, Buffer.from(marker(omittedNow)), tail]);
+    write(saved);
+    evidence.logBytes = saved.length;
+    dirtyBytes = 0;
+  };
+
   return {
     evidence,
     add(text, omitted = 0) {
-      const bytes = Buffer.from(text); total += bytes.length; suppressed += omitted;
-      // Keep two bounded ends even before overflow, for the next append.
-      if (head.length < partBytes) head = Buffer.concat([head,bytes.subarray(0,partBytes-head.length)]);
-      tail = Buffer.concat([tail,bytes]).subarray(-partBytes);
-      let saved;
-      if (!overflow && total <= MAX_VALIDATION_LOG_BYTES) { append(bytes); evidence.logBytes = total; }
-      else {
-        overflow = true;
-        saved = Buffer.concat([head,Buffer.from(marker(total-head.length-tail.length)),tail]);
-        write(saved); evidence.logBytes = saved.length;
+      const bytes = Buffer.from(text);
+      total += bytes.length;
+      suppressed += omitted;
+      if (head.length < partBytes) {
+        const take = bytes.subarray(0, partBytes - head.length);
+        head = head.length === 0 ? Buffer.from(take) : Buffer.concat([head, take]);
       }
-      evidence.omittedBytes = suppressed + (overflow ? total-head.length-tail.length : 0);
+      if (bytes.length > 0) {
+        if (bytes.length >= partBytes) {
+          const tailSlice = bytes.subarray(bytes.length - partBytes);
+          tailChunks = [Buffer.from(tailSlice)];
+          tailBytes = tailSlice.length;
+        } else {
+          tailChunks.push(bytes);
+          tailBytes += bytes.length;
+          if (tailBytes > partBytes * 2) materializeTail();
+        }
+      }
+      if (!overflow && total <= MAX_VALIDATION_LOG_BYTES) {
+        append(bytes);
+        evidence.logBytes = total;
+      } else if (!overflow) {
+        overflow = true;
+        commitOverflow();
+      } else {
+        dirtyBytes += bytes.length;
+        if (dirtyBytes >= checkpointBytes) commitOverflow();
+      }
+      const retainedTail = Math.min(tailBytes, partBytes);
+      evidence.omittedBytes = suppressed + (overflow ? Math.max(0, total - head.length - retainedTail) : 0);
       evidence.truncated = evidence.omittedBytes > 0;
+    },
+    flush() {
+      if (overflow && dirtyBytes > 0) commitOverflow();
     },
   };
 }

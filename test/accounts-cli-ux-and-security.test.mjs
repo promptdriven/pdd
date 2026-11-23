@@ -23,11 +23,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { refreshInstalledAutoSwitchBlocks, renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
+import { detectImportProvider, refreshInstalledAutoSwitchBlocks, renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
 import { readCodexUsageWindows } from '../src/codex-limits.mjs';
 import {
   accountsStatePath,
   buildSyntheticGatewayIdToken,
+  CloudAccountsError,
   createCodexStepOverlay,
   managedClaudeSettingsPath,
   managedCodexAuthPath,
@@ -35,8 +36,9 @@ import {
   pddManagedCodexHome,
   prepareCloudStepExecution,
   readCloudAccountsState,
+  resolvePddStateBase,
 } from '../src/login-pool.mjs';
-import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
+import { parse as parseToml } from '../src/shared/toml/parse.js';
 
 function makeJwt(payload) {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
@@ -891,9 +893,14 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
 });
 
 test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured live mid-session quota rotation without PTY stdout false positives', async t => {
-  // 1. Shell wrapper blocks (`sh` and `fish`) delegate interactive TTY codex sessions to `pdd accounts codex -- "$@"`!
+  // 1. Shell wrapper blocks (`sh` and `fish`) delegate `codex` to `pdd-codex` with fail-open by default
+  //    and preserve `pdd accounts codex --` behind the `PDD_LEGACY_PTY_ROTATE=1` opt-in switch!
   const shWrapper = renderAutoSwitchBlock('sh');
   const fishWrapper = renderAutoSwitchBlock('fish');
+  assert.match(shWrapper, /PDD_CODEX_AUTO_FAIL_OPEN=1 command pdd-codex "\$@"/);
+  assert.match(fishWrapper, /PDD_CODEX_AUTO_FAIL_OPEN=1 command pdd-codex \$argv/);
+  assert.match(shWrapper, /PDD_LEGACY_PTY_ROTATE/);
+  assert.match(fishWrapper, /PDD_LEGACY_PTY_ROTATE/);
   assert.match(shWrapper, /pdd accounts codex -- "\$@"/);
   assert.match(fishWrapper, /pdd accounts codex -- \$argv/);
 
@@ -2482,10 +2489,12 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   mkdirSync(fakeBin, { recursive: true });
   const managedHome = pddManagedCodexHome(sb.env);
   writeFileSync(join(fakeBin, 'pdd'), `#!/bin/sh\nif [ "\${PDD_PRINT_CODEX_HOME:-}" = "1" ]; then printf '%s\\n' ${JSON.stringify(managedHome)}; fi\nexit 0\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, 'pdd-codex'), `#!/bin/sh\nprintf 'VIA=pdd-codex FAIL_OPEN=%s CODEX_HOME=%s ARGS=%s\\n' "\${PDD_CODEX_AUTO_FAIL_OPEN:-UNSET}" "\${CODEX_HOME:-UNSET}" "$*"\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, 'codex'), `#!/bin/sh\nprintf 'CODEX_HOME=%s ARGS=%s\\n' "\${CODEX_HOME:-UNSET}" "$*"\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, 'pdd-claude'), `#!/bin/sh\nprintf 'VIA=pdd-claude ARGS=%s\\n' "$*"\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, 'claude'), `#!/bin/sh\nprintf 'VIA=stock-claude ARGS=%s\\n' "$*"\n`, { mode: 0o755 });
   chmodSync(join(fakeBin, 'pdd'), 0o755);
+  chmodSync(join(fakeBin, 'pdd-codex'), 0o755);
   chmodSync(join(fakeBin, 'codex'), 0o755);
   chmodSync(join(fakeBin, 'pdd-claude'), 0o755);
   chmodSync(join(fakeBin, 'claude'), 0o755);
@@ -2502,15 +2511,24 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
     encoding: 'utf8',
   });
 
-  // 3b-i: `codex "explain login" logout` inside managed CODEX_HOME stops at `"explain login"` (`*) break ;;`) and is NOT blocked by logout guard!
-  const promptWithLogoutWord = runBash('codex "explain login" logout', { CODEX_HOME: managedHome });
-  assert.equal(promptWithLogoutWord.status, 0, promptWithLogoutWord.stderr);
-  assert.match(promptWithLogoutWord.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=explain login logout`));
+  // 3b-i: Default unified auto-switch routes `codex "explain login" logout` and `codex login status` to `pdd-codex`
+  // with `PDD_CODEX_AUTO_FAIL_OPEN=1` (clearing stale managed `CODEX_HOME`) and does NOT trip the logout guard!
+  const defaultPromptWithLogoutWord = runBash('codex "explain login" logout', { CODEX_HOME: managedHome });
+  assert.equal(defaultPromptWithLogoutWord.status, 0, defaultPromptWithLogoutWord.stderr);
+  assert.match(defaultPromptWithLogoutWord.stdout, /VIA=pdd-codex FAIL_OPEN=1 CODEX_HOME=UNSET ARGS=explain login logout/);
 
-  // 3b-ii: `codex login status` runs WITH `CODEX_HOME="$_pdd_cx_home"`!
-  const loginStatusRun = runBash('codex login status');
-  assert.equal(loginStatusRun.status, 0, loginStatusRun.stderr);
-  assert.match(loginStatusRun.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=login status`));
+  const defaultLoginStatusRun = runBash('codex login status');
+  assert.equal(defaultLoginStatusRun.status, 0, defaultLoginStatusRun.stderr);
+  assert.match(defaultLoginStatusRun.stdout, /VIA=pdd-codex FAIL_OPEN=1 CODEX_HOME=UNSET ARGS=login status/);
+
+  // 3b-ii: Opt-in `PDD_LEGACY_PTY_ROTATE=1` preserves legacy `CODEX_HOME="$_pdd_cx_home"` routing!
+  const legacyPromptWithLogoutWord = runBash('codex "explain login" logout', { CODEX_HOME: managedHome, PDD_LEGACY_PTY_ROTATE: '1' });
+  assert.equal(legacyPromptWithLogoutWord.status, 0, legacyPromptWithLogoutWord.stderr);
+  assert.match(legacyPromptWithLogoutWord.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=explain login logout`));
+
+  const legacyLoginStatusRun = runBash('codex login status', { PDD_LEGACY_PTY_ROTATE: '1' });
+  assert.equal(legacyLoginStatusRun.status, 0, legacyLoginStatusRun.stderr);
+  assert.match(legacyLoginStatusRun.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=login status`));
 
   // While `codex logout` and `codex login` (without `status`) inside managedHome ARE still refused!
   assert.equal(runBash('codex logout', { CODEX_HOME: managedHome }).status, 1);
@@ -2868,4 +2886,108 @@ esac
   assert.equal(fallbackRes.exit, 42);
   assert.equal(fallbackRes.stdout, 'bad-out\n');
   assert.equal(fallbackRes.stderr, 'bad-err\n');
+});
+
+test('SEC-5, SEC-6 & REL-2: atomic auto on/off preserves dotfiles symlinks & mode, detectImportProvider blocks symlinks, and add temp dir avoids /tmp', async t => {
+  const cloud = await createPoolGatewayServer(t);
+  const sb = makeSandbox(t, cloud.serverUrl);
+
+  // 1. SEC-5: Stow/chezmoi symlinked ~/.zshrc with custom 0o600 permissions survives `auto on` AND `auto off` intact!
+  const dotfilesDir = join(sb.root, 'dotfiles');
+  mkdirSync(dotfilesDir, { recursive: true, mode: 0o700 });
+  const realZshrc = join(dotfilesDir, '.zshrc');
+  writeFileSync(realZshrc, '# user zshrc\nexport FOO=bar\n', { mode: 0o600 });
+  chmodSync(realZshrc, 0o600);
+  const homeZshrc = join(sb.home, '.zshrc');
+  symlinkSync(realZshrc, homeZshrc);
+
+  const onRes = await invokeCli(['accounts', 'auto', 'on'], sb);
+  assert.equal(onRes.exit, 0, onRes.stderr);
+  assert.equal(lstatSync(homeZshrc).isSymbolicLink(), true, 'auto on must preserve ~/.zshrc symlink');
+  assert.equal(statSync(realZshrc).mode & 0o777, 0o600, 'auto on must preserve target file permissions');
+  assert.match(readFileSync(realZshrc, 'utf8'), /# >>> pdd accounts auto >>>/);
+
+  const offRes = await invokeCli(['accounts', 'auto', 'off'], sb);
+  assert.equal(offRes.exit, 0, offRes.stderr);
+  assert.equal(lstatSync(homeZshrc).isSymbolicLink(), true, 'auto off must preserve ~/.zshrc symlink');
+  assert.equal(statSync(realZshrc).mode & 0o777, 0o600, 'auto off must preserve target file permissions');
+  assert.doesNotMatch(readFileSync(realZshrc, 'utf8'), /# >>> pdd accounts auto >>>/);
+  assert.match(readFileSync(realZshrc, 'utf8'), /export FOO=bar/);
+
+  // 2. SEC-6: detectImportProvider refuses symlinked --from file, dir, parent dir, and child file with symlink_refused.
+  const secretSource = join(sb.root, 'real-secret.json');
+  writeFileSync(secretSource, JSON.stringify({ tokens: { access_token: 'a', refresh_token: 'r', id_token: 'i', account_id: 'acct' } }), { mode: 0o600 });
+  const symFromFile = join(sb.root, 'sym-from.json');
+  symlinkSync(secretSource, symFromFile);
+  const nativeFs = await import('node:fs');
+  assert.throws(
+    () => detectImportProvider(nativeFs, sb.env, { fromOption: symFromFile }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+  );
+
+  const realDir = join(sb.root, 'real-import-dir');
+  mkdirSync(realDir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(realDir, 'auth.json'), readFileSync(secretSource));
+  const symFromDir = join(sb.root, 'sym-import-dir');
+  symlinkSync(realDir, symFromDir);
+  assert.throws(
+    () => detectImportProvider(nativeFs, sb.env, { fromOption: symFromDir }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+  );
+  assert.throws(
+    () => detectImportProvider(nativeFs, sb.env, { fromOption: join(symFromDir, 'auth.json') }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+  );
+
+  const dirWithSymChild = join(sb.root, 'dir-with-sym-child');
+  mkdirSync(dirWithSymChild, { recursive: true, mode: 0o700 });
+  symlinkSync(secretSource, join(dirWithSymChild, 'auth.json'));
+  assert.throws(
+    () => detectImportProvider(nativeFs, sb.env, { fromOption: dirWithSymChild }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+  );
+
+  // Root-owned system symlink parent (e.g. macOS /tmp -> /private/tmp) is permitted for a regular target file,
+  // while a symlinked target itself inside /tmp is still refused.
+  const rootParentFs = {
+    ...nativeFs,
+    lstatSync(p) {
+      if (p === symFromDir) {
+        return { isSymbolicLink: () => true, isDirectory: () => false, isFile: () => false, uid: 0 };
+      }
+      if (p === join(symFromDir, 'auth.json')) {
+        return { isSymbolicLink: () => false, isDirectory: () => false, isFile: () => true, uid: 501 };
+      }
+      return nativeFs.lstatSync(p);
+    },
+  };
+  assert.equal(detectImportProvider(rootParentFs, sb.env, { fromOption: join(symFromDir, 'auth.json') }), 'codex');
+
+  // 3. REL-2: `pdd accounts add` allocates temporary CODEX_HOME under resolvePddStateBase(env)/codex-runtime (never /tmp).
+  let capturedTmpCodexHome = null;
+  const addRes = await invokeCli(['accounts', 'add', '--provider', 'codex', '--label', 'rel2-seat'], sb, {
+    run: async (cmd, _args, opts) => {
+      assert.equal(cmd, 'codex');
+      capturedTmpCodexHome = opts.env.CODEX_HOME;
+      writeFileSync(join(capturedTmpCodexHome, 'auth.json'), JSON.stringify({
+        auth_mode: 'chatgpt',
+        tokens: {
+          access_token: 'acc_rel2',
+          refresh_token: 'ref_rel2',
+          id_token: makeJwt({ email: 'rel2@example.com' }),
+          account_id: 'acct_rel2',
+        },
+      }), { mode: 0o600 });
+      return { code: 0, stdout: 'Logged in\n', stderr: '' };
+    },
+    probeCodexUsage: async () => null,
+    spawnSync: () => ({ status: 0 }),
+  });
+  assert.equal(addRes.exit, 0, addRes.stderr);
+  const expectedRuntimeRoot = join(resolvePddStateBase(sb.env), 'codex-runtime');
+  assert.ok(
+    capturedTmpCodexHome && capturedTmpCodexHome.startsWith(`${expectedRuntimeRoot}/`),
+    `expected add temp CODEX_HOME under ${expectedRuntimeRoot}, got ${capturedTmpCodexHome}`,
+  );
+  assert.equal(existsSync(capturedTmpCodexHome), false, 'temp CODEX_HOME cleaned up after add');
 });

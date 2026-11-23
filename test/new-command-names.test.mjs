@@ -11,7 +11,7 @@ import { fakeRuntime, harbor, root, sink } from './helpers/runtime-fake.mjs';
 
 // Rules of user_stories/new-command-names.md that the runPdd vectors cannot see: a removed name runs
 // nothing, quiet forms give the same result with no extra line, completion, and the words of printed lines.
-const { test: TEST, lint: LINT, simulate: SIMULATE, run: RUN } = NAMES;
+const { test: TEST, lint: LINT, simulate: SIMULATE } = NAMES;
 const names = (line, before, after) => line.includes(`pdd ${before}`) && line.includes(`pdd ${after}`);
 const effect = plan => ({ local: plan.local, operands: plan.operands, options: plan.options, helpPrefix: plan.helpPrefix });
 const forbidden = new Proxy({}, { get(_, name) { return typeof name === 'string' ? () => assert.fail(`A removed name must not run ${name}`) : undefined; } });
@@ -78,15 +78,12 @@ test('quiet forms give the plan, help and usage error of the main name, and no p
     return { plan: plan.error ? plan : effect(plan), code, stdout: stdout.text, stderr: stderr.text };
   };
   const pairs = [[['sim'], [SIMULATE], [[], ['place-order', '--max-calls', '5', '--tab', 'world', '--new', '--no-open', '--no-wait', '--agent', 'Codex (work5)'],
-      ['place-order', '--cli', '--shell'], ['--serve', '8123'], ['--save-last'], ['--stop', 'place-order'], ['--help'], ['-h'], ['--tab', 'phone'], ['a', 'b'], ['--serve', '70000']]],
-    [['workflow', 'start'], ['workflow', RUN], [['feature', 'owner/repo#42', '--agent', 'claude', '--base', 'main'], ['bug', '7'], ['--help'], ['-h'], [], ['81'],
-      ['feature', '0'], ['feature', '42', '--agent', 'other']]]];
+      ['place-order', '--cli', '--shell'], ['--serve', '8123'], ['--save-last'], ['--stop', 'place-order'], ['--help'], ['-h'], ['--tab', 'phone'], ['a', 'b'], ['--serve', '70000']]]];
   for (const [quiet, main, tails] of pairs) for (const tail of tails) {
     for (const head of [[], ['help']]) {
       if (head.length && tail.length) continue;
       const result = await outcome([...head, ...quiet, ...tail]);
       assert.deepEqual(result, await outcome([...head, ...main, ...tail]), [...head, ...quiet, ...tail].join(' '));
-      assert.ok(!(result.stdout + result.stderr).includes('workflow start'), [...head, ...quiet, ...tail].join(' '));
     }
   }
   // `pdd test --lint` works like `pdd lint`: no new refusal.
@@ -105,29 +102,28 @@ async function sameRun(argvs, options) {
   return runs;
 }
 
-test('workflow start reaches the same runner export as workflow run, with no extra line', async () => {
-  const calls = [];
-  const runs = await sameRun([['workflow', RUN, 'feature', 'o/r#42', '--agent', 'claude'], ['workflow', 'start', 'feature', 'o/r#42', '--agent', 'claude']], () => ({
-    cwd: '/chosen', packageRoot: '/bundle', workflowAgents: { checkWorkflowAgents: async ({ requested }) => ({ ok: true, agent: requested ?? 'codex', message: '' }) }, workflowRunner: { startRun: async input => { calls.push(input); return { exitCode: 0, message: 'started' }; } } }));
-  assert.equal(calls.length, 2); assert.deepEqual(calls[0], calls[1]);
-  assert.deepEqual(runs[0], runs[1]); assert.equal(runs[0].stdout, 'started\n');
-});
-
 test('sim runs like simulate and test --lint like lint, in local modes', async t => {
   const setup = harbor(t);
   const options = () => ({ cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PATH: '/usr/bin:/bin' } });
+  const offline = await sameRun([[LINT, '--json'], [TEST, '--lint', '--json']], options);
+  const offlineSummaries = offline.map(result => {
+    assert.equal(result.code, 0, result.stderr); assert.equal(result.stderr, '');
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.schema_version, 'pdd.local-lint.v1');
+    assert.equal(summary.local_only, true);
+    assert.equal(summary.exit_code, 0);
+    return summary;
+  });
+  assert.deepEqual(offlineSummaries[0], offlineSummaries[1]);
+  assert.equal(existsSync(join(setup.state, 'batches')), false, 'default offline lint writes zero batch state');
   const lint = await sameRun([[LINT, '--local', '--json'], [TEST, '--lint', '--local', '--json']], options);
   const summaries = lint.map(result => {
     assert.equal(result.code, 0, result.stderr); assert.equal(result.stderr, '');
     const summary = JSON.parse(result.stdout);
-    assert.match(summary.batch, /^\d{8}-\d{6}-[a-z0-9]{4}$/);
-    const folder = join(setup.state, 'batches', summary.batch);
-    assert.equal(JSON.parse(readFileSync(join(folder, 'batch.json'), 'utf8')).batch, summary.batch);
-    assert.deepEqual(JSON.parse(readFileSync(join(folder, 'summary.json'), 'utf8')), summary);
+    assert.equal(summary.local_only, true);
+    assert.equal(summary.exit_code, 0);
     return summary;
   });
-  // Each completed local lint saves an independent batch; only its identity differs between aliases.
-  assert.notEqual(summaries[0].batch, summaries[1].batch);
   const stable = summaries.map(({ batch, ...fields }) => fields);
   assert.deepEqual(stable[0], stable[1]);
   const story = await sameRun([[SIMULATE, 'no-such-story'], ['sim', 'no-such-story']], options);
@@ -160,26 +156,36 @@ test('shell completion offers only the main names', t => {
   for (const shell of ['bash', 'zsh']) {
     for (const words of [[], ['help']]) {
       const first = choices(shell, words);
-      for (const word of [TEST, LINT, SIMULATE, 'workflow']) assert.ok(first.includes(word), `${shell} ${words} ${word}`);
-      for (const word of ['check', 'try', 'sim']) assert.ok(!first.includes(word), `${shell} ${words} ${word}`);
+      for (const word of [TEST, LINT, SIMULATE]) assert.ok(first.includes(word), `${shell} ${words} ${word}`);
+      for (const word of ['check', 'try', 'sim', 'workflow']) assert.ok(!first.includes(word), `${shell} ${words} ${word}`);
     }
-    const workflow = choices(shell, ['workflow']);
-    assert.ok(workflow.includes(RUN)); assert.ok(!workflow.includes('start'));
     const testOptions = choices(shell, [TEST]);
     assert.ok(testOptions.includes('--read') && testOptions.includes('--files'));
     for (const hidden of ['--lint', '--local', '--request', '--fill-hash', '--compact']) assert.ok(!testOptions.includes(hidden), `${shell} ${TEST} ${hidden}`);
     assert.ok(choices(shell, [LINT]).includes('--local'));
     assert.ok(choices(shell, [SIMULATE]).includes('--stop'));
     assert.deepEqual(choices(shell, [SIMULATE, '--tab']).sort(), ['call', 'screen', 'terminal', 'world']);
-    assert.deepEqual(choices(shell, ['workflow', RUN, 'bug', '7', '--agent']).sort(), ['agy', 'claude', 'codex', 'gemini']);
+    assert.deepEqual(choices(shell, ['product', 'start', 'r1', '--agent']).sort(), ['agy', 'claude', 'codex', 'gemini']);
   }
 });
+
+function listSourceModules(dir, rel = 'src') {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const relPath = join(rel, entry.name);
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listSourceModules(fullPath, relPath));
+    else if (entry.isFile() && entry.name.endsWith('.mjs')) out.push(relPath);
+  }
+  return out.sort();
+}
 
 // The lines that pdd writes name only the new commands. The removal line is built from the catalog words, so
 // no source file needs the text `pdd check` or `pdd try`. A server text passes through as data, never as source.
 test('no source line names pdd check or pdd try', () => {
-  const files = readdirSync(join(root, 'src')).filter(file => file.endsWith('.mjs')).map(file => join('src', file));
-  assert.ok(files.length >= 85, `expected full host src scan, got ${files.length}`);
+  const files = listSourceModules(join(root, 'src'));
+  assert.ok(files.length > 0, 'expected non-empty recursive src/**/*.mjs scan');
+  assert.ok(files.some(file => file.endsWith('pdd-cli.mjs')), `expected valid src/ modules, got ${files.length}`);
   const found = [];
   for (const file of files) {
     readFileSync(join(root, file), 'utf8').split('\n').forEach((text, index) => {

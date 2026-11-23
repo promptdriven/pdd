@@ -50,7 +50,12 @@ if (name === 'git') {
   if (scenario.failCommand === args[0]) process.exit(9);
   if (args[0] === 'init') {
     mkdirSync(join(args.at(-1), 'test'), { recursive: true });
-    writeFileSync(join(args.at(-1), 'test/example.test.mjs'), '');
+    if (!scenario.noTests) writeFileSync(join(args.at(-1), 'test/example.test.mjs'), '');
+    for (const rel of scenario.extraTests || []) {
+      const target = join(args.at(-1), rel);
+      mkdirSync(join(target, '..'), { recursive: true });
+      writeFileSync(target, '');
+    }
   }
   if (args[0] === 'rev-parse') console.log(scenario.head || '${sha}');
   if (args[0] === 'status' && scenario.dirty) console.log(' M package.json');
@@ -150,13 +155,41 @@ test('vm-suite posts only counts on the detached tested commit, with an empty su
   assert.deepEqual(git.find(e => e.args[0] === 'checkout').args, ['checkout', '--quiet', '--detach', 'FETCH_HEAD']);
   assert.ok(result.events.find(e => e.name === 'npm').args.includes('--ignore-scripts'));
   const suite = result.events.find(e => e.name === 'node' && e.args.includes('--test'));
+  const listCall = result.events.find(e => e.name === 'node' && e.args.some(a => a.endsWith('list-tests.mjs')));
+  assert.ok(listCall, 'expected list-tests.mjs invocation');
+  assert.equal(listCall.home, suite.home, 'list-tests.mjs must run inside isolated suite HOME');
+  assert.equal(listCall.state, suite.state, 'list-tests.mjs must run inside isolated suite state dir');
   assert.notEqual(suite.home, result.home);
   assert.deepEqual(suite.homeFiles, []);
   assert.deepEqual(suite.stateFiles, []);
   assert.equal(suite.browser, '/usr/bin/google-chrome');
+  assert.ok(suite.args.includes('./test/helpers/test-home.mjs'));
+  assert.ok(suite.args.includes('./test/helpers/test-net-guard.mjs'));
   assert.ok(suite.args.includes('--test-concurrency=4'));
   assert.deepEqual(suite.args.slice(-1), ['test/example.test.mjs']);
   assert.equal(suite.cwd, git.find(e => e.args[0] === 'checkout').cwd);
+});
+
+test('vm-suite discovers nested tests recursively and skips non-test helpers', t => {
+  const result = run(t, {
+    extraTests: [
+      'test/nested/deep.test.mjs',
+      'test/nested/helper.mjs',
+    ],
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const suite = result.events.find(e => e.name === 'node' && e.args.includes('--test'));
+  assert.ok(suite.args.includes('./test/helpers/test-home.mjs'));
+  assert.ok(suite.args.includes('./test/helpers/test-net-guard.mjs'));
+  assert.deepEqual(suite.args.slice(-2), ['test/example.test.mjs', 'test/nested/deep.test.mjs']);
+  assert.equal(suite.args.includes('test/nested/helper.mjs'), false);
+});
+
+test('vm-suite fails closed without running node --test when discovery returns no test files', t => {
+  const result = run(t, { noTests: true });
+  assert.notEqual(result.status, 0);
+  assert.deepEqual(result.posts, []);
+  assert.equal(result.events.some(e => e.name === 'node' && e.args.includes('--test')), false);
 });
 
 test('vm-suite posts native failure counts and returns failure', t => {
@@ -266,7 +299,7 @@ test('the compatibility runner uses the shared queue and returns the suite exit 
   const suite = result.events.find(e => e.name === 'npm');
   assert.equal(suite.cwd, realpathSync(result.clone));
   assert.equal(suite.stdinIsDevNull, true);
-  const clone = literal(result.clone);
+  const clone = literal(realpathSync(result.clone));
   assert.match(result.stdout, new RegExp(`^queued ${clock} in ${clone}\\nstarted ${clock} in ${clone}\\nfinished ${clock} exit 7 in ${clone}\\n$`));
   const history = readFileSync(join(result.dir, 'shared/fullsuite.lock.history'), 'utf8');
   assert.match(history, new RegExp(`^started ${clock} in ${clone}\\nfinished ${clock} exit 7 in ${clone}\\n$`));
@@ -281,7 +314,7 @@ test('the lock runner runs the plain suite with Chrome when SUITE is empty', t =
   assert.equal(suite.browser, '/usr/bin/google-chrome');
   assert.equal(suite.stdinIsDevNull, true);
   const history = readFileSync(join(result.home, '.local/state/pdd/vm-suite/fullsuite.lock.history'), 'utf8');
-  const clone = literal(result.clone);
+  const clone = literal(realpathSync(result.clone));
   assert.match(history, new RegExp(`^started ${clock} in ${clone}\\nfinished ${clock} exit 3 in ${clone}\\n$`));
 });
 

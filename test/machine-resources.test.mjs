@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readMachineResources } from '../src/machine-resources.mjs';
-import { machineHealth, environmentHealthy } from '../src/autopilot-environment.mjs';
 const GiB = 1024 ** 3;
 const resources = { cpuCount: 4, load: 1, memory: { available: GiB, total: 10 * GiB }, pressure: { io: 0, memory: 0 }, disk: { available: GiB, total: 20 * GiB } };
 
@@ -19,31 +18,6 @@ test('unknown individual observations stay unknown without hiding other metrics'
   assert.equal(row.cpuCount, 8); assert.equal(row.load, null);
   assert.deepEqual(row.memory, { available: null, total: null }); assert.deepEqual(row.disk, { available: null, total: null });
   assert.deepEqual(row.pressure, { io: null, memory: null });
-});
-
-test('bounded resource admission: exact memory, absolute disk and relative disk boundaries', async () => {
-  let checked = 0;
-  for (const memoryPercent of [0, 9, 10, 11, 100]) for (const diskTotal of [10 * GiB, 20 * GiB, 40 * GiB])
-    for (const diskFree of [0, GiB - 1, GiB, GiB + 1, 2 * GiB]) {
-      const row = structuredClone(resources); row.memory = { available: memoryPercent, total: 100 }; row.disk = { available: diskFree, total: diskTotal };
-      const expected = memoryPercent >= 10 && diskFree >= GiB && diskFree >= diskTotal * 0.05;
-      assert.equal((await machineHealth({ cwd: '/checkout' }, { machineResources: async () => row })).healthy, expected,
-        JSON.stringify({ memoryPercent, diskTotal, diskFree })); checked++;
-    }
-  assert.equal(checked, 75);
-});
-
-test('health and validation retry share the same machine port and memory decision', async () => {
-  let calls = [];
-  const ports = { platform: 'linux', machineResources: async input => { calls.push(input); return resources; }, suiteAvailable: async () => true };
-  assert.equal((await machineHealth({ cwd: '/checkout' }, ports)).healthy, true);
-  assert.equal(await environmentHealthy({}, { ...ports, cwd: '/checkout' }), true);
-  assert.deepEqual(calls, [{ cwd: '/checkout' }, { cwd: '/checkout' }]);
-  for (const memory of [null, { available: -1, total: 100 }, { available: 101, total: 100 }, { available: 1, total: 0 }, { available: 9, total: 100 }]) {
-    const machineResources = async () => ({ ...resources, memory });
-    assert.equal((await machineHealth({}, { machineResources })).healthy, false);
-    assert.equal(await environmentHealthy({}, { ...ports, machineResources }), false);
-  }
 });
 
 test('non-Linux fallback uses injected OS memory and no proc files', async () => {

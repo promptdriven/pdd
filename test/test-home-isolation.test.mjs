@@ -36,6 +36,8 @@ function child(args, env, cwd = root) {
 for (const entry of ['focused import', 'npm preload']) test(`${entry} removes inherited suite controls before tests and subprocesses`, t => {
   const f = caller(t), project = join(f.dir, 'suite-project');
   mkdirSync(join(project, 'test/helpers'), { recursive: true });
+  mkdirSync(join(project, 'scripts'), { recursive: true });
+  writeFileSync(join(project, 'scripts/list-tests.mjs'), readFileSync(join(root, 'scripts/list-tests.mjs')));
   writeFileSync(join(project, 'test/helpers/test-home.mjs'), readFileSync(join(root, 'test/helpers/test-home.mjs')));
   writeFileSync(join(project, 'test/helpers/test-net-guard.mjs'), readFileSync(join(root, 'test/helpers/test-net-guard.mjs')));
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
@@ -90,18 +92,18 @@ test('default state, skills, homedir fallback and children use a disposable home
     import { join } from 'node:path';
     import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
     import { execFileSync } from 'node:child_process';
-    import { stateDirFor, writeRun } from ${JSON.stringify(pathToFileURL(join(root, 'src/workflow-runs.mjs')).href)};
+    import { resolvePddStateBase } from ${JSON.stringify(pathToFileURL(join(root, 'src/shared/state-dir.mjs')).href)};
     import { setupSkills } from ${JSON.stringify(pathToFileURL(join(root, 'src/skills-install.mjs')).href)};
     assert.notEqual(process.env.HOME, ${JSON.stringify(f.home)});
     assert.equal(homedir(), process.env.HOME);
     for (const key of ${JSON.stringify(redirects)}) assert.equal(process.env[key], undefined, key);
     const state = join(homedir(), '.local/state/pdd');
-    assert.equal(stateDirFor({ env: {} }), state);
-    const runDir = join(homedir(), 'repo/.git/pdd/runs/1');
-    writeRun({ v: 1, number: 1, repo: 'example/fixture', runDir, root: join(homedir(), 'repo'), state: 'running', areas: [], done: {}, chats: [] }, { skipMetricsDelivery: true });
+    assert.equal(resolvePddStateBase({}), state);
+    mkdirSync(state, { recursive: true });
+    writeFileSync(join(state, 'runs.json'), JSON.stringify({ version: 1, runs: [{ number: 1 }] }));
     assert.equal(existsSync(join(state, 'runs.json')), true);
     setupSkills({ packageRoot: ${JSON.stringify(root)}, cwd: join(homedir(), 'repo'), home: homedir() });
-    assert.equal(existsSync(join(homedir(), '.agents/skills/pdd-bug/SKILL.md')), true);
+    assert.equal(existsSync(join(homedir(), '.agents/skills/pdd/SKILL.md')), true);
     mkdirSync(join(homedir(), '.config/herdr'), { recursive: true });
     execFileSync(process.execPath, ['-e', "require('node:fs').writeFileSync(require('node:path').join(require('node:os').homedir(), '.config/herdr/child'), 'fixture')"]);
     assert.equal(existsSync(join(homedir(), '.config/herdr/child')), true);
@@ -114,16 +116,19 @@ test('default state, skills, homedir fallback and children use a disposable home
   assert.deepEqual(snapshot(f.home), before, 'caller-home-leak');
 });
 
-test('shared workspace fixture keeps a default run-index write out of caller HOME', t => {
+test('shared workspace fixture keeps a default state write out of caller HOME', t => {
   const f = caller(t), before = snapshot(f.home);
   const target = process.env.PDD_TEST_HOME_ROOT ?? root;
   const script = `
     import { fixture } from ${JSON.stringify(pathToFileURL(join(target, 'test/helpers/runtime-workspace-fixture.mjs')).href)};
-    import { writeRun } from ${JSON.stringify(pathToFileURL(join(target, 'src/workflow-runs.mjs')).href)};
+    import { resolvePddStateBase } from ${JSON.stringify(pathToFileURL(join(target, 'src/shared/state-dir.mjs')).href)};
+    import { mkdirSync, writeFileSync } from 'node:fs';
     import { join } from 'node:path';
     const cleanup = [], f = fixture({ after(fn) { cleanup.push(fn); } });
     try {
-      writeRun({ v: 1, number: 1, repo: 'example/fixture', runDir: join(f.root, '.git/pdd/runs/1'), root: f.root, state: 'running', areas: [], done: {}, chats: [] }, { env: f.env, skipMetricsDelivery: true });
+      const stateDir = resolvePddStateBase(f.env);
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(stateDir, 'runs.json'), JSON.stringify({ version: 1, runs: [{ number: 1 }] }));
     } finally { for (const fn of cleanup.reverse()) fn(); }
   `;
   const result = child(['--input-type=module', '-e', script], f.env, target);
@@ -136,16 +141,18 @@ test('shared workspace fixture leaves room for a consumer-owned home', t => {
   const target = process.env.PDD_TEST_HOME_ROOT ?? root;
   const script = `
     import { fixture } from ${JSON.stringify(pathToFileURL(join(target, 'test/helpers/runtime-workspace-fixture.mjs')).href)};
-    import { writeRun } from ${JSON.stringify(pathToFileURL(join(target, 'src/workflow-runs.mjs')).href)};
+    import { resolvePddStateBase } from ${JSON.stringify(pathToFileURL(join(target, 'src/shared/state-dir.mjs')).href)};
     import assert from 'node:assert/strict';
-    import { mkdirSync, readFileSync } from 'node:fs';
+    import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
     import { join } from 'node:path';
     const cleanup = [], f = fixture({ after(fn) { cleanup.push(fn); } });
     try {
       const consumerHome = join(f.parent, 'home');
       assert.doesNotThrow(() => mkdirSync(consumerHome), 'consumer-home-collision');
-      for (const [number, env] of [[1, f.env], [2, { ...f.env, HOME: consumerHome }]]) {
-        writeRun({ v: 1, number, repo: 'example/fixture', runDir: join(f.root, '.git/pdd/runs', String(number)), root: f.root, state: 'running', areas: [], done: {}, chats: [] }, { env, skipMetricsDelivery: true });
+      for (const [number, env] of [[1, { HOME: f.env.HOME }], [2, { HOME: consumerHome }]]) {
+        const stateDir = resolvePddStateBase(env);
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(join(stateDir, 'runs.json'), JSON.stringify({ version: 1, runs: [{ number }] }));
       }
       for (const [number, home] of [[1, f.env.HOME], [2, consumerHome]]) {
         const index = JSON.parse(readFileSync(join(home, '.local/state/pdd/runs.json'), 'utf8'));
@@ -174,10 +181,8 @@ test('home cleanup also runs after a failed native test', t => {
 // control. Expected caller bytes come from the isolation contract, not pdd output.
 for (const [file, pattern] of [
   ['metrics-command.test.mjs', '^CLI'],
-  ['autopilot-runtime-outage.test.mjs', '^real path:|^real pdd test:'],
-  ['workspace-evidence-counting.test.mjs', '^2899/2956: owned'],
-  ['workflow-step-results-2922.test.mjs', '^2922 AC'],
-  ['autopilot-repair-ceiling.test.mjs', '^repair ceiling:'],
+  ['skills.test.mjs', '^SKILLS1'],
+  ['core/prove.test.mjs', 'detectVerifyCommand'],
 ]) test(`focused ${file} leaves caller state and config unchanged`, t => {
   const f = caller(t), before = snapshot(f.home);
   // No preload: this proves focused files load their own isolation. Leave the
@@ -193,6 +198,8 @@ for (const [file, pattern] of [
 test('npm test isolates a new file that omits the helper import', t => {
   const f = caller(t), before = snapshot(f.home), project = join(f.dir, 'project');
   mkdirSync(join(project, 'test/helpers'), { recursive: true });
+  mkdirSync(join(project, 'scripts'), { recursive: true });
+  writeFileSync(join(project, 'scripts/list-tests.mjs'), readFileSync(join(root, 'scripts/list-tests.mjs')));
   writeFileSync(join(project, 'test/helpers/test-home.mjs'), readFileSync(join(root, 'test/helpers/test-home.mjs')));
   writeFileSync(join(project, 'test/helpers/test-net-guard.mjs'), readFileSync(join(root, 'test/helpers/test-net-guard.mjs')));
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
@@ -201,12 +208,14 @@ test('npm test isolates a new file that omits the helper import', t => {
   writeFileSync(join(project, 'test/new.test.mjs'), `
     import test from 'node:test';
     import assert from 'node:assert/strict';
-    import { writeFileSync, existsSync } from 'node:fs';
+    import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
     import { join } from 'node:path';
-    import { writeRun } from ${JSON.stringify(pathToFileURL(join(root, 'src/workflow-runs.mjs')).href)};
+    import { resolvePddStateBase } from ${JSON.stringify(pathToFileURL(join(root, 'src/shared/state-dir.mjs')).href)};
     writeFileSync(${JSON.stringify(record)}, process.env.HOME);
     test('default write', () => {
-      writeRun({ v: 1, number: 1, repo: 'example/new', runDir: join(process.env.HOME, 'repo/.git/pdd/runs/1'), root: process.env.HOME, state: 'running', areas: [], done: {}, chats: [] }, { skipMetricsDelivery: true });
+      const stateDir = resolvePddStateBase(process.env);
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(stateDir, 'runs.json'), JSON.stringify({ version: 1, runs: [{ number: 1 }] }));
       assert.equal(existsSync(join(process.env.HOME, '.local/state/pdd/runs.json')), true);
     });
   `);

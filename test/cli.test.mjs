@@ -18,14 +18,14 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['setup', 'check', 'lint', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use', 'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause', 'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log', 'product.status', 'product.next', 'product.start', 'workflow.list', 'workflow.run', 'workflow.status', 'workflow.view', 'workflow.card', 'workflow.approve', 'workflow.changes', 'workflow.open', 'workflow.prove', 'workflow.suite', 'workflow.done', 'workflow.publish', 'workflow.ask', 'workflow.request-uptake', 'workflow.resend', 'workflow.park', 'workflow.yield', 'workflow.tidy', 'workflow.cancel', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'graph', 'dependencies.prepare', 'dependencies.complete', 'autopilot.doctor', 'autopilot.start', 'autopilot.status', 'autopilot.logs', 'autopilot.stop', 'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust', 'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.report', 'autopilot.regressions', 'autopilot.alerts', 'autopilot.alert', 'autopilot.audit', 'autopilot.check-base', 'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off', 'completion', 'help', 'version', 'version.detailed']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use', 'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause', 'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log', 'product.status', 'product.next', 'product.start', 'product.contracts', 'graph', 'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop', 'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust', 'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.graph', 'autopilot.report', 'autopilot.regressions', 'autopilot.alerts', 'autopilot.alert', 'autopilot.check-base', 'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off', 'completion', 'help', 'version', 'version.detailed']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
-    ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
+    ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['setup', '--skills-dir', '/tmp/s'], ['init'], ['status'], ['status', '--changed', '--json'], ['sim', 'demo'], ['product', '--help'], ['autopilot', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
   }
   // G1: people call the skills in their own chat; pdd starts no session and no named-workflow chat.
-  for (const argv of [['interface', 'draft'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'],
+  for (const argv of [['interface', 'draft'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'], ['workflow','list'], ['workflow','run','bug','1'],
     ['setup', 'now'], ['setup', '--json'], ['run', 'start', 'issue'], ['verify'], ['runtime', 'discover'],
     ['replay'], ['call'], ['tests'], ['doctor'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
     ['unknown', '--help'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
@@ -47,16 +47,16 @@ test('ALPHA4: actual packed package runs every advertised local command without 
   const pack = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', sandbox],
     { cwd: root, env, encoding: 'utf8', timeout: 30000 }))[0];
   const archive = join(sandbox, pack.filename), names = pack.files.map(f => f.path);
-  for (const required of ['bin/pdd.mjs', 'RUNBOOK.md', 'docs/prompting-guide.md', 'skills/pdd-prompting/SKILL.md',
-    'src/workflow-runner.mjs', 'skills/pdd-feature/workflow.json', 'skills/pdd-bug/workflow.json', 'skills/pdd-small-change/workflow.json']) assert.ok(names.includes(required), required);
+  for (const required of ['bin/pdd.mjs', 'skills/pdd/SKILL.md', 'skills/pdd/references/prompting.md',
+    'skills/pdd/references/stories.md', 'skills/pdd/references/verification.md', 'src/autopilot/job-rules.md']) assert.ok(names.includes(required), required);
   for (const file of readdirSync(join(root, 'skills'), { recursive: true }))
-    if (file.startsWith('pdd-') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
-  // RUNBOOK §21's installed examples require these six runnable scenarios; no native tests, fixtures or other test assets ship.
+    if (file.startsWith('pdd/') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
+  // Installed examples require these six runnable scenarios; no native tests, fixtures or other test assets ship.
   assert.deepEqual(names.filter(name => name.startsWith('test/')).sort(), [
     'test/runtime/fake-database.json', 'test/runtime/fake-decision.json', 'test/runtime/fake-factory.json',
     'test/runtime/fake-files.json', 'test/runtime/fake-hash.json', 'test/runtime/fake-service.json'
   ]);
-  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('skills/pdd/') || name === 'src/guidance.mjs'), false);
+  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('prompts/cli/') || name === 'src/guidance.mjs'), false);
   bundleInstalledDependencies(root, archive, sandbox);
   execFileSync('npm', ['install', '--prefix', consumer, archive, '--ignore-scripts', '--offline', '--no-audit', '--no-fund', '--package-lock=false'],
     { cwd: consumer, env, encoding: 'utf8', timeout: 30000 });
@@ -70,25 +70,20 @@ for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync
 for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const original=fs[key];fs[key]=function(path,...args){if(/(?:\\/toolbox\\/|\\/\\.ssh(?:\\/|$)|\\/credentials(?:\\/|$)|\\/\\.npmrc$)/.test(String(path)))stop();return original.call(this,path,...args);};}syncBuiltinESMExports();`);
   const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', guard, bin, ...args],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','start','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['completion', '--help'], ['setup','--help'], ['init','--help'], ['status','--help'], ['lint','--help'], ['prove','--help'], ['test','--help'], ['approve','--help'], ['product','--help'], ['autopilot','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|runtime|doctor|phone)\b/);
   }
-  // help-teaches-pdd: root help and the prompting topic name the guide files of the installed package, not of the cwd.
+  // help-teaches-pdd: root help and the prompting topic name the skill and guide files of the installed package, not of the cwd.
   for (const argv of [['help'], ['help', 'prompting']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
-    for (const file of ['docs/prompting-guide.md', 'RUNBOOK.md']) {
+    for (const file of ['skills/pdd/SKILL.md', 'skills/pdd/references/prompting.md']) {
       const path = answer.stdout.split('\n').find(line => line.endsWith(`/${file}`))?.replace(/^[^/]*/, '');
       assert.equal(path, join(realpathSync(packed), file)); assert.ok(existsSync(path), file);
     }
   }
   const version = run(['--version']); assert.equal(version.status, 0); assert.equal(version.stdout, `${metadata.version}\n`);
   const skill = run(['--skill']); assert.equal(skill.status, 2); assert.equal(skill.stdout, '');
-  const empty = run(['workflow', 'list', '--json']); assert.equal(empty.status, 0,empty.stderr);
-  assert.deepEqual(JSON.parse(empty.stdout).workflows.map(w=>w.name),['bug','feature','product','small-change']);assert.equal(JSON.parse(empty.stdout).default,null);
-  const recipes = run(['workflow', 'list', '--json'], packed); assert.equal(recipes.status, 0);
-  assert.deepEqual(JSON.parse(recipes.stdout).workflows.map(w => w.name), ['bug', 'feature', 'product', 'small-change']);
-  const human = run(['workflow', 'list'], packed); assert.equal(human.status, 0); assert.ok(human.stdout.includes('feature'));assert.ok(human.stdout.includes('Listing starts no work.'));
   for (const shell of ['bash', 'zsh']) {
     const result = run(['completion', shell]); assert.equal(result.status, 0, result.stderr);
     // The supported doctor is scoped to autopilot; other contexts keep the excluded-command check.
@@ -106,18 +101,18 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       assert.equal(completed.stdout.trim().split('\n').includes('doctor'), context === 'autopilot');
     }
     if (shell === 'bash') {
-      const loaded = spawnSync('bash', ['--noprofile', '--norc', '-c', 'source "$1"; COMP_WORDS=(pdd workflow ""); COMP_CWORD=2; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"', 'test', script], { env, encoding: 'utf8' });
-      assert.equal(loaded.status, 0, loaded.stderr); assert.ok(loaded.stdout.split('\n').includes('list'));
-      const selected=spawnSync('bash',['--noprofile','--norc','-c','source "$1"; COMP_WORDS=(pdd workflow bug --agent ""); COMP_CWORD=4; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"','test',script],{env,encoding:'utf8'});
+      const loaded = spawnSync('bash', ['--noprofile', '--norc', '-c', 'source "$1"; COMP_WORDS=(pdd product ""); COMP_CWORD=2; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"', 'test', script], { env, encoding: 'utf8' });
+      assert.equal(loaded.status, 0, loaded.stderr); assert.ok(loaded.stdout.split('\n').includes('status'));
+      const selected=spawnSync('bash',['--noprofile','--norc','-c','source "$1"; COMP_WORDS=(pdd product start --agent ""); COMP_CWORD=4; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"','test',script],{env,encoding:'utf8'});
       assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['agy','claude','codex','gemini']);
     } else {
-      const loaded = spawnSync('zsh', ['-f', '-c', 'autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; [[ $_comps[pdd] == _pdd ]] || exit 3; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow ""); CURRENT=3; _pdd', 'test', script], { env, encoding: 'utf8' });
-      assert.equal(loaded.status, 0, loaded.stderr); assert.ok(loaded.stdout.split('\n').includes('list'));
-      const selected=spawnSync('zsh',['-f','-c','autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow feature --agent ""); CURRENT=5; _pdd','test',script],{env,encoding:'utf8'});
+      const loaded = spawnSync('zsh', ['-f', '-c', 'autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; [[ $_comps[pdd] == _pdd ]] || exit 3; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd product ""); CURRENT=3; _pdd', 'test', script], { env, encoding: 'utf8' });
+      assert.equal(loaded.status, 0, loaded.stderr); assert.ok(loaded.stdout.split('\n').includes('status'));
+      const selected=spawnSync('zsh',['-f','-c','autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd product start --agent ""); CURRENT=5; _pdd','test',script],{env,encoding:'utf8'});
       assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['agy','claude','codex','gemini']);
     }
   }
-  for (const word of ['run', 'verify', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown']) {
+  for (const word of ['run', 'verify', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown', 'workflow']) {
     for (const args of [[word], [word, '--help'], [word, '-h']]) {
       const result = run(args); assert.equal(result.status, 2, JSON.stringify(args)); assert.equal(result.stdout, ''); assert.ok(result.stderr.trim());
     }
@@ -129,88 +124,19 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   assert.ok(PUBLIC_COMMAND_MANIFEST.length > 0);
 });
 
-// Wrong: runner routes reach the wrong export, drop parsed values, retry after a failure, or print an object instead of the message.
-test('ALPHA7: each runner route calls its own export once with parsed values, cwd and package root, and prints the message', async () => {
-  const cases = [
-    [['workflow','start','feature','owner/repo#42','--agent','claude'], 'startRun', { name: 'feature', issue: 'owner/repo#42', agent: 'claude' }],
-    [['workflow','start','small-change','1'], 'startRun', { name: 'small-change', issue: '1', agent: 'codex' }],
-    [['workflow','start','bug','2','--base','round3/tipjar-workflow-base'], 'startRun', { name: 'bug', issue: '2', agent: 'codex', base: 'round3/tipjar-workflow-base' }],
-    [['workflow','done','prompt-story','--summary','Story and cases written'], 'stepDone', { step: 'prompt-story', summary: 'Story and cases written' }],
-    [['workflow','done','review','--no-publish','--summary','Local review complete'], 'stepDone', { step: 'review', noPublish: true, summary: 'Local review complete' }],
-    [['workflow','publish','o/r#7'], 'publishRun', { ref: 'o/r#7' }],
-    [['workflow','done','scope'], 'stepDone', { step: 'scope' }],
-    [['workflow','done','try','--skipped','No person at the Try step'], 'stepDone', { step: 'try', skipped: 'No person at the Try step' }],
-    [['workflow','approve'], 'approveRun', { ref: undefined }],
-    [['workflow','ask','--','Should','-h','work?'], 'askPerson', { text: 'Should -h work?' }],
-    [['workflow','approve','https://github.com/o/r/issues/7'], 'approveRun', { ref: 'https://github.com/o/r/issues/7' }],
-    [['workflow','changes','7','use','--','--blue'], 'changeRun', { ref: '7', text: 'use --blue' }],
-    [['workflow','cancel','o/r#7'], 'cancelRun', { ref: 'o/r#7' }],
-    [['workflow','status'], 'runStatus', { ref: undefined }],
-    [['workflow','status','--all','--json'], 'runStatus', { ref: undefined, all: true, json: true }],
-    [['workflow','status','7','--cancelled'], 'runStatus', { ref: '7', cancelled: true }],
-    [['workflow','open','7'], 'openRun', { ref: '7' }]];
-  for (const [argv, name, input] of cases) {
-    const calls = [], stdout = capture(), stderr = capture();
-    const runner = { [name]: async value => { calls.push(value); return { exitCode: 0, message: `${name} ok` }; } };
-    assert.equal(await runPdd(argv, { workflowAgents: { checkWorkflowAgents: async ({ requested }) => ({ ok: true, agent: requested ?? 'codex', message: '' }) }, workflowRunner: runner, cwd: '/chosen', packageRoot: '/bundle', stdout, stderr }), 0, argv.join(' '));
-    assert.deepEqual(calls, [{ ...input, cwd: '/chosen', packageRoot: '/bundle' }]);
-    assert.equal(stdout.text, `${name} ok\n`); assert.equal(stderr.text, '');
-  }
-  const stderr = capture();
-  assert.equal(await runPdd(['workflow','approve','7'], { workflowRunner: { approveRun: async () => ({ exitCode: 1, message: 'Only the person can approve.' }) }, stdout: capture(), stderr }), 1);
-  assert.equal(stderr.text, 'Only the person can approve.\n');
-});
-
-// Wrong: malformed references/options reach effects, or an owner failure is retried.
-test('ALPHA8: runner argument failures and invalid replies are finite without a second call', async () => {
-  const invalid = [['workflow','publish'], ['workflow','publish','17','extra'], ['workflow','publish','17','--no-publish'], ['workflow','done','review','--no-publish','--no-publish'], ['workflow','run'],['workflow','run','../unknown','1'],['workflow','run','feature','0'],['workflow','run','feature','42','extra'],
-    ['workflow','run','feature','42','--agent',''],['workflow','run','feature','42','--agent','   '],['workflow','run','bug','2','--base'],
-    ['workflow','run','bug','2','--base','one','--base','two'],['workflow','done'],['workflow','done','Scope'],['workflow','done','scope','--summary'],
-    ['workflow','approve','7','8'],['workflow','approve','a1234567-1234-4123-8123-123456789abc'],['workflow','changes','7'],['workflow','cancel'],
-    ['workflow','open'],['workflow','resume','7'],['workflow','attach','7'],['workflow','status','7','--brief'],['workflow','status','--all','--all']];
-  for (const args of invalid) assert.equal(await runPdd(args, { stdout: capture(), stderr: capture(), workflowRunner: new Proxy({}, { get: () => assert.fail('No runner') }) }), 2, args.join(' '));
-  for (const answer of [undefined, { exitCode: NaN, message: 'no' }, { exitCode: 0, message: '' }]) {
-    let calls = 0;
-    assert.equal(await runPdd(['workflow','status'], { stdout: capture(), stderr: capture(), workflowRunner: { runStatus: async () => { calls++; return answer; } } }), 1); assert.equal(calls, 1);
-  }
-  let calls = 0;
-  assert.equal(await runPdd(['workflow','open','7'], { stdout: capture(), stderr: capture(), workflowRunner: { openRun: async () => { calls++; throw Error('possible effect'); } } }), 1); assert.equal(calls, 1);
-});
-
-
-test('workflow evidence routes required saved summary file without progressing steps', async () => {
-  const stdout = capture(), stderr = capture(); let input;
-  const runner = { recordEvidence: async args => { input = args; return { exitCode: 0, message: 'Recorded saved evidence.' }; } };
-  assert.equal(await runPdd(['workflow','evidence','17','--summary','/tmp/check.json'], { workflowRunner: runner, cwd: '/chosen', stdout, stderr }), 0);
-  assert.equal(input.ref, '17'); assert.equal(input.summaryFile, '/tmp/check.json');
-  input = null;
-  assert.equal(await runPdd(['workflow','evidence','17'], { workflowRunner: runner, stdout, stderr }), 2);
-  assert.equal(input, null);
-});
-
-test('Try and workflow accept named local launchers; workflow completion keeps the built-in agent choices', () => {
+test('Try and product accept named local launchers; product completion keeps the built-in agent choices', () => {
   for (const name of ['Codex (work5)', 'Claude (work3)', 'codex', 'claude', 'gemini']) {
     const plan=parseArgv(['simulate','my-story','--agent',name]);
     assert.equal(plan.commandId,'try');assert.equal(plan.options['--agent'],name);
   }
-  for (const args of [['simulate','--agent'],['simulate','--agent',''],['simulate','--agent','   '],['workflow','run','bug','42','--agent'],['workflow','run','bug','42','--agent',''],['workflow','run','bug','42','--agent','   ']]) assert.throws(()=>parseArgv(args),CommandInputError);
-  // 2901: a workflow --agent may name an agents.json entry; the workflow agents owner refuses an unknown name, not the parser.
-  for (const agent of ['codex','claude','gemini','agy','Codex (work5)','other']) assert.equal(parseArgv(['workflow','run','bug','42','--agent',agent]).options['--agent'],agent);
+  for (const args of [['simulate','--agent'],['simulate','--agent',''],['simulate','--agent','   '],['product','start','run-1','--agent'],['product','start','run-1','--agent',''],['product','start','run-1','--agent','   ']]) assert.throws(()=>parseArgv(args),CommandInputError);
+  // 2901: --agent may name an agents.json entry; the agent owner refuses an unknown name, not the parser.
+  for (const agent of ['codex','claude','gemini','agy','Codex (work5)','other']) assert.equal(parseArgv(['product','start','run-1','--agent',agent]).options['--agent'],agent);
   for (const shell of ['bash','zsh']) {
     const completion=renderCompletion(shell);
     assert.doesNotMatch(completion,/(?:try|sim|simulate):--agent\)/);
-    assert.match(completion,/workflow:--agent\)/);
+    assert.match(completion,/product:--agent\)/);
   }
-});
-
-test('2640 CLI parses and forwards --adopt-corpus exactly and retains startup exit 2',async t=>{
-  const cwd=temp(t),stdout=capture(),stderr=capture();let input;
-  const args=['workflow','run','replay','17','--base','main','--adopt-corpus','/approval folder/corpus.json'];
-  assert.equal(parseArgv(args).options['--adopt-corpus'],'/approval folder/corpus.json');
-  const code=await runPdd(args,{cwd,stdout,stderr,env:{HOME:cwd,PATH:''},workflowAgents: { checkWorkflowAgents: async ({ requested }) => ({ ok: true, agent: requested ?? 'codex', message: '' }) }, workflowRunner:{startRun:async value=>{input=value;return {exitCode:2,message:'Cannot adopt (content-mismatch).'};}}});
-  assert.equal(code,2);assert.equal(input.adoptCorpus,'/approval folder/corpus.json');assert.equal(input.name,'replay');assert.equal(input.base,'main');assert.match(stderr.text,/Cannot adopt/);assert.equal(stdout.text,'');
-  for(const option of [[],[''],['a','--adopt-corpus','b']])assert.throws(()=>parseArgv(['workflow','run','replay','17','--adopt-corpus',...option]),CommandInputError);
-  for(const shell of ['bash','zsh'])assert.match(renderCompletion(shell),/--adopt-corpus/);
 });
 
 test('3157 autopilot release routes issue reference to runAutopilotLauncher', async () => {
@@ -223,7 +149,7 @@ test('3157 autopilot release routes issue reference to runAutopilotLauncher', as
   assert.throws(() => parseArgv(['autopilot', 'release']), CommandInputError);
 });
 
-test('3578 pdd lint --local emits default-warn native-only-unknown-port without pdd.json, enforces error when promoted in pdd.json, and exits 0 once fixed', async t => {
+test('3578 pdd lint --local enforces default-on structural errors without pdd.json and exits 0 once fixed', async t => {
   const repo = temp(t);
   const home = temp(t);
   const state = temp(t);
@@ -241,15 +167,6 @@ test('3578 pdd lint --local emits default-warn native-only-unknown-port without 
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
 
   const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
-  const warnOut = capture(), warnErr = capture();
-  const warnCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: warnOut, stderr: warnErr });
-  assert.equal(warnCode, 0, warnErr.text);
-  const warnParsed = JSON.parse(warnOut.text);
-  assert.deepEqual(warnParsed.problems, []);
-  assert.ok(warnParsed.warnings.some(w => /Warning:.*\[native-only-unknown-port\].*"access\.commit"/.test(w)));
-
-  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'error' } } }, null, 2) + '\n');
-  execFileSync('git', ['add', 'pdd.json'], { cwd: repo });
   const errOut = capture(), errErr = capture();
   const failCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: errOut, stderr: errErr });
   assert.equal(failCode, 1);

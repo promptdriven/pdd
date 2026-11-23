@@ -10,7 +10,6 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readPyprojectField } from '../scripts/sync-pypi-version.mjs';
-import { version as runtimeClientVersionInfo } from '../src/runtime-seam.mjs';
 import {
   buildIsolatedPddPath,
   checkRuntimeClientParity,
@@ -21,6 +20,7 @@ import {
   publishRelease,
   resolveAndVerifyGitHubRelease,
   resolvePythonTools,
+  RUNTIME_CLIENT_PACKAGE,
   toPep440Version,
   verifyCleanGitStatus,
   verifyNpmLiveVersion,
@@ -28,7 +28,7 @@ import {
   verifyReleaseCommitParity,
 } from '../scripts/publish-release.mjs';
 
-const RUNTIME_CLIENT_PKG = runtimeClientVersionInfo().package;
+const RUNTIME_CLIENT_PKG = RUNTIME_CLIENT_PACKAGE;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const publishScript = join(root, 'scripts', 'publish-release.mjs');
@@ -103,6 +103,11 @@ function writeExecutable(path, content) {
 
 test('#3533 package.json wires release:publish, parsePublishArgs uses parseArgs and traps swallowed npm flags', () => {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const publishSource = readFileSync(publishScript, 'utf8');
+  const expectedRuntimeClientPkg = Object.keys(pkg.dependencies ?? {}).find(name => name.endsWith('/runtime-client'));
+  assert.ok(expectedRuntimeClientPkg, 'package.json must pin a runtime-client dependency');
+  assert.equal(RUNTIME_CLIENT_PKG, expectedRuntimeClientPkg);
+  assert.doesNotMatch(publishSource, /runtime-seam\.mjs/, 'publish-release.mjs must not load src/runtime-seam.mjs');
   assert.equal(pkg.scripts?.['release:publish'], 'node scripts/publish-release.mjs');
   assert.equal(readPyprojectField('[project]\nname = "pdd-cli"\nversion = "0.1.37"\n', 'name'), 'pdd-cli');
 
@@ -155,8 +160,12 @@ test('#3533 package.json wires release:publish, parsePublishArgs uses parseArgs 
 
   assert.equal(npmDistTagForVersion('0.1.37'), 'latest');
   assert.equal(npmDistTagForVersion('0.1.38-alpha.1'), 'alpha');
+  assert.equal(npmDistTagForVersion('0.2.0-beta.1'), 'beta');
+  assert.equal(npmDistTagForVersion('0.2.0-rc.1'), 'next');
   assert.equal(toPep440Version('0.1.37'), '0.1.37');
   assert.equal(toPep440Version('0.1.38-alpha.1'), '0.1.38a1');
+  assert.equal(toPep440Version('0.2.0-beta.1'), '0.2.0b1');
+  assert.equal(toPep440Version('0.2.0-rc.1'), '0.2.0rc1');
   assert.equal(toPep440Version('0.1.38-rc.2'), '0.1.38rc2');
 });
 

@@ -1,17 +1,40 @@
 import "./helpers/test-home.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
+import {execFileSync} from "node:child_process";
 import {createHash, randomUUID} from "node:crypto";
-import {existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync} from "node:fs";
-import {join} from "node:path";
-import {fixture, packageRoot} from "./helpers/workflow-runner-fixture.mjs";
-import {automaticFixture} from "./helpers/autopilot-run-base-fixture.mjs";
+import {existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {join, resolve} from "node:path";
 import {healthyMachine} from "./helpers/healthy-machine.mjs";
 import {isolatedCheckCapacity} from "./helpers/check-machine.mjs";
 import {createGithubRepoFake} from "./helpers/github-repo-fake.mjs";
-import {runAutopilotLauncher, tickAutopilot} from "../src/autopilot-launcher.mjs";
+import {runAutopilotLauncher} from "../src/autopilot-launcher.mjs";
 
+const packageRoot = resolve(import.meta.dirname, "..");
 const repo = "example/project", coordinatorId = "park-owner", machine = "park-machine";
+
+function makeReleaseFixture(t) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "pdd-release-concurrency-")));
+  t.after(() => rmSync(base, {recursive: true, force: true}));
+  const source = join(base, "repo"), home = join(base, "home");
+  mkdirSync(source, {recursive: true});
+  mkdirSync(home, {recursive: true});
+  execFileSync("git", ["init", "-q", "-b", "main"], {cwd: source});
+  const commonDir = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {cwd: source, encoding: "utf8"}).trim();
+  const f = {base, source, home, commonDir, clock: Date.parse("2026-11-06T12:00:00Z")};
+  f.ports = {
+    env: {HOME: home, PATH: process.env.PATH},
+    now: () => f.clock,
+    execFile: async (file, args, opts = {}) => ({
+      code: 0,
+      stdout: execFileSync(file, args, {cwd: opts.cwd ?? source, encoding: "utf8"}),
+      stderr: "",
+    }),
+  };
+  return f;
+}
+
 function addClaimEra(github, at) {
   const comment = github.claim(17, {coordinatorId, machine});
   const issue = github.issues.get(17);
@@ -22,9 +45,27 @@ function addClaimEra(github, at) {
 }
 
 test("3157: public issue release cleans a pending archived automatic claim", async t => {
-  const f = await automaticFixture(t);
-  assert.equal((await f.begin()).exitCode, 0);
-  const pending = f.record(), github = createGithubRepoFake({repository:pending.repo, owner:"example", issues:18, now:()=>f.clock});
+  const f = makeReleaseFixture(t);
+  const stateFolder = join(f.home, ".local", "state", "pdd", "autopilot");
+  mkdirSync(stateFolder, {recursive: true});
+  const root = realpathSync(f.source), id = createHash("sha256").update(root).digest("hex").slice(0, 20);
+  const stateFile = join(stateFolder, `${id}.json`);
+  writeFileSync(join(f.source, "pdd.json"), JSON.stringify({autopilot: {mode: "auto", trust: []}}));
+  writeFileSync(stateFile, JSON.stringify({
+    enabled: true, defaultBranch: "main", baseBranch: "main", stateFile,
+    cwd: root, repo, packageRoot, runs: 1, coordinatorId, machine, activatedAt: 1,
+    agent: {id: "codex", kind: "codex", command: "codex"}, environment: f.ports.env,
+  }));
+  const runDir = join(f.commonDir, "pdd", "runs", "17");
+  mkdirSync(runDir, {recursive: true});
+  const pending = {
+    v: 1, number: 17, repo, runId: randomUUID(), root, sourceRoot: root, commonDir: f.commonDir, runDir,
+    state: "running", automaticOrigin: {repository: repo, coordinatorId, machine},
+  };
+  const allocation = join(pending.commonDir, "pdd", "worktree-assignments", "issues", "17.json");
+  mkdirSync(join(pending.commonDir, "pdd", "worktree-assignments", "issues"), {recursive: true});
+  writeFileSync(allocation, JSON.stringify({runId: pending.runId}));
+  const github = createGithubRepoFake({repository:pending.repo, owner:"example", issues:18, now:()=>f.clock});
   const comment = github.claim(17, {coordinatorId:pending.automaticOrigin.coordinatorId, machine:pending.automaticOrigin.machine});
   const eventId = github.issues.get(17).timeline.filter(event => event.label === "pdd:working").at(-1).id;
   github.editComment(17, comment.id, `Autopilot claim.\n\n\`\`\`json\n${JSON.stringify({
@@ -47,13 +88,12 @@ test("3157: public issue release cleans a pending archived automatic claim", asy
   delete direct.automaticOrigin;
   delete direct.claimRelease;
   writeFileSync(join(direct.runDir, "status.json"), JSON.stringify(direct));
-  const allocation = join(pending.commonDir, "pdd", "worktree-assignments", "issues", "17.json");
   assert.ok(existsSync(allocation), "the archived run still owns its local issue allocation");
 
   const originalExec = f.ports.execFile;
   const fakeExec = async (file, args, options={}) => file === "gh" && args[0] === "api"
     ? github.gh(args, options) : originalExec(file, args, options);
-  const ports = {...healthyMachine, ...f.ports, stateRoot:f.automaticPorts.autopilotStateRoot,
+  const ports = {...healthyMachine, ...f.ports, stateRoot:stateFolder,
     checkCapacityPorts:isolatedCheckCapacity(f.base), authority:{read:async()=>({authority:"trusted"})}, execFile:fakeExec,
     run:async (file,args,options={}) => {
       if (file === "gh" && args[0] === "api") return fakeExec(file,args,options);
@@ -74,7 +114,7 @@ test("3157: public issue release cleans a pending archived automatic claim", asy
 });
 
 for (const firstClaimPresent of [true, false]) test(`3157: public no-run release preserves replacement when first current claim is ${firstClaimPresent ? "present" : "absent"}`, async t => {
-  const f = await fixture(t, {agent:"codex"});
+  const f = makeReleaseFixture(t);
   const now = () => f.clock;
   const github = createGithubRepoFake({repository:repo, owner:"example", issues:18, now});
   if (firstClaimPresent) {
@@ -132,7 +172,7 @@ for (const firstClaimPresent of [true, false]) test(`3157: public no-run release
 
 
 test("3157: public release keeps a concurrent stop and fresh replacement cache", async t => {
-  const f = await fixture(t, {agent:"codex"});
+  const f = makeReleaseFixture(t);
   const now = () => f.clock;
   const github = createGithubRepoFake({repository:repo, owner:"example", issues:18, now});
   const first = addClaimEra(github, f.clock);

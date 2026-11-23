@@ -1,4 +1,3 @@
-// Generated from prompts/test/autopilot-factory.prompt.md (sha256: 1e63cdda15ec0d34499b1a62a4e6664b040d3a8ff76de2435d17a01988e09b29).
 // The core factory: each user path of Autopilot end to end through the real launcher (start, tick, status, add,
 // stop) and the real core tick, with real Git (a bare origin and clones), a fake GitHub and scripted agent jobs.
 import './helpers/test-home.mjs';

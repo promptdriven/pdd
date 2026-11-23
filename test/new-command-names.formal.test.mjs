@@ -20,18 +20,18 @@ const label = argv => JSON.stringify(argv);
 const effect = plan => ({ local: plan.local, operands: plan.operands, options: plan.options, helpPrefix: plan.helpPrefix });
 const parse = argv => { try { return { plan: parseArgv(argv) }; } catch (error) { return { error: String(error?.message), input: error instanceof CommandInputError }; } };
 const oracle = (command, tail) => command === 'try' ? ['try', 'simulate'] : tail.includes('--lint') ? ['check --lint', 'lint'] : ['check', 'test'];
-const QUIET = [{ quiet: ['sim'], main: ['simulate'] }, { quiet: ['workflow', 'start'], main: ['workflow', 'run'] }];
-const HEADS = { simulate: [[], ['place-order'], ['place-order', 'unknown-item']], 'workflow run': [[], ['feature', '42'], ['bug', 'owner/repo#7'], ['81'], ['feature', '0']] };
+const QUIET = [{ quiet: ['sim'], main: ['simulate'] }];
+const HEADS = { simulate: [[], ['place-order'], ['place-order', 'unknown-item']] };
 
-// The input range: every option of the test, lint, simulate and workflow run routes, each without a value, with a good value and with bad values.
+// The input range: every option of the test, lint and simulate routes, each without a value, with a good value and with bad values.
 function optionSamples() {
   const samples = new Map();
   const add = sample => samples.set(label(sample), sample);
-  for (const prefix of [['test'], ['lint'], ['simulate'], ['workflow', 'run']]) {
+  for (const prefix of [['test'], ['lint'], ['simulate']]) {
     const route = PUBLIC_COMMAND_ROUTES.find(item => words(item.prefix) === words(prefix));
     assert.ok(route, `route ${words(prefix)}`);
     for (const option of route.options) {
-      const values = { flag: [], text: ['place-order', '--json'], uuid: ['0b5a1f2e-1c2d-4e5f-8a9b-0c1d2e3f4a5b', 'nope'],
+      const values = { flag: [], text: ['place-order', '--json'], 'optional-text': ['main', '--json'], uuid: ['0b5a1f2e-1c2d-4e5f-8a9b-0c1d2e3f4a5b', 'nope'],
         integer: [String(option.min), String(option.max), '0', String(option.max + 1), 'x'], 'optional-integer': ['8123', '0', '70000'],
         value: [...(option.choices ?? []), 'other'] }[option.kind];
       assert.ok(values, `kind ${option.kind}`);
@@ -168,7 +168,7 @@ function completionChoices(t, script, shell, contexts) {
   return blocks.map(block => block.split('\n').filter(Boolean));
 }
 const SHELLS = ['bash', ...(spawnSync('zsh', ['-fc', 'true']).status === 0 ? ['zsh'] : [])];
-const NOT_OFFERED = [['check'], ['try'], ['sim'], ['workflow', 'start']];
+const NOT_OFFERED = [['check'], ['try'], ['sim']];
 function completionContexts() {
   const contexts = new Map(), add = context => contexts.set(words(context), context);
   add([]); add(['help']);
@@ -177,7 +177,6 @@ function completionContexts() {
     for (let length = 1; length <= route.prefix.length; length++) { add(route.prefix.slice(0, length)); add(['help', ...route.prefix.slice(0, length)]); }
     for (const option of route.options) if (option.choices) add([...route.prefix, option.name]);
   }
-  contexts.delete('workflow run'); // that context asks the installed pdd for workflow names
   return [...contexts.values()];
 }
 
@@ -192,8 +191,7 @@ test('shell completion offers no removed or quiet name in any context', t => {
       }
     });
     const at = context => all[contexts.findIndex(item => words(item) === context)];
-    for (const name of ['test', 'lint', 'simulate', 'workflow']) assert.ok(at('').includes(name), `${shell}: root offers ${name}`);
-    assert.ok(at('workflow').includes('run'), `${shell}: workflow offers run`);
+    for (const name of ['test', 'lint', 'simulate']) assert.ok(at('').includes(name), `${shell}: root offers ${name}`);
   }
   t.diagnostic(`bounds: ${contexts.length} contexts x ${SHELLS.join(', ')}`);
 });
@@ -202,7 +200,7 @@ test('shell completion offers no removed or quiet name in any context', t => {
 test('the new words are data in one place', async t => {
   const sandbox = temp(t), copy = join(sandbox, 'src'); cpSync(join(root, 'src'), copy, { recursive: true });
   symlinkSync(join(root, 'node_modules'), join(sandbox, 'node_modules'), 'dir');
-  const file = join(copy, 'command-catalog.mjs'), source = readFileSync(file, 'utf8');
+  const file = join(copy, 'shared', 'command-names.mjs'), source = readFileSync(file, 'utf8');
   const RENAMED = { test: 'exam', lint: 'sweep', simulate: 'sandbox', run: 'begin' };
   const edited = source.replace(/(export const NAMES = Object\.freeze\()\{[^}]*\}/, (_, head) => `${head}${JSON.stringify(RENAMED)}`);
   assert.notEqual(edited, source, 'NAMES holds the words');
@@ -213,19 +211,15 @@ test('the new words are data in one place', async t => {
   const completion = await import(pathToFileURL(join(copy, 'completion.mjs')));
   const help = cli.renderHelp();
   for (const word of ['exam', 'sweep', 'sandbox']) assert.match(help, new RegExp(`\\n  pdd ${word}\\b`), word);
-  assert.match(help, /\n {2}pdd workflow begin\b/); assert.match(help, /\bworkflow begin\b.*Herdr/);
   for (const word of ['test', 'lint', 'simulate']) assert.doesNotMatch(help, new RegExp(`\\bpdd ${word}\\b`), word);
-  assert.doesNotMatch(help, /\bworkflow (?:start|run)\b/);
   for (const [before, after] of [[['check'], 'exam'], [['check', '--lint'], 'sweep'], [['try'], 'sandbox']]) {
     assert.throws(() => parser.parseArgv([...before, '--help']), error => error.message.includes(`pdd ${words(before)}`) && error.message.includes(`pdd ${after}`));
   }
   assert.deepEqual(effect(parser.parseArgv(['exam', '--lint', '--local'])), effect(parser.parseArgv(['sweep', '--local'])));
   assert.deepEqual(parser.parseArgv(['sim', '--help']), parser.parseArgv(['sandbox', '--help']), 'the quiet form follows the route');
-  assert.deepEqual(parser.parseArgv(['workflow', 'start', '--help']), parser.parseArgv(['workflow', 'begin', '--help']));
   for (const shell of SHELLS) {
-    const [rootChoices, workflowChoices] = completionChoices(t, completion.renderCompletion(shell), shell, [[], ['workflow']]);
+    const [rootChoices] = completionChoices(t, completion.renderCompletion(shell), shell, [[]]);
     for (const word of ['exam', 'sweep', 'sandbox']) assert.ok(rootChoices.includes(word), `${shell} ${word}`);
     for (const word of ['test', 'lint', 'simulate', 'check', 'try']) assert.ok(!rootChoices.includes(word), `${shell} ${word}`);
-    assert.ok(workflowChoices.includes('begin') && !workflowChoices.includes('start') && !workflowChoices.includes('run'), shell);
   }
 });

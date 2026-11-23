@@ -7,5 +7,6 @@ if (major < 22) {
   process.stderr.write(`pdd needs Node.js 22 or newer. You have ${process.version}. Update Node from https://nodejs.org, then run pdd again.\n`);
   process.exitCode = 1;
 } else {
+  process.stdout.on('error', err => { if (err && err.code === 'EPIPE') process.exit(0); });
   import('../src/pdd-cli.mjs').then(async ({ runPdd }) => { process.exitCode = await runPdd(process.argv.slice(2)); });
 }

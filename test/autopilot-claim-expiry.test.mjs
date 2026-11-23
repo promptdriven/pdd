@@ -3,19 +3,14 @@ import { isolatedCheckCapacity } from './helpers/check-machine.mjs';
 import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile as callbackExec, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { readDependencySnapshot, createDependencyReadPorts, refreshClaimHeartbeat, withoutClaimHeartbeat } from '../src/issue-dependencies-github.mjs';
 import { projectIssueGraph } from '../src/issue-dependencies.mjs';
-import { checkDependencyStart } from '../src/issue-dependencies-intake.mjs';
 import { runIssueGraph } from '../src/issue-dependency-graph.mjs';
-import { startRun, stepDone, approveRun } from '../src/workflow-runner.mjs';
-import { writeRun } from '../src/workflow-runs.mjs';
-import { fixture as runnerFixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 import { createGithubRepoFake } from './helpers/github-repo-fake.mjs';
 
 // Issue #3032: claims carry a heartbeat, expire, and a lost claim stops work.
@@ -132,16 +127,12 @@ test('pdd graph shows an expired claim with its last seen time and no hold', asy
   assert.ok(!lines.includes('  Claimed'));
 });
 
-test('claim expiry: a takeover starts a new claim era; the new owner may start and the old owner may not', async t => {
+test('claim expiry: a takeover starts a new claim era and replaces the expired owner', async t => {
   const world = checkout(t), issue = issueRow(7, { updated_at: at(NOW - 5 * minute) });
   const oldClaim = { id: 901, user: { login: 'owner' }, created_at: at(NOW - 30 * hour), updated_at: at(NOW - 6 * hour), body: claimBody({ lastSeen: at(NOW - 6 * hour) }) };
   const before = await observe(world, { issue, comments: [oldClaim], timeline: [labeled(701, at(NOW - 30 * hour))] });
   assert.equal(before.claim.expired, true);
-  const settings = { read: async () => ({ mode: 'auto', activation: 'activation' }) };
-  const coordinatorA = { repository: repo, coordinatorId: 'coordinator-a', machine: 'machine-a', activation: 'activation', claim: { commentId: '901', labelEventId: '701' } };
-  world.localOwner('coordinator-a');
-  assert.deepEqual(await checkDependencyStart({ cwd: world.cwd, repository: repo, issue: issue.html_url, coordinator: coordinatorA }, { ...before.ports, settings }),
-    { allowed: false, reason: 'owner' }, 'an expired claim does not admit its old owner');
+  assert.equal(before.claim.active, false);
 
   const takeover = { id: 902, user: { login: 'owner' }, created_at: at(NOW - 4 * minute), updated_at: at(NOW - 4 * minute),
     body: claimBody({ coordinatorId: 'coordinator-b', machine: 'machine-b', labelEventId: '703', lastSeen: at(NOW - 4 * minute) },
@@ -151,17 +142,11 @@ test('claim expiry: a takeover starts a new claim era; the new owner may start a
   assert.deepEqual([after.claim.coordinatorId, after.claim.machine, after.claim.commentId, after.claim.labelEventId, after.claim.active], ['coordinator-b', 'machine-b', '902', '703', true]);
   assert.ok(after.node.reasons.includes('Claimed'));
   assert.equal(after.node.eligible, false, 'the new live claim is skipped by others');
-  assert.deepEqual(await checkDependencyStart({ cwd: world.cwd, repository: repo, issue: issue.html_url, coordinator: coordinatorA }, { ...after.ports, settings }),
-    { allowed: false, reason: 'owner' }, 'the old owner lost the claim');
-  world.localOwner('coordinator-b');
-  const coordinatorB = { ...coordinatorA, coordinatorId: 'coordinator-b', machine: 'machine-b', claim: { commentId: '902', labelEventId: '703' } };
-  assert.deepEqual(await checkDependencyStart({ cwd: world.cwd, repository: repo, issue: issue.html_url, coordinator: coordinatorB }, { ...after.ports, settings }),
-    { allowed: true, reason: 'ok' });
 });
 
 // The first lastSeen may come from a wrong clock (here a local time written with Z,
 // 8 hours behind). GitHub's own comment times keep a fresh claim live.
-test('claim expiry: a fresh claim comment with a stale lastSeen is live, and its owner may start', async t => {
+test('claim expiry: a fresh claim comment with a stale lastSeen is live', async t => {
   const world = checkout(t), created = NOW - 2 * minute, issue = issueRow(7, { updated_at: at(created) });
   const comments = [{ id: 901, user: { login: 'owner' }, created_at: at(created), updated_at: at(created), body: claimBody({ lastSeen: at(NOW - 8 * hour) }) }];
   const observed = await observe(world, { issue, comments, timeline: [labeled(701, at(NOW - 3 * minute))] });
@@ -169,10 +154,6 @@ test('claim expiry: a fresh claim comment with a stale lastSeen is live, and its
   assert.equal(observed.claim.expired, undefined);
   assert.equal(observed.claim.lastSeen, at(created), 'the claim comment creation time is the last-seen time');
   assert.ok(observed.node.reasons.includes('Claimed'), observed.node.reasons.join('; '));
-  world.localOwner('coordinator-a');
-  const coordinator = { repository: repo, coordinatorId: 'coordinator-a', machine: 'machine-a', activation: 'activation', claim: { commentId: '901', labelEventId: '701' } };
-  assert.deepEqual(await checkDependencyStart({ cwd: world.cwd, repository: repo, issue: issue.html_url, coordinator },
-    { ...observed.ports, settings: { read: async () => ({ mode: 'auto', activation: 'activation' }) } }), { allowed: true, reason: 'ok' });
 });
 
 test('claim expiry: a lastSeen nested in another object is not read as the heartbeat', async t => {
@@ -432,49 +413,6 @@ async function heartbeatTick(t) {
   return f;
 }
 
-// GitHub moves the issue updated_at to the edit time of a comment (measured on
-// GitHub 2026-11-06), so each heartbeat changes the issue update time.
-// A coordinator whose claim expired or was taken does not push to the issue.
-test('workflow: an automatic run does not push or open its PR after its claim expired', async t => {
-  const exec = promisify(callbackExec);
-  const f = await runnerFixture(t, { name: 'small-change', agent: 'codex' });
-  f.ports.env = { HOME: f.ports.env.HOME };
-  assert.equal((await startRun({ name: 'small-change', issue: '17', agent: 'codex', cwd: f.source, packageRoot }, f.ports)).exitCode, 0);
-  const run = f.record(); f.tick();
-  await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
-  f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
-  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
-  for (const step of ['change', 'verify']) { f.tick(); assert.equal((await stepDone({ step, summary: step, cwd: run.root }, f.agentPorts())).exitCode, 0); }
-  const origin = { repository: 'example/project', coordinatorId: 'coordinator-a', machine: 'machine-a', claim: { commentId: '11', labelEventId: '12' } };
-  const saved = f.record(); saved.automaticOrigin = structuredClone(origin); writeRun(saved);
-  const root = realpathSync(f.source), stateRoot = join(f.state, 'autopilot'); mkdirSync(stateRoot, { recursive: true });
-  writeFileSync(join(stateRoot, `${sha(root).slice(0, 20)}.json`), JSON.stringify({ repo: 'example/project', cwd: root, coordinatorId: origin.coordinatorId }));
-  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
-  const fixturePath = join(f.base, 'reader.json'), logPath = join(f.base, 'gh.log');
-  // As on GitHub, the claim comment has its creation time and its last heartbeat edit time.
-  const claimedAt = at(f.clock - 30 * hour);
-  const claimFor = lastSeen => writeFileSync(fixturePath, JSON.stringify({ labels: ['pdd:working'], events: [{ id: 12, event: 'labeled', label: { name: 'pdd:working' }, actor: { login: 'example' }, created_at: claimedAt }],
-    comments: [{ id: 11, user: { login: 'example' }, created_at: claimedAt, updated_at: lastSeen, body: JSON.stringify({ repository: origin.repository, coordinatorId: origin.coordinatorId, machine: origin.machine, labelEventId: '12', lastSeen }) }] }));
-  const original = f.ports.execFile;
-  const execFile = (file, args, opts) => file === 'gh' && args[0] === 'api' && args[1] === '--include'
-    ? exec(process.execPath, [join(packageRoot, 'test/helpers/continuation-fake-gh.mjs'), ...args], { ...opts, env: { ...process.env, READER_FIXTURE_FILE: fixturePath, READER_GH_LOG: logPath } })
-    : original(file, args, opts);
-  const ports = () => f.agentPorts({ execFile, autopilotStateRoot: stateRoot });
-  claimFor(at(f.clock - 5 * hour));
-  f.tick();
-  const refused = await stepDone({ step: 'formal', summary: 'formal', cwd: run.root }, ports());
-  assert.equal(refused.exitCode, 1);
-  assert.match(refused.message, /claim ownership/);
-  assert.equal(f.pushes.length, 0, 'no push after the claim expired');
-  assert.equal(f.prs.length, 0);
-  claimFor(at(f.clock));
-  f.tick();
-  const opened = await stepDone({ step: 'formal', summary: 'formal', cwd: run.root }, ports());
-  assert.equal(opened.exitCode, 0, opened.message);
-  assert.equal(f.pushes.length, 1);
-  assert.equal(f.prs.length, 1);
-});
-
 // Issue #3041: per-issue ceilings for takeovers and for a long-running claim.
 // Each era: the label event, its claim comment with a last GitHub edit, and how it ended.
 // Each claim record is a heartbeat claim: its last heartbeat wrote lastSeen at that edit.
@@ -516,24 +454,16 @@ test('takeover ceiling: after 3 takeovers an expired claim is not taken over aga
   assert.ok(view.message.split('\n').includes(`  ${reason}`), view.message);
 });
 
-test('takeover ceiling: the 3rd takeover may start; a 4th takeover made anyway is refused at start', async t => {
+test('takeover ceiling: the 3rd takeover stays active without limit hold; a 4th takeover carries the limit hold reason', async t => {
   const world = checkout(t), issue = issueRow(7, { updated_at: at(NOW - 5 * minute) });
-  const settings = { read: async () => ({ mode: 'auto', activation: 'activation' }) };
-  const startAs = async (history, n) => {
-    const observed = await observe(world, { issue, ...claimHistory(history) });
-    world.localOwner(`coordinator-${n}`);
-    const coordinator = { repository: repo, coordinatorId: `coordinator-${n}`, machine: `machine-${n}`, activation: 'activation', claim: { commentId: String(901 + n), labelEventId: String(701 + 2 * n) } };
-    return { observed, start: await checkDependencyStart({ cwd: world.cwd, repository: repo, issue: issue.html_url, coordinator }, { ...observed.ports, settings }) };
-  };
   // The last takeover removes the expired label and adds it again at once.
   const live = history => history.map((era, n) => n === history.length - 1 ? { ...era, from: NOW - 10 * minute, seen: NOW - 5 * minute } : n === history.length - 2 ? { ...era, to: NOW - 10 * minute } : era);
-  const third = await startAs(live(takenOver(3)), 3);
-  assert.deepEqual([third.observed.claim.takeovers, third.observed.claim.active], [3, true]);
-  assert.deepEqual(third.start, { allowed: true, reason: 'ok' });
-  const fourth = await startAs(live(takenOver(4)), 4);
-  assert.equal(fourth.observed.claim.takeovers, 4);
-  assert.ok(fourth.observed.node.reasons.includes('Taken over 4 times; take the stuck path, not another takeover'), fourth.observed.node.reasons.join('; '));
-  assert.deepEqual(fourth.start, { allowed: false, reason: 'dependency' });
+  const third = await observe(world, { issue, ...claimHistory(live(takenOver(3))) });
+  assert.deepEqual([third.claim.takeovers, third.claim.active], [3, true]);
+  assert.equal(third.node.reasons.some(reason => /^Taken over \d+ times/.test(reason)), false);
+  const fourth = await observe(world, { issue, ...claimHistory(live(takenOver(4))) });
+  assert.equal(fourth.claim.takeovers, 4);
+  assert.ok(fourth.node.reasons.includes('Taken over 4 times; take the stuck path, not another takeover'), fourth.node.reasons.join('; '));
 });
 
 test('takeover ceiling: a normal release of a live claim is not a takeover and starts a new claim chain', async t => {
@@ -609,16 +539,13 @@ test('takeover count: a person removing pdd:stuck at the limit resets the count;
 
 test('takeover count: a person removing an expired pdd:working is not a takeover, and a normal release resets the count', async t => {
   const world = checkout(t), issue = issueRow(7, { updated_at: at(NOW - 5 * minute) });
-  world.localOwner('coordinator-4');
-  const settings = { read: async () => ({ mode: 'auto', activation: 'activation' }) };
-  const coordinator = { repository: repo, coordinatorId: 'coordinator-4', machine: 'machine-4', activation: 'activation', claim: { commentId: '905', labelEventId: '709' } };
   // After 3 takeovers the 4th owner's claim expired; a person removed its label; Autopilot claims again 2 days later.
   const cleanup = pingPong(3); cleanup[3] = { ...cleanup[3], to: T0 + 24 * hour };
   cleanup.push({ from: NOW - 10 * minute, seen: NOW - 5 * minute, who: 4 });
   const fresh = await observe(world, { issue, ...eraHistory(cleanup) });
   assert.equal(fresh.claim.takeovers, undefined, "a person's cleanup is not a 4th takeover");
   assert.equal(fresh.claim.claimedAt, at(NOW - 10 * minute), 'the cleanup ends the claim chain');
-  assert.deepEqual(await checkDependencyStart({ cwd: world.cwd, repository: repo, issue: issue.html_url, coordinator }, { ...fresh.ports, settings }), { allowed: true, reason: 'ok' });
+  assert.equal(fresh.claim.active, true);
 
   // After 3 takeovers the 4th owner finished and released its live claim; a new claim days later starts at 0.
   const release = pingPong(3); release[3] = { ...release[3], to: release[3].seen + 20 * minute };

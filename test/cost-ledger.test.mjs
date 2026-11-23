@@ -4,13 +4,50 @@ import * as fs from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { captureCosts, applyCostMeasurement, captureClosedCi, costReport, recordCostGithub } from '../src/cost-ledger.mjs';
+import { captureCosts, applyCostMeasurement, captureClosedCi, costReport } from '../src/cost-ledger.mjs';
 import { nativeGithubCounter } from '../src/github-calls.mjs';
 import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
-import * as runner from '../src/workflow-runner.mjs';
-import { updateRun } from '../src/workflow-runs.mjs';
-import { fixture } from './helpers/workflow-runner-fixture.mjs';
+
+function makeSavedRunRepo(t) {
+  const base = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'pdd-cost-repo-')));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const source = join(base, 'repo'), home = join(base, 'home'), worktree = join(base, 'wt-17');
+  fs.mkdirSync(source, { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: source });
+  execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: source });
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: source });
+  fs.writeFileSync(join(source, 'README.md'), '# Repo\n');
+  execFileSync('git', ['add', '.'], { cwd: source });
+  execFileSync('git', ['commit', '-qm', 'init'], { cwd: source });
+  execFileSync('git', ['worktree', 'add', '-qb', 'issue-17', worktree, 'HEAD'], { cwd: source });
+  const commonDir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: source, encoding: 'utf8' }).trim();
+  const runDir = join(commonDir, 'pdd', 'runs', '17');
+  fs.mkdirSync(runDir, { recursive: true });
+  let clock = at;
+  const run = {
+    v: 1, runId: 'attempt-17', number: 17, repo: 'example/project',
+    startedAt: clock, updatedAt: clock, runDir, commonDir, sourceRoot: source, root: worktree,
+    state: 'running', agent: 'codex', chats: [], pr: [], areas: [{ name: 'code' }],
+  };
+  fs.writeFileSync(join(runDir, 'status.json'), JSON.stringify(run));
+  const ports = {
+    env: { HOME: home, PATH: process.env.PATH },
+    now: () => clock,
+    fs,
+    execFile: async (file, args, opts = {}) => {
+      if (file === 'git') return { code: 0, stdout: execFileSync('git', args, { cwd: opts.cwd ?? source, encoding: 'utf8' }), stderr: '' };
+      return { code: 0, stdout: '{}', stderr: '' };
+    },
+  };
+  return {
+    base, source, home, worktree, commonDir, runDir, ports,
+    get clock() { return clock; },
+    tick(ms = 1000) { clock += ms; },
+    record: () => JSON.parse(fs.readFileSync(join(runDir, 'status.json'), 'utf8')),
+  };
+}
 
 const at = Date.parse('2026-10-27T17:00:00Z');
 const id = '22222222-2222-4222-8222-222222222222';
@@ -134,7 +171,7 @@ test('per-issue percentiles combine attempts, separate repos, and use observed e
 });
 
 test('status JSON includes normal runs without launcher state, with no GitHub, Herdr or timer probes', async t => {
-  const f = await fixture(t); f.ports.skipMetricsDelivery = true; assert.equal((await f.run()).exitCode, 0);
+  const f = makeSavedRunRepo(t);
   const saved = f.record();
   const result = await runAutopilotLauncher({ command: 'status', json: true, cwd: f.source, env: f.ports.env }, {
     ...f.ports, costRuns: async () => [saved], run: () => assert.fail('No external program in cost status'), timer: () => assert.fail('No timer probe'), herdr: () => assert.fail('No Herdr probe')
@@ -144,32 +181,20 @@ test('status JSON includes normal runs without launcher state, with no GitHub, H
   assert.ok(report.runs[0].coverage.includes('suite-unavailable'));
 });
 
-test('workflow cost records and reads local data without workflow effects', async t => {
-  const f = await fixture(t); f.ports.skipMetricsDelivery = true; assert.equal((await f.run()).exitCode, 0);
-  const before = f.record(), calls = f.herdr.calls.length;
-  const input = { id: 'suite-1', suiteMinutes: 4, personMinutes: 1 };
-  for (let i = 0; i < 2; i++) assert.equal((await runner.runCosts({ ref: '17', cwd: f.source, input }, f.ports)).exitCode, 0);
-  const result = await runner.runCosts({ ref: '17', cwd: f.source }, f.ports), row = JSON.parse(result.message), after = f.record();
-  assert.equal(row.suiteMinutes, 4); assert.equal(row.person.activeMinutes, 1);
-  assert.deepEqual(after.done, before.done); assert.deepEqual(after.gate, before.gate); assert.equal(after.state, before.state);
-  assert.equal(f.herdr.calls.length, calls); assert.equal(f.pushes.length, 0); assert.equal(f.edits.length, 0);
-});
-
-test('CLI routes JSON status without settings reads and cost input without approval dispatch', async () => {
+test('CLI routes JSON status without settings reads', async () => {
   let out = '', err = '', supplied;
   const dependencies = { stdout: { write: text => { out += text; } }, stderr: { write: text => { err += text; } }, cwd: '/synthetic', env: {},
     autopilotLauncher: { runAutopilotLauncher: async input => { supplied = input; return { exitCode: 0, message: '{"schema":"pdd.cost-report.v1"}' }; } },
     autopilotGithub: { checkAutopilotSettings: () => assert.fail('No settings read') } };
   assert.equal(await runPdd(['autopilot', 'status', '--json'], dependencies), 0); assert.equal(supplied.json, true); assert.equal(err, ''); assert.equal(JSON.parse(out).schema, 'pdd.cost-report.v1');
-  out = ''; supplied = null;
-  dependencies.stdin = { async *[Symbol.asyncIterator]() { yield '{"id":"suite-1","suiteMinutes":2}'; } };
-  dependencies.workflowRunner = { runCosts: async input => { supplied = input; return { exitCode: 0, message: '{"suiteMinutes":2}' }; } };
-  assert.equal(await runPdd(['workflow','cost','17','--input','-'], dependencies), 0); assert.equal(supplied.input.suiteMinutes, 2);
 });
 
 // Native process recipe: real CLI, Git and local files; no live services.
-test('real CLI process records measured costs and renders local machine JSON', async t => {
-  const f = await fixture(t); f.ports.skipMetricsDelivery = true; assert.equal((await f.run()).exitCode, 0);
+test('real CLI process renders local measured costs as JSON without external programs', async t => {
+  const f = makeSavedRunRepo(t);
+  const seeded = f.record();
+  applyCostMeasurement(seeded, { id: 'real-suite', suiteMinutes: 1.25 }, f.clock);
+  fs.writeFileSync(join(seeded.runDir, 'status.json'), JSON.stringify(seeded));
   const bin = new URL('../bin/pdd.mjs', import.meta.url).pathname;
   const denied = join(f.base, 'denied-programs'); fs.mkdirSync(denied);
   const marker = join(f.base, 'external-call');
@@ -177,36 +202,18 @@ test('real CLI process records measured costs and renders local machine JSON', a
     fs.writeFileSync(join(denied, program), '#!/bin/sh\nprintf called >> "' + marker + '"\nexit 19\n', { mode: 0o700 });
   }
   const options = { cwd: f.source, encoding: 'utf8', env: { HOME: f.ports.env.HOME, PATH: denied + ':' + process.env.PATH }, stdio: ['pipe','pipe','pipe'] };
-  const row = JSON.parse(execFileSync(process.execPath, [bin, 'workflow','cost','17','--input','-'], { ...options, input: JSON.stringify({ id: 'real-suite', suiteMinutes: 1.25 }) }));
-  assert.equal(row.suiteMinutes, 1.25);
   const report = JSON.parse(execFileSync(process.execPath, [bin, 'autopilot','status','--json'], options));
   assert.equal(report.schema, 'pdd.cost-report.v1'); assert.equal(report.runs[0].suiteMinutes, 1.25);
   assert.equal(fs.existsSync(marker), false);
 });
 
 test('native GitHub attribution selects the exact run worktree and excludes repository-wide calls', async t => {
-  const f = await fixture(t); f.ports.skipMetricsDelivery = true; assert.equal((await f.run()).exitCode, 0);
+  const f = makeSavedRunRepo(t);
   const run = f.record(), count = nativeGithubCounter(f.ports.execFile, { env: f.ports.env, now: () => f.clock });
   await count('gh', ['repo', 'view', '--json', 'nameWithOwner'], { cwd: run.root });
   await count('gh', ['repo', 'view', '--json', 'nameWithOwner'], { cwd: f.source });
-  const saved = updateRun(run.runDir, latest => latest, f.ports);
-  assert.equal(saved.cost.githubCalls, 1);
-});
-
-test('workflow prove measures both native phase wall times without saving command text in cost rows', async () => {
-  const { proveRun } = await import('../src/workflow-prove.mjs');
-  const values = [0, 120000, 120000, 150000], measurements = [];
-  const result = await proveRun({ ref: '17', cwd: '/synthetic', test: 'PRIVATE_COMMAND', expect: 'missing-case' }, {
-    readRun: async () => ({ run: { runId: 'attempt', root: '/synthetic', runDir: '/synthetic/run', baseBranch: 'main' } }),
-    snapshot: async () => ({ snapshot: { baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40), baseAvailable: true, headAvailable: true, files: [] } }),
-    createWorktree: async ({ phase }) => ({ worktree: `/synthetic/${phase}` }),
-    runProcess: async () => ({ result: { exitCode: 0, signal: '', timedOut: false, outputLimited: false, stdout: '', stderr: '', error: '', setupError: '' } }),
-    cleanup: async () => ({}), saveProof: async () => ({}), suiteNow: () => values.shift(), recordSuiteCost: async row => measurements.push(row)
-  });
-  assert.equal(result.exitCode, 1); // An old-code proof with a passing base is not proof.
-  assert.deepEqual(measurements.map(row => row.suiteMinutes), [2, 0.5]);
-  assert.equal(new Set(measurements.map(row => row.id)).size, 2);
-  assert.ok(!JSON.stringify(measurements).includes('PRIVATE_COMMAND'));
+  const cost = captureCosts(null, run, f.ports);
+  assert.equal(cost.githubCalls, 1);
 });
 
 test('manual approvals recorded by an agent count through native said/chat evidence, including saved history', t => {
@@ -233,8 +240,11 @@ test('report token totals keep unknown distinct from a real measured zero', t =>
 });
 
 test('archived attempts retain their own costs when their old runDir now belongs to a new attempt', async t => {
-  const f = await fixture(t); f.ports.skipMetricsDelivery = true; assert.equal((await f.run()).exitCode, 0);
-  const old = updateRun(f.record().runDir, run => applyCostMeasurement(run, { id: 'old-suite', suiteMinutes: 2, outcome: 'closed' }, f.clock), f.ports);
+  const f = makeSavedRunRepo(t);
+  const old = f.record();
+  applyCostMeasurement(old, { id: 'old-suite', suiteMinutes: 2, outcome: 'closed' }, f.clock);
+  old.cost = captureCosts(null, old, f.ports);
+  fs.writeFileSync(join(old.runDir, 'status.json'), JSON.stringify(old));
   const archivedDir = `${old.runDir}-cancelled-aabbcc`; fs.renameSync(old.runDir, archivedDir);
   fs.mkdirSync(old.runDir);
   const current = { ...old, runId: 'new-attempt', startedAt: f.clock + 1000, state: 'running', cost: undefined };
@@ -247,22 +257,6 @@ test('archived attempts retain their own costs when their old runDir now belongs
   assert.deepEqual(report.runs.map(row => row.suiteMinutes).sort((a,b) => a-b), [2,5]);
   assert.equal(report.day.totals.suiteMinutes, 7); assert.equal(report.day.mergedIssues, 1); assert.equal(report.day.p50.suiteMinutes, 7);
   assert.equal(JSON.parse(fs.readFileSync(join(archivedDir, 'status.json'))).cost.suiteMinutes, 2);
-});
-
-test('workflow status fetches CI duration once when its normal PR observation sees closure', async t => {
-  const f = await fixture(t); f.ports.skipMetricsDelivery = true; assert.equal((await f.run()).exitCode, 0);
-  const run = f.record(), headSha = 'c'.repeat(40);
-  updateRun(run.runDir, latest => { latest.pr = [{ number: 23, url: 'https://github.com/example/project/pull/23', stage: latest.areas.at(-1).name, state: 'open' }]; return latest; }, f.ports);
-  const exec = f.ports.execFile; let durationCalls = 0;
-  f.ports.readPrStatus = async () => ({ state: 'merged', ci: 'passing', headSha });
-  f.ports.execFile = async (program, args, options) => {
-    if (program === 'gh' && args[0] === 'api' && args[1].includes('/actions/runs?')) {
-      durationCalls++; return { stdout: JSON.stringify({ total_count: 1, workflow_runs: [{ head_sha: headSha, pull_requests: [{ number: 23 }], status: 'completed', run_started_at: new Date(f.clock - 120000).toISOString(), updated_at: new Date(f.clock).toISOString() }] }) };
-    }
-    return exec(program, args, options);
-  };
-  for (let i = 0; i < 2; i++) assert.equal((await runner.runStatus({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
-  assert.equal(durationCalls, 1); assert.equal(f.record().cost.ciMinutes, 2); assert.equal(f.record().cost.outcome, 'merged');
 });
 
 test('CI branch read includes earlier PR heads, excludes other PRs, and reports complete bounded data', async t => {

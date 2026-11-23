@@ -1,0 +1,160 @@
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
+
+// Shared Layer-1 diagnostics, 4-part agent-teaching formatting, and safe in-root file reads.
+import { spawnSync } from 'node:child_process';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
+
+export const MAX_FILE_BYTES = 2 * 1024 * 1024;
+export const HEAD_BYTES = 4096;
+export const SCRUBBED_CHILD_ENV_RE = /^(?:GH_.*|GITHUB_.*|CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_CONFIG_DIR|CLAUDE_PID|ANTHROPIC_.*|OPENAI_.*|CODEX_.*|GEMINI_.*|GOOGLE_.*|ANTIGRAVITY_.*|HERDR_.*|PDD_.*|AWS_.*|SSH_AUTH_SOCK|SSH_AGENT_PID|GPG_AGENT_INFO|NPM_TOKEN|NODE_TEST_CONTEXT|.*(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD))$/i;
+
+export function scrubChildEnv(env = process.env) {
+  const clean = {};
+  for (const [k, v] of Object.entries(env ?? {})) {
+    if (!SCRUBBED_CHILD_ENV_RE.test(k)) clean[k] = v;
+  }
+  return clean;
+}
+
+export function resolveDefaultBaseRef(cwd) {
+  for (const candidate of ['origin/HEAD', 'origin/main', 'origin/master', 'main', 'master']) {
+    const check = spawnSync('git', ['rev-parse', '--verify', `${candidate}^{commit}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (check.status === 0 && check.stdout.trim()) return candidate;
+  }
+  return null;
+}
+
+export const canonicalRepoPath = value =>
+  typeof value === 'string'
+  && value.trim().length > 0
+  && value.length <= 1000
+  && !isAbsolute(value)
+  && !/[\\\x00-\x1f\x7f]/.test(value)
+  && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
+
+function openRegularInRoot(realRoot, relPath, maxBytes) {
+  if (!canonicalRepoPath(relPath)) return null;
+  const parts = relPath.split('/');
+  let cur = realRoot;
+  let observed = null;
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      cur = join(cur, parts[i]);
+      const st = lstatSync(cur);
+      if (st.isSymbolicLink()) return null;
+      if (i < parts.length - 1 && !st.isDirectory()) return null;
+      if (i === parts.length - 1) {
+        if (!st.isFile() || (maxBytes !== null && st.size > maxBytes)) return null;
+        observed = st;
+      }
+    }
+  } catch {
+    return null;
+  }
+  try {
+    const fd = openSync(cur, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const fst = fstatSync(fd);
+    if (!fst.isFile() || (observed && (fst.ino !== observed.ino || fst.dev !== observed.dev)) || (maxBytes !== null && fst.size > maxBytes)) {
+      try { closeSync(fd); } catch {}
+      return null;
+    }
+    return { fd, size: fst.size };
+  } catch {
+    return null;
+  }
+}
+
+export function readSafeUtf8(realRoot, relPath, maxBytes = MAX_FILE_BYTES) {
+  const opened = openRegularInRoot(realRoot, relPath, maxBytes);
+  if (!opened) return null;
+  const { fd, size } = opened;
+  try {
+    const buf = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < buf.length) {
+      const n = readSync(fd, buf, offset, buf.length - offset, offset);
+      if (!n) break;
+      offset += n;
+    }
+    const slice = buf.subarray(0, offset);
+    if (slice.includes(0)) return null;
+    return slice.toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    try { closeSync(fd); } catch {}
+  }
+}
+
+export function readSafeHeadUtf8(realRoot, relPath, limit = HEAD_BYTES + 1) {
+  const opened = openRegularInRoot(realRoot, relPath, null);
+  if (!opened) return null;
+  const { fd, size } = opened;
+  try {
+    const len = Math.min(size, limit);
+    const buf = Buffer.alloc(len);
+    let offset = 0;
+    while (offset < len) {
+      const n = readSync(fd, buf, offset, len - offset, offset);
+      if (!n) break;
+      offset += n;
+    }
+    const slice = buf.subarray(0, offset);
+    if (slice.includes(0)) return null;
+    return slice.toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    try { closeSync(fd); } catch {}
+  }
+}
+
+export function buildLineStarts(text) {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
+  return starts;
+}
+
+export function lineNumberAt(lineStarts, index) {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (lineStarts[mid] <= index) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+/**
+ * Format a 4-part agent-teaching diagnostic (Lauren Tan / OpenAI Harness Engineering pattern):
+ * 1) location (`path:line [code]`), 2) invariant violated, 3) concrete 1-line fix, 4) rerun command.
+ */
+export function formatTeachingDetail({ invariant, fix, rerun = 'pdd lint' }) {
+  const inv = String(invariant ?? '').trim().replace(/\.+$/, '');
+  const fx = String(fix ?? '').trim().replace(/\.+$/, '');
+  const rr = String(rerun ?? 'pdd lint').trim();
+  const parts = [];
+  if (inv) parts.push(`${inv}.`);
+  if (fx) parts.push(`Fix: ${fx}.`);
+  if (rr) parts.push(`Rerun: \`${rr}\`.`);
+  return parts.join(' ');
+}
+
+export function formatDiagnosticLine(item, severity) {
+  const prefix = severity === 'error' ? 'Error' : 'Warning';
+  let detail = item.detail;
+  if (item.fix && !/\bFix:\s/i.test(detail)) {
+    detail = formatTeachingDetail({ invariant: detail, fix: item.fix, rerun: item.rerun ?? 'pdd lint' });
+  } else if (severity === 'error' && !/\bFix:\s/i.test(detail)) {
+    const guideHint = item.category === 'Story hygiene'
+      ? 'stories.md'
+      : (item.category === 'prompt' || item.category === 'native-only port parity' ? 'prompting.md' : 'verification.md');
+    const fallbackFix = item.category === 'custom rule'
+      ? `Update ${item.filePath}:${item.line} to satisfy custom rule "${item.code}"`
+      : `Update ${item.filePath}:${item.line} to fix ${item.category} rule "${item.code}" (see skills/pdd/references/${guideHint})`;
+    detail = formatTeachingDetail({ invariant: detail, fix: fallbackFix, rerun: item.rerun ?? 'pdd lint' });
+  }
+  return `${prefix}: ${item.category}: ${item.filePath}:${item.line} [${item.code}] ${detail}`;
+}

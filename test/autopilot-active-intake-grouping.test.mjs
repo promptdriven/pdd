@@ -30,7 +30,7 @@ import {
 } from '../src/autopilot-areas.mjs';
 import { coreSettings, coreStatus } from '../src/autopilot-core.mjs';
 import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
-import { selectPoolLogin, markLoginExhausted } from '../src/login-pool.mjs';
+import { selectPoolLogin, markLoginExhausted } from '../src/autopilot/local-pool.mjs';
 import { parseCodexLimits } from '../src/codex-limits.mjs';
 
 const intakeJobs = w => w.started.filter(job => job.role === 'intake');
@@ -401,8 +401,8 @@ test('active-intake 4: ranks unblockers, active group continuations, high-clarit
     { number: 44, created_at: '2026-10-15T00:00:00Z', title: 'Unblocks two downstream issues', labels: [], issue_dependencies_summary: { blocked_by: 0, total_blocking: 2 } },
   ];
   const cardByIssue = {
-    40: { class: 'ready', reason: 'Large cleanup.', confidence: 0.7, size: 'large', areas: ['src/old.mjs'], group_with: [] },
-    41: { class: 'ready', reason: 'Medium p1 work.', confidence: 0.72, size: 'medium', areas: ['src/p1.mjs'], group_with: [] },
+    40: { class: 'ready', reason: 'Large cleanup.', confidence: 0.75, size: 'large', areas: ['src/old.mjs'], group_with: [] },
+    41: { class: 'ready', reason: 'Medium p1 work.', confidence: 0.76, size: 'medium', areas: ['src/p1.mjs'], group_with: [] },
     42: { class: 'ready', reason: 'Small crisp bug.', confidence: 0.95, size: 'small', areas: ['src/bug.mjs'], group_with: [] },
     43: { class: 'ready', reason: 'Continues group #99.', confidence: 0.8, size: 'medium', areas: ['src/grp.mjs'], group_with: [99] },
     44: { class: 'ready', reason: 'Unblocker.', confidence: 0.75, size: 'medium', areas: ['src/unblock.mjs'], group_with: [] },

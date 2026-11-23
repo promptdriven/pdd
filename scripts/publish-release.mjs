@@ -7,14 +7,24 @@ import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { checkVersionParity, readPyprojectField, stagePypiBundle } from './sync-pypi-version.mjs';
-import { version as runtimeClientVersionInfo } from '../src/runtime-seam.mjs';
+import { checkVersionParity, readPyprojectField, stagePypiBundle, toPep440Version } from './sync-pypi-version.mjs';
+
+export { toPep440Version };
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_REPO = 'promptdriven/pdd';
 const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org';
 const DEFAULT_PYPI_BASE_URL = 'https://pypi.org';
-const RUNTIME_CLIENT_PACKAGE = runtimeClientVersionInfo().package;
+function readRuntimeClientPackageName(root = DEFAULT_ROOT) {
+  try {
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    return Object.keys(pkg.dependencies ?? {}).find(name => name.endsWith('/runtime-client')) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export const RUNTIME_CLIENT_PACKAGE = readRuntimeClientPackageName(DEFAULT_ROOT);
 const TAG_RE = /^[A-Za-z0-9._-]+$/;
 const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const SHA_RE = /^[0-9a-f]{7,64}$/i;
@@ -174,17 +184,12 @@ export function parsePublishArgs(argv, env = {}) {
 
 /** Select npm dist-tag matching .github/workflows/release.yml. */
 export function npmDistTagForVersion(version) {
-  return String(version).includes('-') ? 'alpha' : 'latest';
-}
-
-/** Convert a SemVer version to its PEP 440 PyPI equivalent. */
-export function toPep440Version(version) {
-  const raw = String(version).trim();
-  const match = /^(\d+\.\d+\.\d+)-(alpha|a|beta|b|rc)\.?(\d+)$/i.exec(raw);
-  if (!match) return raw;
-  const [, base, label, num] = match;
-  const l = label.toLowerCase();
-  return `${base}${l.startsWith('a') ? 'a' : l.startsWith('b') ? 'b' : 'rc'}${num}`;
+  const raw = String(version).trim().toLowerCase();
+  if (!raw.includes('-')) return 'latest';
+  if (/-rc(?:\.|\d|$)/.test(raw)) return 'next';
+  if (/-beta(?:\.|\d|$)/.test(raw)) return 'beta';
+  if (/-alpha(?:\.|\d|$)/.test(raw)) return 'alpha';
+  return 'alpha';
 }
 
 function deriveGitHubRepo(root, env, runCommand) {

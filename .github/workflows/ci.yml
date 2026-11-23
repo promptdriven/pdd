@@ -3,14 +3,14 @@ name: PDD checks
 on:
   pull_request:
   push:
-    branches: [main, alpha]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pdd-alpha-${{ github.workflow }}-${{ github.ref }}
+  group: pdd-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -39,33 +39,29 @@ jobs:
           fi
           command -v zsh
           zsh --version
-      - name: Install dependencies with private package Git access
-        env:
-          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
-          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
-          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
-        run: node .github/scripts/ci-install.mjs
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Check architecture boundaries (G7)
+        if: matrix.shard == 1
+        run: npm run check:arch
       - name: Run offline unit tests
         id: unit-tests
         run: |
-          unit_tests=()
-          for file in test/*.test.mjs; do
-            case "$file" in
-              test/screen-*.test.mjs) ;;
-              *) unit_tests+=("$file") ;;
-            esac
-          done
+          unit_list=$(node scripts/list-tests.mjs --unit)
+          test -n "$unit_list"
+          mapfile -t unit_tests <<< "$unit_list"
           set +e
           node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-concurrency=4 --test-shard=${{ matrix.shard }}/8 "${unit_tests[@]}" 2>&1 | tee "$RUNNER_TEMP/tests-unit.tap"
           exit "${PIPESTATUS[0]}"
       - name: Run sequential browser tests
         if: success() || steps.unit-tests.outcome == 'failure'
         run: |
+          browser_list=$(node scripts/list-tests.mjs --browser)
+          test -n "$browser_list"
+          mapfile -t browser_tests <<< "$browser_list"
           set +e
           # Keep Chrome startup sequential so browser tests do not compete across workers.
-          node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/8 test/screen-*.test.mjs 2>&1 | tee "$RUNNER_TEMP/tests-browser.tap"
+          node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/8 "${browser_tests[@]}" 2>&1 | tee "$RUNNER_TEMP/tests-browser.tap"
           exit "${PIPESTATUS[0]}"
       - name: Summarize test counts
         if: always()
@@ -95,7 +91,7 @@ jobs:
       - run: npm pack --ignore-scripts --dry-run
 
   public:
-    # main and alpha require this check name; every offline test shard must pass.
+    # main requires this check name; every offline test shard must pass.
     name: tests
     if: ${{ always() }}
     needs: test-shards
@@ -117,14 +113,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - name: Install dependencies with private package Git access
-        env:
-          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
-          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
-          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
-        run: node .github/scripts/ci-install.mjs
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
       - name: Pack, install and smoke the installed command
         run: |
           smoke_dir=$(mktemp -d)
@@ -144,19 +134,24 @@ jobs:
           cd "$smoke_dir/harbor"
           git init --quiet
           git add .
-          "$installed" lint --local place-order | tee "$smoke_dir/lint.log"
+          "$installed" lint --json place-order > "$smoke_dir/lint.json"
+          node --input-type=module - "$smoke_dir/lint.json" "$PDD_STATE_DIR" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { existsSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          assert.equal(result.exit_code, 0);
+          assert.equal(result.local_only, true);
+          assert.deepEqual(result.problems, []);
+          assert.equal(existsSync(join(process.argv[3], 'batches')), false, 'offline lint writes zero batch state');
+          NODE
           checks=$((checks + 1))
-          "$installed" test --read --json > "$smoke_dir/saved-read.json"
-          node --input-type=module - "$smoke_dir/saved-read.json" <<'NODE'
+          "$installed" status --json > "$smoke_dir/status.json"
+          node --input-type=module - "$smoke_dir/status.json" <<'NODE'
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
           const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-          assert.equal(result.exit_code, 0);
-          assert.equal(result.state, 'partial');
-          assert.equal(result.lint_state, 'partial');
-          assert.equal(result.local_only, true);
-          assert.equal(result.reason?.code, 'local-only');
-          assert.deepEqual(result.rows, []);
+          assert.ok(result && typeof result === 'object');
           NODE
           checks=$((checks + 1))
           mkdir -p "$smoke_dir/empty-state"

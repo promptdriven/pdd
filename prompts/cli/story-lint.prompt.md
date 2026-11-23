@@ -4,7 +4,7 @@ Own `src/story-lint.mjs`. Check authored Story files locally so that Stories sta
 
 ## Scope
 
-`isLintableStoryPath(path)` returns `true` when `path` is a canonical repository-relative `.md` path (at most 1,000 characters, `/` separators, no empty, `.`, `..`, `.git` or control-character segments) with a `user_stories` parent folder at any depth, except `PLAN.md` and `README.md` (any letter case).
+`isLintableStoryPath(path)` returns `true` when `path` is a canonical repository-relative `.md` path (at most 1,000 characters, `/` separators, no empty, `.`, `..`, `.git` or control-character segments) inside a `user_stories` or `pdd/stories` folder at any depth, except `PLAN.md` and `README.md` (any letter case).
 
 When scanning a Story's lines (1-based line numbers):
 
@@ -26,7 +26,7 @@ When `criteriaHygiene` is enabled (`true` by default in `lintStory`):
 
 6. `story-missing-criteria`: the Story has no `## Acceptance criteria` (`## Acceptance`) heading or that section has zero numbered (`1.`, `1)`) or top-level bullet (`-`, `*`, `+`) items outside fenced blocks and comments. Report at the heading line when present, otherwise line 1.
 7. `story-bloated-criteria`: `## Acceptance criteria` (`## Acceptance`) has more than 6 acceptance items (counted across numbered items when any numbered item is present, otherwise top-level bullet items, without counting wrapped continuation lines). Report at the 7th item's line with the total count and advise keeping 1 Story per cohesive user loop and moving technical invariants to `.prompt.md` `## Domain decisions` or `## Rules to check`.
-8. `story-too-long`: the Story exceeds 35 lines (counting lines excluding a single trailing newline). Report at line 36 with the total line count and advise keeping Stories concise (`<= 35` lines) and routing technical invariants, edge-case tables or fixtures to `.prompt.md` `## Domain decisions` or test JSON files.
+8. `story-too-long`: the Story exceeds 35 lines (ignoring trailing blank lines). Report at line 36 with the total line count and advise keeping Stories concise (`<= 35` lines) and routing technical invariants, edge-case tables or fixtures to `.prompt.md` `## Domain decisions` or test JSON files.
 
 Each problem is `{path, line, code, message, excerpt}`, where `excerpt` is the trimmed offending line cut to at most 140 characters, and `message` states both why the match failed and how to rewrite it in user-observable terms.
 
@@ -39,5 +39,5 @@ Each problem is `{path, line, code, message, excerpt}`, where `excerpt` is the t
 
 ## Callers and context
 
-- [Story guide](../../docs/story-guide.md): authoring rules that this check enforces locally.
-- [Prompt approve](prompt-approve.prompt.md) and [workflow runner](workflow-runner.prompt.md): run `lintStories` on changed Story files at approval and pre-PR gates.
+- [Story guide](../../skills/pdd/references/stories.md): authoring rules that this check enforces locally.
+- [Prompt approve](prompt-approve.prompt.md) and workflow runner: run `lintStories` on changed Story files at approval and pre-PR gates.

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import * as seam from '../src/runtime-seam.mjs';
 import { CommandInputError, parseArgv } from '../src/argument-parser.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { formatCheckReconciliation, savedCheckReconciliationTargets } from '../src/workflow-results.mjs';
+import { formatCheckReconciliation } from '../src/core/reconcile-format.mjs';
 import { checkRuntimeClientParity } from '../scripts/publish-release.mjs';
 import { PLACE, TOKEN, fakeRuntime, harbor, portsFor } from './helpers/runtime-fake.mjs';
 
@@ -691,21 +691,8 @@ test('#3594: pdd test --reconcile exercises real >= 1.1.1 read-only HTTP reconci
     { projected: VALID_REQUEST_ID },
   );
 
-  // 6. Read-only savedCheckReconciliationTargets extracts canonical UUIDs without modifying saved batch JSON.
-  const lostOnly = savedCheckReconciliationTargets(batchName, {
-    env: { PDD_STATE_DIR: setup.state },
-    root: setup.repo,
-  });
-  assert.deepEqual(lostOnly.requestIds, [VALID_REQUEST_ID]);
-  assert.equal(lostOnly.requests.length, 1);
-
-  const allTargets = savedCheckReconciliationTargets(batchName, {
-    env: { PDD_STATE_DIR: setup.state },
-    root: setup.repo,
-    includeAll: true,
-  });
-  assert.deepEqual(allTargets.requestIds, [VALID_REQUEST_ID, '22222222-2222-4222-8222-222222222222']);
-  assert.equal(readFileSync(batchPath, 'utf8'), rawSaved, 'savedCheckReconciliationTargets and --reconcile must remain strictly read-only');
+  // 6. --reconcile leaves saved batch JSON strictly untouched on disk.
+  assert.equal(readFileSync(batchPath, 'utf8'), rawSaved, '--reconcile must remain strictly read-only');
 });
 
 test('#3594: checkRuntimeClientParity validates real repo package.json pinned at exact semver >= 1.1.1 cleanly offline', () => {
@@ -891,7 +878,7 @@ test('#3594 R1 regressions: runCheck --reconcile, non-string requestId, Stop(2)/
     assert.match(err.text, new RegExp(`explicit exit ${expectedExit}`));
   }
 
-  // Finding #7 (P2): formatCheckReconciliation sanitizes accounting.calls / known_calls / unknown_calls.
+  // Finding #7 (P2): formatCheckReconciliation sanitizes control characters in accounting.calls / known_calls / unknown_calls.
   const formatted = formatCheckReconciliation({
     request_id: VALID_REQUEST_ID,
     http_status: 200,
@@ -906,9 +893,8 @@ test('#3594 R1 regressions: runCheck --reconcile, non-string requestId, Stop(2)/
     },
     retry: { blocked: true },
   });
-  assert.doesNotMatch(formatted, /pdd-workflow:fake/);
-  assert.match(formatted, /pdd-workflow\\u003afake/);
-  assert.match(formatted, /Accounting: unknown \(complete=no, calls=1 pdd-workflow\\u003afake, known=2 injected, unknown=3 bell\)/);
+  assert.doesNotMatch(formatted, /[\r\u0007]/);
+  assert.match(formatted, /Accounting: unknown \(complete=no, calls=1 pdd-workflow:fake, known=2 injected, unknown=3 bell\)/);
 });
 
 test('#3594 R1 regressions: --lf --fresh bypasses cache reuse while keeping unselected cached passes intact', async t => {

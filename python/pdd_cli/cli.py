@@ -16,7 +16,37 @@ from . import __version__
 
 PACKAGE_NAME = "@promptdriven/pdd"
 MAX_WRAPPER_DEPTH = 3
+ENTRY_SCRIPTS: dict[str, str] = {
+    "pdd": "pdd.mjs",
+    "pdd-codex": "pdd-codex.mjs",
+    "pdd-claude": "pdd-claude.mjs",
+}
 _PY_INTERP_RE = re.compile(r"^(?:python(?:\d+(?:\.\d+)*)?|pypy(?:\d+(?:\.\d+)*)?)$")
+_SEMVER_PRE_RE = re.compile(r"^(\d+\.\d+\.\d+)-(alpha|a|beta|b|rc)\.?(\d+)$", re.IGNORECASE)
+
+
+def _to_pep440(version: str) -> str:
+    raw = version.strip()
+    match = _SEMVER_PRE_RE.match(raw)
+    if not match:
+        return raw
+    base, label, num = match.groups()
+    low = label.lower()
+    prefix = "a" if low.startswith("a") else ("b" if low.startswith("b") else "rc")
+    return f"{base}{prefix}{num}"
+
+
+def _version_matches(pkg_version: str | None, expected_version: str) -> bool:
+    if not pkg_version:
+        return False
+    return pkg_version == expected_version or _to_pep440(pkg_version) == _to_pep440(expected_version)
+
+
+def _script_for_command(command: str) -> str:
+    script = ENTRY_SCRIPTS.get(command)
+    if script is None:
+        raise ValueError(f"Unsupported pdd entrypoint command: {command}")
+    return script
 
 
 def _real_or_none(path: Path | str | None) -> str | None:
@@ -80,12 +110,14 @@ def _find_installed_on_path(
     env: Mapping[str, str],
     self_path: str | None,
     is_windows: bool | None = None,
+    command: str = "pdd",
 ) -> Path | None:
     raw_path = env.get("PATH", "")
     if not raw_path:
         return None
+    script_name = _script_for_command(command)
     win_mode = (os.name == "nt") if is_windows is None else is_windows
-    exe_names = ("pdd.cmd", "pdd") if win_mode else ("pdd",)
+    exe_names = (f"{command}.cmd", command) if win_mode else (command,)
     for folder in raw_path.split(os.pathsep):
         if not folder:
             continue
@@ -98,21 +130,33 @@ def _find_installed_on_path(
             if not resolved_str or (self_path and resolved_str == self_path):
                 continue
             resolved = Path(resolved_str)
-            if resolved.name == "pdd.mjs" and _read_pkg_version(resolved) == version:
+            if resolved.name == script_name and _version_matches(_read_pkg_version(resolved), version):
                 return resolved
-            if win_mode and name.lower() == "pdd.cmd":
+            if win_mode and name.lower() == f"{command}.cmd":
                 for win_entry in (
-                    folder_path / "node_modules" / "@promptdriven" / "pdd" / "bin" / "pdd.mjs",
-                    folder_path.parent / "node_modules" / "@promptdriven" / "pdd" / "bin" / "pdd.mjs",
+                    folder_path / "node_modules" / "@promptdriven" / "pdd" / "bin" / script_name,
+                    folder_path.parent / "node_modules" / "@promptdriven" / "pdd" / "bin" / script_name,
                 ):
-                    if win_entry.is_file() and _read_pkg_version(win_entry) == version:
+                    if win_entry.is_file() and _version_matches(_read_pkg_version(win_entry), version):
                         return win_entry.resolve()
+    if command != "pdd":
+        pdd_entry = _find_installed_on_path(version, env, None, is_windows=win_mode, command="pdd")
+        if pdd_entry is not None:
+            sibling = pdd_entry.parent / script_name
+            if sibling.is_file() and _version_matches(_read_pkg_version(sibling), version):
+                return sibling.resolve()
     return None
 
 
-def _install_into_cache(version: str, cache_dir: Path, env: Mapping[str, str]) -> tuple[Path | None, str]:
-    cached_entry = cache_dir / "node_modules" / "@promptdriven" / "pdd" / "bin" / "pdd.mjs"
-    if cached_entry.is_file() and _read_pkg_version(cached_entry) == version:
+def _install_into_cache(
+    version: str,
+    cache_dir: Path,
+    env: Mapping[str, str],
+    command: str = "pdd",
+) -> tuple[Path | None, str]:
+    script_name = _script_for_command(command)
+    cached_entry = cache_dir / "node_modules" / "@promptdriven" / "pdd" / "bin" / script_name
+    if cached_entry.is_file() and _version_matches(_read_pkg_version(cached_entry), version):
         return cached_entry, ""
     if env.get("PDD_CLI_OFFLINE") == "1":
         return None, f"{PACKAGE_NAME}@{version} is not cached and PDD_CLI_OFFLINE=1 is set."
@@ -150,7 +194,7 @@ def _install_into_cache(version: str, cache_dir: Path, env: Mapping[str, str]) -
             capture_output=True,
             text=True,
         )
-        if proc.returncode == 0 and cached_entry.is_file() and _read_pkg_version(cached_entry) == version:
+        if proc.returncode == 0 and cached_entry.is_file() and _version_matches(_read_pkg_version(cached_entry), version):
             return cached_entry, ""
         last_err = (proc.stderr or proc.stdout or "").strip()
     return None, last_err
@@ -160,32 +204,40 @@ def resolve_cli_entry(
     version: str = __version__,
     env: Mapping[str, str] | None = None,
     argv0: str | None = None,
+    command: str = "pdd",
 ) -> tuple[Path | None, str]:
+    script_name = _script_for_command(command)
     active_env = os.environ if env is None else env
     explicit = active_env.get("PDD_CLI_JS_ENTRY", "").strip()
     if explicit:
         override = Path(explicit).expanduser()
         if override.is_file():
-            return override.resolve(), ""
+            resolved_override = override.resolve()
+            if command == "pdd" or resolved_override.name == script_name:
+                return resolved_override, ""
+            sibling = resolved_override.parent / script_name
+            if sibling.is_file():
+                return sibling, ""
+            return None, f"PDD_CLI_JS_ENTRY sibling {script_name} does not exist: {sibling}"
         return None, f"PDD_CLI_JS_ENTRY does not exist: {override}"
 
     pkg_dir = Path(__file__).resolve().parent
-    bundled = pkg_dir / "_bundled" / "bin" / "pdd.mjs"
-    if bundled.is_file() and _read_pkg_version(bundled) == version:
+    bundled = pkg_dir / "_bundled" / "bin" / script_name
+    if bundled.is_file() and _version_matches(_read_pkg_version(bundled), version):
         return bundled, ""
 
     if active_env.get("PDD_CLI_IGNORE_CHECKOUT") != "1":
-        checkout = pkg_dir.parents[1] / "bin" / "pdd.mjs"
-        if checkout.is_file() and _read_pkg_version(checkout) == version:
+        checkout = pkg_dir.parents[1] / "bin" / script_name
+        if checkout.is_file() and _version_matches(_read_pkg_version(checkout), version):
             return checkout, ""
 
     _, self_real = _resolve_argv0_real(argv0, active_env)
-    on_path = _find_installed_on_path(version, active_env, self_real)
+    on_path = _find_installed_on_path(version, active_env, self_real, command=command)
     if on_path is not None:
         return on_path, ""
 
     cache_dir = _cache_root(active_env) / "pdd-cli" / version
-    return _install_into_cache(version, cache_dir, active_env)
+    return _install_into_cache(version, cache_dir, active_env, command=command)
 
 
 def _extract_shebang_interpreter(text: str) -> str | None:
@@ -304,9 +356,41 @@ def _set_exec_wrapper(wrapper_path: Path, target: Path) -> None:
         raise
 
 
-def _sync_mirrored_shim(folder: Path, entry_real: str, cache_root: Path) -> Path:
+def _sibling_entry_targets(entry_mjs: Path, command: str) -> dict[str, str]:
+    targets: dict[str, str] = {}
+    entry_real = _real_or_none(entry_mjs)
+    if not entry_real:
+        return targets
+    targets[command] = entry_real
+    bin_dir = Path(entry_real).parent
+    for cmd_name, script_name in ENTRY_SCRIPTS.items():
+        if cmd_name in targets:
+            continue
+        sibling = bin_dir / script_name
+        if sibling.is_file():
+            if not os.access(sibling, os.X_OK):
+                try:
+                    os.chmod(sibling, 0o755)
+                except OSError:
+                    pass
+            sibling_real = _real_or_none(sibling)
+            if sibling_real:
+                targets[cmd_name] = sibling_real
+    return targets
+
+
+def _sync_mirrored_shim(
+    folder: Path,
+    entry_real: str,
+    cache_root: Path,
+    command: str = "pdd",
+    entry_targets: Mapping[str, str] | None = None,
+) -> Path:
     folder_abs = Path(os.path.abspath(folder))
-    digest = hashlib.sha256(f"{folder_abs}\0{entry_real}".encode("utf-8")).hexdigest()[:12]
+    targets = dict(entry_targets or {command: entry_real})
+    targets[command] = entry_real
+    target_sig = "\0".join(f"{k}={v}" for k, v in sorted(targets.items()))
+    digest = hashlib.sha256(f"{folder_abs}\0{command}\0{target_sig}".encode("utf-8")).hexdigest()[:12]
     shim_root = cache_root / "pdd-cli" / "shims" / digest
     shim_bin = shim_root / "bin"
     shim_bin.mkdir(parents=True, exist_ok=True)
@@ -318,20 +402,22 @@ def _sync_mirrored_shim(folder: Path, entry_real: str, cache_root: Path) -> Path
         except OSError:
             pass
 
-    _set_symlink(shim_bin / "pdd", entry_real)
+    _set_symlink(shim_bin / command, entry_real)
 
     is_venv = (folder_abs.parent / "pyvenv.cfg").is_file()
-    present = {"pdd"}
+    present = {command}
     try:
         with os.scandir(folder_abs) as it:
             for item in it:
-                if item.name == "pdd":
+                if item.name == command:
                     continue
                 present.add(item.name)
                 dst = shim_bin / item.name
                 src = folder_abs / item.name
                 try:
-                    if is_venv and _PY_INTERP_RE.match(item.name) and os.access(src, os.X_OK):
+                    if item.name in targets and _is_own_python_wrapper(src, None):
+                        _set_symlink(dst, targets[item.name])
+                    elif is_venv and _PY_INTERP_RE.match(item.name) and os.access(src, os.X_OK):
                         _set_exec_wrapper(dst, src)
                     else:
                         _set_symlink(dst, src)
@@ -354,11 +440,20 @@ def _sync_mirrored_shim(folder: Path, entry_real: str, cache_root: Path) -> Path
     return shim_bin
 
 
-def _ensure_standalone_shim(entry_real: str, cache_root: Path) -> Path:
-    digest = hashlib.sha256(f"standalone\0{entry_real}".encode("utf-8")).hexdigest()[:12]
+def _ensure_standalone_shim(
+    entry_real: str,
+    cache_root: Path,
+    command: str = "pdd",
+    entry_targets: Mapping[str, str] | None = None,
+) -> Path:
+    targets = dict(entry_targets or {command: entry_real})
+    targets[command] = entry_real
+    target_sig = "\0".join(f"{k}={v}" for k, v in sorted(targets.items()))
+    digest = hashlib.sha256(f"standalone\0{command}\0{target_sig}".encode("utf-8")).hexdigest()[:12]
     shim_bin = cache_root / "pdd-cli" / "shims" / digest / "bin"
     shim_bin.mkdir(parents=True, exist_ok=True)
-    _set_symlink(shim_bin / "pdd", entry_real)
+    for cmd_name, target_real in targets.items():
+        _set_symlink(shim_bin / cmd_name, target_real)
     return shim_bin
 
 
@@ -367,6 +462,7 @@ def _prepare_child_env(
     env: Mapping[str, str],
     depth: int,
     argv0: str | None = None,
+    command: str = "pdd",
 ) -> dict[str, str]:
     child_env = dict(env)
     child_env["PDD_PYTHON_WRAPPER_DEPTH"] = str(depth + 1)
@@ -384,33 +480,51 @@ def _prepare_child_env(
     if not entry_real:
         return child_env
 
+    entry_targets = _sibling_entry_targets(entry_mjs, command)
     cmd_name, cand_self_real = _resolve_argv0_real(argv0, child_env)
     self_real = (
         cand_self_real
-        if (cmd_name and cmd_name.lower() in ("pdd", "pdd.cmd", "pdd.exe"))
+        if (cmd_name and cmd_name.lower() in (command, f"{command}.cmd", f"{command}.exe"))
         else None
     )
 
     cache_root = _cache_root(child_env)
     raw_path = child_env.get("PATH", "")
     parts = [p for p in raw_path.split(os.pathsep)] if raw_path else []
-    has_alpha_on_path = False
+    has_entry_on_path = False
 
     try:
         for idx, folder in enumerate(parts):
             if not folder:
                 continue
-            candidate = Path(folder) / "pdd"
+            candidate = Path(folder) / command
             if not (candidate.is_file() and os.access(candidate, os.X_OK)):
                 continue
             if _real_or_none(candidate) == entry_real:
-                has_alpha_on_path = True
+                has_entry_on_path = True
             elif _is_own_python_wrapper(candidate, self_real):
-                parts[idx] = str(_sync_mirrored_shim(Path(folder), entry_real, cache_root))
-                has_alpha_on_path = True
+                parts[idx] = str(
+                    _sync_mirrored_shim(
+                        Path(folder),
+                        entry_real,
+                        cache_root,
+                        command=command,
+                        entry_targets=entry_targets,
+                    )
+                )
+                has_entry_on_path = True
 
-        if not has_alpha_on_path:
-            parts.append(str(_ensure_standalone_shim(entry_real, cache_root)))
+        if not has_entry_on_path:
+            parts.append(
+                str(
+                    _ensure_standalone_shim(
+                        entry_real,
+                        cache_root,
+                        command=command,
+                        entry_targets=entry_targets,
+                    )
+                )
+            )
         child_env["PATH"] = os.pathsep.join(parts)
     except OSError:
         pass
@@ -427,11 +541,13 @@ def _run_interruptible(cmd: Sequence[str], env: Mapping[str, str]) -> int:
     return proc.returncode
 
 
-def main(
+def _run_command(
+    command: str,
     argv: Sequence[str] | None = None,
     env: Mapping[str, str] | None = None,
     argv0: str | None = None,
 ) -> int:
+    _script_for_command(command)
     active_env = os.environ if env is None else env
     args = list(sys.argv[1:] if argv is None else argv)
     effective_argv0 = sys.argv[0] if argv0 is None else argv0
@@ -441,36 +557,60 @@ def main(
     except ValueError:
         depth = 0
     if depth >= MAX_WRAPPER_DEPTH:
-        sys.stderr.write("pdd wrapper detected recursive self-invocation; check your PATH.\n")
+        sys.stderr.write(f"{command} wrapper detected recursive self-invocation; check your PATH.\n")
         return 1
 
     node_bin = active_env.get("PDD_NODE_BIN", "").strip() or shutil.which("node", path=active_env.get("PATH"))
     if not node_bin or not Path(node_bin).is_file():
         sys.stderr.write(
-            f"pdd requires Node.js >=22.16.0 on PATH to run {PACKAGE_NAME} {__version__}. "
-            "Install Node.js from https://nodejs.org and run pdd again.\n"
+            f"{command} requires Node.js >=22.16.0 on PATH to run {PACKAGE_NAME} {__version__}. "
+            f"Install Node.js from https://nodejs.org and run {command} again.\n"
         )
         return 127
 
-    entry_mjs, detail = resolve_cli_entry(__version__, active_env, argv0=effective_argv0)
+    entry_mjs, detail = resolve_cli_entry(__version__, active_env, argv0=effective_argv0, command=command)
     if entry_mjs is None:
         npx_bin = active_env.get("PDD_NPX_BIN", "").strip() or shutil.which("npx", path=active_env.get("PATH"))
         if npx_bin and active_env.get("PDD_CLI_OFFLINE") != "1":
             child_env = dict(active_env)
             child_env["PDD_PYTHON_WRAPPER_DEPTH"] = str(depth + 1)
             return _run_interruptible(
-                [npx_bin, "--yes", "--package", f"{PACKAGE_NAME}@{__version__}", "pdd", *args],
+                [npx_bin, "--yes", "--package", f"{PACKAGE_NAME}@{__version__}", command, *args],
                 child_env,
             )
-        msg = f"Unable to locate or install {PACKAGE_NAME}@{__version__}."
+        msg = f"Unable to locate or install {PACKAGE_NAME}@{__version__} ({command})."
         if detail:
             msg = f"{msg}\n{detail}"
         sys.stderr.write(f"{msg}\n")
         return 1
 
-    child_env = _prepare_child_env(entry_mjs, active_env, depth, argv0=effective_argv0)
+    child_env = _prepare_child_env(entry_mjs, active_env, depth, argv0=effective_argv0, command=command)
     cmd = [node_bin, str(entry_mjs), *args]
     if argv is None and env is None and os.name == "posix" and active_env.get("PDD_CLI_NO_EXEC") != "1":
         os.execve(node_bin, cmd, child_env)
 
     return _run_interruptible(cmd, child_env)
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    env: Mapping[str, str] | None = None,
+    argv0: str | None = None,
+) -> int:
+    return _run_command("pdd", argv=argv, env=env, argv0=argv0)
+
+
+def main_codex(
+    argv: Sequence[str] | None = None,
+    env: Mapping[str, str] | None = None,
+    argv0: str | None = None,
+) -> int:
+    return _run_command("pdd-codex", argv=argv, env=env, argv0=argv0)
+
+
+def main_claude(
+    argv: Sequence[str] | None = None,
+    env: Mapping[str, str] | None = None,
+    argv0: str | None = None,
+) -> int:
+    return _run_command("pdd-claude", argv=argv, env=env, argv0=argv0)

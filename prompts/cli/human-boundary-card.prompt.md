@@ -42,7 +42,7 @@ Inspect saved check records for `root` under `PDD_STATE_DIR` (or `HOME/.pdd/runt
 ## Compact rendering (`<= 25` lines)
 
 - `formatApproveBoundaryCard(card)` returns at most `25` plain-text lines starting with `Human boundary card (advisory):` and two-space-indented body lines (`Policy:`, `Owner gap:` when unloaded owning sources exist, `Provenance:`, `Verification split:`, `Budget & samples:`). Prioritize `missing owner connection`, `port spy or native observation still needed` and `0 observed port calls` rows before ordinary rows when compacting, and summarize overflow with `… +N more` while always retaining `Verification split:` and `Budget & samples:`. Never start any card line with `Text` or `Approve `.
-- `readablePrTop` in [readable workflow PR descriptions](workflow-pr-body.prompt.md) renders `facts.boundary` on PR 1 (`layout: "spec"`) as a `## Boundary` section of at most `25` lines right after `## Summary`, sanitizing all dynamic text as inert Markdown with no forbidden jargon, extra URLs, HTML tags or closing keywords.
+- `readablePrTop` in readable workflow PR descriptions renders `facts.boundary` on PR 1 (`layout: "spec"`) as a `## Boundary` section of at most `25` lines right after `## Summary`, sanitizing all dynamic text as inert Markdown with no forbidden jargon, extra URLs, HTML tags or closing keywords.
 
 ## Dependencies
 

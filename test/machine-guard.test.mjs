@@ -219,7 +219,7 @@ for (const [name, installed, line] of [['an old installed skills folder', '0.1.2
   const dir = mkdtempSync(join(tmpdir(), 'pdd-guard-skills-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const { mkdirSync, writeFileSync } = await import('node:fs');
   const home = join(dir, 'home'), installedDir = join(home, '.agents', 'skills'), engineDir = join(dir, 'pkg', 'skills');
-  if (installed) { mkdirSync(join(installedDir, 'pdd-feature'), { recursive: true }); writeFileSync(join(installedDir, 'pdd-feature', 'SKILL.md'), `---\nname: pdd-feature\nmetadata:\n  pdd-skills: ${installed}\n---\n`); }
+  if (installed) { mkdirSync(join(installedDir, 'pdd'), { recursive: true }); writeFileSync(join(installedDir, 'pdd', 'SKILL.md'), `---\nname: pdd\nmetadata:\n  pdd-skills: ${installed}\n---\n`); }
   const job = startAgentJob({ id: 'skills-1', dir, cwd: dir, command: '/bin/sh', args: ['-c', 'echo "skills in $PDD_SKILLS"'],
     pddCheck: { version: '0.1.29', cli: '/engine/bin/pdd', skills: { dir: engineDir, version: '0.1.29', read: [installedDir] } }, env: { PATH: process.env.PATH, HOME: home, SHELL: '/bin/sh', PDD_SKILLS: engineDir } });
   const end = Date.now() + 20000;

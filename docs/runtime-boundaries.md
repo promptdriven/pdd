@@ -1,23 +1,23 @@
 # Offline review and interpreter boundaries
 
-`pdd lint` uploads the selected files to the PDD interpreter with your gh login. It uses
-zero AI calls, but needs a network connection and server capacity. A task that permits only
-offline work does not permit this command.
+`pdd lint` runs deterministic offline structural, SVG, and diff checks with zero AI and zero network calls. `pdd lint --remote` uploads the selected files to the PDD interpreter with your gh login; it uses zero AI calls, but needs a network connection and server capacity. A task that permits only offline work uses `pdd lint` or `pdd lint --local` rather than `--remote`.
 
 | Offline work | What it establishes |
 |---|---|
-| `pdd lint --local` | Local lint; no network or AI calls. |
+| `pdd lint` / `pdd lint --local` | Deterministic offline structural, SVG, Short JSON, criterion-binding, and diff lint; no network or AI calls. |
+| `pdd status [--changed]` | Offline overview of prompts, Stories, ownership, and `pdd.json` Feature Map; no network or AI calls. |
 | `pdd files [--json]` | Discovered prompts, Stories, tests and local refusals; nothing is sent. |
 | `pdd test --files [STORY...]` | The selected upload paths, byte sizes and capture safety checks; nothing is sent. |
+| `pdd prove [--base REF]` | Offline lint, diff checks, repository tests, and `verify.paths` recipes against base; no AI calls. |
 | Read the prompt, Story and test together | Check declared schemas, exact criterion text, dependencies and expected-value ownership. This is an authoring review. |
 | Run the repository's ordinary tests | The native behavior those tests exercise. |
 
-Record the actual checks you performed. Offline review is not a server lint pass or an interpreter
-behavior verdict. If server access is outside the task's permission, leave those results
-unverified. When server access is allowed, `pdd lint` requests complete diagnostics and prints the problems the server reports;
+Record the actual checks you performed. Offline review is not a remote server lint pass or an interpreter
+behavior verdict. If server access is outside the task's permission, leave remote interpreter results
+unverified. When server access is allowed, `pdd lint --remote` requests complete diagnostics and prints the problems the server reports;
 correct them and check again before submitting a behavior check.
 
-The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests. This applies when the program must build or verify a SHA-256 hash: both operations return a lowercase SHA-256. Keep any other digest, for example an HMAC, in native tests. See the [RUNBOOK §21 record-id fragment](../skills/pdd-prompting/runbook/cli-and-ports.md#verify-a-record-id) for the resource and simulation entries and the native binding limits.
+The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests. This applies when the program must build or verify a SHA-256 hash: both operations return a lowercase SHA-256. Keep any other digest, for example an HMAC, in native tests. See [ports and CLI reference](../skills/pdd/references/ports-and-cli.md) for the resource and simulation entries and the native binding limits.
 
 ## Native factories and JSON operations
 
@@ -37,7 +37,7 @@ to selected logical input values when the contract requires them.
 Put injected I/O and callbacks behind declared `port` operations. A `port.write` simulation
 records arguments in the scenario world and returns the scenario-declared result. Bind
 these operations to the actual dependency contract and keep expected values owned by the
-Story and test. See [RUNBOOK §5](../skills/pdd-prompting/runbook/cli-and-ports.md#5-saved-data) for saved data and resources.
+Story and test. See [Ports and CLI](../skills/pdd/references/ports-and-cli.md) for saved data and resources.
 
 | Declared simulation | What it covers |
 |---|---|
@@ -65,4 +65,4 @@ incomplete accounting, a raw `provider_calls: 0` does not prove zero cost. Keep 
 ceiling reserved until complete evidence resolves it; do not resubmit the same run to obtain a
 number. Share its report with the PDD team.
 
-The runtime-slots snapshot interface binds the actual files.listRecords port. Supplied records can establish listing order and preserved fields. Local exclusive-create races, process death, crash cleanup, private file permissions and CLI dispatch require native tests; no snapshot replay establishes those effects. See the [shared admission plan](../user_stories/PLAN.md#shared-runtime-admission-2631).
+The runtime-slots snapshot interface binds the actual files.listRecords port. Supplied records can establish listing order and preserved fields. Local exclusive-create races, process death, crash cleanup, private file permissions and CLI dispatch require native tests; no snapshot replay establishes those effects. See [selected interface admission](runtime-interface-admission.md).

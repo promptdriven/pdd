@@ -22,7 +22,13 @@ const canonicalStoryPath = value => typeof value === 'string' && value.trim().le
 export function isLintableStoryPath(path) {
   if (!canonicalStoryPath(path) || !/\.md$/i.test(path)) return false;
   const parts = path.split('/'), base = parts.at(-1).toLowerCase();
-  return base !== 'plan.md' && base !== 'readme.md' && parts.slice(0, -1).includes('user_stories');
+  if (base === 'plan.md' || base === 'readme.md') return false;
+  const dirs = parts.slice(0, -1);
+  if (dirs.includes('user_stories')) return true;
+  for (let i = 0; i < dirs.length - 1; i++) {
+    if (dirs[i] === 'pdd' && dirs[i + 1] === 'stories') return true;
+  }
+  return false;
 }
 
 const trimExcerpt = line => {
@@ -62,28 +68,33 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
   const checkLine = (line, rawLine, lineNo, activeSection) => {
     if (!line.trim()) return;
     const excerpt = trimExcerpt(rawLine);
-    const push = (code, message) => problems.push({ path, line: lineNo, code, message, excerpt });
+    const push = (code, message, fix) => problems.push({ path, line: lineNo, code, message, fix, excerpt });
 
     const implPath = findImplPath(line);
     if (implPath) push('story-implementation-path',
-      `Implementation path "${implPath}" belongs in module prompts or tests, not the Story. Describe what the person runs or sees instead of naming code files.`);
+      `Implementation path "${implPath}" belongs in module prompts or tests, not the Story. Describe what the person runs or sees instead of naming code files.`,
+      `Remove "${implPath}" from ${path}:${lineNo} and describe the visible command, screen, or outcome instead`);
 
     const internal = findCodeInternals(line);
     if (internal) push('story-code-internals',
-      `Low-level code detail "${internal}" leaks implementation internals into the Story. State observable user inputs, outputs or exit behavior instead (put formal invariants under "## Rules to check").`);
+      `Low-level code detail "${internal}" leaks implementation internals into the Story. State observable user inputs, outputs or exit behavior instead (put formal invariants under "## Rules to check").`,
+      `Replace "${internal}" at ${path}:${lineNo} with observable inputs, outputs, or exit behavior (move technical invariants to .prompt.md)`);
 
     const digest = RAW_DIGEST.exec(line)?.[0];
     if (digest) push('story-raw-digest',
-      `Raw hash or UUID "${digest}" pins internal machine state in the Story. Describe the visible behavior or rule without hard-coding digests, commit hashes or UUIDs.`);
+      `Raw hash or UUID "${digest}" pins internal machine state in the Story. Describe the visible behavior or rule without hard-coding digests, commit hashes or UUIDs.`,
+      `Remove raw digest/UUID "${digest}" at ${path}:${lineNo} and state the user-visible rule instead`);
 
     const role = GENERIC_ROLE.exec(line)?.[0];
     if (role) push('story-generic-role',
-      `Generic role "${role}" hides who uses the behavior. Name a real person or role (for example "As a customer", "As a shop owner" or "As a developer who runs pdd test").`);
+      `Generic role "${role}" hides who uses the behavior. Name a real person or role (for example "As a customer", "As a shop owner" or "As a developer who runs pdd test").`,
+      `Replace "${role}" at ${path}:${lineNo} with a specific actor role (for example "As a customer" or "As a developer")`);
 
     if (activeSection === 'criteria') {
       const vague = findVagueCriterion(line);
       if (vague) push('story-vague-criterion',
-        `Vague phrase "${vague}" cannot be checked directly. State the exact output, message, state change or exit code that shows it worked.`);
+        `Vague phrase "${vague}" cannot be checked directly. State the exact output, message, state change or exit code that shows it worked.`,
+        `Replace "${vague}" at ${path}:${lineNo} with a concrete output, state change, or exit code`);
     }
   };
 
@@ -126,6 +137,7 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
         line: firstIdx >= 0 ? firstIdx + 1 : 1,
         code: 'story-missing-criteria',
         message: 'Story is missing an "## Acceptance criteria" section. Add "## Acceptance criteria" with 1 to 6 concrete, user-observable acceptance items.',
+        fix: `Add a "## Acceptance criteria" section to ${path} with 1 to 6 numbered, user-observable checks`,
         excerpt: trimExcerpt(rawLines[firstIdx >= 0 ? firstIdx : 0] ?? ''),
       });
     } else if (items.length === 0) {
@@ -134,6 +146,7 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
         line: criteriaHeadingLine,
         code: 'story-missing-criteria',
         message: '"## Acceptance criteria" lists 0 acceptance items. Add 1 to 6 concrete, user-observable numbered or bulleted acceptance items.',
+        fix: `Add 1 to 6 numbered acceptance criteria under "## Acceptance criteria" in ${path}`,
         excerpt: trimExcerpt(criteriaHeadingRaw),
       });
     } else if (items.length > 6) {
@@ -143,16 +156,19 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
         line: seventh.line,
         code: 'story-bloated-criteria',
         message: `"## Acceptance criteria" lists ${items.length} items (recommended at most 6). Keep 1 Story per cohesive user loop and move technical invariants to .prompt.md "## Domain decisions" or "## Rules to check".`,
+        fix: `Trim ${path} to at most 6 criteria by splitting separate user loops or moving technical edge cases to .prompt.md "## Domain decisions"`,
         excerpt: trimExcerpt(seventh.raw),
       });
     }
-    const lineCount = rawLines.length > 0 && rawLines.at(-1) === '' ? rawLines.length - 1 : rawLines.length;
+    let lineCount = rawLines.length;
+    while (lineCount > 0 && rawLines[lineCount - 1].trim() === '') lineCount--;
     if (lineCount > 35) {
       problems.push({
         path,
         line: 36,
         code: 'story-too-long',
         message: `Story is ${lineCount} lines long (recommended at most 35 lines). Move technical invariants, schemas or edge-case matrices to .prompt.md "## Domain decisions" or test JSON fixtures.`,
+        fix: `Shorten ${path} to <= 35 lines by moving schemas, fixtures, and technical edge cases into the owning .prompt.md or scenario JSON`,
         excerpt: trimExcerpt(rawLines[35] ?? ''),
       });
     }

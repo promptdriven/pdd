@@ -692,8 +692,6 @@ registerHooks({
   );
 
   const ALLOWED_BASE_CYCLES = new Set([
-    'src/issue-sort-github.mjs <-> src/issue-sort.mjs',
-    'src/issue-mixed.mjs <-> src/issue-sort-github.mjs <-> src/issue-sort.mjs',
     'src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs',
     'src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs <-> src/runtime/try-doors.mjs',
     'src/toml-string.mjs <-> src/workflow-herdr-layout.mjs',
@@ -844,17 +842,17 @@ registerHooks({
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
   const coveredLocals = new Set([
-    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'update-sync', 'prompt-approve',
+    'help', 'version', 'version-detailed', 'completion', 'setup', 'init', 'status', 'lint', 'prove', 'project-files', 'file-owner', 'update-sync', 'prompt-approve',
     'runtime-check', 'runtime-try', 'contracts', 'contracts-sync', 'runtime-jobs', 'mcp', 'metrics',
-    'issue-dependency-graph', 'dependencies-prepare', 'dependencies-complete',
+    'issue-dependency-graph',
     'product-status', 'product-next', 'product-start',
     'workflow-list', 'workflow-status', 'workflow-run', 'workflow-done', 'workflow-publish', 'workflow-ask', 'workflow-request-uptake',
     'workflow-approve', 'workflow-resend', 'workflow-card', 'workflow-changes', 'workflow-open', 'workflow-view',
     'workflow-cost', 'workflow-prove', 'workflow-suite', 'workflow-evidence', 'workflow-evidence-associate',
     'workflow-park', 'workflow-yield', 'workflow-cancel', 'workflow-tidy',
     'autopilot-status', 'autopilot-logs', 'autopilot-doctor', 'autopilot-regressions', 'autopilot-alerts', 'autopilot-alert',
-    'autopilot-start', 'autopilot-stop', 'autopilot-add', 'autopilot-release', 'autopilot-report',
-    'autopilot-intake', 'autopilot-audit', 'autopilot-check-base',
+    'autopilot-start', 'autopilot-suite', 'autopilot-stop', 'autopilot-add', 'autopilot-release', 'autopilot-report',
+    'autopilot-intake', 'autopilot-check-base',
     'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot-trust', 'autopilot-untrust', 'accounts', 'upgrade',
   ]);
   for (const route of PUBLIC_COMMAND_ROUTES) {
@@ -862,12 +860,6 @@ registerHooks({
   }
 
   const bin = join(root, 'bin/pdd.mjs');
-  const replayChildExpr = 'source.identity({root:process.argv[1],tests:JSON.parse(process.argv[2])}).files';
-  assert.ok(
-    readFileSync(join(root, 'src/workflow-replay.mjs'), 'utf8').includes(replayChildExpr),
-    'SEAM5 replayScript must match src/workflow-replay.mjs selectedFiles child expression',
-  );
-  const replayScript = `import {source} from ${JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href)};process.stdout.write(JSON.stringify(${replayChildExpr}));`;
   const launcherScript = 'import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.exitCode = 125; });';
   const probes = [
     ['cli:--help', [bin, '--help'], repo],
@@ -875,12 +867,15 @@ registerHooks({
     ['cli:--version', [bin, '--version'], repo],
     ['cli:completion', [bin, 'completion', 'bash'], repo],
     ['cli:setup', [bin, 'setup', '--yes'], repo],
+    ['cli:init', [bin, 'init'], repo],
+    ['cli:status', [bin, 'status', '--json'], repo],
     ['cli:files', [bin, 'files', '--json'], repo],
     ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:update', [bin, 'update', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
+    ['cli:prove', [bin, 'prove', '--json'], repo],
     ['cli:simulate', [bin, 'simulate', '--stop', 'a'], repo],
     ['cli:contracts', [bin, 'contracts'], repo],
     ['cli:contracts-sync', [bin, 'contracts', 'sync'], repo],
@@ -888,30 +883,17 @@ registerHooks({
     ['cli:mcp', [bin, 'mcp'], repo],
     ['cli:metrics', [bin, 'metrics', '--json'], repo],
     ['cli:graph', [bin, 'graph', '--issue', '1'], nonGit],
-    ['cli:dependencies-prepare', [bin, 'dependencies', 'prepare'], nonGit],
-    ['cli:dependencies-complete', [bin, 'dependencies', 'complete', '--input', '-'], nonGit],
     ['cli:product-status', [bin, 'product', 'status'], repo],
     ['cli:product-next', [bin, 'product', 'next'], repo],
     ['cli:product-start', [bin, 'product', 'start', 'r1', '--no-run'], repo],
-    ['cli:workflow-list', [bin, 'workflow', 'list'], repo],
-    ['cli:workflow-status', [bin, 'workflow', 'status'], repo],
-    ['cli:workflow-run', [bin, 'workflow', 'run', 'feature', '1'], nonGit],
-    ['cli:workflow-done', [bin, 'workflow', 'done', 'story'], nonGit],
-    ['cli:workflow-publish', [bin, 'workflow', 'publish', '1'], nonGit],
-    ['cli:workflow-view', [bin, 'workflow', 'view', '1'], nonGit],
-    ['cli:workflow-cost', [bin, 'workflow', 'cost', '1'], nonGit],
-    ['cli:workflow-prove', [bin, 'workflow', 'prove', '1', '--test', 'true', '--expect', 'ok'], nonGit],
     ['cli:autopilot-status', [bin, 'autopilot', 'status'], nonGit],
     ['cli:autopilot-logs', [bin, 'autopilot', 'logs'], nonGit],
     ['cli:autopilot-doctor', [bin, 'autopilot', 'doctor'], repo],
     ['cli:autopilot-regressions', [bin, 'autopilot', 'regressions'], nonGit],
     ['cli:autopilot-alerts', [bin, 'autopilot', 'alerts', 'clear'], nonGit],
     ['cli:autopilot-off', [bin, 'autopilot', 'off'], nonGit],
-    ['child:workflow-worker-completion', [join(root, 'src/workflow-worker-completion.mjs'), '{}'], nonGit],
-    ['child:workflow-replay-selector', ['--input-type=module', '-e', replayScript, repo, JSON.stringify(['tests/a.json'])], nonGit],
     ['child:try-doors-launcher', ['--input-type=commonjs', '-e', launcherScript, '--', pathToFileURL(join(root, 'src/try-doors.mjs')).href, join(scratch, 'missing.door.json')], nonGit],
     ['child:scripts/autopilot-smoke.mjs', [join(root, 'scripts/autopilot-smoke.mjs')], nonGit],
-    ['child:scripts/route-runtime-issues.mjs', [join(root, 'scripts/route-runtime-issues.mjs')], nonGit],
     ['tick:autopilot-launcher', [join(root, 'src/autopilot-launcher.mjs'), join(scratch, 'missing-state.json')], nonGit],
     ['lib:svg-layout.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`], nonGit],
     ['lib:prompt-approve.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/prompt-approve.mjs')).href)})`], nonGit],
@@ -924,22 +906,20 @@ registerHooks({
 
   const ACYCLIC_ENTRIES = new Set([
     'cli:--help', 'cli:owner', 'cli:update', 'cli:files', 'cli:approve',
-    'child:workflow-replay-selector', 'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
+    'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
     'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
   const ZERO_SRC_ENTRIES = new Set([
     'child:scripts/autopilot-smoke.mjs',
-    'child:scripts/route-runtime-issues.mjs',
   ]);
   const LIGHT_ENTRIES = new Set([
     'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion',
-    'cli:files', 'cli:owner', 'cli:update', 'cli:approve', 'cli:workflow-list',
+    'cli:files', 'cli:owner', 'cli:update', 'cli:approve',
     'cli:jobs', 'cli:contracts', 'cli:contracts-sync', 'cli:simulate', 'cli:mcp',
-    'child:workflow-replay-selector', 'child:try-doors-launcher',
+    'child:try-doors-launcher',
     'lib:svg-layout.mjs', 'lib:prompt-approve.mjs', 'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
   const HEAVY_ORCHESTRATORS = new Set([
-    'src/workflow-runner.mjs',
     'src/autopilot-core.mjs',
     'src/product.mjs',
   ]);
@@ -989,8 +969,8 @@ registerHooks({
   assert.equal(runWithRejectedModule('/runtime-client.mjs', [bin, '--help']).status, 0);
 
   for (const [cmdArgs, suffix] of [
-    [['test', 'a'], '/workflow-eligibility.mjs'],
-    [['simulate', '--stop', 'a'], '/prompt-approve.mjs'],
+    [['test', 'a'], '/file-owner.mjs'],
+    [['simulate', '--stop', 'a'], '/approve-prompt.mjs'],
   ]) {
     const checkOrTryFail = runWithRejectedModule(suffix, [bin, ...cmdArgs], repo);
     assert.equal(checkOrTryFail.status, 3);
@@ -1000,7 +980,11 @@ registerHooks({
     );
   }
 
-  for (const suffix of ['/runtime-client.mjs', '/workflow-eligibility.mjs']) {
+  // Lazy-loading proof: rejecting screen-compare.mjs must not break ordinary lint --local or mcp startup.
+  assert.equal(runWithRejectedModule('/screen-compare.mjs', [bin, 'lint', '--local'], repo).status, 0);
+  assert.equal(runWithRejectedModule('/screen-compare.mjs', [bin, 'mcp']).status, 0);
+
+  for (const suffix of ['/runtime-client.mjs', '/product-documents.mjs']) {
     const mcpFail = runWithRejectedModule(suffix, [bin, 'mcp']);
     assert.equal(mcpFail.status, 1);
     assert.equal(mcpFail.stderr.trim(), 'pdd mcp could not start. Reason: REVIEW_LOAD_FAILURE');
@@ -1016,7 +1000,7 @@ registerHooks({
 
   const launcherFailScript = 'import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.stderr.write("pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\\n"); process.exitCode = 125; });';
   const launcherFail = runWithRejectedModule(
-    '/prompt-approve.mjs',
+    '/line-reader.mjs',
     ['--input-type=commonjs', '-e', launcherFailScript, '--', pathToFileURL(join(root, 'src/try-doors.mjs')).href, join(scratch, 'missing.door.json')],
   );
   assert.equal(launcherFail.status, 125);
@@ -1026,7 +1010,6 @@ registerHooks({
     runWithRejectedModule('/runtime-output.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`]).status,
     0,
   );
-  assert.equal(runWithRejectedModule('/runtime-output.mjs', [join(root, 'src/workflow-worker-completion.mjs'), '{}']).status, 0);
 });
 
 test('SEAM6: installed @promptdriven/runtime-client modules do not import or address host pdd paths', () => {
@@ -1968,8 +1951,8 @@ test('SEAM14 (Should-fix 1 & 5): single shared defaultLineReader in src/runtime 
   assert.equal(await reader.ask(), 'yes');
   reader.close();
 
-  // (5) createAgentBridge loads src/agent-adapters.mjs before "Connecting your agent..." and GET /model.
-  const loader = "export async function resolve(s, c, n) { const r = await n(s, c); if (r.url.endsWith('/agent-adapters.mjs')) throw new Error('ADAPTERS_LOAD_FAILURE'); return r; }";
+  // (5) createAgentBridge loads src/shared/agent-process.mjs before "Connecting your agent..." and GET /model.
+  const loader = "export async function resolve(s, c, n) { const r = await n(s, c); if (r.url.endsWith('/agent-process.mjs')) throw new Error('ADAPTERS_LOAD_FAILURE'); return r; }";
   const reg = `import { register } from 'node:module'; register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(loader)}`)});`;
   const script = `
     const seam = await import(${JSON.stringify(pathToFileURL(join(root, 'src/runtime-seam.mjs')).href)});
@@ -2087,45 +2070,11 @@ test('SEAM15 (R2b-2): src/runtime-seam.mjs supports base standalone call forms w
   assert.equal(report.passed, true);
 });
 
-test('SEAM16 (S2): workflow-worker-completion keeps top-level await (exit 13 on unsettled drain) and no createRequire graph reaches top-level await', async t => {
+test('SEAM16 (S2): no createRequire graph reaches top-level await', async () => {
   const { spawnSync } = await import('node:child_process');
-  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
   const { dirname, resolve } = await import('node:path');
-  const { pathToFileURL } = await import('node:url');
 
-  // 1. workflow-worker-completion.mjs retains its top-level await and exits 13 when waitForWorkerCompletion stays unsettled at drain.
-  const workerSrc = readFileSync(join(root, 'src/workflow-worker-completion.mjs'), 'utf8');
-  assert.match(workerSrc, /\bawait\s+waitForWorkerCompletion\s*\(\s*identity\s*\)\s*;/);
-
-  const tmp = mkdtempSync(join(tmpdir(), 'pdd-s2-'));
-  t.after(() => rmSync(tmp, { recursive: true, force: true }));
-  const unsettledHook = join(tmp, 'unsettled-exec.mjs');
-  writeFileSync(
-    unsettledHook,
-    "import { registerHooks } from 'node:module';\n" +
-      "registerHooks({ load(url, ctx, next) {\n" +
-      "  if (url.endsWith('/src/workflow-worker-completion.mjs')) {\n" +
-      "    const res = next(url, ctx);\n" +
-      "    const src = String(res.source).replace('const exec = promisify(execFile);', 'const exec = () => new Promise(() => {});');\n" +
-      "    return { ...res, source: src };\n" +
-      "  }\n" +
-      "  return next(url, ctx);\n" +
-      "} });\n",
-  );
-  const workerRun = spawnSync(
-    process.execPath,
-    [
-      '--import',
-      pathToFileURL(unsettledHook).href,
-      join(root, 'src/workflow-worker-completion.mjs'),
-      JSON.stringify({ runId: 'r1', number: 1, sourceRoot: tmp, runDir: tmp, area: 'plan', paneId: '%1', startAnchor: 0, coordinatorPaneId: '%2' }),
-    ],
-    { cwd: root, encoding: 'utf8', timeout: 8000 },
-  );
-  assert.equal(workerRun.status, 13, `expected unsettled top-level await exit 13, got ${workerRun.status} (${workerRun.stderr})`);
-
-  // 2. Every module that uses createRequire in src/ has zero top-level await anywhere in its reachable require() graphs.
+  // Every module that uses createRequire in src/ has zero top-level await anywhere in its reachable require() graphs.
   const requireHosts = walk('src').filter(rel => readFileSync(join(root, rel), 'utf8').includes('createRequire'));
   assert.ok(requireHosts.length > 0, 'expected at least one createRequire host in src/');
 
@@ -2286,7 +2235,7 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   const { tmpdir } = await import('node:os');
   const { pathToFileURL } = await import('node:url');
 
-  const pkgRoot = join(root, 'node_modules/@promptdriven/runtime-client');
+  const pkgRoot = realpathSync(join(root, 'node_modules/@promptdriven/runtime-client'));
   const indexSource = readFileSync(join(pkgRoot, 'src/runtime/index.mjs'), 'utf8');
   const staticImports = [...indexSource.matchAll(/^\s*(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]/gm)].map(m => m[1]);
   assert.ok(staticImports.length > 0);
@@ -4347,4 +4296,74 @@ test('SEAM26 (#3444): every CLI option accepted by @promptdriven/runtime-client 
     1,
     '--no-restart-replacement must prevent automatic replacement check POST on service-restarted',
   );
+});
+
+test('S4 Stage 1: runMcp preserves raw JSON-RPC stdout framing (no hint rewriting) and wires Short JSON saveDoorCase', async () => {
+  const { Readable } = await import('node:stream');
+  const seam = await import('../src/runtime-seam.mjs');
+
+  const lines = [];
+  const rawStdout = {
+    write(chunk) {
+      lines.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+      return true;
+    },
+  };
+  const initReq = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'probe', version: '1.0.0' } },
+  });
+  // Tool failure containing both tokens that normalizeHintStream would otherwise rewrite with unescaped quotes, breaking JSON-RPC!
+  const callReq = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: {
+      name: 'try_observe',
+      arguments: {
+        try_id: '11111111-1111-4111-8111-111111111111',
+        run_id: '22222222-2222-4222-8222-222222222222',
+      },
+    },
+  });
+  const code = await seam.runMcp(
+    { cwd: root, words: [] },
+    {
+      stdin: Readable.from([`${initReq}\n${callReq}\n`]),
+      stdout: rawStdout,
+      stderr: { write() {} },
+      observeTryCall: async () => {
+        throw new Error('impossible-result-value-pointer after pdd test --fill-hash');
+      },
+    },
+  );
+  assert.equal(code, 0);
+  const responses = lines.join('').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(responses.length, 2);
+  assert.equal(responses[0].id, 1);
+  assert.equal(responses[0].result?.serverInfo?.name, 'pdd-try');
+  assert.equal(responses[1].id, 2);
+  assert.equal(responses[1].result?.isError, true);
+  assert.equal(
+    responses[1].result?.content?.[0]?.text,
+    'impossible-result-value-pointer after pdd test --fill-hash',
+    'MCP stdout must never rewrite JSON-RPC payload bytes via normalizeHintStream',
+  );
+  assert.equal(rawStdout.__pddHintNormalized, undefined);
+
+  // Verify createTryTools defaults saveDoorCase to seam.saveDoorCase (not raw runtime-client saveDoorCase)
+  let saveDoorCaseBound = null;
+  const tools = seam.createTryTools(
+    { cwd: root, words: [] },
+    {
+      readTryOwner: async () => {
+        saveDoorCaseBound = 'checked';
+        throw new Error('stop-after-check');
+      },
+    },
+  );
+  await assert.rejects(() => tools.call('try_state', {}), /stop-after-check/);
+  assert.equal(saveDoorCaseBound, 'checked');
 });

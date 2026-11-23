@@ -1,11 +1,17 @@
 // Generated from prompts/cli/argument-parser.prompt.md (sha256: 4a837dc76607532a46b38ca5cedacb06793321dcb21c5fc4703a99f744f422bc).
-import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
+import { PUBLIC_COMMAND_ROUTES, REMOVED_COMMANDS } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
   constructor(message) { super(message); this.name = 'CommandInputError'; this.exitCode = 2; }
 }
 const HELP_WORDS = ['--help', '-h', '-help'];
 const fail = () => { throw new CommandInputError('Unsupported command or options in pdd. Run pdd --help for local authoring tools.'); };
+const sanitizeToken = word => String(word ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').slice(0, 64);
+const failUnknownOption = (route, word) => {
+  if (!route?.prefix?.length || route.prefix[0].startsWith('-')) fail();
+  const cmd = `pdd ${route.prefix.join(' ')}`;
+  throw new CommandInputError(`Unsupported command or options in pdd: unknown option "${sanitizeToken(word)}" for ${cmd}. Run ${cmd} --help.`);
+};
 const routes = [...PUBLIC_COMMAND_ROUTES].sort((a, b) => b.prefix.length - a.prefix.length);
 const matches = (route, words) => route.prefix.every((token, index) => words[index] === token);
 const findRoute = words => routes.find(route => matches(route, words));
@@ -13,9 +19,9 @@ const help = prefix => Object.freeze({ commandId: 'help', local: 'help', helpPre
 // A help topic (`help prompting`) is exactly two words; any word after the topic, also a help flag, refuses.
 const TOPICS = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'help')?.topics ?? [];
 const topicHelp = words => words.length === 1 ? Object.freeze({ ...help([]), topic: words[0] }) : fail();
-// A plan whose options hold every flag that another route of the same local always has works like that route (`test --lint` = `lint`).
-const routeLike = (route, options) => routes.find(other => other !== route && other.local === route.local && other.implies
-  ?.every(flag => options[flag] === true)) ?? route;
+// A plan whose options hold every flag that another route always implies works like that route (`test --lint` = `lint`).
+const routeLike = (route, options) => routes.find(other => other !== route && other.implies?.length
+  && other.implies.every(flag => options[flag] === true)) ?? route;
 // A removed word (`check`, `try`) runs nothing: one line names the new command. A removed entry with a flag
 // (`check --lint`) wins when that flag is one of the words after the command word.
 const REMOVED = routes.filter(route => route.removed).map(route => ({ route,
@@ -24,6 +30,8 @@ function refuseRemoved(input) {
   const at = input[0] === 'help' ? 1 : 0, rest = input.slice(at + 1);
   const entry = REMOVED.find(item => item.word === input[at] && item.flags.every(flag => rest.includes(flag)));
   if (entry) throw new CommandInputError(`pdd ${entry.route.removed.join(' ')} was removed. Use pdd ${entry.route.prefix.join(' ')}.`);
+  const retired = REMOVED_COMMANDS.find(item => item.words.every((word, index) => input[at + index] === word));
+  if (retired) throw new CommandInputError(retired.message);
 }
 function helpFor(words) {
   if (!words.length) return help([]);
@@ -49,7 +57,8 @@ function parseRoute(route, words, allowHelp = false) {
     if (word === '--' && route.operands.at(-1)?.type === 'text' && !literal) { literal = true; continue; }
     if (!literal && word.startsWith('-')) {
       const option = route.options.find(option => option.name === word);
-      if (!option || Object.hasOwn(options, word)) fail();
+      if (!option) failUnknownOption(route, word);
+      if (Object.hasOwn(options, word)) fail();
       if (option.kind === 'flag') options[word] = true;
       else if (option.kind === 'optional-integer') {
         const next = words[index + 1];
@@ -82,23 +91,21 @@ function parseRoute(route, words, allowHelp = false) {
       }
     } else operands.push(word);
   }
-  if (route.id === 'workflow.run' && /^[1-9][0-9]*$/.test(operands[0] ?? '')) {
-    throw new CommandInputError(`Name the workflow: pdd ${route.prefix.join(' ')} small-change ${operands[0]} (or bug, feature). See pdd workflow list.`);
-  }
   const minimum = route.operands.filter(item => !item.optional).length;
   if (operands.length < minimum || !route.operands.at(-1)?.repeat && operands.length > route.operands.length) fail();
   for (let index = 0; index < operands.length; index++) {
     const type = route.operands[Math.min(index, route.operands.length - 1)].type;
     const word = operands[index];
-    const valid = type === 'text' || type === 'workflow-name' && word.length<=64 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(word) || type === 'issue'
+    const valid = type === 'text' || type === 'issue'
       && /^(?:[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word)
       || type === 'uuid' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(word)
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();
   }
-  if (helpRequested) return help(routeLike(route, options).prefix);
+  const effective = routeLike(route, options);
+  if (helpRequested) return help(effective.prefix);
   const implied = Object.fromEntries((route.implies ?? []).map(flag => [flag, true]));
-  return Object.freeze({ commandId: route.id, local: route.local,
+  return Object.freeze({ commandId: route.id, local: effective.local,
     operands: Object.freeze(operands), options: Object.freeze({ ...implied, ...options }) });
 }
 // A quiet word (`sim`, `workflow start`) is rewritten to the prefix of its route, with nothing added.

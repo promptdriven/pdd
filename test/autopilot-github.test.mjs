@@ -400,28 +400,20 @@ test('autopilot-github: start and status warn once when GitHub has other setting
   assert.deepEqual(stopped.calls, [], 'stop does not read GitHub');
 });
 
-// Wrong (F4): setup saves a first mode in this checkout and says nothing, so the person thinks Autopilot is on; or setup writes to GitHub.
-test('autopilot-github: setup that saves a first mode says how to update GitHub, and sends nothing there', async t => {
-  const hint = mode => `Setup saved pdd.json, the PDD block and .gitignore only in this checkout. Commit and push them so that GitHub, other machines and Autopilot jobs have them, or run pdd autopilot ${mode} to put the Autopilot mode on GitHub.`;
-  for (const [answer, mode] of [['auto', 'auto'], ['', 'off']]) {
-    const { cwd } = repo(t);
-    const home = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-autopilot-github-home-')));
-    t.after(() => rmSync(home, { recursive: true, force: true }));
-    const fake = fakeGithub();
-    // A person's terminal: setup asks only when stdin and stdout are both terminals (#3207).
-    const setup = () => invoke(cwd, ['setup'], { packageRoot: fileURLToPath(new URL('..', import.meta.url)), env: { HOME: home, PATH: process.env.PATH }, stdin: { isTTY: true }, tty: true,
-      pathDiagnostic: () => [], workflowAgents: { checkWorkflowAgents: async () => ({ ok: true, agent: 'codex', message: '' }) }, setupAgentMcp: async () => 0,
-      autopilotPorts: { terminal: { mode: async () => ({ answer }), names: async () => ({ names: [] }) }, github: { lookup: async () => ({ owner: 'Ada', writers: [], complete: true }) } },
-      autopilotGithubPorts: fake.ports });
-    const first = await setup();
-    assert.equal(first.exitCode, 0, first.stderr);
-    assert.equal(JSON.parse(readFileSync(join(cwd, 'pdd.json'))).autopilot.mode, mode);
-    assert.deepEqual(lines(first.stdout).filter(line => line.includes('pdd autopilot')), [hint(mode)]);
-    const second = await setup();
-    assert.equal(second.exitCode, 0, second.stderr);
-    assert.equal(second.stdout.includes(hint(mode)), false, 'A saved mode prints no hint again');
-    assert.deepEqual(fake.calls, [], 'setup never calls GitHub');
-  }
+// Laptop-wide pdd setup never writes repository pdd.json and never calls GitHub.
+test('autopilot-github: laptop pdd setup leaves pdd.json untouched and sends nothing to GitHub', async t => {
+  const { cwd } = repo(t);
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-autopilot-github-home-')));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const fake = fakeGithub();
+  const setup = () => invoke(cwd, ['setup'], { packageRoot: fileURLToPath(new URL('..', import.meta.url)), env: { HOME: home, PATH: process.env.PATH }, stdin: { isTTY: true }, tty: true,
+    pathDiagnostic: () => [], workflowAgents: { checkWorkflowAgents: async () => ({ ok: true, agent: 'codex', message: '' }) }, setupAgentMcp: async () => 0,
+    autopilotPorts: { terminal: { mode: async () => assert.fail('setup must not ask Autopilot mode'), names: async () => ({ names: [] }) }, github: { lookup: async () => assert.fail('setup must not look up GitHub') } },
+    autopilotGithubPorts: fake.ports });
+  const first = await setup();
+  assert.equal(first.exitCode, 0, first.stderr);
+  assert.throws(() => readFileSync(join(cwd, 'pdd.json')), { code: 'ENOENT' });
+  assert.deepEqual(fake.calls, [], 'setup never calls GitHub');
 });
 
 // Wrong: the native gh port sends another request than the fake port shows, or misreads a refusal of gh.

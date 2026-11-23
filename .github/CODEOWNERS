@@ -1,0 +1,7 @@
+# Protected verification, architecture, CI, and Autopilot merge-gate surfaces (G2 & G4).
+/pdd.json @Serhan-Asad
+/scripts/check-architecture.mjs @Serhan-Asad
+/scripts/architecture-ratchet.json @Serhan-Asad
+/.github/CODEOWNERS @Serhan-Asad
+/.github/workflows/ @Serhan-Asad
+/src/autopilot/gates/ @Serhan-Asad

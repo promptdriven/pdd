@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-selection.prompt.md (sha256: 0ff1e1edecfab67e4a28928ea0459abedc72abdea6dff178e36f948d594db00c).
+// Generated from prompts/cli/test-selection.prompt.md (sha256: 51dbd663136bdabce204db3fafbf7d297c41792abad1fb25cc5f9def7b3276e6).
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
@@ -14,7 +14,28 @@ export const isStoryPath = path =>
 
 export const hasAcceptance = text => AC_HEADING.test(text);
 
-const isTestFolderJson = path => path.endsWith('.json') && folders(path).some(part => part === 'test' || part === 'tests');
+const NON_SCENARIO_TEST_DIRS = new Set([
+  'fixtures', '__fixtures__', 'mocks', '__mocks__', 'snapshots', '__snapshots__',
+  'data', 'testdata', 'golden', 'cassettes',
+]);
+const NON_SCENARIO_JSON_NAME_RE =
+  /^(?:\..+|tsconfig(?:\.[^/]+)?|jsconfig|package(?:-lock)?|npm-shrinkwrap|composer|biome|deno|jsr|eslint|prettier|vitest|jest|babel|firebase|firestore\.indexes|vercel|netlify|wrangler)\.json$/i;
+
+const isTestFolderJson = path => {
+  if (!path.endsWith('.json')) return false;
+  const dirs = folders(path);
+  let lastTestDir = -1;
+  for (let i = dirs.length - 1; i >= 0; i -= 1) {
+    if (dirs[i] === 'test' || dirs[i] === 'tests') {
+      lastTestDir = i;
+      break;
+    }
+  }
+  if (lastTestDir < 0) return false;
+  if (dirs.slice(lastTestDir + 1).some(part => NON_SCENARIO_TEST_DIRS.has(part.toLowerCase()))) return false;
+  if (NON_SCENARIO_JSON_NAME_RE.test(basename(path))) return false;
+  return true;
+};
 const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const listed = items => (items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
 
@@ -165,7 +186,7 @@ export function selectTests(found, words = [], { native = false, captureSource }
   return { selected: found.tests.filter(test => selected.has(test)), nativeSelections: descriptors, unknown, untested };
 }
 
-export const NO_TESTS = 'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.';
+export const NO_TESTS = 'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. Run `pdd help prompting` for the Story and scenario guide.';
 
 // Why a repo has no tests, by the test name rule (it opens no JSON file): Stories with no test, test-folder JSON
 // that matches no Story, and *.prompt names.
@@ -1279,8 +1300,8 @@ export function selectAffectedTests(options = {}, ports = {}) {
   if (touchedPrompts) {
     for (const testPath of totalTests) {
       if (
-        /^(?:test|tests)\/(?:plain-prompts-and-frontmatter|prompt-approve|repo-hygiene-lint|file-owner|story-quality-lint|authoring-lint-parity|skills)\.(?:test|spec)\./.test(testPath) ||
-        /^(?:test|tests)\/.*prompt.*contract.*\.(?:test|spec)\./i.test(testPath)
+        /^(?:test|tests)\/(?:core\/lint\/)?(?:plain-prompts-and-frontmatter|prompt-approve|repo-hygiene-lint|file-owner|story-quality-lint|authoring-lint-parity|skills)\.(?:test|spec)\./.test(testPath) ||
+        /^(?:test|tests)\/(?:core\/lint\/)?.*prompt.*contract.*\.(?:test|spec)\./i.test(testPath)
       ) {
         addTest(testPath, 'prompt-contract');
       }
@@ -1290,8 +1311,8 @@ export function selectAffectedTests(options = {}, ports = {}) {
   if (touchedStories) {
     for (const testPath of totalTests) {
       if (
-        /^(?:test|tests)\/(?:story-quality-lint|repo-hygiene-lint|authoring-lint-parity|tests-found-by-name)\.(?:test|spec)\./.test(testPath) ||
-        /^(?:test|tests)\/.*story.*(?:lint|contract).*\.(?:test|spec)\./i.test(testPath)
+        /^(?:test|tests)\/(?:core\/lint\/)?(?:story-quality-lint|repo-hygiene-lint|authoring-lint-parity|tests-found-by-name)\.(?:test|spec)\./.test(testPath) ||
+        /^(?:test|tests)\/(?:core\/lint\/)?.*story.*(?:lint|contract).*\.(?:test|spec)\./i.test(testPath)
       ) {
         addTest(testPath, 'story-contract');
       }
@@ -1301,8 +1322,8 @@ export function selectAffectedTests(options = {}, ports = {}) {
   if (touchedDocs) {
     for (const testPath of totalTests) {
       if (
-        /^(?:test|tests)\/(?:docs(?:[-.].*)?|runbook(?:[-.].*)?|skills|authoring-lint-parity|help-teaches-pdd|cli-help-words)\.(?:test|spec)\./.test(testPath) ||
-        /^(?:test|tests)\/.*docs?.*contract.*\.(?:test|spec)\./i.test(testPath)
+        /^(?:test|tests)\/(?:core\/lint\/)?(?:docs(?:[-.].*)?|runbook(?:[-.].*)?|skills|authoring-lint-parity|help-teaches-pdd|cli-help-words)\.(?:test|spec)\./.test(testPath) ||
+        /^(?:test|tests)\/(?:core\/lint\/)?.*docs?.*contract.*\.(?:test|spec)\./i.test(testPath)
       ) {
         addTest(testPath, 'docs-contract');
       }
@@ -1312,7 +1333,7 @@ export function selectAffectedTests(options = {}, ports = {}) {
   if (touchedSkills) {
     for (const testPath of totalTests) {
       if (
-        /^(?:test|tests)\/(?:.*skill.*|runbook(?:[-.].*)?|authoring-lint-parity|setup|setup-defaults)\.(?:test|spec)\./i.test(testPath)
+        /^(?:test|tests)\/(?:core\/lint\/)?(?:.*skill.*|runbook(?:[-.].*)?|authoring-lint-parity|setup|setup-defaults)\.(?:test|spec)\./i.test(testPath)
       ) {
         addTest(testPath, 'skills-contract');
       }

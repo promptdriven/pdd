@@ -1,9 +1,10 @@
 # Build a whole product
 
-Say: "Build a coffee pickup app: a phone app to order, a shop server, and a
-barista screen." Call `$pdd-product` in Codex or `/pdd-product` in Claude Code.
-The skill makes a product issue and starts `pdd workflow run product ISSUE`.
-It makes and tracks the plan. Normal feature runs build each part.
+Describe what you want to build — for example, "Build a coffee pickup app: a
+phone app to order, a shop server, and a barista screen" — and author the
+product map, plan and contracts in your repository. `pdd product` tracks the
+plan, topological waves, GitHub issues and PR progress; each planned slice runs
+through `/pdd` in your coding agent (or queues cleanly for `pdd autopilot`).
 
 Read the map and answer its questions. Approve the map when it describes what
 you want. For coffee pickup, the [example map](../examples/coffee-pickup/product/map.md)
@@ -12,97 +13,100 @@ ticket done, and see Ready on the phone. Cancellation is LATER.
 
 | Path | Map | Plan |
 |---|---|---|
-| single part | One cohesive part | Keep the map; run one feature run. |
+| single part | One cohesive part | Keep the map; run one feature slice. |
 | multi-part | Decoupled parts with shared boundaries | Parts, boundaries, contracts and scoped runs. |
 | sliced rollout | Broad cross-part rollout | Also vertical slices: slice 1 makes one thin journey work through all parts. |
 
-The agent recommends a path from architecture boundaries rather than fixed Story
-counts; you can change it at the map gate. Keep each planned run scoped to one
-cohesive part or contract boundary; mixed-boundary runs get a warning.
+Choose a path from architecture boundaries rather than fixed Story counts. Keep
+each planned run scoped to one cohesive part or contract boundary; runs with
+more than 12 Stories receive an advisory warning.
 
 ## Files
 
-The files live in your repo so another session can continue. Follow the
+The files live in your repository so any session can continue. Follow the
 [complete coffee example](../examples/coffee-pickup/README.md):
 
-Read the [file formats](../skills/pdd-product/references/files.md) for the map,
-plan tables and contract records. `product/map.md` lists parts, Stories, journeys
-and questions. `product/plan.md` lists boundaries and runs. `contracts/` holds
-shared record schemas, the world key ownership table and the shared seed.
+Read the [product guide](../skills/pdd/references/product.md) for the map,
+plan tables and contract records. `product/map.md` lists parts, Stories,
+journeys, `## Rules to check`, and open questions. `product/plan.md` lists
+boundaries, optional `Through:` / `Base:` / `Issue:` preamble settings,
+`## Prompts` inventory, and planned `## Runs`. `contracts/` holds shared record
+schemas, the world key ownership table and the shared seed.
 
-`plan PR` means `product/plan.md` is present on the base branch. Planned-run
-needs wait for the implementation PR to merge by default, or for the prompt PR
-(or implementation PR) to merge when `product/plan.md` sets `Through: prompt-pr`
-or when `--through prompt-pr` is passed. Explicit starts show unmet needs as
-advice and keep the normal feature gates.
+`plan PR` means `product/plan.md` is present on the integration base branch.
+Planned-run needs wait for the implementation PR to merge by default, or for the
+prompt PR (or implementation PR) to merge when `product/plan.md` sets
+`Through: prompt-pr` or when `--through prompt-pr` is passed. Explicit starts
+show unmet needs as advice without blocking you.
 
 Review the plan PR's parts and contracts. The coffee plan has `server-1`,
 `phone-1`, `barista-1`, then `journeys`. The phone never talks directly to the
-barista screen. Each part tests other parts as fakes from their contracts.
-A feature run reads the map and contracts and does not change `contracts/`.
+barista screen. Single-part runs test other parts as fakes from their contracts
+and do not change `contracts/`. The final `all` / journey run composes every part's maps and prompts in `pdd sim --product` for prompt-space exploration and proves real unmocked implementation wiring across parts with a cross-part `verify.paths` recipe executed by `pdd prove`.
 
 ## Check the plan
 
-Before part prompts and Story tests exist, run `pdd product status` to read the
-map and plan and report structural problems such as duplicate IDs or unknown
-references. It makes no interpreter calls, though it may read GitHub for run
-status. Run `pdd contracts` to inventory shared records and their users; unused
-records can have no users yet. Its warnings are advisory and a successful listing
-does not validate the schemas.
+Run `pdd product status` to parse the map and plan, audit `## Prompts` inventory
+drift and unwired `## Boundaries` operations, and report structural problems
+such as duplicate IDs or unknown references. It makes no interpreter calls,
+though it reads GitHub for issue and PR status. Run `pdd contracts` (also
+available as `pdd product contracts`) to inventory shared records and their
+users; unused records can have no users yet.
 
 Review the shared schemas and seed with the map and boundaries. Walk through
-normal, refusal and empty-world examples, and check that each required domain
-boundary and ownership is represented. These checks do not establish a hosted
-lint pass.
-
-Hosted `pdd lint` requires program-scenario tests, so a plan without them cannot
-run it. `pdd lint --local` is a partial local check; it does not validate shared
-schemas and cannot stand in for hosted lint. There is no need to add placeholder
-tests. Once feature Story tests exist, `pdd test` includes lint, so a separate
-lint run before it is unnecessary.
+normal, refusal and empty-world examples, and confirm that each required domain
+boundary and ownership rule is represented. Once prompts and Story tests exist,
+run offline `pdd lint` to check prompt structure, rules and contract wiring, and
+`pdd test` to verify behavior.
 
 ## Start and track runs
 
-After the plan PR is merged and its base branch is available locally:
+After the plan PR is merged and its integration base branch is available locally:
 
 ```sh
 pdd product next
-pdd product start server-1 --agent codex
+pdd product start server-1
 pdd product start phone-1 --no-run
 pdd product status
 pdd product status --json
 ```
 
-The first three coffee runs have the same needs and can run in parallel. You can
-also do them in order with one agent. Without `--agent`, product start uses Codex without a sign-in check. Start finds the exact run marker in an
-existing issue, including closed issues, before making one. `--no-run` only makes
-or finds that issue. Each started run keeps the normal feature gates and PRs.
+`pdd product next` groups planned runs into deterministic topological waves
+(`Wave 1`, `Wave 2`, ...). The first three coffee runs share Wave 1 and can run
+in parallel or in order. `pdd product start RUN` finds the exact run marker in
+an existing trusted issue (including closed issues) before creating one, pins
+the integration base commit SHA when available locally, and prints a concise
+`/pdd` handoff for your coding agent (or queues with `pdd autopilot start --issue N`).
+`--no-run` prepares or reuses the scoped issue without starting a run.
 
-The marker search reads bounded pages, including closed issues. A run belongs
-to an issue by a repository owner, member or collaborator, or by you. An
-outsider's marker does not claim your run. If trusted duplicates exist, pdd uses
-the issue of a local run first, then the oldest issue, and warns. Long issue titles use a Story count; the
-body keeps the full IDs and tells the agent how to name the Story files.
+The marker search reads bounded pages, including closed issues. A run belongs to
+an issue by a repository owner, member or collaborator, or by the authenticated
+GitHub user. An outsider's marker does not claim your run. If trusted duplicates
+exist, `pdd product` chooses the issue with a matching local run first, then the
+oldest issue, and warns. Long issue titles compact to stay within GitHub's
+256-character limit while preserving every Story ID and text in the issue body.
 
 Status counts current passing Stories per part and slice, shows stale results,
-PRs and what can start next. A stale pass used older files and needs another
-check. On another machine, status can read Prompt tests lines in the run's PR
-and labels those results "from PR #N"; these are not locally verified passes.
-Name each Story file with its map id first, for example `P01-menu.md`.
-LATER Stories do not count toward planned progress.
-No result files are committed, and these commands make no interpreter calls.
+waves, PRs and what can start next. A stale pass used older files and needs
+another check. On another machine, status reads `Prompt tests` lines in the
+run's PR and labels those results `from PR #N`; remote lines are reported
+progress rather than locally verified passes. Name each Story file with its map
+ID first, for example `P01-menu.md`. `LATER` Stories do not count toward planned
+progress. No result files are committed, and these commands make no interpreter
+calls.
 
-Only the run's own same-repository PRs count. Status takes check results from the
-latest PR with named results, so a code PR without them does not hide the prompt
-PR's checks. An implementation merge satisfies a need under the default `code`
-target; under `Through: prompt-pr` (in `product/plan.md`) or `--through prompt-pr`,
-a merged prompt PR (or implementation PR) satisfies a need. Use `--base BRANCH`
-on `pdd product start` to target a non-default origin branch.
-For merged work, current and stale compare with the base branch's files. If
-that base is unavailable, status warns and leaves those results unverified.
-Needs cycles show their path in status and next. They do not prevent an explicit
-start or hide unrelated ready runs.
+Only the run's own same-repository PRs count. Status takes check results from
+the latest eligible PR with named results, so a code PR without them does not
+hide a prompt PR's checks. A run's need is satisfied by a merged same-repository
+PR carrying `<!-- pdd-product: run=<RUN> stage=code -->`, a normal merged
+same-repository PR that closes the run's issue (`Closes #N` without a prompt-only
+stage marker), or a merged PR carrying `<!-- pdd-product: run=<RUN> stage=prompt-pr -->`
+when targeting `prompt-pr`. Use `--base BRANCH` (or `Base: BRANCH` in
+`product/plan.md`) to target a non-default integration branch. For merged work,
+current and stale compare with the base branch's files; if that base is
+unavailable locally, status warns and leaves those results unverified. Needs
+cycles show their closed path in `status` and `next` as advice without hiding
+unrelated ready runs.
 
-Journey J1 is the final run after the three parts. Use its normal Story checks
-and the whole-product simulation to test the path across parts. Status tracks journeys
-separately from each part's Stories.
+Journey J1 is the final run after the three parts. Run cross-part Story checks, explore the composed product in `pdd sim --product`, and run an unmocked cross-part integration `verify.paths` recipe via `pdd prove` to verify the real implementation path across parts.
+Status tracks journeys separately from each part's Stories.

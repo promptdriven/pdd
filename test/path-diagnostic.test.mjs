@@ -5,7 +5,6 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { runPdd } from '../src/pdd-cli.mjs';
 
 const bin = resolve(import.meta.dirname, '../bin/pdd.mjs');
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version;
@@ -62,21 +61,6 @@ test('PATH3: an unreportable version stays visible and help makes no version pro
   assert.equal(readFileSync(mark, 'utf8'), 'probed\n');
 });
 
-test('PATH4: workflow startup gives a one-line shadow warning before normal dispatch', async t => {
-  const f = fixture(t), stdout = { text: '', write(s) { this.text += s; } }, stderr = { text: '', write(s) { this.text += s; } };
-  let called = false;
-  assert.equal(await runPdd(['workflow', 'run', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout, stderr,
-    workflowRunner: { startRun: async () => { called = true; return { exitCode: 0, message: 'Local dispatch proof' }; } } }), 0);
-  assert.equal(called, true); assert.equal(stdout.text, 'Local dispatch proof\n');
-  assert.equal(stderr.text.trim().split('\n').length, 1);
-  assert.match(stderr.text, /PATH selects:.*0\.0\.305\.dev214/); assert.ok(stderr.text.includes(bin));
-  // The quiet `workflow start` prints the same PATH line and dispatches the same way, with no extra line.
-  const quiet = { text: '', write(s) { this.text += s; } };
-  assert.equal(await runPdd(['workflow', 'start', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout: { write() {} }, stderr: quiet,
-    workflowRunner: { startRun: async () => ({ exitCode: 0, message: 'Local dispatch proof' }) } }), 0);
-  assert.equal(quiet.text, stderr.text);
-});
-
 test('PATH5: without which, relative PATH entries and symlinked Alpha still resolve correctly', t => {
   const f = fixture(t);
   f.env.PATH = '../conda-bin:../alpha-bin';
@@ -106,16 +90,6 @@ test('PATH7: a hanging external version probe is bounded and leaves the installa
 });
 
 
-test('workflow warning gives a short executable chat hint that survives PATH shadowing', async t => {
- const f=fixture(t), stdout={write(){}}, stderr={text:'',write(s){this.text+=s;}};
- f.env.PDD_AGENT_SESSION='1'; f.env.PDD_BIN=bin;
- await runPdd(['workflow','run','small-change','17'],{cwd:f.cwd,env:f.env,stdout,stderr,workflowRunner:{startRun:async()=>({exitCode:0,message:'ok'})}});
- assert.match(stderr.text,/use "\$PDD_BIN"/);
- assert.doesNotMatch(stderr.text,/Use '[^']+' '[^']+'/);
- const result=spawnSync('/bin/sh',['-c','"$PDD_BIN" --version'],{cwd:f.cwd,env:f.env,encoding:'utf8'});
- assert.equal(result.status,0);assert.equal(result.stdout,`${version}\n`);
-});
-
 test('PATH8: #2715 package uses @promptdriven/pdd and pathDiagnostic flags an unrelated unscoped npm "pdd" package', t => {
   const pkgMeta = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(pkgMeta.name, '@promptdriven/pdd');
@@ -135,7 +109,7 @@ test('PATH8: #2715 package uses @promptdriven/pdd and pathDiagnostic flags an un
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, `${version}\n`);
   assert.match(r.stderr, /Found the unrelated npm package "pdd"/);
-  assert.match(r.stderr, /npm uninstall -g pdd && npm install -g github:promptdriven\/pdd/);
+  assert.match(r.stderr, /npm uninstall -g pdd && npm install -g @promptdriven\/pdd/);
 });
 
 test('PATH9: #3474 pathDiagnostic flags an unscoped PDD npm package owning bin/pdd and recommends explicit uninstall before install', t => {
@@ -155,6 +129,15 @@ test('PATH9: #3474 pathDiagnostic flags an unscoped PDD npm package owning bin/p
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, `${version}\n`);
   assert.match(r.stderr, /Found unscoped npm package "pdd".*blocks @promptdriven\/pdd on bin\/pdd/);
-  assert.match(r.stderr, /npm uninstall -g pdd && npm install -g github:promptdriven\/pdd/);
+  assert.match(r.stderr, /npm uninstall -g pdd && npm install -g @promptdriven\/pdd/);
   assert.doesNotMatch(r.stderr, /--force/);
+});
+
+test('PATH10: clean setup stays quiet on PATH diagnostics when no conflict exists', t => {
+  const f = fixture(t);
+  rmSync(join(f.old, 'pdd'));
+  f.env.PATH = [f.alpha, f.nodeBin, '/usr/bin', '/bin'].join(':');
+  const r = f.run('setup');
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /Running pdd|PATH selects:/);
 });

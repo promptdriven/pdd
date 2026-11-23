@@ -2,11 +2,11 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/help-teaches-pdd.md",
   "criteria": [
-    {"id": "AC1", "text": "`pdd`, `pdd --help`, `pdd -h` and `pdd help` each name `pdd help prompting` and the full paths of the installed Prompting guide (`docs/prompting-guide.md`) and RUNBOOK (`RUNBOOK.md`), print nothing to stderr and exit with code 0."},
+    {"id": "AC1", "text": "`pdd`, `pdd --help`, `pdd -h` and `pdd help` each name `pdd help prompting` and the full paths of the installed skill (`skills/pdd/SKILL.md`) and Prompting guide (`skills/pdd/references/prompting.md`), print nothing to stderr and exit with code 0."},
     {"id": "AC2", "text": "`pdd help prompting` shows how to write a prompt file, `prompts/NAME.prompt.md`, with its `## Dependencies` section, prints nothing to stderr and exits with code 0."},
     {"id": "AC3", "text": "`pdd help prompting` shows how to write a Story file, `user_stories/STORY.md`, with its numbered acceptance criteria, and the Story's test file, `tests/STORY.json`, and exits with code 0."},
     {"id": "AC4", "text": "`pdd help prompting` names the commands `pdd test`, `pdd lint` and `pdd approve`, and exits with code 0."},
-    {"id": "AC5", "text": "`pdd help prompting` names the full paths of the installed `docs/prompting-guide.md` and `RUNBOOK.md`, and exits with code 0."},
+    {"id": "AC5", "text": "`pdd help prompting` names the full paths of the installed `skills/pdd/SKILL.md` and `skills/pdd/references/prompting.md`, and exits with code 0."},
     {"id": "AC6", "text": "`pdd prompting` is still an unknown command: it prints nothing to stdout, prints one line to stderr that says \"Unknown command\" and names `prompting`, and exits with code 2."},
     {"id": "AC7", "text": "`pdd --help` and `pdd help prompting` never name a removed command (\"pdd check\", \"pdd try\" or \"workflow start\") and exit with code 0."}
   ],
@@ -23,8 +23,8 @@
       "input": {"argv": []},
       "checks": [
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/skills/pdd/SKILL.md"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/skills/pdd/references/prompting.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
         {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
         {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
@@ -37,8 +37,8 @@
       "input": {"argv": ["--help"]},
       "checks": [
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/skills/pdd/SKILL.md"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/skills/pdd/references/prompting.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
         {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
         {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
@@ -55,8 +55,8 @@
       "input": {"argv": ["-h"]},
       "checks": [
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/skills/pdd/SKILL.md"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/skills/pdd/references/prompting.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
         {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
         {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
@@ -69,8 +69,8 @@
       "input": {"argv": ["help"]},
       "checks": [
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/skills/pdd/SKILL.md"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/skills/pdd/references/prompting.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
         {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
         {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
@@ -94,8 +94,8 @@
         {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint"},
         {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd approve"},
         {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
+        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "/skills/pdd/SKILL.md"},
+        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "/skills/pdd/references/prompting.md"},
         {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
         {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
         {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},

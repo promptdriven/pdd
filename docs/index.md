@@ -2,16 +2,22 @@
 
 Start with the [README](../README.md).
 
-- [Build a whole product](build-a-whole-product.md): map a product and plan its runs.
-- [Usage guide](USAGE.md): install, the PDD skills, setup, runs, gates, checks on the PDD interpreter, clean up and fixes.
-- [Workflows in depth](workflows.md): areas, steps, gates, PR 1 and PR 2, the run folder, tests and your own workflows.
-- [RUNBOOK.md](../RUNBOOK.md): what the agent does for `pdd test`, `pdd lint` and `pdd simulate`.
-- [Interpreter boundaries](runtime-boundaries.md): offline review, server lint, native factory bindings and call-accounting evidence.
-- [CLI reference](cli.md): every command, and how to run from a source checkout.
-- [Refactor runbook](refactor-runbook.md): separate structural cleanup from behavior changes and prevent pattern drift in agent-maintained repositories.
-- [A GitHub App token for Autopilot](autopilot-github-app-token.md): a design note for a team that wants Autopilot to have its own GitHub limit.
+- [The `/pdd` skill](../skills/pdd/SKILL.md): single-entry workflow router (`product`, `bug`, `feature`, `small-change`) and co-located guides:
+  - [Prompting guide](../skills/pdd/references/prompting.md): module ownership, `// Prompt:` headers, 100% Truth, `kind: native-only` specs, and approvals.
+  - [Story guide](../skills/pdd/references/stories.md): Stories, compact scenario JSON, targets, operators, and schemas.
+  - [Product roadmaps](../skills/pdd/references/product.md): multi-part maps, plans, contracts, and `--through prompt-pr`.
+  - [Ports and CLI](../skills/pdd/references/ports-and-cli.md): external fakes, 3-Port Adoption Rule, CLI programs, and `pdd mcp`.
+  - [UI and screens](../skills/pdd/references/ui-and-screens.md): single-file plain-prose UI, optional `app-map.json`, `.ui.svg`, and `pdd sim`.
+  - [Verification](../skills/pdd/references/verification.md): real-path tests, Feature Maps (`verify.paths`), Deliberate-Break Probe, and `pdd prove`.
+  - [Formal verification](../skills/pdd/references/formal.md): 3-tier code-bound stack, Z3 isolation, mutation control, and Rule Coverage reporting.
+- [Usage guide](USAGE.md): install, `pdd setup`, `pdd init`, `pdd status`, interactive `/pdd`, Autopilot, interpreter checks, Simulator, and fixes.
+- [Workflows in depth](workflows.md): interactive `/pdd` modes, headless `pdd autopilot`, product plans, and skill locations.
+- [Build a whole product](build-a-whole-product.md): map a multi-part product, contracts, waves, and planned runs.
+- [CLI reference](cli.md): every command form, option, and running from a source checkout.
+- [Metrics](metrics.md): local Autopilot throughput, funnel, and 7-day cohort metrics (`pdd metrics`).
+- [Autopilot factory & smoke tests](autopilot-factory.md): offline Autopilot factory harness and fresh release smoke sandbox.
+- [Interpreter boundaries](runtime-boundaries.md): offline review, server lint, native factory bindings, and call-accounting evidence.
+- [Interpreter capacity & retries](lint-capacity.md): remote lint wait queues, slot limits (`PDD_MAX_JOBS`), and retry behavior.
+- [Runtime bindings](runtime-bindings.md) & [Runtime interface admission](runtime-interface-admission.md): resource binding resolution and hosted interface admission rules.
+- [Prompt re-entry verification](prompt-reentry-verification.md): verifying edits to prompts and code ownership parity.
 - [Report a problem](ISSUES.md): how you or your agent files a clear issue about pdd.
-- [Prompting guide](prompting-guide.md): the method. The [pdd-prompting skill](../skills/pdd-prompting/SKILL.md) has the same text in `guide.md`.
-- [Story guide](story-guide.md): how to write a Story that a test can check. The pdd-prompting skill has the same text in `story-guide.md`.
-
-The guide's source is `docs/prompting-guide.md`, and the Story guide's source is `docs/story-guide.md`. A test keeps the skill copies the same. Link to the guide. Do not copy its rules into other files.

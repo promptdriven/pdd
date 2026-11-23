@@ -490,7 +490,7 @@ async function t10World(t, settings = { decisions: 'ask' }) {
 test('E23 (T10) the review brief has check (6) and the linked open issue; a P2 decision is one question (pdd:needs-decision), not a repair', async t => {
   let { w, pr, head } = await t10World(t);
   const brief = w.job(17, 'review').input;
-  assert.match(brief, /\(6\) choices: every choice that the issue did not settle must be listed/);
+  assert.match(brief, /\(6\) choices: evaluate substantive behavioral, contract, and safety choices directly from the issue and code diff/);
   assert.match(brief, /Only a product-direction choice of a feature PR \(.*\) that the job made instead of asking is a P2 must-fix with "decision:"/);
   assert.match(brief, /Issue #4: Durations under one minute show as "0m"\n<<<\n[\s\S]*We have two ideas and have not decided/);
   assert.doesNotMatch(brief, /Issue #9:/);
@@ -880,7 +880,7 @@ test('E47 (T10 small choice) a small choice is the job\'s own: the briefs list i
   const body = `Fixes #17.\n\n${NOT_RUN}\nPath: e — src/duration.js — unowned — no contract change — Test: done check\n\nChoices Autopilot made:\n- the helper name secondsText (an internal name; easy to change)`;
   const { pr } = w.build(17, { body, result: { promptChanged: false } }); await w.tick();
   const review = w.job(17, 'review').input;
-  assert.match(review, /every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its reason \(with "\(changes public behavior: \.\.\.\)" when users see a change\); a missing or wrong line is a P2 must-fix \(fix the list\), never a decision item\./);
+  assert.match(review, /\(6\) choices: evaluate substantive behavioral, contract, and safety choices directly from the issue and code diff \(never police builder PR prose\)\./);
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick(); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
   assert.equal(w.comments(17).filter(b => b.includes('pdd:autopilot-core:question:')).length, 0, 'no question');
@@ -894,8 +894,8 @@ test('E48 (T10 decide, the default) "decide" never asks: the briefs say so, and 
   const { w, head } = await t10World(t, {});                          // the default: decide
   const build = w.started.find(job => job.role === 'build').input, review = w.job(17, 'review').input;
   assert.match(build, /Choices: never ask a person about a choice\./);
-  assert.match(build, /Decide every choice yourself, product-direction ones too, and list each; list the big ones first, each marked "\(big\)"\./);
-  assert.match(build, /never for a choice: decide it and list it \(rule 1\)/);
+  assert.match(build, /Decide every choice yourself, product-direction ones too \(marking major product choices "\(big\)"\)\./);
+  assert.match(build, /never for a choice: decide it \(rule 1\)/);
   assert.doesNotMatch(build, /Then do not choose and open no PR/);
   assert.match(review, /Never write a decision item: Autopilot decides every other choice in this repository\./);
   assert.doesNotMatch(review, /"question":"<only with a P2 decision item/);
@@ -1103,7 +1103,7 @@ test('E59 (#3227 fix 3) the engine writes one evidence record per head; the revi
   const { w, pr, head } = await t04World(t, { base: { 'test/a.vectors.test.mjs': nodeTest('a') }, change: { 'test/a.vectors.test.mjs': nodeTest('a2') }, evidence: 'vectors=pass (1/1); formal=not-applicable' });
   const file = join(w.root, 'logs', `17-evidence-${head}.json`);
   assert.ok(existsSync(file), 'the record of this head');
-  assert.match(w.job(17, 'review').input, new RegExp(`Autopilot's evidence record of this head \\(written by the engine; the PR's Runtime and Evidence lines are claims that it checks\\): ${file.replaceAll('/', '\\/').replaceAll('.', '\\.')}`));
+  assert.match(w.job(17, 'review').input, new RegExp(`Autopilot's harness-owned verification evidence for this head \\(written strictly by the engine, never builder PR prose\\): ${file.replaceAll('/', '\\/').replaceAll('.', '\\.')}`));
   w.vectorsRun(17, { tests: 1 }); await w.tick(); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
   const record = JSON.parse(readFileSync(file, 'utf8'));
@@ -1449,33 +1449,33 @@ test('E74 (T10 narrowed, Serhan and the audit) the briefs: Autopilot decides whe
   for (const decisions of ['ask', 'decide']) {
     const { w } = await t10World(t, { decisions });
     const build = w.started.find(job => job.role === 'build').input, review = w.job(17, 'review').input;
-    assert.match(build, /Autopilot decides when at least one reasonable fix solves the problem and breaks nothing that people use today: pick that fix and list it/);
-    assert.match(build, /with "\(changes public behavior: WHAT\)" when users see a change\. For example, "make remove safer" is decided: ask y\/N only in an interactive terminal, --yes skips it, scripts stay unchanged; nothing is asked\./);
-    assert.match(build, /A pdd-bug or pdd-small-change run never asks a choice question: pick the fix that makes the reported behavior right with the least surprise\./);
+    assert.match(build, /Autopilot decides when at least one reasonable fix solves the problem and breaks nothing that people use today: pick that fix/);
+    assert.match(build, /For example, "make remove safer" is decided: ask y\/N only in an interactive terminal, --yes skips it, scripts stay unchanged; nothing is asked\./);
+    assert.match(build, /A bug-fix or small-change run never asks a choice question: pick the fix that makes the reported behavior right with the least surprise\./);
     assert.match(build, /Two cases always go to a person, in every run: a change against a person's recorded answer to an earlier question \(an answer above, a decision issue\), and a change of what blocks merges \(a new required check, a gate, a hash pin, CI policy\)\. Do not make such a change: write the needs-person result with "kind":"blocker"\./);
     assert.match(build, /"outcome":"needs-person","kind":"blocker\|choice"/);
     assert.match(review, /A change against a person's recorded answer to an earlier question, or a change of what blocks merges \(a required check, a gate, a hash pin, CI policy\), is a P1 must-fix in every mode/);
     if (decisions === 'ask') {
-      assert.match(review, /In a pdd-bug or pdd-small-change PR a decision item is never a question: only a repair or a "list it" fix\./);
+      assert.match(review, /In a bug-fix or small-change PR a decision item is never a question\./);
     } else assert.match(build, /Choices: never ask a person about a choice\./);
   }
 });
 
-test('E75 (#3177, #3227 fix 5) every agent brief names the short job rules file from "$PDD_SKILLS", and pdd runs as "$PDD_CLI"', async t => {
-  assert.ok(existsSync(fileURLToPath(new URL('../skills/pdd-prompting/autopilot-job-rules.md', import.meta.url))), 'the package has the file');
-  const rules = '"$PDD_SKILLS/pdd-prompting/autopilot-job-rules.md"';
+test('E75 (#3177, #3227 fix 5) every agent brief names the short job rules file from "$PDD_JOB_RULES", and pdd runs as "$PDD_CLI"', async t => {
+  assert.ok(existsSync(fileURLToPath(new URL('../src/autopilot/job-rules.md', import.meta.url))), 'the package has the file');
+  const rules = '"$PDD_JOB_RULES"';
   const { w, head } = await t10World(t, {});
   const build = w.started.find(job => job.role === 'build').input, review = w.job(17, 'review').input;
-  assert.ok(build.includes(`Read ${rules} in full before you write the PR body.`), 'build');
-  assert.ok(review.includes(`Read ${rules} in full before you check the PR body.`), 'review');
-  assert.match(build, /Run pdd as "\$PDD_CLI" \(for example "\$PDD_CLI" test STORY\), never as a bare pdd: your shell can find an older pdd first on PATH\. \$PDD_CLI is the pdd of this Autopilot\./);
+  assert.ok(build.includes(`Read ${rules} in full before you start.`), 'build');
+  assert.ok(review.includes(`Read ${rules} in full before you start.`), 'review');
+  assert.match(build, /Run pdd as "\$PDD_CLI" \(for example `"\$PDD_CLI" prove` or `"\$PDD_CLI" test STORY`\), never as a bare pdd: your shell can find an older pdd first on PATH\. \$PDD_CLI is the pdd of this Autopilot\./);
   assert.doesNotMatch(build, /`pdd` on PATH is the same/);
   assert.match(review, /When you run pdd, run it as "\$PDD_CLI", never as a bare pdd\./);
   assert.match(review, /Read any PDD skill or rules file from "\$PDD_SKILLS"\./);
-  assert.match(build, /Read these PDD skills and their step files from "\$PDD_SKILLS" \(for example "\$PDD_SKILLS\/pdd-feature\/SKILL\.md"\), never from ~\/\.agents\/skills or ~\/\.claude\/skills: the installed copies can be older than this Autopilot\./);
+  assert.match(build, /Read the PDD skill from "\$PDD_SKILLS\/pdd\/SKILL\.md" \(and load its guides from "\$PDD_SKILLS\/pdd\/references\/" on demand\), never from ~\/\.agents\/skills or ~\/\.claude\/skills: the installed copies can be older than this Autopilot\./);
   w.finish(17, 'review', { result: { verdict: 'FAIL', head, summary: 'x', mustFix: ['P2 src/duration.js:1 wrong'] } }); w.suite(17, 0); await w.tick();
   const repair = w.job(17, 'repair').input;
-  assert.ok(repair.includes(`Read ${rules} in full before you write the PR body.`), 'repair');
+  assert.ok(repair.includes(`Read ${rules} in full before you start.`), 'repair');
   assert.match(repair, /Run pdd as "\$PDD_CLI"/);
 });
 
@@ -1611,19 +1611,19 @@ test('E80 (B2) the owner table over 40 owned files is cut with a marker and neve
     'pdd-bindings.json': JSON.stringify({ schema_version: 'pdd.bindings.v1', modules: Object.keys(files).map(path => ({ module: path, stories: ['user_stories/s.md'], prompt: 'prompts/m.prompt.md' })) }) });
   w.issue(17); await w.tick();
   const brief = w.job(17, 'build').input;
-  assert.match(brief, /the table is cut, so run pdd owner FILE for a file that it does not list\):/);
+  assert.match(brief, /the table is cut, so run "\$PDD_CLI" owner FILE for a file that it does not list\):/);
   assert.doesNotMatch(brief, /every other file of the base is unowned/);
   assert.match(brief, /\[cut: 2 more owned files; run pdd owner FILE before you call a file unowned\]/);
   assert.deepEqual(JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8')).cuts, [{ input: 'owner table', more: 2 }]);
 });
 
-test('E81 (T10, Serhan D1) a bug fix may change an approved rule: it decides, lists "(changes approved rule: OLD -> NEW)" and asks nothing; the review checks the mark', async t => {
+test('E81 (T10, Serhan D1) a bug fix may change an approved rule: it decides, notes "(changes approved rule: OLD -> NEW)" and asks nothing; the review verifies agreement', async t => {
   for (const decisions of ['ask', 'decide']) {
     const { w, pr } = await t10World(t, { decisions });
     const build = w.started.find(job => job.role === 'build').input, review = w.job(17, 'review').input;
-    assert.match(build, /When that fix changes a rule in an approved prompt, change it without asking and list it with "\(changes approved rule: OLD -> NEW\)", so a person sees it; the repository's approval setting still applies to the changed prompt\./);
+    assert.match(build, /When that fix changes a rule in an approved prompt, change it without asking and note "\(changes approved rule: OLD -> NEW\)"; the repository's approval setting still applies to the changed prompt\./);
     assert.doesNotMatch(build, /a change that contradicts a rule in an approved prompt/);
-    assert.match(review, /A bug or small-change fix may change a rule in an approved prompt; it must be listed with "\(changes approved rule: OLD -> NEW\)", and a missing mark is a P2 must-fix \(fix the list\)\./);
+    assert.match(review, /A bug-fix or small-change PR may update an approved prompt rule when required by the issue; check that code and prompt agree\./);
     // The A1 shape: "round down" becomes one decimal; the PR lists it and merges with no question.
     w.review(17, 'PASS'); w.suite(17, 0); await w.tick(); await w.tick();
     assert.deepEqual(w.github.merges, [pr.number], decisions);

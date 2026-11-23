@@ -244,7 +244,7 @@
         { "criterion_id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba", "target": "result", "path": "/stages/unmergedPrs/total", "op": "equals", "value": 2 },
         { "criterion_id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba", "target": "result", "path": "/stages/unmergedPrs/summary", "op": "equals", "value": "Unmerged PRs (2): 1 failed suite · 1 open/draft" },
         { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/prGates/summary", "op": "equals", "value": "PR Gates (of 6 PRs): Suite 5/6 · Review 6/6 · CI 5/6" },
-        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/promptChecks/summary", "op": "equals", "value": "Prompt Checks (of 2 prompt PRs): Runtime 2/2 · Vectors 8/8 · Formal 4/4" },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/promptChecks/summary", "op": "equals", "value": "Prompt Checks (of 2 prompt PRs): Runtime 2/2 · Vectors 2/2 · Formal 2/2" },
         { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/regressions/summary", "op": "equals", "value": "Regressions (1): 0 reopened · 0 reverted · 1 regression issue (#3528)" }
       ]
     },

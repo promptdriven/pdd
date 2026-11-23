@@ -6,7 +6,7 @@ session after the gate question and returns the original text and session ID for
 the caller's journal and status record. It reads files only. The caller owns the
 current gate, decision semantics, persistence and application of the decision.
 This is recording evidence of a user turn, never authority to approve a gate. The
-[runner](workflow-runner.prompt.md#approval-through-the-persons-words) owns explicit
+runner owns explicit
 approval authorization; neither even genuine "I approve" text nor freshness proves
 that the agent displayed the gate or received consent to advance. Preserve this
 reader's public interface and selection rules for recording and changes.
@@ -103,6 +103,6 @@ and messages come from the same read snapshot.
 
 ## Dependencies
 
-- [Prompting guide](../../docs/prompting-guide.md): authoring and generation.
+- [Prompting guide](../../skills/pdd/references/prompting.md): authoring and generation.
 - [Public boundary](public-boundary.prompt.md): authoring and verification; use
   Node built-ins only, with no services or private runtime dependencies.

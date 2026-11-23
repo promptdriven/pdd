@@ -13,7 +13,7 @@ Both find the Git top-level folder of cwd and read the key `autopilot` of its `p
 
 ## Ports
 
-- `github.repository()` returns `{repository, defaultBranch}`. The native port calls `resolveWorkflowRepository({cwd: root}, {execFile})` of [workflow GitHub](workflow-github.prompt.md): the `origin` remote and `gh repo view`, with the gh sign-in that pdd already uses. There are no new credentials.
+- `github.repository()` returns `{repository, defaultBranch}`. The native port calls `resolveWorkflowRepository({cwd: root}, {execFile})` of workflow GitHub: the `origin` remote and `gh repo view`, with the gh sign-in that pdd already uses. There are no new credentials.
 - `github.request({method, path, body})` returns `{status, body}` for each HTTP answer of the GitHub REST API, also for an error status. It throws when there is no HTTP answer: gh is missing or not signed in, or GitHub cannot be reached. The native port runs `gh api --method METHOD PATH`. It sends a body as JSON on stdin (`--input -`), and it reads an error status from the `(HTTP NNN)` text of gh. A success is status 200.
 - `execFile(file, args, {cwd, input})` runs `git` and `gh`. The native port gives each command 15 seconds.
 - `shortId()` gives the branch suffix. Native: 8 random lowercase hex characters.
@@ -101,6 +101,6 @@ The native gh runner records each `gh` call in the GitHub call ledger of the rep
 
 - [GitHub calls](github-calls.prompt.md): native generation and verification context for counting `gh` calls.
 
-- [Workflow GitHub](workflow-github.prompt.md): required generation context for `resolveWorkflowRepository` and its `execFile` port.
+- Workflow GitHub: required generation context for `resolveWorkflowRepository` and its `execFile` port.
 - [Autopilot settings](autopilot.prompt.md): owns the local `pdd.json` shape and its writes. The change table above follows its rules for the local write.
 - Navigation only: the [CLI](pdd-cli.prompt.md) calls Publish after the mode, trust and untrust commands, and Check after `pdd autopilot start` and `pdd autopilot status`.

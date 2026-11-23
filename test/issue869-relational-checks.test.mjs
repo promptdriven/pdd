@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findTests, preflight, projectAnswer, renderJson, renderText } from '../src/runtime-seam.mjs';
-import { storyCard } from '../src/workflow-story-card.mjs';
 import { harbor } from './helpers/runtime-fake.mjs';
 
 test('ISSUE869: preflight admits relational ref_target checks, lt/lte/gt/gte, and integer_relation as exact criterion coverage', t => {
@@ -96,27 +95,4 @@ test('ISSUE869: runtime-output preserves relational reference metadata and rende
   const json = renderJson({ batch: '20261113-030000-abcd', repo: 'demo/repo', rows: [row], exitCode: 1 });
   assert.equal(json.rows[0].failed_checks[0].ref_target, 'input');
   assert.equal(json.rows[0].failed_checks[0].ref_path, '/cap_cents');
-});
-
-test('ISSUE869: workflow story card formats inline ref_target and integer_relation checks cleanly', t => {
-  const setup = harbor(t), file = join(setup.repo, 'tests/place-order.json');
-  const source = JSON.parse(readFileSync(file, 'utf8'));
-  source.steps[0].checks = [
-    { criterion_id: 'AC1', target: 'result', path: '/fee_cents', op: 'at_most', ref_target: 'input', ref_path: '/cap_cents' },
-    {
-      criterion_id: 'AC2',
-      target: 'result',
-      path: '',
-      op: 'integer_relation',
-      value: {
-        left: { field: '/total_cents' },
-        compare: 'eq',
-        right: { ref_target: 'input', ref_path: '/gross_cents' },
-      },
-    },
-  ];
-  writeFileSync(file, `${JSON.stringify(source, null, 2)}\n`);
-  const card = storyCard({ run: { repo: 'demo/repo', number: 869, issue: { title: 'Relational checks', url: 'https://example.test/869' } }, root: setup.repo, changed: ['tests/place-order.json'] });
-  assert.match(card, /input \/cap_cents/);
-  assert.match(card, /integer_relation/);
 });

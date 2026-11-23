@@ -1,10 +1,25 @@
 // Generated from prompts/cli/pdd-codex.prompt.md.
 // Dedicated PDD Codex launcher: shares one ~/.codex home + one PID-refcounted runtime dir
 // per machine, passes gateway routing via -c flags, and cleans up auth.json + lease on last exit.
-import { spawn as nativeSpawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
+import {
+  assertSafeRuntimeDir,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
+  defaultIsPidAlive,
+  MIN_REUSABLE_LEASE_REMAINING_MS,
+  parseWrapperLeadingArgs,
+  readJsonObjectQuiet,
+  registerProcessCleanupHooks,
+  signalToExitCode,
+  spawnWrappedBinary,
+  startLeaseHeartbeat,
+  sweepLivePids,
+  unlinkQuiet,
+  withRuntimeDirLock,
+  writeAtomicPrivate,
+} from './accounts/runtime-session.mjs';
 import {
   buildCodexGatewayCliArgs,
   buildCodexHomeMirrorCliArgs,
@@ -12,12 +27,15 @@ import {
   CloudAccountsError,
   ensureUserCodexHomeBaseline,
   heartbeatCloudLease,
+  isCloudAccountsActive,
+  isReauthRequiredAccount,
   leaseCloudAccount,
   localCodexHome,
   needsCodexConfigWritebackNormalization,
   normalizeCodexConfigWriteback,
+  readCloudAccountsState,
   releaseCloudLease,
-  resolveCodexBackendApiUrl,
+  resolveCodexGatewayEndpoints,
   resolveEffectiveSqliteHome,
   resolvePddStateBase,
   stopCodexAppServerDaemon,
@@ -25,12 +43,6 @@ import {
   syncManagedCodexHomeLinks,
 } from './login-pool.mjs';
 import { redactSecrets, rememberSecrets } from './secret-redaction.mjs';
-
-const DEFAULT_LOCK_TIMEOUT_MS = 25_000;
-const DEFAULT_STALE_LOCK_MS = 30_000;
-const DEAD_LOCK_GRACE_MS = 1_500;
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 10 * 60 * 1000;
-const MIN_REUSABLE_LEASE_REMAINING_MS = 5 * 60 * 1000;
 
 const STRIPPED_PROVIDER_ENV_VARS = [
   'OPENAI_API_KEY',
@@ -98,51 +110,6 @@ const PDD_CODEX_HELP_TEXT = [
   '',
 ].join('\n');
 
-function sleepMs(ms) {
-  return new Promise(resolveTimer => {
-    setTimeout(resolveTimer, ms);
-  });
-}
-
-function defaultIsPidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    // Runtime directory is 0700 per-UID, so EPERM means a recycled PID owned by another OS user.
-    return false;
-  }
-}
-
-function writePrivateAtomic(fs, targetPath, content) {
-  fs.mkdirSync(dirname(targetPath), { recursive: true, mode: 0o700 });
-  const tmpPath = `${targetPath}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
-  try {
-    fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: 0o600 });
-    try { fs.chmodSync?.(tmpPath, 0o600); } catch {}
-    fs.renameSync(tmpPath, targetPath);
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch {}
-    throw err;
-  }
-}
-
-function readJsonFileQuiet(fs, targetPath) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function unlinkQuiet(fs, targetPath) {
-  try {
-    fs.unlinkSync(targetPath);
-  } catch {}
-}
-
 function isKnownCodexOrWrapperOption(token) {
   if (typeof token !== 'string' || !token) return false;
   if (token === '--' || token === '--account' || token.startsWith('--account=') || token === '--pdd-help') {
@@ -158,60 +125,21 @@ function isKnownCodexOrWrapperOption(token) {
 
 /**
  * Parse optional leading `pdd-codex` flags (`--account`, `--pdd-help`) without disturbing
- * stock Codex flags or user prompt arguments.
+ * stock Codex flags or user prompt arguments. Rejects blank or dash-prefixed labels on both
+ * `--account <label>` and `--account=<label>`.
  */
 export function parsePddCodexArgs(argv = []) {
-  const args = Array.isArray(argv) ? argv.map(String) : [];
-  let preferredAccount = null;
-  let showPddHelp = false;
-  let idx = 0;
-
-  while (idx < args.length) {
-    const token = args[idx];
-    if (token === '--') {
-      // Consume `--` only when it separates leading pdd-codex flags from non-dash args or
-      // known Codex/wrapper options; preserve `--` when the next token is an unknown dash
-      // token (e.g. `pdd-codex -- -prompt` or `pdd-codex --account a -- -prompt`) so Codex
-      // treats it as a positional prompt instead of a flag.
-      const nextToken = args[idx + 1];
-      const nextIsPositionalDashPrompt = typeof nextToken === 'string'
-        && nextToken.startsWith('-')
-        && !isKnownCodexOrWrapperOption(nextToken);
-      if (idx > 0 && !nextIsPositionalDashPrompt) {
-        idx += 1;
-      }
-      break;
-    }
-    if (token === '--pdd-help') {
-      showPddHelp = true;
-      idx += 1;
-      continue;
-    }
-    if (token === '--account') {
-      const value = args[idx + 1];
-      if (typeof value !== 'string' || !value.trim() || value.startsWith('-')) {
-        throw new CloudAccountsError('Missing account label after --account.', { code: 'invalid_argument' });
-      }
-      preferredAccount = value.trim();
-      idx += 2;
-      continue;
-    }
-    if (token.startsWith('--account=')) {
-      const value = token.slice('--account='.length).trim();
-      if (!value) {
-        throw new CloudAccountsError('Missing account label after --account=.', { code: 'invalid_argument' });
-      }
-      preferredAccount = value;
-      idx += 1;
-      continue;
-    }
-    break;
-  }
-
+  const { preferredAccount, showPddHelp, restArgs } = parseWrapperLeadingArgs(argv, {
+    isKnownOption: isKnownCodexOrWrapperOption,
+    missingMessage: 'Missing account label after --account.',
+    missingEqMessage: 'Missing account label after --account=.',
+    missingCode: 'invalid_argument',
+    exitCode: 2,
+  });
   return {
     preferredAccount,
     showPddHelp,
-    codexArgs: args.slice(idx),
+    codexArgs: restArgs,
   };
 }
 
@@ -258,7 +186,6 @@ function inspectCodexInvocation(codexArgs = []) {
     break;
   }
 
-  // Check if the subcommand itself is asking for `--help` / `-h` (before any `--` separator).
   for (const token of subArgs) {
     if (token === '--') break;
     if (token === '--help' || token === '-h') {
@@ -293,102 +220,13 @@ export function sharedRuntimeDirPath({ env = process.env, tmpRoot = null, uid = 
   return join(resolve(root), `pdd-codex-${effectiveUid}`);
 }
 
-function ensureSecureDirectory(fs, dirPath, { expectedUid = null } = {}) {
-  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
-  let stat = null;
-  try {
-    stat = lstat.call(fs, dirPath);
-  } catch (err) {
-    if (err?.code !== 'ENOENT') throw err;
-  }
-  if (stat) {
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new CloudAccountsError(`Refusing unsafe PDD Codex runtime path at ${dirPath}.`, { code: 'unsafe_runtime_dir' });
-    }
-    if (expectedUid !== null && typeof stat.uid === 'number' && stat.uid !== expectedUid) {
-      throw new CloudAccountsError(`PDD Codex runtime folder at ${dirPath} is owned by another user.`, { code: 'unsafe_runtime_dir' });
-    }
-  } else {
-    fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
-  }
-  try { fs.chmodSync?.(dirPath, 0o700); } catch {}
-}
-
-function tryBreakLockAtomically(fs, runtimeDir, lockDir) {
-  const staleDir = join(runtimeDir, `.lock-stale-${process.pid}-${randomBytes(4).toString('hex')}`);
-  try {
-    fs.renameSync(lockDir, staleDir);
-  } catch {
-    return false;
-  }
-  try { fs.rmSync(staleDir, { recursive: true, force: true }); } catch {}
-  return true;
-}
-
-/**
- * Acquire an atomic cross-process directory lock inside `runtimeDir` with dead-owner and stale-lock recovery.
- */
-async function withRuntimeLock(fs, runtimeDir, fn, ports = {}) {
-  const nowFn = ports.now ?? Date.now;
-  const sleep = ports.sleep ?? sleepMs;
-  const isPidAlive = ports.isPidAlive ?? defaultIsPidAlive;
-  const ownerPid = ports.pid ?? process.pid;
-  const lockTimeoutMs = ports.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
-  const staleLockMs = ports.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
-  const lockDir = join(runtimeDir, 'lock');
-  const ownerPath = join(lockDir, 'owner.json');
-  const lockToken = randomBytes(8).toString('hex');
-  const deadline = nowFn() + lockTimeoutMs;
-  let wroteOwner = false;
-
-  while (true) {
-    try {
-      fs.mkdirSync(lockDir, { mode: 0o700 });
-      try {
-        fs.writeFileSync(
-          ownerPath,
-          JSON.stringify({ pid: ownerPid, token: lockToken, acquired_at: nowFn() }),
-          { encoding: 'utf8', mode: 0o600 },
-        );
-        wroteOwner = true;
-      } catch {}
-      break;
-    } catch (err) {
-      if (err?.code !== 'EEXIST') throw err;
-      try {
-        const st = fs.statSync(lockDir);
-        const ageMs = typeof st?.mtimeMs === 'number' ? (nowFn() - st.mtimeMs) : 0;
-        const owner = readJsonFileQuiet(fs, ownerPath);
-        const ownerDead = Number.isInteger(owner?.pid)
-          && owner.pid > 0
-          && !isPidAlive(owner.pid)
-          && ageMs >= DEAD_LOCK_GRACE_MS;
-        if (ownerDead || ageMs > staleLockMs) {
-          if (tryBreakLockAtomically(fs, runtimeDir, lockDir)) continue;
-        }
-      } catch {}
-      if (nowFn() >= deadline) {
-        throw new CloudAccountsError('Timed out waiting for PDD Codex runtime lock.', { code: 'lock_timeout' });
-      }
-      await sleep(15 + Math.floor(Math.random() * 25));
-    }
-  }
-
-  try {
-    return await fn();
-  } finally {
-    try {
-      // Only remove lockDir if it still belongs to this acquisition (prevents deleting a
-      // newer holder's lock after stale-lock recovery, including before it writes owner.json).
-      const currentOwner = readJsonFileQuiet(fs, ownerPath);
-      const ownsLock = wroteOwner
-        ? currentOwner?.token === lockToken
-        : !currentOwner;
-      if (ownsLock) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
-      }
-    } catch {}
-  }
+function withCodexRuntimeLock(fs, runtimeDir, fn, ports = {}) {
+  return withRuntimeDirLock(fs, runtimeDir, fn, {
+    lockName: 'lock',
+    timeoutCode: 'lock_timeout',
+    label: 'PDD Codex runtime',
+    ports,
+  });
 }
 
 function ensureConfigSymlinkAtomic(fs, userConfigPath, runtimeConfigPath) {
@@ -406,7 +244,6 @@ function ensureConfigSymlinkAtomic(fs, userConfigPath, runtimeConfigPath) {
       fs.symlinkSync(userConfigPath, runtimeConfigPath);
       return;
     }
-    // Atomic rename avoids an ENOENT window for concurrent Codex processes reading config.toml.
     const tmpLink = `${runtimeConfigPath}.link-${process.pid}-${randomBytes(4).toString('hex')}`;
     try {
       fs.symlinkSync(userConfigPath, tmpLink);
@@ -421,10 +258,7 @@ function ensureConfigSymlinkAtomic(fs, userConfigPath, runtimeConfigPath) {
   fs.symlinkSync(userConfigPath, runtimeConfigPath);
 }
 
-/**
- * Ensure `~/.codex/` baseline exists and symlink all user entries + `config.toml` into `runtimeDir`.
- */
-export function prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir) {
+function assertCodexHomeNotInsideRuntimeDir(fs, userCodexHome, runtimeDir) {
   const resolvedUserHome = resolve(userCodexHome);
   const resolvedRuntimeDir = resolve(runtimeDir);
   const realFn = fs?.realpathSync?.native ?? fs?.realpathSync ?? (fs === nativeFs ? nativeFs.realpathSync : null);
@@ -445,6 +279,14 @@ export function prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir) {
       { code: 'unsafe_runtime_dir' },
     );
   }
+  return { resolvedUserHome, resolvedRuntimeDir };
+}
+
+/**
+ * Ensure `~/.codex/` baseline exists and symlink all user entries + `config.toml` into `runtimeDir`.
+ */
+export function prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir) {
+  const { resolvedUserHome, resolvedRuntimeDir } = assertCodexHomeNotInsideRuntimeDir(fs, userCodexHome, runtimeDir);
   const userConfigPath = ensureUserCodexHomeBaseline(fs, resolvedUserHome);
 
   syncManagedCodexHomeLinks(fs, resolvedUserHome, resolvedRuntimeDir, [], {
@@ -453,44 +295,15 @@ export function prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir) {
 
   ensureConfigSymlinkAtomic(fs, userConfigPath, join(resolvedRuntimeDir, 'config.toml'));
 
-  const emptySubshellDir = join(resolvedRuntimeDir, 'empty-subshell');
-  fs.mkdirSync(emptySubshellDir, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync?.(emptySubshellDir, 0o700); } catch {}
-
   return {
     userCodexHome: resolvedUserHome,
     userConfigPath,
-    emptySubshellDir,
   };
 }
 
-function sweepAndListLivePids(fs, pidsDir, isPidAlive) {
-  fs.mkdirSync(pidsDir, { recursive: true, mode: 0o700 });
-  const live = [];
-  let entries = [];
-  try {
-    entries = fs.readdirSync(pidsDir);
-  } catch {
-    return live;
-  }
-  for (const name of entries) {
-    if (!/^\d+$/.test(name)) {
-      unlinkQuiet(fs, join(pidsDir, name));
-      continue;
-    }
-    const pidNum = Number(name);
-    if (isPidAlive(pidNum)) {
-      live.push(pidNum);
-    } else {
-      unlinkQuiet(fs, join(pidsDir, name));
-    }
-  }
-  return live;
-}
-
 function readReusableRuntimeLease(fs, runtimeDir, { now }) {
-  const meta = readJsonFileQuiet(fs, join(runtimeDir, 'lease.json'));
-  const auth = readJsonFileQuiet(fs, join(runtimeDir, 'auth.json'));
+  const meta = readJsonObjectQuiet(fs, join(runtimeDir, 'lease.json'));
+  const auth = readJsonObjectQuiet(fs, join(runtimeDir, 'auth.json'));
   if (!meta || !auth) return null;
   if (meta.auto_rotate !== true) return null;
   if (typeof meta.lease_id !== 'string' || !meta.lease_id.trim()) return null;
@@ -522,13 +335,7 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
       { code: 'invalid_lease' },
     );
   }
-  const grantToken = String(lease.codex_gateway_token || lease.gateway_bearer_token || '').trim();
-  if (!grantToken.startsWith('pddg_')) {
-    throw new CloudAccountsError('PDD Cloud returned an invalid Codex gateway grant token.', { code: 'invalid_lease' });
-  }
-  rememberSecrets(grantToken);
-  const hasExplicitBackendApi = typeof lease.codex_backend_api_url === 'string' && Boolean(lease.codex_backend_api_url.trim());
-  const backendApiUrl = resolveCodexBackendApiUrl(lease, null, { preserveLegacyBase: !hasExplicitBackendApi });
+  const { grantToken, backendApiUrl, nativeBackendApi } = resolveCodexGatewayEndpoints(lease);
   if (!backendApiUrl) {
     throw new CloudAccountsError('PDD Cloud lease did not include a Codex gateway URL.', { code: 'invalid_lease' });
   }
@@ -540,7 +347,7 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
     account_id: account.account_id ?? null,
     label: account.label ?? null,
     backend_api_url: backendApiUrl,
-    native_backend_api: hasExplicitBackendApi,
+    native_backend_api: nativeBackendApi,
     expires_at: lease.expires_at ?? null,
     delivery_mode: lease.delivery_mode,
     plan_type: planType,
@@ -548,21 +355,33 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
     obtained_at: nowIso,
     last_heartbeat_at: nowIso,
   };
-  writePrivateAtomic(fs, join(runtimeDir, 'auth.json'), `${JSON.stringify(authPayload, null, 2)}\n`);
-  writePrivateAtomic(fs, join(runtimeDir, 'lease.json'), `${JSON.stringify(metaPayload, null, 2)}\n`);
+  writeAtomicPrivate(fs, join(runtimeDir, 'auth.json'), `${JSON.stringify(authPayload, null, 2)}\n`);
+  writeAtomicPrivate(fs, join(runtimeDir, 'lease.json'), `${JSON.stringify(metaPayload, null, 2)}\n`);
   return {
     leaseId: metaPayload.lease_id,
     accountId: metaPayload.account_id,
     label: metaPayload.label,
     backendApiUrl,
-    nativeBackendApi: hasExplicitBackendApi,
+    nativeBackendApi,
     expiresAt: metaPayload.expires_at,
     grantToken,
   };
 }
 
+function assertCodexAccountNotReauthRequired(reply, fallbackLabel = null) {
+  const account = reply?.account;
+  if (reply?.state !== 'reauth_required' && !isReauthRequiredAccount(account)) return;
+  const label = account?.label || fallbackLabel || 'your Codex account';
+  throw new CloudAccountsError(
+    `PDD Cloud Codex account "${label}" requires re-authentication. Run \`pdd accounts add --provider codex --label ${label}\` or pick another account.`,
+    { code: 'reauth_required', exitCode: 1 },
+  );
+}
+
 /**
  * Acquire a shared machine runtime session (PID-refcounted, 1 lease across N concurrent sessions).
+ * Propagates the locally active `accounts-state.json` Codex seat (from `pdd accounts use`/`next`)
+ * into `leaseCloudAccount` when acquiring a new shared lease.
  */
 export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = process.env } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
@@ -573,21 +392,33 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
   const runtimeDir = sharedRuntimeDirPath({ env, tmpRoot: ports.tmpRoot, uid: ports.uid });
   const userCodexHome = localCodexHome(env);
 
-  ensureSecureDirectory(fs, runtimeDir, { expectedUid });
+  assertSafeRuntimeDir(fs, dirname(runtimeDir), { expectedUid, label: 'PDD Codex runtime root' });
+  assertSafeRuntimeDir(fs, runtimeDir, { expectedUid, label: 'PDD Codex runtime' });
+  assertCodexHomeNotInsideRuntimeDir(fs, userCodexHome, runtimeDir);
 
-  return withRuntimeLock(fs, runtimeDir, async () => {
+  return withCodexRuntimeLock(fs, runtimeDir, async () => {
     const pidsDir = join(runtimeDir, 'pids');
-    sweepAndListLivePids(fs, pidsDir, isPidAlive);
+    const existingLivePids = sweepLivePids(fs, pidsDir, isPidAlive, { createDir: true });
     const myPidFile = join(pidsDir, String(myPid));
-    writePrivateAtomic(fs, myPidFile, JSON.stringify({ pid: myPid, started_at: new Date(nowFn()).toISOString() }));
+    writeAtomicPrivate(fs, myPidFile, JSON.stringify({ pid: myPid, started_at: new Date(nowFn()).toISOString() }));
 
     try {
-      const homeInfo = prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir);
+      const savedActiveCodex = readCloudAccountsState({ env }, { fs })?.active?.codex;
+      const savedActiveId = typeof savedActiveCodex?.account_id === 'string' && savedActiveCodex.account_id
+        && savedActiveCodex.state !== 'reauth_required'
+        ? savedActiveCodex.account_id
+        : null;
       const existing = readReusableRuntimeLease(fs, runtimeDir, { now: nowFn });
-      if (existing) {
+      const seatMatchesOrShared = existingLivePids.length > 0
+        || !savedActiveId
+        || !existing?.accountId
+        || existing.accountId === savedActiveId;
+      if (existing && seatMatchesOrShared) {
+        const homeInfo = prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir);
         return {
           reused: true,
           pinned: false,
+          pid: myPid,
           runtimeDir,
           ...homeInfo,
           ...existing,
@@ -596,7 +427,7 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
 
       const leaseReply = await (ports.leaseCloudAccount ?? leaseCloudAccount)({
         provider: 'codex',
-        currentAccountId: null,
+        ...(savedActiveId ? { currentAccountId: savedActiveId } : {}),
         holderId: 'pdd-codex',
         updateState: false,
         autoRotate: true,
@@ -606,6 +437,7 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
         const wakeAt = leaseReply.wake_at ? ` until ${leaseReply.wake_at}` : '';
         throw new CloudAccountsError(`All shared Codex accounts are cooling${wakeAt}.`, { code: 'all_cooling' });
       }
+      assertCodexAccountNotReauthRequired(leaseReply);
       if (!leaseReply || leaseReply.state !== 'leased') {
         throw new CloudAccountsError(
           'No ready Codex account is available in PDD Cloud. Run `gh auth login`, `pdd accounts add --provider codex`, or run stock `codex` for your personal account.',
@@ -614,10 +446,12 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
       }
 
       const leaseInfo = writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate: true, now: nowFn });
+      const homeInfo = prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir);
       stopCodexAppServerDaemon(runtimeDir, { env, fs, spawnSync: ports.spawnSync, codexBin: ports.codexBin });
       return {
         reused: false,
         pinned: false,
+        pid: myPid,
         runtimeDir,
         ...homeInfo,
         ...leaseInfo,
@@ -639,14 +473,14 @@ export async function releaseSharedRuntimeSession(runtimeDir, { cwd = process.cw
 
   let cleanupOutcome = { isLastSession: false, leaseId: null };
   try {
-    cleanupOutcome = await withRuntimeLock(fs, runtimeDir, async () => {
+    cleanupOutcome = await withCodexRuntimeLock(fs, runtimeDir, async () => {
       const pidsDir = join(runtimeDir, 'pids');
       unlinkQuiet(fs, join(pidsDir, String(myPid)));
-      const remaining = sweepAndListLivePids(fs, pidsDir, isPidAlive);
+      const remaining = sweepLivePids(fs, pidsDir, isPidAlive, { createDir: true });
       if (remaining.length > 0) {
         return { isLastSession: false, leaseId: null, remainingPids: remaining.length };
       }
-      const meta = readJsonFileQuiet(fs, join(runtimeDir, 'lease.json'));
+      const meta = readJsonObjectQuiet(fs, join(runtimeDir, 'lease.json'));
       const leaseId = typeof meta?.lease_id === 'string' && meta.lease_id.trim() ? meta.lease_id.trim() : null;
       unlinkQuiet(fs, join(runtimeDir, 'auth.json'));
       unlinkQuiet(fs, join(runtimeDir, 'lease.json'));
@@ -674,13 +508,16 @@ export async function releaseSharedRuntimeSession(runtimeDir, { cwd = process.cw
 export async function acquirePinnedRuntimeSession(preferredLabel, { cwd = process.cwd(), env = process.env } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const nowFn = ports.now ?? Date.now;
+  const myPid = ports.pid ?? process.pid;
+  const expectedUid = typeof process.getuid === 'function' ? process.getuid() : null;
   const root = resolveRuntimeRoot({ env, tmpRoot: ports.tmpRoot });
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  assertSafeRuntimeDir(fs, root, { expectedUid, label: 'PDD Codex runtime root' });
   const pinDir = fs.mkdtempSync(join(resolve(root), 'pdd-codex-pin-'));
   try { fs.chmodSync?.(pinDir, 0o700); } catch {}
 
+  const userCodexHome = localCodexHome(env);
   try {
-    const homeInfo = prepareRuntimeCodexHome(fs, localCodexHome(env), pinDir);
+    assertCodexHomeNotInsideRuntimeDir(fs, userCodexHome, pinDir);
     const leaseReply = await (ports.leaseCloudAccount ?? leaseCloudAccount)({
       provider: 'codex',
       preferredLabel,
@@ -694,14 +531,17 @@ export async function acquirePinnedRuntimeSession(preferredLabel, { cwd = proces
       const wakeAt = leaseReply.wake_at ? ` until ${leaseReply.wake_at}` : '';
       throw new CloudAccountsError(`Pinned Codex account "${preferredLabel}" is cooling${wakeAt}.`, { code: 'all_cooling' });
     }
+    assertCodexAccountNotReauthRequired(leaseReply, preferredLabel);
     if (!leaseReply || leaseReply.state !== 'leased') {
       throw new CloudAccountsError(`Codex account "${preferredLabel}" is not available in PDD Cloud.`, { code: 'no_account_available' });
     }
 
     const leaseInfo = writeLeaseFiles(fs, pinDir, leaseReply, { autoRotate: false, now: nowFn });
+    const homeInfo = prepareRuntimeCodexHome(fs, userCodexHome, pinDir);
     return {
       reused: false,
       pinned: true,
+      pid: myPid,
       runtimeDir: pinDir,
       ...homeInfo,
       ...leaseInfo,
@@ -727,144 +567,129 @@ async function releasePinnedRuntimeSession(session, { cwd = process.cwd(), env =
 function buildCleanChildEnv(baseEnv, runtimeDir, { grantToken = null } = {}) {
   const next = {};
   for (const [key, val] of Object.entries(baseEnv ?? {})) {
-    if (typeof val === 'string') next[key] = val;
+    if (typeof val !== 'string') continue;
+    if (key.startsWith('PDD_')) continue;
+    next[key] = val;
   }
   for (const key of STRIPPED_PROVIDER_ENV_VARS) {
     delete next[key];
   }
   next.CODEX_HOME = runtimeDir;
-  // Stock Codex's built-in `codex_apps` MCP client only attaches ChatGPT auth to chatgpt.com;
-  // setting CODEX_CONNECTORS_TOKEN passes our revocable `pddg_*` grant to `{chatgpt_base_url}/ps/mcp`
-  // while `shell_environment_policy.exclude` keeps it out of Codex subshells.
   if (typeof grantToken === 'string' && grantToken.startsWith('pddg_')) {
     next.CODEX_CONNECTORS_TOKEN = grantToken;
   }
   return next;
 }
 
-function spawnCodexProcess(command, args, { cwd, env }, ports = {}) {
-  if (typeof ports.spawnCodex === 'function') {
-    return Promise.resolve(ports.spawnCodex(command, args, { cwd, env }));
+function stripPddEnv(env) {
+  if (!env || typeof env !== 'object') return env;
+  const next = {};
+  for (const [key, val] of Object.entries(env)) {
+    if (typeof val !== 'string') continue;
+    if (key.startsWith('PDD_')) continue;
+    next[key] = val;
   }
-  return new Promise(resolveExit => {
-    const child = (ports.spawn ?? nativeSpawn)(command, args, {
-      cwd,
-      env,
-      stdio: 'inherit',
-    });
-    const forward = sig => {
-      try { child.kill(sig); } catch {}
-    };
-    const onSigInt = () => forward('SIGINT');
-    const onSigTerm = () => forward('SIGTERM');
-    const onSigHup = () => forward('SIGHUP');
-    process.on('SIGINT', onSigInt);
-    process.on('SIGTERM', onSigTerm);
-    process.on('SIGHUP', onSigHup);
+  return next;
+}
 
-    const detach = () => {
-      process.off('SIGINT', onSigInt);
-      process.off('SIGTERM', onSigTerm);
-      process.off('SIGHUP', onSigHup);
-    };
+const AUTO_FAIL_CLOSED_CODES = new Set([
+  'unsafe_runtime_dir',
+  'symlink_refused',
+  'invalid_settings',
+  'invalid_lease',
+  'invalid_codex_config',
+  'reauth_required',
+  'unsafe_path',
+  'invalid_args',
+  'unsupported_delivery_mode',
+  'lock_timeout',
+  'toml_parser_unregistered',
+]);
 
-    child.on('error', err => {
-      detach();
-      resolveExit({ code: 1, error: err });
-    });
-    child.on('close', (code, signal) => {
-      detach();
-      if (signal === 'SIGINT') return resolveExit({ code: 130 });
-      if (signal === 'SIGTERM') return resolveExit({ code: 143 });
-      if (signal === 'SIGHUP') return resolveExit({ code: 129 });
-      resolveExit({ code: typeof code === 'number' ? code : 1 });
-    });
-  });
+const AUTO_FAIL_OPEN_CODES = new Set([
+  'timeout',
+  'network_error',
+  'missing_auth_token',
+  'no_ready_account',
+  'no_account_available',
+  'all_cooling',
+  'not_enrolled',
+  'offline',
+  'service_unavailable',
+  'rate_limited',
+  'lease_unavailable',
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'ECONNRESET',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+function isAutoFailOpenLeaseError(err) {
+  if (!err || typeof err !== 'object') return false;
+  const code = String(err.code ?? '');
+  const causeCode = String(err.cause?.code ?? '');
+  if (AUTO_FAIL_CLOSED_CODES.has(code) || AUTO_FAIL_CLOSED_CODES.has(causeCode)) return false;
+  if (AUTO_FAIL_OPEN_CODES.has(code) || AUTO_FAIL_OPEN_CODES.has(causeCode)) return true;
+  const status = Number(err.status ?? 0);
+  if (status === 401 || status === 403 || status >= 500) return true;
+  return false;
+}
+
+function spawnCodexProcess(command, args, { cwd, env, onChild = null }, ports = {}) {
+  return spawnWrappedBinary(
+    command,
+    args,
+    { cwd, env, onChild, customSpawn: ports.spawnCodex },
+    ports,
+  );
 }
 
 function startBackgroundHeartbeat(session, { cwd, env }, ports = {}) {
   if (!session?.leaseId) return () => {};
-  const intervalMs = ports.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) return () => {};
   const fs = ports.fs ?? nativeFs;
   const nowFn = ports.now ?? Date.now;
-  let stopped = false;
-  let inFlight = false;
-  let timer = null;
+  const metaPath = join(session.runtimeDir, 'lease.json');
 
-  const stop = () => {
-    stopped = true;
-    if (timer) clearTimeout(timer);
-    timer = null;
-  };
-
-  const scheduleNext = () => {
-    if (stopped) return;
-    const jitterMs = intervalMs >= 1000 ? Math.floor(Math.random() * Math.min(30_000, intervalMs * 0.2)) : 0;
-    timer = setTimeout(() => { void tick(); }, intervalMs + jitterMs);
-    timer.unref?.();
-  };
-
-  const tick = async () => {
-    if (stopped || inFlight) return;
-    inFlight = true;
-    let targetLeaseId = session.leaseId;
-    try {
-      if (!session.pinned) {
-        const meta = readJsonFileQuiet(fs, join(session.runtimeDir, 'lease.json'));
-        if (!meta || typeof meta.lease_id !== 'string' || !meta.lease_id.trim()) {
-          stop();
-          return;
-        }
-        targetLeaseId = meta.lease_id.trim();
-        // Deduplicate heartbeats across concurrent sessions sharing one runtime lease.
-        const lastHbMs = Date.parse(String(meta.last_heartbeat_at ?? ''));
-        if (Number.isFinite(lastHbMs) && (nowFn() - lastHbMs) < Math.floor(intervalMs * 0.75)) {
-          return;
-        }
+  return startLeaseHeartbeat({
+    initialLeaseId: session.leaseId,
+    leasePath: metaPath,
+    runtimeDir: session.runtimeDir,
+    shared: !session.pinned,
+    lockName: 'lock',
+    lockLabel: 'PDD Codex runtime',
+    timeoutCode: 'lock_timeout',
+    intervalMs: ports.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
+    minSpacingRatio: 0.75,
+    jitterCapMs: 30_000,
+    jitterRatio: 0.2,
+    heartbeatTimeoutMs: ports.heartbeatTimeoutMs ?? 5000,
+    heartbeatFn: ports.heartbeatCloudLease ?? heartbeatCloudLease,
+    onRefresh: async (targetLeaseId, reply) => {
+      if (!reply?.expires_at || session.pinned) return;
+      const currentMeta = readJsonObjectQuiet(fs, metaPath);
+      if (currentMeta && currentMeta.lease_id === targetLeaseId) {
+        currentMeta.expires_at = reply.expires_at;
+        currentMeta.last_heartbeat_at = new Date(nowFn()).toISOString();
+        writeAtomicPrivate(fs, metaPath, `${JSON.stringify(currentMeta, null, 2)}\n`);
       }
-
-      const reply = await (ports.heartbeatCloudLease ?? heartbeatCloudLease)(
-        targetLeaseId,
-        { cwd, env, timeoutMs: ports.heartbeatTimeoutMs ?? 5000 },
-        ports,
-      );
-      if (stopped) return;
-      if (reply?.expires_at && !session.pinned) {
-        await withRuntimeLock(fs, session.runtimeDir, async () => {
-          if (stopped) return;
-          const metaPath = join(session.runtimeDir, 'lease.json');
-          const currentMeta = readJsonFileQuiet(fs, metaPath);
-          if (currentMeta && currentMeta.lease_id === targetLeaseId) {
-            currentMeta.expires_at = reply.expires_at;
-            currentMeta.last_heartbeat_at = new Date(nowFn()).toISOString();
-            writePrivateAtomic(fs, metaPath, `${JSON.stringify(currentMeta, null, 2)}\n`);
-          }
-        }, ports).catch(() => {});
+    },
+    onInvalidated: async targetLeaseId => {
+      if (session.pinned) return;
+      const currentMeta = readJsonObjectQuiet(fs, metaPath);
+      if (currentMeta && currentMeta.lease_id === targetLeaseId) {
+        unlinkQuiet(fs, join(session.runtimeDir, 'auth.json'));
+        unlinkQuiet(fs, metaPath);
+        stopCodexAppServerDaemon(session.runtimeDir, { env, fs, spawnSync: ports.spawnSync, codexBin: ports.codexBin });
       }
-    } catch (err) {
-      if (err?.status === 401 || err?.status === 403 || err?.status === 404) {
-        if (!session.pinned) {
-          await withRuntimeLock(fs, session.runtimeDir, async () => {
-            const metaPath = join(session.runtimeDir, 'lease.json');
-            const currentMeta = readJsonFileQuiet(fs, metaPath);
-            if (currentMeta && currentMeta.lease_id === targetLeaseId) {
-              unlinkQuiet(fs, join(session.runtimeDir, 'auth.json'));
-              unlinkQuiet(fs, metaPath);
-              stopCodexAppServerDaemon(session.runtimeDir, { env, fs, spawnSync: ports.spawnSync, codexBin: ports.codexBin });
-            }
-          }, ports).catch(() => {});
-        }
-        stop();
-      }
-    } finally {
-      inFlight = false;
-      scheduleNext();
-    }
-  };
-
-  scheduleNext();
-  return stop;
+    },
+    cwd,
+    env,
+    fs,
+    now: nowFn,
+    ports,
+  });
 }
 
 /**
@@ -872,12 +697,15 @@ function startBackgroundHeartbeat(session, { cwd, env }, ports = {}) {
  */
 async function runPddCodexLogout({ cwd, env, stdout }, ports = {}) {
   const fs = ports.fs ?? nativeFs;
+  const expectedUid = typeof process.getuid === 'function' ? process.getuid() : null;
   const runtimeDir = sharedRuntimeDirPath({ env, tmpRoot: ports.tmpRoot, uid: ports.uid });
   let leaseId = null;
   if (fs.existsSync?.(runtimeDir)) {
+    assertSafeRuntimeDir(fs, dirname(runtimeDir), { expectedUid, label: 'PDD Codex runtime root' });
+    assertSafeRuntimeDir(fs, runtimeDir, { expectedUid, label: 'PDD Codex runtime' });
     try {
-      await withRuntimeLock(fs, runtimeDir, async () => {
-        const meta = readJsonFileQuiet(fs, join(runtimeDir, 'lease.json'));
+      await withCodexRuntimeLock(fs, runtimeDir, async () => {
+        const meta = readJsonObjectQuiet(fs, join(runtimeDir, 'lease.json'));
         leaseId = typeof meta?.lease_id === 'string' && meta.lease_id.trim() ? meta.lease_id.trim() : null;
         unlinkQuiet(fs, join(runtimeDir, 'auth.json'));
         unlinkQuiet(fs, join(runtimeDir, 'lease.json'));
@@ -905,6 +733,7 @@ export async function runPddCodexCli(
   ports = {},
 ) {
   const fs = ports.fs ?? nativeFs;
+  const expectedUid = typeof process.getuid === 'function' ? process.getuid() : null;
   const codexBin = (typeof env?.PDD_CODEX_BIN === 'string' && env.PDD_CODEX_BIN.trim())
     ? env.PDD_CODEX_BIN.trim()
     : 'codex';
@@ -923,27 +752,39 @@ export async function runPddCodexCli(
   }
 
   const codexArgs = parsed.codexArgs;
+  const autoFailOpen = env?.PDD_CODEX_AUTO_FAIL_OPEN === '1' && !parsed.preferredAccount;
+  const passthroughEnv = stripPddEnv(env);
   const invocation = inspectCodexInvocation(codexArgs);
   const { subcommand, subArgs, hasHelpOrVersion } = invocation;
   const mcpSubcommand = subcommand === 'mcp' ? inspectCodexInvocation(subArgs).subcommand : '';
+  const loginSubcommand = subcommand === 'login' ? inspectCodexInvocation(subArgs).subcommand : '';
 
-  // Instant passthrough for purely local help/version/completion commands (no cloud lease
-  // and never mutating shared state on e.g. `pdd-codex logout --help` or `pdd-codex -h logout`).
   const isMcpHelp = subcommand === 'mcp' && (!mcpSubcommand || mcpSubcommand === 'help');
   if (hasHelpOrVersion || NO_LEASE_SUBCOMMANDS.has(subcommand) || isMcpHelp) {
-    const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env }, ports);
+    const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env: passthroughEnv }, ports);
     if (res?.error) {
       stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
     }
-    return { exitCode: res?.code ?? 1 };
+    return { exitCode: res?.exitCode ?? res?.code ?? 1 };
   }
 
-  // Never let `pdd-codex logout` or `pdd-codex login` (even after leading global flags)
-  // touch the user's personal ~/.codex/auth.json.
-  if (subcommand === 'logout') {
-    return runPddCodexLogout({ cwd, env, stdout }, { ...ports, codexBin });
+  if (autoFailOpen && (subcommand === 'logout' || (subcommand === 'login' && loginSubcommand !== 'status'))) {
+    const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env: passthroughEnv }, ports);
+    if (res?.error) {
+      stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
+    }
+    return { exitCode: res?.exitCode ?? res?.code ?? 1 };
   }
-  if (subcommand === 'login') {
+
+  if (subcommand === 'logout') {
+    try {
+      return await runPddCodexLogout({ cwd, env, stdout }, { ...ports, codexBin });
+    } catch (err) {
+      stderr?.write?.(`pdd-codex: ${redactSecrets(err?.message ?? String(err))}\n`);
+      return { exitCode: 1 };
+    }
+  }
+  if (subcommand === 'login' && loginSubcommand !== 'status') {
     stdout?.write?.(
       'pdd-codex uses PDD Cloud shared accounts and never touches your personal ~/.codex/auth.json.\n'
       + 'Run `pdd accounts add --provider codex` to enroll an account, or run `codex login` for your personal account.\n',
@@ -951,14 +792,20 @@ export async function runPddCodexCli(
     return { exitCode: 0 };
   }
 
-  const normalizeWritebackUnderLock = async (writebackOpts) => {
+  if (autoFailOpen && !ports.leaseCloudAccount && !isCloudAccountsActive({ env, provider: 'codex' }, ports)) {
+    const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env: passthroughEnv }, ports);
+    if (res?.error) {
+      stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
+    }
+    return { exitCode: res?.exitCode ?? res?.code ?? 1 };
+  }
+
+  const normalizeWritebackUnderLock = async writebackOpts => {
     if (!needsCodexConfigWritebackNormalization(fs, writebackOpts)) return false;
     const lockRuntimeDir = sharedRuntimeDirPath({ env, tmpRoot: ports.tmpRoot, uid: ports.uid });
     try {
-      ensureSecureDirectory(fs, lockRuntimeDir, {
-        expectedUid: ports.uid ?? (typeof process.getuid === 'function' ? process.getuid() : null),
-      });
-      return await withRuntimeLock(
+      assertSafeRuntimeDir(fs, lockRuntimeDir, { expectedUid, label: 'PDD Codex runtime' });
+      return await withCodexRuntimeLock(
         fs,
         lockRuntimeDir,
         () => normalizeCodexConfigWriteback(fs, writebackOpts),
@@ -969,21 +816,17 @@ export async function runPddCodexCli(
     }
   };
 
-  // Offline-safe local config/state subcommands (`mcp add|remove|list|get`, `features`,
-  // `apply`, `archive`, `unarchive`, `delete`, `migrate-*`) run in a mirrored temp CODEX_HOME
-  // with marketplace/hook overrides and user sqlite_home without needing a cloud lease.
   const isLocalMcp = subcommand === 'mcp' && LOCAL_MCP_SUBCOMMANDS.has(mcpSubcommand);
   if (isLocalMcp || LOCAL_OFFLINE_SUBCOMMANDS.has(subcommand)) {
     const root = resolveRuntimeRoot({ env, tmpRoot: ports.tmpRoot });
-    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    const localDir = fs.mkdtempSync(join(resolve(root), 'pdd-codex-mcp-'));
-    try { fs.chmodSync?.(localDir, 0o700); } catch {}
+    let localDir = null;
     try {
+      assertSafeRuntimeDir(fs, root, { expectedUid, label: 'PDD Codex runtime root' });
+      localDir = fs.mkdtempSync(join(resolve(root), 'pdd-codex-mcp-'));
+      try { fs.chmodSync?.(localDir, 0o700); } catch {}
       const homeInfo = prepareRuntimeCodexHome(fs, localCodexHome(env), localDir);
       let userConfigText = '';
-      try {
-        userConfigText = fs.readFileSync(homeInfo.userConfigPath, 'utf8');
-      } catch {}
+      try { userConfigText = fs.readFileSync(homeInfo.userConfigPath, 'utf8'); } catch {}
       const localFlags = [];
       const effectiveSqliteHome = resolveEffectiveSqliteHome({
         userCodexHome: homeInfo.userCodexHome,
@@ -1011,33 +854,81 @@ export async function runPddCodexCli(
       if (res?.error) {
         stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
       }
-      return { exitCode: res?.code ?? 1 };
+      return { exitCode: res?.exitCode ?? res?.code ?? 1 };
+    } catch (err) {
+      stderr?.write?.(`pdd-codex: ${redactSecrets(err?.message ?? String(err))}\n`);
+      return { exitCode: 1 };
     } finally {
-      try { fs.rmSync(localDir, { recursive: true, force: true }); } catch {}
+      if (localDir) {
+        try { fs.rmSync(localDir, { recursive: true, force: true }); } catch {}
+      }
     }
   }
 
   let session = null;
-  try {
-    session = parsed.preferredAccount
-      ? await acquirePinnedRuntimeSession(parsed.preferredAccount, { cwd, env }, { ...ports, codexBin })
-      : await acquireSharedRuntimeSession({ cwd, env }, { ...ports, codexBin });
-  } catch (err) {
-    stderr?.write?.(`pdd-codex: ${redactSecrets(err?.message ?? String(err))}\n`);
-    return { exitCode: 1 };
-  }
+  let stopHeartbeat = () => {};
+  let activeChild = null;
+  let receivedSignal = null;
+  let cleanedUp = false;
 
-  const stopHeartbeat = startBackgroundHeartbeat(session, { cwd, env }, { ...ports, codexBin });
-  try {
-    let userConfigText = '';
+  const syncEmergencyCleanup = () => {
+    if (cleanedUp || !session) return;
+    cleanedUp = true;
     try {
-      userConfigText = fs.readFileSync(session.userConfigPath, 'utf8');
+      if (session.pinned && session.runtimeDir) {
+        fs.rmSync(session.runtimeDir, { recursive: true, force: true });
+      } else if (session.runtimeDir) {
+        const myPid = session.pid ?? ports.pid ?? process.pid;
+        unlinkQuiet(fs, join(session.runtimeDir, 'pids', String(myPid)));
+      }
     } catch {}
+  };
+
+  const detachHooks = registerProcessCleanupHooks({
+    onEmergencyExit: syncEmergencyCleanup,
+    onSignal: sig => {
+      receivedSignal = sig;
+      if (activeChild) {
+        try { activeChild.kill?.(sig); } catch {}
+      }
+    },
+  });
+
+  try {
+    try {
+      session = parsed.preferredAccount
+        ? await acquirePinnedRuntimeSession(parsed.preferredAccount, { cwd, env }, { ...ports, codexBin })
+        : await acquireSharedRuntimeSession({ cwd, env }, { ...ports, codexBin });
+    } catch (err) {
+      if (receivedSignal) return { exitCode: signalToExitCode(receivedSignal) };
+      if (autoFailOpen && isAutoFailOpenLeaseError(err)) {
+        const res = await spawnCodexProcess(
+          codexBin,
+          codexArgs,
+          { cwd, env: passthroughEnv, onChild: child => { activeChild = child; } },
+          ports,
+        );
+        if (res?.error) {
+          stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
+        }
+        return { exitCode: res?.exitCode ?? res?.code ?? 1 };
+      }
+      stderr?.write?.(`pdd-codex: ${redactSecrets(err?.message ?? String(err))}\n`);
+      return { exitCode: 1 };
+    }
+
+    if (receivedSignal) {
+      return { exitCode: signalToExitCode(receivedSignal) };
+    }
+
+    stopHeartbeat = startBackgroundHeartbeat(session, { cwd, env }, { ...ports, codexBin });
+
+    let userConfigText = '';
+    try { userConfigText = fs.readFileSync(session.userConfigPath, 'utf8'); } catch {}
     const cliFlags = buildCodexGatewayCliArgs({
       backendApiUrl: session.backendApiUrl,
       userCodexHome: session.userCodexHome,
       runtimeCodexHome: session.runtimeDir,
-      emptySubshellCodexHome: session.emptySubshellDir,
       userConfigText,
       nativeBackendApi: session.nativeBackendApi !== false,
       codexArgs,
@@ -1047,7 +938,12 @@ export async function runPddCodexCli(
     });
     const forwardedCodexArgs = stripCodexCliEnvExcludeArgs(codexArgs);
     const childEnv = buildCleanChildEnv(env, session.runtimeDir, { grantToken: session.grantToken });
-    const res = await spawnCodexProcess(codexBin, [...cliFlags, ...forwardedCodexArgs], { cwd, env: childEnv }, ports);
+    const res = await spawnCodexProcess(
+      codexBin,
+      [...cliFlags, ...forwardedCodexArgs],
+      { cwd, env: childEnv, onChild: child => { activeChild = child; } },
+      ports,
+    );
     await normalizeWritebackUnderLock({
       userCodexHome: session.userCodexHome,
       runtimeCodexHome: session.runtimeDir,
@@ -1057,13 +953,21 @@ export async function runPddCodexCli(
     if (res?.error) {
       stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
     }
-    return { exitCode: res?.code ?? 1 };
+    return { exitCode: res?.exitCode ?? res?.code ?? 1 };
   } finally {
     stopHeartbeat();
-    if (session.pinned) {
-      await releasePinnedRuntimeSession(session, { cwd, env }, { ...ports, codexBin });
-    } else {
-      await releaseSharedRuntimeSession(session.runtimeDir, { cwd, env }, { ...ports, codexBin });
+    if (session) {
+      try {
+        if (session.pinned) {
+          await releasePinnedRuntimeSession(session, { cwd, env }, { ...ports, codexBin });
+        } else {
+          await releaseSharedRuntimeSession(session.runtimeDir, { cwd, env }, { ...ports, codexBin });
+        }
+        cleanedUp = true;
+      } catch {
+        syncEmergencyCleanup();
+      }
     }
+    detachHooks();
   }
 }

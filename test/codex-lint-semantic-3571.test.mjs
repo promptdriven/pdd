@@ -567,18 +567,15 @@ test('3571 repo-wide runCodexLint (words: []) builds promptsByStory across >6 fi
   assert.equal(multiIssueParsed.issue_coverage.missed[0].requirement, 'Timeout handling');
 });
 
-test('3571 PR 1 skill steps reference review.md and advisory pdd lint --codex --issue preflight', () => {
+test('3571 PR 1 skill docs reference offline pdd lint preflight and independent review', () => {
   const root = new URL('..', import.meta.url);
-  for (const rel of [
-    'skills/pdd-feature/steps/prompt-story.md',
-    'skills/pdd-feature/steps/check.md',
-    'skills/pdd-bug/steps/prompt-story.md',
-    'skills/pdd-bug/steps/check.md',
-  ]) {
-    const content = readFileSync(new URL(rel, root), 'utf8');
-    assert.match(content, /review\.md/, `${rel} should reference review.md`);
-    assert.match(content, /pdd lint --codex <story> --issue <N>/, `${rel} should reference pdd lint --codex <story> --issue <N>`);
-  }
+  const skill = readFileSync(new URL('skills/pdd/SKILL.md', root), 'utf8');
+  assert.match(skill, /references\/verification\.md/, 'skills/pdd/SKILL.md should reference references/verification.md');
+  assert.match(skill, /pdd lint\b/, 'skills/pdd/SKILL.md should reference pdd lint');
+  assert.match(skill, /Blind Read-Only Reviewer/, 'skills/pdd/SKILL.md should reference independent read-only review');
+  const verification = readFileSync(new URL('skills/pdd/references/verification.md', root), 'utf8');
+  assert.match(verification, /pdd lint --diff/, 'skills/pdd/references/verification.md should reference pdd lint --diff');
+  assert.match(verification, /Blind Read-Only Reviewer/, 'skills/pdd/references/verification.md should reference independent read-only review');
 });
 
 test('3571 Round-1 adversarial regressions: workspace.allows, fail-closed malformed missed, strict --issue validation, binary refusal, JSON-before-redact scenario summaries, and linear fence scan', async t => {

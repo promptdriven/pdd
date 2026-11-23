@@ -1,0 +1,13 @@
+{
+  "schema_version": "pdd.architecture-ratchet.v1",
+  "rules": [
+    "circular-import",
+    "layer-boundary",
+    "legacy-workflow-import",
+    "path-string-spawn",
+    "unresolved-local-import",
+    "disallowed-npm-import",
+    "unmapped-layer"
+  ],
+  "entries": []
+}

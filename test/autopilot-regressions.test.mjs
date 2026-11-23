@@ -189,9 +189,17 @@ test('generic links to the PR or issue remain suspect; unrelated identities are 
     issues(f, [newIssue(body)]); assert.equal((await f.scan()).merges[0].classification, 'ok', body);
   }
 });
-test('reopen and timeline cross-reference are suspect, including a source not in the issues listing', async t => {
+test('human post-merge reopen is proven while unlabeled timeline cross-reference alone stays suspect', async t => {
   const f = fixture(t); f.routes.set('issues/7/timeline?per_page=100', [{ event: 'reopened', created_at: later, actor: { login: 'person' } }, { event: 'cross-referenced', created_at: later, source: { issue: newIssue('', { repository_url: `https://api.github.com/repos/${repo}` }) } }]);
-  const r = await f.scan(); assert.equal(r.merges[0].classification, 'suspect'); assert.equal(r.merges[0].signals.length, 2);
+  const r = await f.scan();
+  assert.equal(r.merges[0].classification, 'proven');
+  assert.equal(r.merges[0].signals.length, 2);
+  assert.equal(r.merges[0].signals.find(s => s.kind === 'reopened')?.level, 'proven');
+  assert.equal(r.merges[0].signals.find(s => s.kind === 'reference')?.level, 'suspect');
+
+  const f2 = fixture(t); f2.routes.set('issues/7/timeline?per_page=100', [{ event: 'cross-referenced', created_at: later, source: { issue: newIssue('', { repository_url: `https://api.github.com/repos/${repo}` }) } }]);
+  const r2 = await f2.scan();
+  assert.equal(r2.merges[0].classification, 'suspect');
 });
 test('engine-marked reopens are skipped without treating all same-account actions as machine actions', async t => {
   const f = fixture(t); f.routes.set('issues/7/timeline?per_page=100', [
@@ -253,7 +261,7 @@ test('regressions route stays outside the exact prompting help contract and leav
   assert.match(contract.replace(/```[^\n]*\n[\s\S]*?\n```/g, ''), /## Regression scan\n/);
   let stdout = '', stderr = '';
   assert.equal(await runPdd(['help', 'prompting'], { packageRoot: '/package', stdout: { write: s => stdout += s }, stderr: { write: s => stderr += s } }), 0);
-  assert.equal(stdout, [PUBLIC_HELP_TEXT.heading, '', ...literal[1].split('\n'), '', 'Prompting guide: /package/docs/prompting-guide.md', 'RUNBOOK: /package/RUNBOOK.md', ''].join('\n'));
+  assert.equal(stdout, [PUBLIC_HELP_TEXT.heading, '', ...literal[1].split('\n'), '', 'Skill: /package/skills/pdd/SKILL.md', 'Prompting guide: /package/skills/pdd/references/prompting.md', ''].join('\n'));
   assert.equal(stderr, '');
 });
 test('command resolves launcher hash/core folder read-only and exclusively creates report', async t => {

@@ -18,7 +18,6 @@ import {
   lintValidationCode,
 } from '../src/autopilot-validator.mjs';
 import {
-  lintBoundaryMockOnlyTests,
   lintNativeOnlyContract,
   lintRepoProject,
 } from '../src/repo-hygiene-lint.mjs';
@@ -150,6 +149,8 @@ test('3574 Part 1: lintNativeOnlyContract warns on thin stubs, passes complete s
   execFileSync('git', ['-C', repo, 'config', 'user.name', 'Test']);
   execFileSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
   writeFile(repo, 'prompts/trust/service.prompt.md', `${thinStub}\n`);
+  writeFile(repo, 'prompts/trust/error-store.prompt.md', '# Error store\n\n## Ports\n- `store.load`\n- `store.save`\n\n## Dependencies\nNone.\n');
+  writeFile(repo, 'prompts/trust/verify-smoke.prompt.md', '# Verify smoke\n\n## Dependencies\nNone.\n');
   commitAll(repo, 'thin native-only stub');
   const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
 
@@ -486,8 +487,8 @@ test('3574 Part 4: all 4 real-host OS/CLI failure classes fail closed when mocke
   assert.equal(fullOutcome.decision, 'allow-merge');
 });
 
-test('3574 Part 4 integration: lintRepoProject flags mock-only tests on kind: native-only modules and Autopilot core blocks mocked os-boundary PRs without touching autopilot-core', async (t) => {
-  // 1. lintRepoProject resolves kind: native-only ownership automatically and flags mock-only test on an ordinary-named native-only module
+test('3574 Part 4 integration: Layer-2 validator flags mock-only tests on kind: native-only modules while Layer-1 lintRepoProject stays PDD-files-only, and Autopilot core blocks mocked os-boundary PRs', async (t) => {
+  // 1. Layer-2 detectNativeOnlyModules + lintValidationCode flags mock-only test on an ordinary-named native-only module; Layer-1 lintRepoProject stays PDD-files-only
   const repo = makeTempGitRepo(t, 'pdd-3574-native-lint-');
   writeFile(
     repo,
@@ -524,35 +525,49 @@ test('3574 Part 4 integration: lintRepoProject flags mock-only tests on kind: na
   );
   commitAll(repo, 'mock-only native-only service');
 
-  const before = lintRepoProject({ root: repo });
-  const mockHit = before.findings.find((f) => f.code === 'boundary-mock-only-test');
-  assert.ok(mockHit, 'mock-only test on native-only module must emit boundary-mock-only-test');
-  assert.equal(mockHit.path, 'test/trust-mock.test.mjs');
-  assert.match(mockHit.message, /native-only/);
+  const coreLint = lintRepoProject({ root: repo });
+  assert.equal(coreLint.ok, true);
+  assert.equal(coreLint.findings.some((f) => f.code === 'boundary-mock-only-test'), false, 'Layer-1 core lint stays PDD-files-only');
 
-  // Direct lintBoundaryMockOnlyTests and inspectTestBoundaryTargets honor nativeOnlyTargets
-  const targets = inspectTestBoundaryTargets('test/trust-mock.test.mjs', readFileSync(join(repo, 'test/trust-mock.test.mjs'), 'utf8'), {
-    nativeOnlyTargets: ['src/trust/service.mjs'],
+  const nativeDetected = detectNativeOnlyModules({
+    changedFiles: ['prompts/trust/service.prompt.md', 'src/trust/service.mjs'],
+    promptFiles: [{ path: 'prompts/trust/service.prompt.md', content: readFileSync(join(repo, 'prompts/trust/service.prompt.md'), 'utf8') }],
+    fileHeads: [{ path: 'src/trust/service.mjs', content: readFileSync(join(repo, 'src/trust/service.mjs'), 'utf8') }],
+  });
+  assert.ok(nativeDetected.nativeOnlyModules.includes('src/trust/service.mjs'));
+
+  const mockText = readFileSync(join(repo, 'test/trust-mock.test.mjs'), 'utf8');
+  const targets = inspectTestBoundaryTargets('test/trust-mock.test.mjs', mockText, {
+    nativeOnlyTargets: nativeDetected.nativeOnlyModules,
   });
   assert.ok(targets.boundarySurfaces.includes('native-only'));
-  assert.equal(
-    lintBoundaryMockOnlyTests(readFileSync(join(repo, 'test/trust-mock.test.mjs'), 'utf8'), {
-      path: 'test/trust-mock.test.mjs',
-      hasRealE2eCoverage: false,
-      nativeOnlyTargets: ['src/trust/service.mjs'],
-    }).length,
-    1,
-  );
+  const beforeVal = lintValidationCode({
+    path: 'test/trust-mock.test.mjs',
+    kind: 'test',
+    text: mockText,
+    hasRealE2eCoverage: false,
+    nativeOnlyTargets: nativeDetected.nativeOnlyModules,
+  });
+  assert.ok(beforeVal.codes.includes('boundary-mock-only-test'), 'Layer-2 validator must emit boundary-mock-only-test');
 
-  // Adding a real SQLite / subprocess smoke test clears boundary-mock-only-test cleanly
+  // Adding a real SQLite / subprocess smoke test provides real-host coverage and clears boundary-mock-only-test cleanly
   writeFile(
     repo,
     'test/trust-smoke.test.mjs',
     "import { DatabaseSync } from 'node:sqlite';\nimport { createTrustService } from '../src/trust/service.mjs';\nconst db = new DatabaseSync(':memory:');\ncreateTrustService(db);\n",
   );
   commitAll(repo, 'add real sqlite smoke');
-  const after = lintRepoProject({ root: repo });
-  assert.equal(after.findings.some((f) => f.code === 'boundary-mock-only-test'), false);
+  const smokeText = readFileSync(join(repo, 'test/trust-smoke.test.mjs'), 'utf8');
+  const smokeProbes = detectRealHostProbesInTest('test/trust-smoke.test.mjs', smokeText);
+  assert.equal(smokeProbes.hasRealHostSmoke, true);
+  const afterVal = lintValidationCode({
+    path: 'test/trust-mock.test.mjs',
+    kind: 'test',
+    text: mockText,
+    hasRealE2eCoverage: true,
+    nativeOnlyTargets: nativeDetected.nativeOnlyModules,
+  });
+  assert.equal(afterVal.codes.includes('boundary-mock-only-test'), false);
 
   // 2. End-to-end coreWorld check: OS sandbox boundary file with only an argv-prefix unit test fails closed (Bucket 3) and merges once real subprocess smoke is added!
   const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
@@ -594,36 +609,33 @@ test('3574 Part 4 integration: lintRepoProject flags mock-only tests on kind: na
   assert.ok(bigMs < 300, `expected linear O(N) probe scan on 100KB input, got ${bigMs.toFixed(1)}ms`);
 });
 
-test('3574 docs & skills: pdd-product contract and RUNBOOK §17 checklist define native-only contract and all 4 real-host classes without history words', () => {
-  const filesDoc = readFileSync(join(process.cwd(), 'skills/pdd-product/references/files.md'), 'utf8');
-  const planDoc = readFileSync(join(process.cwd(), 'skills/pdd-product/steps/plan.md'), 'utf8');
-  const replaysDoc = readFileSync(join(process.cwd(), 'skills/pdd-prompting/runbook/replays-and-formal.md'), 'utf8');
+test('3574 docs & skills: prompting, product, and verification references define native-only contract and all 4 real-host classes without history words', () => {
+  const promptingDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/prompting.md'), 'utf8');
+  const productDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/product.md'), 'utf8');
+  const verificationDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/verification.md'), 'utf8');
 
-  assert.match(filesDoc, /## Native-only prompt contract/);
-  assert.match(filesDoc, /Boundary & runtime contract/);
-  assert.match(filesDoc, /Error mapping & failure behavior/);
-  assert.match(filesDoc, /Real-host \/ native verification cases/);
-  assert.doesNotMatch(filesDoc, /thin `kind: native-only`/i);
-
-  assert.match(planDoc, /specification contract/i);
-  assert.doesNotMatch(planDoc, /thin\s+`kind: native-only`/i);
+  assert.match(promptingDoc, /## 3\. Dependency declarations and `kind: native-only`/);
+  assert.match(promptingDoc, /Boundary & runtime contract/);
+  assert.match(promptingDoc, /Error mapping & failure behavior/);
+  assert.match(promptingDoc, /Real-host verification cases/);
+  assert.match(promptingDoc, /complete executable boundary specification/i);
+  assert.match(productDoc, /## 5\. `kind: native-only` boundary specs/);
+  assert.match(productDoc, /prompting\.md#3-dependency-declarations-and-kind-native-only/);
+  assert.doesNotMatch(productDoc, /thin\s+`kind: native-only`/i);
 
   for (const needle of [
-    'needs-real-host-smoke',
-    'Nested OS sandbox execution',
-    'Real host device/TTY ownership',
+    'nested OS sandbox',
     '/dev/tty',
-    'Multi-turn real CLI state side effects',
-    'Full-size realistic payload handling',
+    'multi-turn Turn 1 → Turn 2 CLI state',
     '4 KiB',
   ]) {
-    assert.ok(replaysDoc.includes(needle), `replays-and-formal.md missing: ${needle}`);
+    assert.ok(verificationDoc.includes(needle), `skills/pdd/references/verification.md missing: ${needle}`);
   }
 
   for (const [name, content] of [
-    ['skills/pdd-product/references/files.md', filesDoc],
-    ['skills/pdd-product/steps/plan.md', planDoc],
-    ['skills/pdd-prompting/runbook/replays-and-formal.md', replaysDoc],
+    ['skills/pdd/references/prompting.md', promptingDoc],
+    ['skills/pdd/references/product.md', productDoc],
+    ['skills/pdd/references/verification.md', verificationDoc],
   ]) {
     assert.doesNotMatch(content, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i, `${name} must use timeless current wording`);
   }
@@ -911,11 +923,13 @@ test('3574 R1 regressions (#1, #3-#10): ReDoS safety, mocked primitives, 4-class
   assert.ok(batchProbe.classes.includes('multi-turn-cli-state'));
   assert.ok(ms9 < 250, `batch helper scan took ${ms9.toFixed(1)}ms on 8000 single-line calls`);
 
-  // Finding #10 [P2]: skills/pdd-product/steps/parts.md no longer says "Thin kind: native-only".
-  const partsDoc = readFileSync(join(process.cwd(), 'skills/pdd-product/steps/parts.md'), 'utf8');
-  assert.doesNotMatch(partsDoc, /thin\s+`kind: native-only`/i);
-  assert.match(partsDoc, /specification prompts/i);
-  assert.doesNotMatch(partsDoc, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i);
+  // Finding #10 [P2]: skills/pdd/references/prompting.md §3 defines complete executable native-only boundary specs (and product.md links it, never thin stubs).
+  const promptingDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/prompting.md'), 'utf8');
+  const productDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/product.md'), 'utf8');
+  assert.doesNotMatch(productDoc, /thin\s+`kind: native-only`/i);
+  assert.match(promptingDoc, /complete executable boundary specification/i);
+  assert.doesNotMatch(promptingDoc, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i);
+  assert.doesNotMatch(productDoc, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i);
 });
 
 test('R2 adversarial regression suite: R2-1 through R2-5', () => {
@@ -1684,9 +1698,13 @@ test('R1 Finding #2 integration: autopilot-core runValidatorV2Gate enforces nati
     'human verification card names the unverified native-only module',
   );
 
-  // Now verify a second PR on the same kind: native-only module (discovered via pdd-bindings.json) WITH a real executed SQLite smoke test PASSES and merges!
+  // Now verify a second PR on the same kind: native-only module (discovered via base pdd-bindings.json) WITH a real executed SQLite smoke test PASSES and merges!
   const w2 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
   w2.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  w2.baseCommit('pdd-bindings.json', JSON.stringify({
+    schema_version: 'pdd.bindings.v1',
+    modules: [{ module: 'src/trust/store.mjs', prompt: 'prompts/trust/store.prompt.md' }],
+  }, null, 2));
   w2.issue(102, { title: 'Add real SQLite smoke for native-only trust store' });
   await w2.tick();
   const buildCwd2 = w2.job(102, 'build').cwd;
@@ -1705,10 +1723,6 @@ test('R1 Finding #2 integration: autopilot-core runValidatorV2Gate enforces nati
     '## Dependencies',
     'None.',
   ].join('\n'));
-  writeFile(buildCwd2, 'pdd-bindings.json', JSON.stringify({
-    schema_version: 'pdd.bindings.v1',
-    modules: [{ module: 'src/trust/store.mjs', prompt: 'prompts/trust/store.prompt.md' }],
-  }, null, 2));
   writeFile(buildCwd2, 'src/trust/store.mjs', 'export function openTrustStore(db) { return db; }\n');
   writeFile(
     buildCwd2,
@@ -2094,4 +2108,115 @@ test('R6 adversarial regression suite: R6-1 through R6-5', async (t) => {
   await wR65.tick();
   assert.equal(pr207.merged, false, 'R6-5: pure Playwright test with > 4 KiB string must NOT satisfy os-boundary');
   assert.ok(wR65.labels(207).includes('pdd:needs-decision'));
+});
+
+test('3574 reopened CLI parity: pdd lint --local passes <stem>.<op> public exports on MCP connector adapter and fails exit 1 on fake/typo port', async (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-3574-stem-op-cli-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const repo = join(scratch, 'repo');
+  const home = join(scratch, 'home');
+  const state = join(scratch, 'state');
+  mkdirSync(repo, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  execFileSync('git', ['init', '-q', repo]);
+  execFileSync('git', ['-C', repo, 'config', 'user.name', 'Test']);
+  execFileSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
+
+  writeFile(
+    repo,
+    'prompts/connector/access.prompt.md',
+    [
+      '# Remote MCP connector access',
+      '',
+      '## Public operations',
+      '',
+      '### invoke_tool',
+      'Runs an authorized read-only MCP tool.',
+      '',
+      '### redeem_view',
+      'Redeems an opaque view reference.',
+      '',
+      '## Ports',
+      '- `tokens.verify`',
+      '- `audit_log.append`',
+      '',
+      '## Dependencies',
+      'None.',
+    ].join('\n') + '\n',
+  );
+  writeFile(
+    repo,
+    'prompts/connector/governance.prompt.md',
+    [
+      '# Remote MCP connector governance',
+      '',
+      '## Public operations',
+      '',
+      '### register_client',
+      'Registers an OAuth client.',
+      '',
+      '### manage_grant and rotate_token',
+      'Manages OAuth grants and token rotation.',
+      '',
+      '## Ports',
+      '- `grant_store.save`',
+      '',
+      '## Dependencies',
+      'None.',
+    ].join('\n') + '\n',
+  );
+
+  const cleanServer = [
+    '---',
+    'kind: native-only',
+    'reason: Authenticated HTTPS remote MCP server transport and OAuth bearer plumbing.',
+    '---',
+    '',
+    '# Remote MCP connector server adapter',
+    '',
+    'Route tool requests to `access.invoke_tool` and browser redemptions to `access.redeem_view`.',
+    '',
+    '## Domain decisions',
+    '- Wire `access.invoke_tool` and `access.redeem_view` to `tokens.verify` and `audit_log.append`.',
+    '- Invoke `governance.register_client`, `governance.manage_grant`, and `governance.rotate_token` wired to `grant_store.save`.',
+    '',
+    '## Boundary and runtime contract',
+    '- Serve JSON-RPC MCP over HTTPS/TLS with OAuth 2.1 bearer verification.',
+    '',
+    '## Error mapping',
+    '- Map invalid tokens to HTTP 401 and audit failures to HTTP 503 fail-closed.',
+    '',
+    '## Real-host verification cases',
+    '1. Live HTTPS localhost MCP probe returning > 4 KiB payload and failing closed after revocation.',
+    '',
+    '## Dependencies',
+    '- [Remote MCP connector access](access.prompt.md)',
+    '- [Remote MCP connector governance](governance.prompt.md)',
+  ].join('\n') + '\n';
+
+  writeFile(repo, 'prompts/connector/mcp-server.prompt.md', cleanServer);
+  commitAll(repo, 'clean mcp-server with stem.op refs');
+
+  const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
+  const okOut = sink(), okErr = sink();
+  const okCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: okOut, stderr: okErr });
+  assert.equal(okCode, 0, `expected exit 0 on valid <stem>.<op> refs, stderr: ${okErr.text}\nstdout: ${okOut.text}`);
+  const okParsed = JSON.parse(okOut.text);
+  assert.deepEqual(okParsed.problems, []);
+
+  // Seed a typo exported op + a fake port -> MUST fail exit 1 with [native-only-unknown-port].
+  writeFile(
+    repo,
+    'prompts/connector/mcp-server.prompt.md',
+    cleanServer
+      .replace('`access.invoke_tool`', '`access.invoke_tools`')
+      .replace('`tokens.verify`', '`fake_tokens.verify`'),
+  );
+  const badOut = sink(), badErr = sink();
+  const badCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: badOut, stderr: badErr });
+  assert.equal(badCode, 1, 'fake/typo port in native-only prompt must fail closed with exit 1');
+  const badParsed = JSON.parse(badOut.text);
+  assert.ok(badParsed.problems.some((p) => p.includes('[native-only-unknown-port]') && p.includes('"access.invoke_tools"')));
+  assert.ok(badParsed.problems.some((p) => p.includes('[native-only-unknown-port]') && p.includes('"fake_tokens.verify"')));
 });

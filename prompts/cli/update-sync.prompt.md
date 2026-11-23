@@ -1,89 +1,36 @@
-# Code-to-prompt sync
+# Changed-file ownership map
 
-Own `src/update-sync.mjs`. Export `runUpdate(input, ports)`, `analyzeUpdate(input, ports)`, `syncRecordPathForModule(modulePath)`, `extractDiffSummary(diffText)`, `formatUpdateText(report)`, and `formatUpdateJson(report)`. It implements `pdd update [FILE...] [--from RANGE] [--check] [--write] [--json]`: scoping strictly to explicitly named files, a Git diff range, or working-tree changes; mapping touched files to owning `.prompt.md` contracts through [File owner lookup](file-owner.prompt.md); tracking conflict-free per-module derived hashes (`prompt_sha256` and `module_sha256`) in disjoint per-module sidecar files under `.pdd/sync/` without mutating `.prompt.md` files, `pdd-bindings.json`, or any shared global `source_baseline`; and checking or refreshing derived pins offline with zero AI subprocesses.
+Own `src/core/changed-map.mjs` and the read-only compatibility wrapper `src/update-sync.mjs`. Export `analyzeChangedMap`, `extractDiffSummary`, `formatChangedMapText`, and `formatChangedMapJson` from `src/core/changed-map.mjs`, and `runUpdate`, `analyzeUpdate`, `extractDiffSummary`, `formatUpdateText`, and `formatUpdateJson` from `src/update-sync.mjs`.
+
+Map touched repository files (explicit paths, a Git `--from RANGE`, or working-tree changes) to their owning `.prompt.md` contracts through [File owner lookup](file-owner.prompt.md), summarize unified diff line counts and changed top-level symbols across JS/TS, Python, Go, and Rust, and report unowned touched files offline with zero file writes and zero AI or network calls.
 
 ## Domain decisions
 
-- **Offline deterministic core and immutable prompt/binding boundaries.** `update-sync` operates strictly on local Git metadata and local working-tree files. It spawns zero AI agent subprocesses (`codex`, `claude`, `gemini`, `agy`), makes zero network or interpreter calls, NEVER mutates `.prompt.md` files (preserving `proseSha256`, Runtime interface approval metadata, and approval journals byte-for-byte), NEVER mutates `pdd-bindings.json`, and writes zero global baseline files.
-- **Disjoint per-module sidecar storage (`.pdd/sync/<canonical-module-path>.json`).**
-  - `syncRecordPathForModule(modulePath)` maps a canonical non-secret repository path `<module>` (not under `.pdd/`) to `.pdd/sync/<module>.json`.
-  - Each sidecar file is deterministic JSON with exact schema `pdd.module-sync.v1`: `schema_version`, `module`, `prompt`, `module_sha256`, `prompt_sha256` (plus optional `prompts` map of `{ [promptPath]: sha256 }` only when a module has more than one owner). Two parallel PRs touching different modules—even modules owned by the SAME `.prompt.md`—write completely disjoint sidecar paths with zero merge conflicts.
-  - Validate `.pdd`, `.pdd/sync`, every intermediate directory, and every sidecar file with `lstat` and `O_NOFOLLOW` (reject symlinks with `exit 2`). Malformed or schema-invalid sidecars fail closed with `exit 2` before any write.
-  - Write sidecars and refreshed code headers atomically via a same-directory exclusive temp file (`O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW`, preserving existing file mode or `0o644` for new sidecars) followed by `rename`, removing the temp file on failure.
-  - Ignore `.pdd/sync/**` paths when resolving `--from` or working-tree touched files so derived sidecars never pollute `unowned`.
+- **Strictly read-only offline core.** Inspect local Git metadata and working-tree files only. Spawn zero AI subprocesses, make zero network or interpreter calls, and never write `.pdd/sync/` sidecars, `.prompt.md` files, source headers, or `pdd-bindings.json`.
 - **Scoped target selection (mutually exclusive modes).**
-  - Explicit `files` (`pdd update FILE...`): scope strictly to those repository-relative paths. Reject combining `files` with `--from` (`exit 2`, 0 writes). Every explicitly named file must exist as a regular in-repo file (`exit 2` if missing). Detect untracked explicit files so newly added explicit files report full line additions and symbols.
-  - Range `from` (`pdd update --from RANGE`): accept either `<base>..<head>` or a single `<base>` (normalized to `<base>..HEAD`). Reject empty strings, length `> 256`, whitespace, ASCII control characters, `...`, more than one `..`, empty `<base>` or `<head>`, or any segment starting with `-` (Git option injection) with `exit 2` before calling Git. Resolve touched paths with `git --literal-pathspecs -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false diff --name-status -z -M --no-ext-diff <range> --` so non-ASCII, spaced, and glob-character filenames resolve verbatim regardless of user Git config. If Git exits non-zero, refuse with `exit 2`.
-  - Default working-tree mode (neither `files` nor `from`): resolve modified, staged, renamed, deleted, and untracked non-ignored files strictly from working-tree and staged changes (`git diff --name-status -z -M` against `HEAD` when `HEAD` exists, merged with `git status --porcelain=v1 -z -uall`, falling back cleanly on unborn branches). Never scan untouched files across the repository.
-  - Reject combining `--check` and `--write` (`exit 2`, 0 writes). Outside a Git repository, write `pdd update works inside a Git repository.` to stderr and exit `2`. Wrap unexpected Git/FS errors into finite `exit 2` diagnostics without uncaught exceptions.
-  - Empty scope (zero touched files): print a clean no-op summary (or empty JSON arrays with `ok: true`) and exit `0` in plan, `--check`, and `--write` modes.
-- **Security, secret isolation, binary probing, and fail-closed bindings.** Pre-validate every path and control file before any write:
-  - Reject any typed path starting with `-`, containing `\0`, ASCII control characters (`U+0000`–`U+001F`, `U+007F`), `\`, or any `..` path segment, or resolving outside the canonical Git root (`exit 2`).
-  - Walk every path segment from the canonical Git root with `lstat` and open with `O_NOFOLLOW`: reject symlinks (`exit 2`) and non-regular active targets (`exit 2`).
-  - Reject secret-looking paths matching [Runtime seam](runtime-seam.prompt.md#public-contract) `isSecretPath(path)` or basenames matching `.env`, `.env.*`, `credentials`, `credentials.*`, or `.aws-credentials` (case-insensitive) BEFORE opening or reading them—including explicit targets, touched diff entries, candidate lookups, and claimed owning prompt paths (`exit 2`). Filter secret paths out of candidate lists before calling `findOwners` so secret files in the repository are never opened.
-  - Fail closed (`exit 2`, 0 writes) if `pdd-bindings.json` exists but is a symlink, unreadable, exceeds 64 KiB, is invalid JSON, or does not have `schema_version: "pdd.bindings.v1"` and an array `modules`.
-  - Probe binary content on active files using a bounded 8 KiB prefix read (never failing `too-large` for files > 8 KiB!): reject binary files containing NUL (`0x00`) bytes when explicitly targeted or owned by a prompt (`exit 2`); list unowned binary assets touched in `--from` or working-tree diffs under `unowned` with reason `binary file (skipped)`. Bound full text reads of owned code files and prompts to 10 MiB.
-- **Owner mapping, prompt touches, renames, and deletions.**
-  - Delegate ownership lookup to [File owner lookup](file-owner.prompt.md) `findOwners` (`pdd-bindings.json`, `Generated from` / `Prompt:` headers, opening-sentence prose claims, and unique path/stem matches), handling absent `pdd-bindings.json` cleanly.
-  - When any touched entry is a canonical `*.prompt.md` (active or deleted) or has `renamedFrom` ending in `.prompt.md` (including cross-type renames from `.prompt.md` to non-prompt), refuse active misplaced test prompts (`isTestPromptPath`) with `exit 1`; otherwise narrow candidate discovery across all touched prompt targets (`active`, `deleted`, and `renamedFrom`) using bindings, active prompt `promptClaims`, existing `.pdd/sync/` sidecars, and eligible non-secret production code files so prompt edits, prompt deletions, and prompt renames surface live-module drift or missing-prompt refusals (`exit 1`) without scanning or opening secrets.
-  - When a missing/deleted prompt is referenced ONLY by deleted modules or orphaned sidecars (zero active owned modules), skip reading the deleted prompt (`prompt_sha256: null`, rendered as `deleted` in text output) so `--check` still flags the stale sidecar (`exit 1`) and `--write` cleanly prunes `.pdd/sync/<module>.json` (`exit 0`). When any active module references a missing prompt, fail closed with `exit 1` and 0 writes.
-  - When any touched entry (including cross-type renames from code into `.prompt.md`) is renamed (`renamedFrom`), inspect `renamedFrom` (when not under `.pdd/` or `*.prompt.md`) via `.pdd/sync/` sidecars and bindings so any lingering stale sidecar for `renamedFrom` is flagged as drifted under `--check` (even if the new path is unowned, moved to another prompt, renamed to a `.prompt.md`, or already pinned) and pruned cleanly (along with empty parent directories under `.pdd/sync`) under `--write`.
-  - When any touched entry is deleted and has a `.pdd/sync/<deleted>.json` sidecar, ALWAYS union the sidecar's recorded owners into its owner list (even if another prompt matches by stem, prose, or binding) and mark any lingering sidecar as drifted until pruned on `--write`.
-  - When an active touched file has no current owners (`owners.length === 0`) but still has a lingering `.pdd/sync/<module>.json` sidecar (lost ownership in place), surface it as drifted (`status: "unowned"`) under `--check` (`exit 1`) and prune the orphaned sidecar on `--write`.
-  - Guard all `.pdd` and `.pdd/**` paths consistently (`isPddInternalPath`) and pre-validate `syncRecordPathForModule` for every owned module before any write phase executes (`exit 2`, 0 writes if an owned module lives under `.pdd/`).
-  - Refuse any touched file owned by a misplaced test prompt (`isTestPromptPath`) with `exit 1` and 0 writes.
-  - Group owned modules by owning `.prompt.md` (sorted lexicographically by prompt path, with modules sorted by path) and list touched unowned files separately in sorted `unowned` order.
-- **Deterministic diff stats and symbol summary.**
-  - Inspect unified diffs with `--literal-pathspecs`, `-c core.quotepath=false`, `-c diff.noprefix=false`, `-c diff.mnemonicPrefix=false`, `--src-prefix=a/`, `--dst-prefix=b/`, `--no-color`, `--no-ext-diff`, `-M`, `-U0` (including `renamedFrom` in the pathspec for renames, and synthesizing `+` lines for untracked new files).
-  - Count `+added`/`-removed` lines (excluding `+++`/`---` headers) and extract changed exported/top-level symbol declarations deterministically across JS/TS, Python, Go, and Rust, classifying each as `added`, `removed`, or `updated`.
-- **Per-module derived hashes and status machine.**
-  - Compute `prompt_sha256 = promptHeaderHash(promptContent)` and `module_sha256 = moduleContentHash(codeContent)` from [File owner lookup](file-owner.prompt.md).
-  - Classify each `(module, owner)` pair from `promptDrifted` (code header hash is `stale`, or sidecar `prompt_sha256` mismatches `prompt_sha256`) and `codeDrifted` (sidecar `module_sha256` mismatches `module_sha256`):
-    - `both-drifted`: both `promptDrifted` and `codeDrifted`.
-    - `prompt-stale`: `promptDrifted` only.
-    - `code-drifted`: `codeDrifted` only.
-    - `current`: neither drifted and a matching sidecar exists for `(module, owner)`.
-    - `unpinned`: neither drifted and no matching sidecar exists yet.
-    - `deleted`: owned module is missing/deleted (drifted while a sidecar remains at `.pdd/sync/<module>.json`, clean once pruned).
-    - `unowned`: previously pinned module lost all current owners in place (drifted while its orphaned sidecar remains, clean once pruned).
-  - Exclude deleted paths from suggested `pdd update --write ...` instructions and POSIX-quote paths containing spaces or shell metacharacters.
-
-```mermaid
-flowchart TD
-    V{Valid args, repo, bindings, paths & security?} -->|No| E2([exit 2, 0 writes])
-    V -->|Yes| O[Resolve owners, renames, sidecars, diffs & hashes]
-    O --> P{Missing prompt or misplaced test prompt?}
-    P -->|Yes| E1([exit 1, 0 writes])
-    P -->|No| M{Mode?}
-    M -->|plan| OUT0([Print sync plan or JSON, exit 0])
-    M -->|check| D{Any drifted owned module?}
-    D -->|Yes| OUT1([Print drift report or JSON, exit 1])
-    D -->|No| OUTC([Print current report or JSON, exit 0])
-    M -->|write| W[Atomically write/prune .pdd/sync sidecars & refresh existing code headers]
-    W --> OUTW([Re-evaluate current state & print, exit 0])
-```
-
-## Public contract
-
-- `syncRecordPathForModule(modulePath)`: pure function mapping a canonical non-secret repository path (not under `.pdd/`) to `".pdd/sync/" + modulePath + ".json"`.
-- `extractDiffSummary(diffText)`: pure function returning `{ added: number, removed: number, changed_symbols: Array<{ kind: "added" | "removed" | "updated", symbol: string }> }`.
-- `analyzeUpdate({ cwd, files, from, check, write }, ports)`: validate scope, security guards, bindings, sidecars, ownership, diffs, and derived hashes; return `{ ok, exitCode, error, report }` (executing atomic writes only when `write: true`).
-- `runUpdate({ cwd = process.cwd(), files = [], from, check = false, write = false, json = false }, { stdout = process.stdout, stderr = process.stderr, ...ports } = {})`: execute `pdd update`, write formatted text or JSON (`\n`-terminated) to `stdout` (or diagnostic to `stderr` on error), and return integer exit code (`0`, `1`, or `2`).
-  - With `--write`: pre-validate everything first, never modify `.prompt.md` or `pdd-bindings.json`, atomically write/update `.pdd/sync/<module>.json` for active touched owned modules, prune `.pdd/sync/<old>.json` (and empty parent dirs under `.pdd/sync`) for deleted or renamed-from modules, and atomically refresh any existing `Generated from` / `Prompt:` header line in active touched owned code files without injecting headers into headerless files.
-- `formatUpdateJson(report)`: return JSON string + `\n` with exact top-level fields `{ schema_version: "pdd.update-sync.v1", ok, mode, scope, prompts, modules, unowned, drifted, updated }`.
-- `formatUpdateText(report)`: return deterministic human-readable text ending in `\n` listing each affected prompt group, module status, `+added/-removed` diff stats, changed symbols, next-step instructions, updated files (when `--write`), and unowned files.
-
-## Consequential operations
-
-| Step | Failure condition | Surviving state & exit |
-|---|---|---|
-| 1. Validate mode, args, repo, `pdd-bindings.json` | `--check` + `--write`, `files` + `--from`, outside Git, invalid `--from`, malformed/symlink `pdd-bindings.json` | `0` writes; stderr diagnostic; `exit 2` |
-| 2. Validate targets, sidecars & security | Missing explicit file, leading `-`, `..` traversal, symlink, secret path (including secret prompt), binary owned/explicit file, malformed sidecar | `0` writes; stderr diagnostic; `exit 2` |
-| 3. Resolve owners & prompts | Misplaced test prompt or named owning prompt missing/unreadable | `0` writes; stderr diagnostic; `exit 1` |
-| 4. `--check` evaluation | One or more touched owned modules (or stale renamed/deleted sidecars) not `current` | `0` writes; report on stdout; `exit 1` |
-| 5. `--write` atomic refresh | Target dir/file symlink or write error | Temp file cleaned up; original files intact; `exit 2` |
+  - Explicit `files`: scope strictly to those repository-relative regular files. Reject combining `files` with `--from`, `--branch`, or `--all` (`exit 2`). Detect untracked explicit files so newly added files report full line additions and symbols.
+  - Range `from`: accept `<base>..<head>` or `<base>` (normalized to `<base>..HEAD`). Reject empty strings, length `> 256`, whitespace, ASCII control characters, `...`, multiple `..`, or any segment starting with `-` (`exit 2`) before calling Git. Resolve touched paths with `--literal-pathspecs`, `core.quotepath=false`, and `--no-ext-diff`.
+  - Branch mode (`branch: true` / `--branch`): resolve the local default base ref (`origin/HEAD`, `origin/main`, `origin/master`, `main`, or `master`), compute `merge-base(defaultBranch, HEAD)..HEAD` merged with working-tree changes, and compute unified diff stats against that merge base.
+  - Full-repo mode (`all: true` / `--all`): inspect all Git-tracked non-secret regular files (merged with working-tree status) so every prompt-owned module is audited without silent skips.
+  - Default working-tree mode: resolve modified, staged, renamed, deleted, and untracked non-ignored files from `git diff --name-status -z -M HEAD` merged with `git status --porcelain=v1 -z -uall` (falling back cleanly on unborn branches), ignoring `.pdd/**`. When working-tree has 0 touched files on a clean committed branch ahead of the default branch (`merge-base(defaultBranch, HEAD) !== HEAD`), automatically widen to `branch` (`scope.widened_from = "working-tree"`).
+  - Outside a Git repository, exit `2`. Empty scope exits `0` with empty arrays and `ok: true`.
+- **Security, secret isolation, binary probing, and fail-closed bindings.**
+  - Reject paths starting with `-`, containing control characters or `\`, using `..` traversal, resolving outside the canonical Git root, or traversing symlinks (`lstat` + `O_NOFOLLOW`, `exit 2`).
+  - Reject secret-looking paths (`isSecretPath` or `.env*`, `credentials*`, `.aws-credentials`) before reading them (`exit 2`).
+  - Fail closed (`exit 2`) if `pdd-bindings.json` exists and is a symlink, unreadable, exceeds 64 KiB, is invalid JSON, or fails the `pdd.bindings.v1` schema.
+  - Probe binary content with a bounded 8 KiB prefix read: reject explicit or owned binary files (`exit 2`) and report unowned binary files under `unowned` with reason `binary file (skipped)`. Bound full text reads to 10 MiB.
+- **Owner mapping, prompt touches, and diff summaries.**
+  - Delegate ownership lookup to `findOwners` (`pdd-bindings.json`, `Generated from` / `Prompt:` headers, opening-sentence prose claims, and unique path/stem matches).
+  - When a touched path is a `.prompt.md`, refuse active misplaced test prompts (`isTestPromptPath`, `exit 1`) and gather owned modules from bindings, `promptClaims`, and eligible non-secret production code files.
+  - Extract `+added`/`-removed` line counts and changed top-level symbols across JS/TS, Python, Go, and Rust (`added`, `removed`, `updated`).
+  - Classify each `(module, owner)` pair as `deleted`, `prompt-stale` (when an existing code header hash lags the prompt), `changed` (when the diff or rename touched the module), `unpinned` (when the module is prompt-owned without a pinned `sha256` hash matching the prompt), or `current`.
+- **Read-only compatibility wrapper (`src/update-sync.mjs`).**
+  - Forward `{ cwd, files, from, all, branch, check, write }`.
+  - In plan mode (`check: false, write: false`), return `schema_version: "pdd.update-sync.v1"` with `exit 0` and zero writes.
+  - In `--check` mode (`check: true`), when default working-tree scope has 0 touched files and no branch commits ahead of the default branch (e.g. a clean default/single-branch checkout), automatically widen to `all: true` (`scope.widened_from = "working-tree"`) so unpinned or stale prompt-owned modules never silently return false-green `ok: true, drifted: []`. Return `exit 1` when any owned module has non-`current` status (`drifted.length > 0`), else `exit 0`.
+  - Refuse `--write` (`write: true`) with `exit 2`, zero writes, and a 4-part diagnostic naming the location, read-only invariant, concrete fix, and rerun command.
 
 ## Dependencies
 
-- [File owner lookup](file-owner.prompt.md): canonical ownership lookup (`findOwners`, `promptClaims`, `isTestPromptPath`), `promptHeaderHash`, `headerEntries`, `headerHashState`, `moduleContentHash`, and `updateHeaderHash`.
-- [Runtime seam](runtime-seam.prompt.md#public-contract): `gitFiles(root)` and `isSecretPath(path)` via `runtimePreflightSlice()`.
+- [File owner lookup](file-owner.prompt.md): `findOwners`, `headerEntries`, `headerHashState`, `isTestOwnedPath`, `isTestPromptPath`, `promptClaims`, and `promptHeaderHash`.
+- Layer-0 shared primitives: `src/shared/git-context.mjs` (`gitFiles`) and `src/shared/safe-read.mjs` (`isSecretPath`).

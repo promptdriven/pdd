@@ -49,10 +49,9 @@ test('doctor: stale PATH and missing sign-in accumulate; start returns identical
   assert.match(doctor.text,/\/node.*\/install\/bin\/pdd.mjs.*autopilot doctor/);assert.match(doctor.text,/codex.*login/);
 });
 
-test('doctor: non-agent findings warn; warnings permit readiness',async()=>{
-  for(const fault of ['node','permission','merge','setup','timers','identity','settings']) {
+test('doctor: advisory findings warn; warnings permit readiness; critical prerequisites fail with exit 1',async()=>{
+  for(const fault of ['permission','merge','setup','timers','identity','settings']) {
     const f=doctorFixture();
-    if(fault==='node')f.ports.nodeVersion='22.19.9';
     if(fault==='permission')f.permission='READ';
     if(fault==='merge')f.merge=false;
     if(fault==='setup')f.paths.delete('/project/AGENTS.md');
@@ -60,7 +59,17 @@ test('doctor: non-agent findings warn; warnings permit readiness',async()=>{
     if(fault==='identity')f.identity={};
     if(fault==='settings')f.remote=null;
     const r=await invoke(f);assert.equal(r.code,0,`${fault}: ${r.text}`);
-    check(r,{node:'node',permission:'github-permission',merge:'merge-method',setup:'setup-block',timers:'user-timers',identity:'git-identity',settings:'settings-github'}[fault],'WARN');
+    check(r,{permission:'github-permission',merge:'merge-method',setup:'setup-block',timers:'user-timers',identity:'git-identity',settings:'settings-github'}[fault],'WARN');
+  }
+  for(const critical of ['node','git','github-cli','platform']) {
+    const f=doctorFixture();
+    if(critical==='node')f.ports.nodeVersion='22.19.9';
+    if(critical==='git'){const run=f.ports.run;f.ports.run=(file,args,o)=>file==='git'&&args[0]==='--version'?f.answer('',1):run(file,args,o);}
+    if(critical==='github-cli'){const run=f.ports.run;f.ports.run=(file,args,o)=>file==='gh'&&args[0]==='--version'?f.answer('',1):run(file,args,o);}
+    if(critical==='platform')f.ports.platform='win32';
+    const r=await invoke(f);
+    assert.equal(r.code,1,`critical ${critical} must exit 1: ${r.text}`);
+    check(r,critical,'FAIL');
   }
   const plain=doctorFixture();plain.tracked='one.prompt.md\0';plain.paths.set('/project/one.prompt.md','# Plain prompt');
   const pr=await invoke(plain);assert.equal(pr.code,0,pr.text);check(pr,'draft-prompts','PASS');
@@ -138,7 +147,7 @@ test('doctor: malformed agents.json identifies its file and a repair without con
   mkdirSync(join(folder,'.config','pdd'),{recursive:true});writeFileSync(path,'{"SECRET_VALUE":');
   delete f.ports.agentDefinitions;
   const result=await runAutopilotDoctor(f.input,f.ports),line=result.checks.find(c=>c.id==='agent-config');
-  assert.equal(result.exitCode,0);assert.equal(line?.status,'warn');assert.ok(line.detail.includes(path));assert.match(line.fix,/vi /);assert.ok(!result.message.includes('SECRET_VALUE'));
+  assert.equal(result.exitCode,1);assert.equal(line?.status,'fail');assert.ok(line.detail.includes(path));assert.match(line.fix,/vi /);assert.ok(!result.message.includes('SECRET_VALUE'));
 });
 
 test('doctor: invalid runtime address and unavailable user session give repair commands',async()=>{
@@ -284,13 +293,13 @@ test('doctor: GitHub settings are unproved for an unreadable GitHub file, and na
   assert.deepEqual(await settingsRow(f),{id:'settings-github',status:'warn',detail:'pdd.json in this checkout is not a JSON object; the GitHub comparison is unproved',fix:'vi pdd.json'});
 });
 
-// Wrong (#3242): doctor warns on a machine that has the seven skills but not the retired coordinator skills, or passes
-// a machine that lacks one of the seven.
-test('doctor: the skill bundle is the seven shipped skills; the retired skills are not required',async()=>{
+// Wrong (#3242): doctor warns on a machine that has the shipped pdd skill but not the retired coordinator skills, or passes
+// a machine that lacks the shipped pdd skill.
+test('doctor: the skill bundle is the single shipped pdd skill; retired skills are not required',async()=>{
   const f=doctorFixture();
   assert.equal([...f.paths.keys()].some(path=>/pdd-(?:autopilot|check|merge)\//.test(path)),false);
   check(await invoke(f),'setup-skills','PASS');
-  f.paths.delete(join('/home/fake','.agents','skills','pdd-graph','SKILL.md'));
+  f.paths.delete(join('/home/fake','.agents','skills','pdd','SKILL.md'));
   check(await invoke(f),'setup-skills','WARN');
 });
 
@@ -339,7 +348,7 @@ test('#3252 doctor: saved agy profile binds ANTIGRAVITY_APP_DATA_DIR, non-agy pr
 
 test('doctor: setup-skills hints pdd setup and warns advisories on unmarked retired skill folders only',async t=>{
   const f=doctorFixture();
-  f.paths.delete(join('/home/fake','.agents','skills','pdd-graph','SKILL.md'));
+  f.paths.delete(join('/home/fake','.agents','skills','pdd','SKILL.md'));
   const missingSkill=await runAutopilotDoctor(f.input,f.ports);
   assert.equal(missingSkill.checks.find(c=>c.id==='setup-skills').fix,'pdd setup');
 

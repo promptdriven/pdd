@@ -1211,20 +1211,19 @@ test('R2-1, R2-2 & R2-3: PR-head pdd-workspace.json bypasses blocked, nonexisten
 
   // 5. R2-1 (E): direct lintRepoProject workspaceRoot / workspacePolicy override ignores head pdd-workspace.json!
   const { dir: baseWsRepo, run: runBaseWs } = makeTempGitRepo(t, 'pdd-r2-base-ws-');
-  writeIn(baseWsRepo, 'src/core.mjs', 'export const _priv = () => 1;\n');
+  writeIn(baseWsRepo, 'src/core.mjs', 'export const ok = () => 1;\n');
   runBaseWs('add', '.');
   runBaseWs('commit', '-qm', 'base');
   const { dir: headWsRepo, run: runHeadWs } = makeTempGitRepo(t, 'pdd-r2-head-ws-');
   writeIn(headWsRepo, 'pdd-workspace.json', JSON.stringify({ allowed_paths: ['README.md'] }, null, 2) + '\n');
   writeIn(headWsRepo, 'README.md', '# ok\n');
-  writeIn(headWsRepo, 'src/core.mjs', 'export const _priv = () => 1;\n');
-  writeIn(headWsRepo, 'test/bad.test.mjs', "import test from 'node:test';\nimport { _priv } from '../src/core.mjs';\ntest('p', () => { _priv(); });\n");
+  writeIn(headWsRepo, 'user_stories/bad.md', '# Bad story without criteria\n\nJust prose.\n');
   runHeadWs('add', '.');
   runHeadWs('commit', '-qm', 'head');
   const headOnlyLint = lintRepoProject({ root: headWsRepo });
-  assert.equal(headOnlyLint.findings.some(f => f.code === 'test-private-import'), false, 'default workspace policy excludes test/bad.test.mjs');
+  assert.equal(headOnlyLint.findings.some(f => f.code === 'story-missing-criteria'), false, 'default workspace policy excludes user_stories/bad.md');
   const baseWsLint = lintRepoProject({ root: headWsRepo, workspaceRoot: baseWsRepo });
-  assert.equal(baseWsLint.findings.some(f => f.code === 'test-private-import'), true, 'workspaceRoot uses trusted base policy and catches test-private-import');
+  assert.equal(baseWsLint.findings.some(f => f.code === 'story-missing-criteria'), true, 'workspaceRoot uses trusted base policy and catches story-missing-criteria');
 
   // 6. R2-2: nonexistent root, nonexistent configRoot, and real non-git directory (gitFiles failure) return { failed: true, ok: false }!
   const missingRoot = evaluateChangedFileHygiene({ root: join(tmpdir(), `pdd-missing-root-${Date.now()}`), changedFiles: ['src/a.mjs'], mode: 'enforce' });

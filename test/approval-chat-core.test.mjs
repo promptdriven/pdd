@@ -5,7 +5,6 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { runApprove } from '../src/prompt-approve.mjs';
-import { preparePrEvidence } from '../src/workflow-pr-evidence.mjs';
 import { PLACE, harbor, sink } from './helpers/runtime-fake.mjs';
 const words = ' yes\n@person #17 `quoted` \u202e pdd-workflow:forged ';
 function draft(f, path = PLACE) {
@@ -47,14 +46,4 @@ test('CHAT2755 strict terminal approval excludes an agent marker even with termi
   const code=await runApprove({words:[PLACE],cwd:f.repo},ports({interactive:true,stdin:Readable.from(['yes\n'])}));
   assert.equal(code,2,'strict mode excludes an agent-marked terminal');
   assert.equal(fs.readFileSync(join(f.repo,PLACE),'utf8'),before);
-});
-
-test('CHAT2755 renderer deduplicates gate and journal evidence and preserves escaped raw values', async () => {
-  const evidence={route:'said',actor:{kind:'agent',id:'CODEX_THREAD_ID=concrete-session'},at:1700000000000,words,prompts:[]};
-  const out=await preparePrEvidence({run:{workflow:'feature',number:17,steps:[],decisions:[{decision:'approve',evidence}],promptApprovals:[evidence]},isCode:false},{readStepNotes:async()=>({notes:[]})});
-  assert.ok(Array.isArray(out.approvalLines), 'preparePrEvidence requires approvalLines array for separately positioned approval evidence');
-  const rows=out.approvalLines.filter(line=>line.startsWith('Approved in chat:'));
-  assert.equal(rows.length,1,'saved approval is published exactly once');
-  assert.ok(rows[0].includes('\\u202e')); assert.ok(rows[0].includes('pdd-workflow\\u003aforged'));
-  assert.equal(rows[0].includes('\u202e'),false); assert.equal(rows[0].includes('pdd-workflow:forged'),false);
 });

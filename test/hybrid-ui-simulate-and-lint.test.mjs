@@ -162,53 +162,13 @@ test('3596 CLI & runtime-seam forward prompts/app.prompt.md, --stop prompts/app.
     hasRunTryPort: false,
   });
 
-  const compatStreams = captureStreams();
-  const rejectOldClient = async (_input, ports) => {
-    ports.stderr?.write('No tests found.\n');
-    return 2;
-  };
-  assert.equal(
-    await runTry({ cwd: root, words: ['prompts/app.prompt.md'], options: {} }, { ...compatStreams, runTry: rejectOldClient }),
-    2,
-  );
-  assert.match(compatStreams.err, /No tests found\./);
-  assert.match(compatStreams.err, /Direct \.prompt\.md simulation \(prompts\/app\.prompt\.md\) requires a newer @promptdriven\/runtime-client; upgrade pdd \/ @promptdriven\/runtime-client\./);
-  assert.doesNotMatch(compatStreams.err, /runtime-client#97/);
-
-  const stopStreams = captureStreams();
-  assert.equal(
-    await runTry({ cwd: root, words: ['prompts/app.prompt.md'], options: { '--stop': true } }, { ...stopStreams, runTry: rejectOldClient }),
-    2,
-  );
-  assert.doesNotMatch(stopStreams.err, /Direct \.prompt\.md simulation/);
-
-  const missingStreams = captureStreams();
-  assert.equal(
-    await runTry({ cwd: root, words: ['prompts/does-not-exist.prompt.md'], options: {} }, { ...missingStreams, runTry: rejectOldClient }),
-    2,
-  );
-  assert.doesNotMatch(missingStreams.err, /Direct \.prompt\.md simulation/);
-
-  // With @promptdriven/runtime-client@1.1.0, `pdd simulate prompts/app.prompt.md` is accepted natively
+  // With runtime-client@1.1.1, `pdd simulate prompts/app.prompt.md` is accepted natively
   // and proceeds past Story discovery to runtime authentication (exit 5 without gh sign-in, no old-client refusal).
   const cliStreams = captureStreams();
   const env = { HOME: home, PDD_RUNTIME_URL: 'https://runtime.example', PDD_STATE_DIR: state };
   const cliCode = await runPdd(['simulate', 'prompts/app.prompt.md'], { cwd: root, env, stdout: cliStreams.stdout, stderr: cliStreams.stderr });
   assert.equal(cliCode, 5, cliStreams.err);
   assert.doesNotMatch(cliStreams.err, /No tests found|Unknown story|No Stories are available/);
-  assert.doesNotMatch(cliStreams.err, /Direct \.prompt\.md simulation|runtime-client#97/);
-
-  // R1-4: oversized stderr (>4096 chars before "No tests found.") stays bounded and does not trigger unbounded buffering
-  const floodStreams = captureStreams();
-  const noisyReject = async (_input, ports) => {
-    ports.stderr?.write(`${'x'.repeat(5000)}\nNo tests found.\n`);
-    return 2;
-  };
-  assert.equal(
-    await runTry({ cwd: root, words: ['prompts/app.prompt.md'], options: {} }, { ...floodStreams, runTry: noisyReject }),
-    2,
-  );
-  assert.doesNotMatch(floodStreams.err, /Direct \.prompt\.md simulation/);
 });
 
 test('3596 pdd lint --local passes with 0 warnings on 1-file and 3-file plain-prose HTML UI apps (zero app-map.json, zero Runtime interface)', async t => {
@@ -469,18 +429,6 @@ test('3595/3596 compact app-map.json local lint still flags invalid schema_versi
   });
   const emptyWarnings = lintSvgLayouts({ root: emptyScreensRoot, files: gitFiles(emptyScreensRoot) });
   assert.ok(emptyWarnings.some(line => /non-empty "screens"/.test(line)), emptyWarnings.join('\n'));
-});
-
-test('3595/3596 lean RUNBOOK and SKILL default to Short JSON and single-file plain-prose UI without verbose boilerplate', () => {
-  const runbook = readFileSync(new URL('../RUNBOOK.md', import.meta.url), 'utf8');
-  const skill = readFileSync(new URL('../skills/pdd-prompting/SKILL.md', import.meta.url), 'utf8');
-  assert.doesNotMatch(runbook, /screen\.css/);
-  assert.doesNotMatch(runbook, /--emit-v1 --write/);
-  assert.doesNotMatch(runbook, /"schema_version":\s*"prompt-runtime\.app-map\.v1"/);
-  assert.match(runbook, /render\(\{ state \}\).*handle_event\(\{ state, event \}\)/);
-  assert.match(runbook, /--fresh/);
-  assert.match(runbook, /--read <batch> --details/);
-  assert.match(skill, /one plain-prose `\.prompt\.md`/i);
 });
 
 test('3596 runTry auto-selects tab=screen for Story-backed plain-prose render/handle_event UI without app-map.json, preserves reopen and explicit --tab', async t => {
@@ -904,19 +852,14 @@ test('3595/3596 R1-5/6: malformed non-object state_schema warns, screens[] keeps
   assert.ok(idxWarnings.some(line => /screen-2/.test(line)), `expected screen-2 in stylesheet warning, got:\n${idxWarnings.join('\n')}`);
   assert.ok(!idxWarnings.some(line => /\bscreen "main"\b/.test(line)), idxWarnings.join('\n'));
 
-  // R1-6: docs document 4 top-level check targets and input as ref_target only
-  for (const rel of [
-    '../RUNBOOK.md',
-    '../skills/pdd-prompting/RUNBOOK.md',
-    '../docs/prompting-guide.md',
-    '../skills/pdd-prompting/guide.md',
-    '../docs/story-guide.md',
-    '../skills/pdd-prompting/story-guide.md',
-    '../skills/pdd-prompting/runbook/checks-and-budgets.md',
-  ]) {
+  // R1-6: skill references document 4 top-level check targets and input as ref_target only
+  const storiesRef = readFileSync(new URL('../skills/pdd/references/stories.md', import.meta.url), 'utf8');
+  assert.doesNotMatch(storiesRef, /5-target|5 targets|five core check targets/i, 'skills/pdd/references/stories.md must not advertise 5 top-level targets');
+  assert.match(storiesRef, /\*\*4 targets:\*\*/, 'skills/pdd/references/stories.md must document 4 top-level targets');
+  assert.match(storiesRef, /ref_target/, 'skills/pdd/references/stories.md must clarify input as ref_target');
+  for (const rel of ['../skills/pdd/SKILL.md', '../skills/pdd/references/prompting.md']) {
     const content = readFileSync(new URL(rel, import.meta.url), 'utf8');
     assert.doesNotMatch(content, /5-target|5 targets|five core check targets/i, `${rel} must not advertise 5 top-level targets`);
-    assert.match(content, /ref_target/, `${rel} must clarify input as ref_target`);
   }
 });
 

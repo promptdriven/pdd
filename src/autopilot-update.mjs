@@ -5,13 +5,25 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isNewerRelease, parseReleaseVersion, pickLatestRelease } from './release-notice.mjs';
-import * as defaultSkillsInstall from './skills-install.mjs';
+import {
+  classifyInstallKind,
+  detectGlobalInstallPrefix,
+  formatNpmInstallCommand,
+  formatNpmUninstallCommand,
+  hasLegacyUnscopedPdd,
+  isLegacyUnscopedPddDir,
+  npmCommandForInstall,
+  quoteShellArg as quote,
+  resolveInstalledRoot,
+} from './shared/install-kind.mjs';
+import * as defaultSkillsInstall from './shared/skills-install.mjs';
+
+export { classifyInstallKind, detectGlobalInstallPrefix, hasLegacyUnscopedPdd };
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const HOUR_MS = 60 * 60 * 1000;
 const STATUS_FILE = 'autopilot-update.json';
-const quote = text => `'${String(text).replace(/'/g, "'\\''")}'`;
 
 export const validAutoUpdateMode = mode => ['release', 'main', 'off'].includes(mode);
 
@@ -66,53 +78,6 @@ export function hasMidWriteJobs(target, ports = {}) {
     }
   }
   return false;
-}
-
-export function detectGlobalInstallPrefix(packageRoot, ports = {}) {
-  const fs = ports.fs ?? nativeFs;
-  const uid = ports.uid !== undefined ? ports.uid : (typeof process.getuid === 'function' ? process.getuid() : null);
-  if (typeof packageRoot !== 'string' || !packageRoot) return null;
-  let real, info;
-  try {
-    real = fs.realpathSync(packageRoot);
-    info = fs.statSync(real);
-    if (!info.isDirectory()) return null;
-    if (uid !== null && Number.isInteger(info.uid) && info.uid !== uid) return null;
-    if (fs.existsSync(join(real, '.git'))) return null;
-  } catch { return null; }
-  const normalized = real.replace(/\\/g, '/').replace(/\/+$/, '');
-  const match = /^(.*?)\/(?:lib\/)?node_modules\/(?:@promptdriven\/pdd|pdd)$/.exec(normalized);
-  if (!match || !match[1]) return null;
-  try {
-    const prefixInfo = fs.statSync(match[1]);
-    if (uid !== null && Number.isInteger(prefixInfo.uid) && prefixInfo.uid !== uid) return null;
-  } catch { return null; }
-  return { prefix: match[1], realPackageRoot: real };
-}
-
-function isLegacyUnscopedPddDir(pkgDir, fs, uid) {
-  const lstat = fs.lstatSync ?? fs.statSync;
-  try {
-    const info = lstat(pkgDir);
-    if (info.isSymbolicLink?.() || !info.isDirectory()) return false;
-    if (uid !== null && Number.isInteger(info.uid) && info.uid !== uid) return false;
-    if (fs.existsSync(join(pkgDir, '.git'))) return false;
-    const pkg = readJson(join(pkgDir, 'package.json'), fs);
-    if (pkg?.name !== 'pdd') return false;
-    const binRel = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.pdd;
-    if (typeof binRel !== 'string' || binRel.replace(/^\.\//, '') !== 'bin/pdd.mjs') return false;
-    const binInfo = lstat(join(pkgDir, 'bin/pdd.mjs'));
-    return !binInfo.isSymbolicLink?.() && binInfo.isFile();
-  } catch {
-    return false;
-  }
-}
-
-export function hasLegacyUnscopedPdd(prefix, ports = {}) {
-  const fs = ports.fs ?? nativeFs;
-  const uid = ports.uid !== undefined ? ports.uid : (typeof process.getuid === 'function' ? process.getuid() : null);
-  if (typeof prefix !== 'string' || !prefix) return false;
-  return ['lib/node_modules/pdd', 'node_modules/pdd'].some(rel => isLegacyUnscopedPddDir(join(prefix, rel), fs, uid));
 }
 
 const LEGACY_SHIM_RE = /(?:^|[\\/])node_modules[\\/]pdd(?:[\\/]|$)/;
@@ -210,14 +175,6 @@ function stageLegacyPddBackup(prefix, fs, uid = undefined) {
   };
 }
 
-function resolveInstalledRoot(prefix, fallbackRoot, fs) {
-  for (const rel of ['lib/node_modules/@promptdriven/pdd', 'node_modules/@promptdriven/pdd', 'lib/node_modules/pdd', 'node_modules/pdd']) {
-    const candidate = join(prefix, rel);
-    try { if (fs.statSync(join(candidate, 'package.json')).isFile()) return candidate; } catch { /* Try next layout. */ }
-  }
-  return fallbackRoot;
-}
-
 async function ghApiJson(execute, endpoint) {
   const reply = await execute('gh', ['api', endpoint], { timeoutMs: 10000 });
   if (!reply || reply.code !== 0) {
@@ -250,7 +207,7 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
     return { action: 'throttled' };
   if (hasMidWriteJobs({ coreRoot, stateRoot }, { fs }))
     return { action: 'deferred', reason: 'mid-write-job' };
-  const globalInstall = detectGlobalInstallPrefix(packageRoot, { fs, uid: ports.uid });
+  const globalInstall = detectGlobalInstallPrefix(packageRoot, { fs, uid: ports.uid, env, platform: ports.platform });
   if (!globalInstall) {
     writeJson(statusPath, { ...(previous ?? {}), checkedAt: now, channel: mode, action: 'skipped', reason: 'non-global-or-unowned' }, fs);
     return { action: 'skipped', reason: 'non-global-or-unowned' };
@@ -259,7 +216,10 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
   if (!parseReleaseVersion(currentVersion)) return { action: 'skipped', reason: 'unreadable-version' };
   const execute = ports.execute;
   if (typeof execute !== 'function') return { action: 'skipped', reason: 'missing-executor' };
-  const legacyUnscoped = hasLegacyUnscopedPdd(globalInstall.prefix, { fs, uid: ports.uid });
+  const isVolta = globalInstall.kind === 'volta';
+  const legacyUnscoped = isVolta
+    ? (globalInstall.isLegacyUnscoped || hasLegacyUnscopedPdd(globalInstall, { fs, uid: ports.uid }))
+    : hasLegacyUnscopedPdd(globalInstall.prefix, { fs, uid: ports.uid });
 
   let targetSpec = null, targetLabel = null, nextSha = null;
   try {
@@ -310,29 +270,37 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
       } catch { /* Checkout fast-forward is best-effort only. */ }
     }
     let backup = null, uninstalledLegacy = false;
-    if (hasLegacyUnscopedPdd(globalInstall.prefix, { fs, uid: ports.uid })) {
-      backup = stageLegacyPddBackup(globalInstall.prefix, fs, ports.uid);
-      const uninstall = await execute('npm', ['uninstall', '-g', '--prefix', globalInstall.prefix, '--ignore-scripts', '--no-audit', '--no-fund', 'pdd'], { timeoutMs: 60000 });
+    const needsUninstall = isVolta
+      ? (globalInstall.isLegacyUnscoped || hasLegacyUnscopedPdd(globalInstall, { fs, uid: ports.uid }))
+      : hasLegacyUnscopedPdd(globalInstall.prefix, { fs, uid: ports.uid });
+    if (needsUninstall) {
+      if (!isVolta) backup = stageLegacyPddBackup(globalInstall.prefix, fs, ports.uid);
+      const u = npmCommandForInstall(globalInstall, 'uninstall', 'pdd', env);
+      const uninstall = await execute(u.command, u.args, isVolta ? { timeoutMs: 60000, env: u.env } : { timeoutMs: 60000 });
       if (uninstall.code !== 0) {
-        backup.cleanup();
+        backup?.cleanup();
         throw Error((uninstall.stderr || uninstall.stdout || 'npm uninstall pdd failed').trim().split('\n')[0]);
       }
       uninstalledLegacy = true;
     }
-    const install = await execute('npm', ['install', '-g', '--prefix', globalInstall.prefix, '--ignore-scripts', '--no-audit', '--no-fund', targetSpec], { timeoutMs: 120000 });
+    const ins = npmCommandForInstall(globalInstall, 'install', targetSpec, env);
+    const install = await execute(ins.command, ins.args, isVolta ? { timeoutMs: 120000, env: ins.env } : { timeoutMs: 120000 });
     if (install.code !== 0) {
       const detail = (install.stderr || install.stdout || 'npm install failed').trim().split('\n')[0];
       if (uninstalledLegacy) {
+        if (isVolta) {
+          throw Error(`${detail}; unscoped pdd was removed — restore with: ${formatNpmInstallCommand(globalInstall, targetSpec)}`);
+        }
         const restored = backup?.restore() ?? false;
         if (!restored) {
           const backupNote = backup?.backupDir ? ` (staged backup preserved at ${quote(backup.backupDir)})` : '';
-          throw Error(`${detail}; unscoped pdd was removed and rollback failed${backupNote} — restore with: npm install -g --prefix ${quote(globalInstall.prefix)} --ignore-scripts ${targetSpec}`);
+          throw Error(`${detail}; unscoped pdd was removed and rollback failed${backupNote} — restore with: ${formatNpmInstallCommand(globalInstall, targetSpec)}`);
         }
       }
       throw Error(detail);
     }
     backup?.cleanup();
-    const installedRoot = resolveInstalledRoot(globalInstall.prefix, globalInstall.realPackageRoot, fs);
+    const installedRoot = resolveInstalledRoot(globalInstall, globalInstall.realPackageRoot, fs);
     const toVersion = readJson(join(installedRoot, 'package.json'), fs)?.version ?? currentVersion;
     try {
       const setup = ports.setupSkills ?? defaultSkillsInstall.setupSkills;
@@ -450,9 +418,9 @@ export async function runCliUpgrade({
 } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const resolvedHome = home ?? env.HOME ?? (ports.homedir ?? homedir)();
-  const globalInstall = detectGlobalInstallPrefix(packageRoot, { fs, uid: ports.uid });
+  const globalInstall = detectGlobalInstallPrefix(packageRoot, { fs, uid: ports.uid, env, platform: ports.platform });
   if (!globalInstall) {
-    writeLine(stderr, 'pdd upgrade updates only a user-owned global npm installation (not a Git checkout or root-owned prefix). To update manually, run: npm install -g github:promptdriven/pdd && pdd setup');
+    writeLine(stderr, 'pdd upgrade updates only a user-owned global npm installation (including Volta; not a Git checkout or root-owned prefix). To update manually, run: npm install -g github:promptdriven/pdd && pdd setup');
     return { exitCode: 1, cliUpdated: false, updatedSkills: [], skippedSkills: [], failedSkills: [] };
   }
   const currentVersion = readJson(join(globalInstall.realPackageRoot, 'package.json'), fs)?.version;
@@ -472,50 +440,62 @@ export async function runCliUpgrade({
   }
 
   const effectiveSpawn = spawnSyncImpl ?? nativeSpawnSync;
-  const quotedPrefix = quote(globalInstall.prefix);
-  const legacyUnscoped = hasLegacyUnscopedPdd(globalInstall.prefix, { fs, uid: ports.uid });
+  const isVolta = globalInstall.kind === 'volta';
+  const legacyUnscoped = isVolta
+    ? (globalInstall.isLegacyUnscoped || hasLegacyUnscopedPdd(globalInstall, { fs, uid: ports.uid }))
+    : hasLegacyUnscopedPdd(globalInstall.prefix, { fs, uid: ports.uid });
+  const manualInstallCmd = formatNpmInstallCommand(globalInstall, target.spec);
+  const manualUninstallCmd = formatNpmUninstallCommand(globalInstall);
   let cliUpdated = false;
   if (main || legacyUnscoped || isNewerRelease(target.version, currentVersion)) {
     let backup = null, uninstalledLegacy = false;
     if (legacyUnscoped) {
-      backup = stageLegacyPddBackup(globalInstall.prefix, fs, ports.uid);
-      const uninstall = effectiveSpawn('npm', ['uninstall', '-g', '--prefix', globalInstall.prefix, '--ignore-scripts', '--no-audit', '--no-fund', 'pdd'], {
+      if (!isVolta) backup = stageLegacyPddBackup(globalInstall.prefix, fs, ports.uid);
+      const u = npmCommandForInstall(globalInstall, 'uninstall', 'pdd', env);
+      const uninstall = effectiveSpawn(u.command, u.args, {
         encoding: 'utf8',
         timeout: 60000,
-        env,
+        env: u.env,
       });
       const uninstallCode = uninstall?.status ?? uninstall?.code ?? (uninstall?.error ? 1 : 0);
       if (uninstallCode !== 0) {
-        backup.cleanup();
+        backup?.cleanup();
         const detail = (uninstall?.stderr || uninstall?.stdout || uninstall?.error?.message || 'npm uninstall pdd failed').trim().split('\n')[0];
-        writeLine(stderr, `pdd upgrade failed to remove the unscoped pdd package in ${globalInstall.prefix} (${detail}). To migrate manually, run: npm uninstall -g --prefix ${quotedPrefix} pdd && npm install -g --prefix ${quotedPrefix} --ignore-scripts ${target.spec} && pdd setup`);
+        writeLine(stderr, `pdd upgrade failed to remove the unscoped pdd package in ${globalInstall.prefix} (${detail}). To migrate manually, run: ${manualUninstallCmd} && ${manualInstallCmd} && pdd setup`);
         return { exitCode: 1, cliUpdated: false, fromVersion: currentVersion, toVersion: currentVersion, updatedSkills: [], skippedSkills: [], failedSkills: [] };
       }
       uninstalledLegacy = true;
     }
-    const install = effectiveSpawn('npm', ['install', '-g', '--prefix', globalInstall.prefix, '--ignore-scripts', '--no-audit', '--no-fund', target.spec], {
+    const ins = npmCommandForInstall(globalInstall, 'install', target.spec, env);
+    const install = effectiveSpawn(ins.command, ins.args, {
       encoding: 'utf8',
       timeout: 120000,
-      env,
+      env: ins.env,
     });
     const code = install?.status ?? install?.code ?? (install?.error ? 1 : 0);
     if (code !== 0) {
       const rawOut = `${install?.stderr || ''}\n${install?.stdout || ''}\n${install?.error?.message || ''}`;
       const detail = (install?.stderr || install?.stdout || install?.error?.message || 'npm install failed').trim().split('\n')[0];
       if (uninstalledLegacy) {
-        const restored = backup?.restore() ?? false;
-        if (!restored) {
-          const backupNote = backup?.backupDir ? ` (staged backup preserved at ${quote(backup.backupDir)})` : '';
-          writeLine(stderr, `Warning: unscoped pdd was removed in ${globalInstall.prefix} and automatic rollback failed${backupNote}. Restore pdd with: npm install -g --prefix ${quotedPrefix} --ignore-scripts ${target.spec} && pdd setup`);
+        if (isVolta) {
+          writeLine(stderr, `Warning: unscoped pdd was removed under Volta (${globalInstall.voltaHome}). Restore pdd with: ${manualInstallCmd} && pdd setup`);
+        } else {
+          const restored = backup?.restore() ?? false;
+          if (!restored) {
+            const backupNote = backup?.backupDir ? ` (staged backup preserved at ${quote(backup.backupDir)})` : '';
+            writeLine(stderr, `Warning: unscoped pdd was removed in ${globalInstall.prefix} and automatic rollback failed${backupNote}. Restore pdd with: ${manualInstallCmd} && pdd setup`);
+          }
         }
       }
-      const stillLegacy = hasLegacyUnscopedPdd(globalInstall.prefix, { fs, uid: ports.uid });
+      const stillLegacy = isVolta
+        ? hasLegacyUnscopedPdd(globalInstall, { fs, uid: ports.uid })
+        : hasLegacyUnscopedPdd(globalInstall.prefix, { fs, uid: ports.uid });
       if (/\bEEXIST\b/.test(rawOut) && !stillLegacy) {
-        writeLine(stderr, `pdd upgrade failed to install ${target.spec} (${detail}): ${join(globalInstall.prefix, 'bin/pdd')} already exists from a non-npm binary or symlink. Remove or relocate it with the tool that installed it (or use a separate npm prefix), then run: npm install -g --prefix ${quotedPrefix} --ignore-scripts ${target.spec} && pdd setup`);
+        writeLine(stderr, `pdd upgrade failed to install ${target.spec} (${detail}): ${join(globalInstall.prefix, 'bin/pdd')} already exists from a non-npm binary or symlink. Remove or relocate it with the tool that installed it (or use a separate npm prefix), then run: ${manualInstallCmd} && pdd setup`);
       } else {
         const retryCmd = stillLegacy
-          ? `npm uninstall -g --prefix ${quotedPrefix} pdd && npm install -g --prefix ${quotedPrefix} --ignore-scripts ${target.spec} && pdd setup`
-          : `npm install -g --prefix ${quotedPrefix} --ignore-scripts ${target.spec} && pdd setup`;
+          ? `${manualUninstallCmd} && ${manualInstallCmd} && pdd setup`
+          : `${manualInstallCmd} && pdd setup`;
         writeLine(stderr, `pdd upgrade failed to install ${target.spec} (${detail}). To retry, run: ${retryCmd}`);
       }
       return { exitCode: 1, cliUpdated: false, fromVersion: currentVersion, toVersion: currentVersion, updatedSkills: [], skippedSkills: [], failedSkills: [] };
@@ -524,7 +504,7 @@ export async function runCliUpgrade({
     cliUpdated = true;
   }
 
-  const targetPkgRoot = resolveInstalledRoot(globalInstall.prefix, globalInstall.realPackageRoot, fs);
+  const targetPkgRoot = resolveInstalledRoot(globalInstall, globalInstall.realPackageRoot, fs);
   const toVersion = readJson(join(targetPkgRoot, 'package.json'), fs)?.version ?? (cliUpdated && target.version ? target.version : currentVersion);
   const stateHome = ports.stateHome ?? (env.XDG_STATE_HOME || (resolvedHome ? join(resolvedHome, '.local', 'state') : null));
   const stateRoot = env.PDD_STATE_DIR || (stateHome ? join(stateHome, 'pdd') : null);

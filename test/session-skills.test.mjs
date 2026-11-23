@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { findSkills, setupSkills, syncOwnedUserSkills, PDD_SKILL_NAMES, RETIRED_SKILL_NAMES } from '../src/skills-install.mjs';
+import { findSkills, hasClaudePluginInstall, setupSkills, syncOwnedUserSkills, PDD_SKILL_NAMES, RETIRED_SKILL_NAMES } from '../src/skills-install.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -23,43 +23,44 @@ for (const local of [false, true]) test(`INSTALL10: stale skill names and versio
   const { pkg, home, project, run } = packageCopy(t);
   const folder = join(local ? project : home, '.agents/skills');
   for (const name of PDD_SKILL_NAMES) cpSync(join(pkg, 'skills', name), join(folder, name), { recursive: true });
-  const graph = join(folder, 'pdd-graph/SKILL.md');
-  const old = readFileSync(graph, 'utf8').replace(/^(  pdd-skills:).*$/m, '$1 0.1.20');
-  writeFileSync(graph, old);
-  for (const args of [['--version'], ['setup']]) {
+  const skillMd = join(folder, 'pdd/SKILL.md');
+  const old = readFileSync(skillMd, 'utf8').replace(/^(  pdd-skills:).*$/m, '$1 0.1.20');
+  writeFileSync(skillMd, old);
+  for (const args of (local ? [['--version']] : [['--version'], ['setup']])) {
     const result = run(args);
     assert.equal(result.status, 0, result.stderr);
     if (args[0] === '--version') assert.equal(result.stdout, `${version()}\n`);
     const warning = (args[0] === '--version' ? result.stderr : result.stdout).split('\n').find(line => line.startsWith(`PDD skills in ${folder} `));
     assert.ok(warning, result.stdout + result.stderr);
-    assert.match(warning, /pdd-graph is 0\.1\.20/);
-    assert.doesNotMatch(warning, /pdd-bug|pdd-feature/);
+    assert.match(warning, /pdd is 0\.1\.20/);
     assert.ok(warning.includes(local ? UPDATE.replace(' -g', '') : UPDATE), warning);
     assert.match(warning, /pdd setup/);
-    assert.equal(readFileSync(graph, 'utf8'), old);
+    assert.equal(readFileSync(skillMd, 'utf8'), old);
   }
-  // An unrelated local edit must not hide the older graph copy.
-  const bug = join(folder, 'pdd-bug/SKILL.md');
-  writeFileSync(bug, readFileSync(bug, 'utf8') + '\nLocal edit.\n');
+  // An unrelated local edit in another folder must not hide the older copy.
+  const otherFolder = join(local ? project : home, '.claude/skills');
+  cpSync(join(pkg, 'skills/pdd'), join(otherFolder, 'pdd'), { recursive: true });
+  const otherMd = join(otherFolder, 'pdd/SKILL.md');
+  writeFileSync(otherMd, readFileSync(otherMd, 'utf8') + '\nLocal edit.\n');
   const mixed = run(['--version']);
   assert.equal(mixed.status, 0, mixed.stderr);
-  assert.match(mixed.stderr, /pdd-graph is 0\.1\.20/);
+  assert.match(mixed.stderr, /pdd is 0\.1\.20/);
 });
 
 test('INSTALL11: version names an older pdd-owned skill and setup repairs it', t => {
   const { home, run } = packageCopy(t);
   assert.equal(run(['setup']).status, 0);
-  const marker = join(home, '.agents/skills/pdd-graph', MARKER);
+  const marker = join(home, '.agents/skills/pdd', MARKER);
   writeFileSync(marker, JSON.stringify({ ...JSON.parse(readFileSync(marker, 'utf8')), version: '0.1.20' }));
   const before = run(['--version']);
   assert.equal(before.status, 0, before.stderr);
-  assert.match(before.stderr, /pdd-graph is 0\.1\.20/);
+  assert.match(before.stderr, /pdd is 0\.1\.20/);
   assert.match(before.stderr, /pdd setup/);
   assert.equal(JSON.parse(readFileSync(marker, 'utf8')).version, '0.1.20');
   const repair = run(['setup']);
   assert.equal(repair.status, 0, repair.stderr);
   assert.equal(JSON.parse(readFileSync(marker, 'utf8')).version, version());
-  assert.doesNotMatch(run(['--version']).stderr, /pdd-graph/);
+  assert.doesNotMatch(run(['--version']).stderr, /PDD skills in /);
 });
 
 // A copied package in a quoted path, so install never depends on the source checkout.
@@ -81,7 +82,7 @@ function packageCopy(t) {
 }
 
 // Wrong: an ordinary command writes skill folders into the person's home (only pdd setup may install them).
-test('INSTALL1: pdd --version, help and workflow list write nothing to HOME or CLAUDE_CONFIG_DIR', t => {
+test('INSTALL1: pdd --version, help and completion write nothing to HOME or CLAUDE_CONFIG_DIR', t => {
   const { sandbox, pkg, home, project, run } = packageCopy(t);
   const config = join(sandbox, 'claude config');
   const alpha = join(sandbox, 'alpha-bin'), legacy = join(sandbox, 'legacy-bin');
@@ -90,7 +91,7 @@ test('INSTALL1: pdd --version, help and workflow list write nothing to HOME or C
   symlinkSync(process.execPath, join(alpha, 'node'));
   writeFileSync(join(legacy, 'pdd'), '#!/bin/sh\necho "pdd, version 0.0.305"\n', { mode: 0o755 });
   const path = `${alpha}:/usr/bin:/bin`;
-  for (const args of [['--version'], ['--help'], ['workflow', 'list']]) {
+  for (const args of [['--version'], ['--help'], ['help', 'prompting'], ['completion', 'bash']]) {
     const result = run(args, { CLAUDE_CONFIG_DIR: config, PATH: path });
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
   }
@@ -107,10 +108,11 @@ test('INSTALL2: pdd setup installs missing skills into each agent user folder, s
   assert.equal(first.status, 0, first.stderr);
   // The list is every folder in skills/; the retired skills are not in it.
   assert.deepEqual([...PDD_SKILL_NAMES].sort(), readdirSync(join(pkg, 'skills')).sort());
-  assert.ok(PDD_SKILL_NAMES.includes('pdd-graph'));
+  assert.deepEqual([...PDD_SKILL_NAMES], ['pdd']);
   for (const name of RETIRED_SKILL_NAMES) assert.equal(PDD_SKILL_NAMES.includes(name), false, name);
+  const skillLabel = `${PDD_SKILL_NAMES.length} PDD skill${PDD_SKILL_NAMES.length === 1 ? '' : 's'}`;
   for (const skillRoot of ROOTS) {
-    assert.ok(first.stdout.includes(`Installed 7 PDD skills to ${join(home, skillRoot)}: ${PDD_SKILL_NAMES.join(', ')}\n`), first.stdout);
+    assert.ok(first.stdout.includes(`Installed ${skillLabel} to ${join(home, skillRoot)}: ${PDD_SKILL_NAMES.join(', ')}\n`), first.stdout);
     assert.deepEqual(readdirSync(join(home, skillRoot)).sort(), [...PDD_SKILL_NAMES].sort());
     for (const name of PDD_SKILL_NAMES) {
       const installed = join(home, skillRoot, name), source = join(pkg, 'skills', name);
@@ -119,94 +121,134 @@ test('INSTALL2: pdd setup installs missing skills into each agent user folder, s
       assert.equal(JSON.parse(readFileSync(join(installed, MARKER), 'utf8')).version, version());
     }
   }
-  assert.deepEqual(readdirSync(project), ['AGENTS.md']);
-  const inodes = ROOTS.map(skillRoot => statSync(join(home, skillRoot, 'pdd-bug')).ino), block = readFileSync(join(project, 'AGENTS.md'), 'utf8');
+  assert.deepEqual(readdirSync(project), [], 'laptop pdd setup never creates repo files');
+  const inodes = ROOTS.map(skillRoot => statSync(join(home, skillRoot, 'pdd')).ino);
   const second = run(['setup']);
   assert.equal(second.status, 0, second.stderr);
   for (const skillRoot of ROOTS) assert.ok(second.stdout.includes(`PDD skills found in ${join(home, skillRoot)}\n`), second.stdout);
   assert.doesNotMatch(second.stdout, /Installed|Updated/);
-  assert.deepEqual(ROOTS.map(skillRoot => statSync(join(home, skillRoot, 'pdd-bug')).ino), inodes);
-  assert.equal(readFileSync(join(project, 'AGENTS.md'), 'utf8'), block);
+  assert.deepEqual(ROOTS.map(skillRoot => statSync(join(home, skillRoot, 'pdd')).ino), inodes);
 });
 
-// Wrong: setup copies over skills that npx skills add already installed (symlinked folders without the pdd marker).
-test('INSTALL3: after an npx-style install in the project, pdd setup finds the skills and copies nothing', t => {
+// S1 bug fix: a local .agents/skills inside cwd must NOT prevent pdd setup from installing global user skills.
+test('INSTALL3: project-local skills do not block global pdd setup install, Claude plugin avoids duplicate copy, and Antigravity is conditional', t => {
   const { pkg, home, project, run } = packageCopy(t);
   for (const name of PDD_SKILL_NAMES) {
     cpSync(join(pkg, 'skills', name), join(project, '.agents/skills', name), { recursive: true });
-    mkdirSync(join(project, '.claude/skills'), { recursive: true });
-    symlinkSync(join(project, '.agents/skills', name), join(project, '.claude/skills', name));
   }
+  // Seed Claude Code plugin registry so Claude skips duplicate global copy.
+  mkdirSync(join(home, '.claude/plugins'), { recursive: true });
+  writeFileSync(join(home, '.claude/plugins/installed_plugins.json'), JSON.stringify({
+    version: 2,
+    plugins: { 'pdd@promptdriven': [{ scope: 'user', installPath: '/plugins/pdd', version: version() }] },
+  }));
   const result = run(['setup']);
   assert.equal(result.status, 0, result.stderr);
-  for (const skillRoot of ROOTS) assert.ok(result.stdout.includes(`PDD skills found in ${join(project, skillRoot)}\n`), result.stdout);
-  assert.doesNotMatch(result.stdout, /Installed|Updated/);
-  assert.deepEqual(readdirSync(home), []);
-  assert.equal(existsSync(join(project, '.agents/skills/pdd-bug', MARKER)), false);
+  assert.ok(existsSync(join(home, '.agents/skills/pdd/SKILL.md')), 'Codex global skills still installed');
+  assert.equal(existsSync(join(home, '.gemini/config/skills')), false, 'clean laptop without Antigravity does not create ~/.gemini/config/skills');
+  assert.equal(existsSync(join(home, '.claude/skills/pdd/SKILL.md')), false, 'Claude plugin avoids duplicate global copy');
+  assert.match(result.stdout, /managed by an installed plugin/);
+  assert.equal(existsSync(join(project, '.agents/skills/pdd', MARKER)), false, 'project copy stays untouched');
+
+  // Tightened plugin regex: unrelated plugin in a marketplace named `pdd` does NOT match!
+  const otherHome = temp(t);
+  mkdirSync(join(otherHome, '.claude/plugins'), { recursive: true });
+  writeFileSync(join(otherHome, '.claude/plugins/installed_plugins.json'), JSON.stringify({
+    version: 2,
+    plugins: { 'unrelated-tool@pdd': [{ scope: 'user', installPath: '/plugins/unrelated' }] },
+  }));
+  assert.equal(hasClaudePluginInstall({ home: otherHome }), null, 'marketplace name @pdd must not false-match PDD plugin');
+
+  // When Antigravity is present (~/.gemini/antigravity-cli), setup installs ~/.gemini/config/skills too.
+  mkdirSync(join(home, '.gemini/antigravity-cli'), { recursive: true });
+  const agyRes = run(['setup']);
+  assert.equal(agyRes.status, 0, agyRes.stderr);
+  assert.ok(existsSync(join(home, '.gemini/config/skills/pdd/SKILL.md')), 'Antigravity skills installed when detected');
+
+  // findSkills reports scope ('project' vs 'user') accurately.
+  const found = findSkills({ packageRoot: pkg, cwd: project, home });
+  assert.ok(found.some(r => r.scope === 'project' && r.found === join(project, '.agents/skills')));
+  assert.ok(found.some(r => r.scope === 'user' && r.found === join(home, '.gemini/config/skills')));
 });
 
 // Wrong: an update keeps stale files, a newer copy is downgraded, or a person's own folder or symlink is overwritten.
 test('INSTALL4: setup updates only older or changed copies that carry the pdd marker', t => {
   const { pkg, home } = packageCopy(t);
-  const opts = { packageRoot: pkg, cwd: join(home, 'none'), home };
+  const opts = { packageRoot: pkg, cwd: join(home, 'none'), home, env: { HOME: home, PATH: '' } };
   setupSkills(opts);
   const [agents, claude] = ROOTS.map(skillRoot => join(home, skillRoot));
   const marker = dir => JSON.parse(readFileSync(join(dir, MARKER), 'utf8'));
-  writeFileSync(join(agents, 'pdd-bug/steps/old.md'), 'stale\n');
-  writeFileSync(join(agents, 'pdd-bug', MARKER), JSON.stringify({ ...marker(join(agents, 'pdd-bug')), version: '0.0.1' }));
-  writeFileSync(join(agents, 'pdd-feature/SKILL.md'), 'edited\n');
-  writeFileSync(join(agents, 'pdd-feature', MARKER), JSON.stringify({ ...marker(join(agents, 'pdd-feature')), digest: 'other' }));
-  writeFileSync(join(claude, 'pdd-bug/SKILL.md'), 'newer\n');
-  writeFileSync(join(claude, 'pdd-bug', MARKER), JSON.stringify({ ...marker(join(claude, 'pdd-bug')), version: '99.0.0' }));
-  rmSync(join(claude, 'pdd-feature'), { recursive: true }); mkdirSync(join(claude, 'pdd-feature'));
-  writeFileSync(join(claude, 'pdd-feature/SKILL.md'), 'mine\n');
-  const own = join(home, 'own-skill'); mkdirSync(own); writeFileSync(join(own, 'SKILL.md'), 'linked\n');
-  rmSync(join(claude, 'pdd-small-change'), { recursive: true }); symlinkSync(own, join(claude, 'pdd-small-change'));
-  rmSync(join(agents, 'pdd-prompting'), { recursive: true });
 
-  const results = setupSkills(opts);
-  assert.deepEqual(results.map(result => [result.agent, result.root, result.found, result.installed.length, result.updated.length]),
-    [['Codex', agents, null, 1, 2], ['Claude', claude, claude, 0, 0]]);
-  assert.equal(existsSync(join(agents, 'pdd-bug/steps/old.md')), false);
-  assert.equal(marker(join(agents, 'pdd-bug')).version, version());
-  assert.deepEqual(readFileSync(join(agents, 'pdd-feature/SKILL.md')), readFileSync(join(pkg, 'skills/pdd-feature/SKILL.md')));
-  assert.deepEqual(readFileSync(join(agents, 'pdd-prompting/guide.md')), readFileSync(join(pkg, 'docs/prompting-guide.md')));
-  assert.equal(readFileSync(join(claude, 'pdd-bug/SKILL.md'), 'utf8'), 'newer\n');
-  assert.equal(readFileSync(join(claude, 'pdd-feature/SKILL.md'), 'utf8'), 'mine\n');
-  assert.equal(readFileSync(join(claude, 'pdd-small-change/SKILL.md'), 'utf8'), 'linked\n');
+  // 1. Older marked copy with stale extra file updates; newer marked copy is never downgraded.
+  writeFileSync(join(agents, 'pdd/references/old.md'), 'stale\n');
+  writeFileSync(join(agents, 'pdd', MARKER), JSON.stringify({ ...marker(join(agents, 'pdd')), version: '0.0.1' }));
+  writeFileSync(join(claude, 'pdd/SKILL.md'), 'newer\n');
+  writeFileSync(join(claude, 'pdd', MARKER), JSON.stringify({ ...marker(join(claude, 'pdd')), version: '99.0.0' }));
+  const r1 = setupSkills(opts);
+  assert.deepEqual(r1.map(result => [result.agent, result.root, result.found, result.installed.length, result.updated.length]),
+    [['Codex', agents, agents, 0, 1], ['Claude', claude, claude, 0, 0]]);
+  assert.equal(existsSync(join(agents, 'pdd/references/old.md')), false);
+  assert.equal(marker(join(agents, 'pdd')).version, version());
+  assert.equal(readFileSync(join(claude, 'pdd/SKILL.md'), 'utf8'), 'newer\n');
+
+  // 2. Same-version differing digest updates; unmarked personal folder is never overwritten.
+  writeFileSync(join(agents, 'pdd/SKILL.md'), 'edited\n');
+  writeFileSync(join(agents, 'pdd', MARKER), JSON.stringify({ ...marker(join(agents, 'pdd')), digest: 'other' }));
+  rmSync(join(claude, 'pdd'), { recursive: true }); mkdirSync(join(claude, 'pdd'));
+  writeFileSync(join(claude, 'pdd/SKILL.md'), 'mine\n');
+  const r2 = setupSkills(opts);
+  assert.deepEqual(r2.map(result => [result.agent, result.installed.length, result.updated.length]),
+    [['Codex', 0, 1], ['Claude', 0, 0]]);
+  assert.deepEqual(readFileSync(join(agents, 'pdd/SKILL.md')), readFileSync(join(pkg, 'skills/pdd/SKILL.md')));
+  assert.equal(readFileSync(join(claude, 'pdd/SKILL.md'), 'utf8'), 'mine\n');
+
+  // 3. Missing skill installs cleanly; symlink is never overwritten.
+  rmSync(join(agents, 'pdd'), { recursive: true });
+  const own = join(home, 'own-skill'); mkdirSync(own); writeFileSync(join(own, 'SKILL.md'), 'linked\n');
+  rmSync(join(claude, 'pdd'), { recursive: true }); symlinkSync(own, join(claude, 'pdd'));
+  const r3 = setupSkills(opts);
+  assert.deepEqual(r3.map(result => [result.agent, result.found, result.installed.length, result.updated.length]),
+    [['Codex', null, 1, 0], ['Claude', claude, 0, 0]]);
+  assert.deepEqual(readFileSync(join(agents, 'pdd/references/prompting.md')), readFileSync(join(pkg, 'skills/pdd/references/prompting.md')));
+  assert.equal(readFileSync(join(claude, 'pdd/SKILL.md'), 'utf8'), 'linked\n');
 });
 
 // Wrong: Claude started with CLAUDE_CONFIG_DIR reads <dir>/skills, so a ~/.claude copy is invisible to it.
 test('INSTALL5: with CLAUDE_CONFIG_DIR set, setup installs Claude skills in <dir>/skills', t => {
-  const { sandbox, home, run } = packageCopy(t);
+  const { sandbox, home, env, run } = packageCopy(t);
+  // Even when `gh` exists on PATH (as on Linux `/usr/bin/gh`), an unconfigured HOME must NOT spawn `gh` or create `$HOME/.local`.
+  const ghShimDir = join(sandbox, 'gh-shim');
+  mkdirSync(ghShimDir);
+  writeFileSync(join(ghShimDir, 'gh'), '#!/bin/sh\nmkdir -p "$HOME/.local/state/gh"\nexit 1\n', { mode: 0o755 });
   const config = join(sandbox, 'claude config');
-  const result = run(['setup'], { CLAUDE_CONFIG_DIR: config });
+  const result = run(['setup'], { CLAUDE_CONFIG_DIR: config, PATH: `${ghShimDir}:${env.PATH}` });
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout.includes(`Installed 7 PDD skills to ${join(config, 'skills')}: ${PDD_SKILL_NAMES.join(', ')}\n`), result.stdout);
+  const skillLabel = `${PDD_SKILL_NAMES.length} PDD skill${PDD_SKILL_NAMES.length === 1 ? '' : 's'}`;
+  assert.ok(result.stdout.includes(`Installed ${skillLabel} to ${join(config, 'skills')}: ${PDD_SKILL_NAMES.join(', ')}\n`), result.stdout);
   assert.deepEqual(readdirSync(join(config, 'skills')).sort(), [...PDD_SKILL_NAMES].sort());
-  assert.deepEqual(readdirSync(home), ['.agents']);
+  assert.deepEqual(readdirSync(home).sort(), ['.agents']);
 });
 
-// Wrong: one broken agent folder stops the other agent's install or the project block.
-test('INSTALL6: an install failure is reported, the other agent and the block still happen, and setup exits 1', t => {
+// Wrong: one broken agent folder stops the other agent's install.
+test('INSTALL6: an install failure is reported, other agents still install, and setup exits 1', t => {
   const { home, project, run } = packageCopy(t);
   writeFileSync(join(home, '.agents'), 'not a folder\n');
   const result = run(['setup']);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /pdd setup: the PDD skills could not be installed in .*\.agents\/skills/);
-  assert.ok(existsSync(join(home, '.claude/skills/pdd-prompting/SKILL.md')));
-  assert.ok(existsSync(join(project, 'AGENTS.md')));
+  assert.ok(existsSync(join(home, '.claude/skills/pdd/SKILL.md')));
+  assert.deepEqual(readdirSync(project), []);
 });
 
 // Wrong (0.1.4): setup says how many skills it changed but not which ones.
 test('INSTALL7: pdd setup names each skill that it updated', t => {
   const { home, run } = packageCopy(t);
   assert.equal(run(['setup']).status, 0);
-  const marker = join(home, '.agents/skills/pdd-bug', MARKER);
+  const marker = join(home, '.agents/skills/pdd', MARKER);
   writeFileSync(marker, JSON.stringify({ ...JSON.parse(readFileSync(marker, 'utf8')), version: '0.0.1' }));
   const result = run(['setup']);
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout.includes(`Updated 1 PDD skill in ${join(home, '.agents/skills')}: pdd-bug\n`), result.stdout);
+  assert.ok(result.stdout.includes(`Updated 1 PDD skill in ${join(home, '.agents/skills')}: pdd\n`), result.stdout);
   assert.ok(result.stdout.includes(`PDD skills found in ${join(home, '.agents/skills')}\n`), result.stdout);
 });
 
@@ -214,34 +256,34 @@ test('INSTALL7: pdd setup names each skill that it updated', t => {
 // pdd, so a chat outside a workflow ran the old skills.
 test('INSTALL8: when the skills that setup finds are older than this pdd, it says so and prints the update command; it changes nothing', t => {
   const { pkg, home, project, run } = packageCopy(t);
-  // An npx skills -g copy of another pdd version (no pdd marker); the Claude folder links to it.
+  // An npx skills -g copy of another pdd version (no pdd marker); Claude links to it.
   mkdirSync(join(home, '.claude/skills'), { recursive: true });
   for (const name of PDD_SKILL_NAMES) {
     cpSync(join(pkg, 'skills', name), join(home, '.agents/skills', name), { recursive: true });
     symlinkSync(join(home, '.agents/skills', name), join(home, '.claude/skills', name));
   }
   // A copy from before the version line counts as older.
-  writeFileSync(join(home, '.agents/skills/pdd-feature/SKILL.md'), 'an older feature skill\n');
+  writeFileSync(join(home, '.agents/skills/pdd/SKILL.md'), 'an older pdd skill\n');
   const result = run(['setup']);
   assert.equal(result.status, 0, result.stderr);
   for (const skillRoot of ROOTS) {
     const warning = result.stdout.split('\n').find(line => line.startsWith(`PDD skills in ${join(home, skillRoot)} `));
     assert.ok(warning?.includes(`older than pdd ${version()}`), result.stdout);
-    assert.match(warning, /pdd-feature is unknown/);
+    assert.match(warning, /pdd is unknown/);
     assert.ok(warning.includes(UPDATE), warning);
   }
   assert.doesNotMatch(result.stdout, /found|Installed|Updated/);
-  assert.equal(readFileSync(join(home, '.agents/skills/pdd-feature/SKILL.md'), 'utf8'), 'an older feature skill\n');
-  assert.equal(existsSync(join(home, '.agents/skills/pdd-feature', MARKER)), false);
-  // A project copy with a pdd marker of an older version gets the project command.
+  assert.equal(readFileSync(join(home, '.agents/skills/pdd/SKILL.md'), 'utf8'), 'an older pdd skill\n');
+  assert.equal(existsSync(join(home, '.agents/skills/pdd', MARKER)), false);
+  // A project copy with a pdd marker of an older version gets the project command on --version.
   for (const name of PDD_SKILL_NAMES) {
     cpSync(join(pkg, 'skills', name), join(project, '.agents/skills', name), { recursive: true });
     writeFileSync(join(project, '.agents/skills', name, MARKER), JSON.stringify({ package: 'pdd', version: '0.0.1', digest: 'old' }));
   }
-  const local = run(['setup']);
+  const local = run(['--version']);
   assert.equal(local.status, 0, local.stderr);
-  const warning = local.stdout.split('\n').find(line => line.startsWith(`PDD skills in ${join(project, '.agents/skills')} `));
-  assert.ok(warning?.includes(`older than pdd ${version()}`), local.stdout);
+  const warning = local.stderr.split('\n').find(line => line.startsWith(`PDD skills in ${join(project, '.agents/skills')} `));
+  assert.ok(warning?.includes(`older than pdd ${version()}`), local.stderr);
   for (const name of PDD_SKILL_NAMES) assert.ok(warning.includes(`${name} is 0.0.1`), warning);
   assert.ok(warning.includes(UPDATE.replace(' -g', '')), warning);
   assert.doesNotMatch(warning, / -g/);
@@ -250,26 +292,26 @@ test('INSTALL8: when the skills that setup finds are older than this pdd, it say
 // Wrong (0.1.8 tester): the skills had no version line, so no one could tell that the installed skills were older than pdd.
 test('INSTALL9: the SKILL.md version line decides older or different, and pdd --version warns on stderr only when older', t => {
   const { pkg, home, run } = packageCopy(t);
-  const feature = join(home, '.agents/skills/pdd-feature/SKILL.md');
+  const skillMd = join(home, '.agents/skills/pdd/SKILL.md');
   const withLine = (text, value) => text.replace(/^(\s*pdd-skills:).*$/m, '$1 ' + value);
   for (const name of PDD_SKILL_NAMES) {
     cpSync(join(pkg, 'skills', name), join(home, '.agents/skills', name), { recursive: true });
     assert.match(readFileSync(join(home, '.agents/skills', name, 'SKILL.md'), 'utf8').split('\n---\n')[0], /^metadata:\n  pdd-skills: \S+$/m, name);
   }
-  const source = readFileSync(feature, 'utf8'), stderrOf = () => run(['--version']).stderr.split('\n').filter(text => text.startsWith('PDD skills'));
+  const source = readFileSync(skillMd, 'utf8'), stderrOf = () => run(['--version']).stderr.split('\n').filter(text => text.startsWith('PDD skills'));
   // Same version line, other files: setup says they differ; --version stays quiet.
-  writeFileSync(feature, `${withLine(source, version())}\nA local edit.\n`);
+  writeFileSync(skillMd, `${withLine(source, version())}\nA local edit.\n`);
   assert.ok(run(['setup']).stdout.includes(`PDD skills in ${join(home, '.agents/skills')} differ from the skills of pdd ${version()}.`));
   assert.deepEqual(stderrOf(), []);
   // An older version line: --version prints the update line on stderr and only the version on stdout.
-  writeFileSync(feature, withLine(source, '0.1.8'));
+  writeFileSync(skillMd, withLine(source, '0.1.8'));
   const older = run(['--version']);
   assert.equal(older.status, 0); assert.equal(older.stdout, `${version()}\n`);
   assert.ok(older.stderr.includes(`PDD skills in ${join(home, '.agents/skills')} are older than pdd ${version()}`), older.stderr);
-  assert.match(older.stderr, /pdd-feature is 0\.1\.8/);
+  assert.match(older.stderr, /pdd is 0\.1\.8/);
   assert.ok(older.stderr.includes(UPDATE), older.stderr);
   // A newer version line is not older.
-  writeFileSync(feature, withLine(source, '99.0.0'));
+  writeFileSync(skillMd, withLine(source, '99.0.0'));
   assert.deepEqual(stderrOf(), []);
   // The 0.1.8 case: copies that pdd setup made, with an older marker.
   rmSync(join(home, '.agents'), { recursive: true, force: true });
@@ -281,12 +323,15 @@ test('INSTALL9: the SKILL.md version line decides older or different, and pdd --
   assert.equal(stderrOf().length, 2);
 });
 
-// Wrong (#3242): an old pdd-owned copy of a retired coordinator skill stays in the user folder, so an agent that is asked
-// to "start Autopilot" follows it and claims issues itself; or setup deletes a copy that the person or npx skills owns.
-test('INSTALL12: setup removes a pdd-owned copy of a retired skill and keeps an unmarked copy, a symlink and project copies', t => {
+// Wrong (#3242): an old pdd-owned copy of a retired coordinator or split skill stays in the user folder, so an agent follows it;
+// or setup deletes a copy that the person or npx skills owns.
+test('INSTALL12: setup removes pdd-owned copies of retired skills (including pdd-setup and retired split skills) and keeps unmarked copies, symlinks and project copies', t => {
   const { pkg, home, project } = packageCopy(t);
-  const opts = { packageRoot: pkg, cwd: project, home };
-  assert.deepEqual([...RETIRED_SKILL_NAMES], ['pdd-autopilot', 'pdd-check', 'pdd-merge']);
+  const opts = { packageRoot: pkg, cwd: project, home, env: { HOME: home, PATH: '' } };
+  assert.deepEqual([...RETIRED_SKILL_NAMES], [
+    'pdd-autopilot', 'pdd-check', 'pdd-merge', 'pdd-setup',
+    'pdd-prompting', 'pdd-small-change', 'pdd-bug', 'pdd-feature', 'pdd-product', 'pdd-graph',
+  ]);
   const [agents, claude] = ROOTS.map(skillRoot => join(home, skillRoot));
   const retired = (parent, name, marker) => {
     mkdirSync(join(parent, name, 'steps'), { recursive: true });
@@ -294,33 +339,34 @@ test('INSTALL12: setup removes a pdd-owned copy of a retired skill and keeps an 
     writeFileSync(join(parent, name, 'steps/handoff.md'), 'Merge it.\n');
     if (marker !== undefined) writeFileSync(join(parent, name, MARKER), marker);
   };
-  // Codex: two pdd-owned copies (one with an invalid marker) and one without a marker.
+  // Codex: three pdd-owned copies (including invalid marker and retired split skill) and one without a marker.
   retired(agents, 'pdd-autopilot', JSON.stringify({ package: 'pdd', version: '0.1.28', digest: 'old' }));
   retired(agents, 'pdd-check', 'not json');
+  retired(agents, 'pdd-feature', JSON.stringify({ package: 'pdd', version: '0.1.40', digest: 'old' }));
   retired(agents, 'pdd-merge');
   // Claude: a symlink to a marked folder, a marked copy, and a marked project copy that setup must not touch.
   const linked = join(home, 'linked-autopilot');
   retired(home, 'linked-autopilot', JSON.stringify({ package: 'pdd', version: '0.1.28', digest: 'old' }));
   mkdirSync(claude, { recursive: true }); symlinkSync(linked, join(claude, 'pdd-autopilot'));
-  retired(claude, 'pdd-merge', JSON.stringify({ package: 'pdd', version: '99.0.0', digest: 'new' }));
+  retired(claude, 'pdd-setup', JSON.stringify({ package: 'pdd', version: '99.0.0', digest: 'new' }));
   retired(join(project, '.claude/skills'), 'pdd-check', JSON.stringify({ package: 'pdd', version: '0.1.28', digest: 'old' }));
 
   const results = setupSkills(opts);
   assert.deepEqual(results.map(result => [result.agent, result.error, result.removed]),
-    [['Codex', undefined, [join(agents, 'pdd-autopilot'), join(agents, 'pdd-check')]], ['Claude', undefined, [join(claude, 'pdd-merge')]]]);
-  for (const gone of [join(agents, 'pdd-autopilot'), join(agents, 'pdd-check'), join(claude, 'pdd-merge')]) assert.equal(existsSync(gone), false, gone);
+    [['Codex', undefined, [join(agents, 'pdd-autopilot'), join(agents, 'pdd-check'), join(agents, 'pdd-feature')]], ['Claude', undefined, [join(claude, 'pdd-setup')]]]);
+  for (const gone of [join(agents, 'pdd-autopilot'), join(agents, 'pdd-check'), join(agents, 'pdd-feature'), join(claude, 'pdd-setup')]) assert.equal(existsSync(gone), false, gone);
   assert.equal(readFileSync(join(agents, 'pdd-merge/SKILL.md'), 'utf8'), '---\nname: pdd-merge\n---\nClaim the issue.\n');
   assert.equal(readFileSync(join(claude, 'pdd-autopilot/steps/handoff.md'), 'utf8'), 'Merge it.\n');
   assert.ok(existsSync(join(linked, MARKER)));
   assert.ok(existsSync(join(project, '.claude/skills/pdd-check', MARKER)));
-  // The current skills install as usual, and a retired copy never counts as a found skill.
+  // The current skill installs as usual, and a retired copy never counts as a found skill.
   for (const root of [agents, claude]) for (const name of PDD_SKILL_NAMES) assert.ok(existsSync(join(root, name, 'SKILL.md')), `${root}: ${name}`);
-  assert.deepEqual(findSkills(opts).map(result => [result.agent, result.found, result.staleSkills]), [['Codex', agents, []], ['Claude', claude, []]]);
+  assert.deepEqual(findSkills(opts).map(result => [result.agent, result.found, result.staleSkills]), [['Codex', agents, []], ['Claude', claude, []], ['Antigravity', null, []]]);
   // A second run changes nothing.
   assert.deepEqual(setupSkills(opts).map(result => [result.removed, result.installed, result.updated]), [[[], [], []], [[], [], []]]);
 });
 
-test('INSTALL13: #3324 pdd --version warns on stale PDD skills in .codex/skills, $CODEX_HOME/skills and partial skill folders', t => {
+test('INSTALL13: #3324 pdd --version warns on stale PDD skills in .codex/skills and $CODEX_HOME/skills', t => {
   const { pkg, home, project, sandbox, run } = packageCopy(t);
   const copyOlderSkill = (folder, name, oldVersion) => {
     cpSync(join(pkg, 'skills', name), join(folder, name), { recursive: true });
@@ -330,38 +376,38 @@ test('INSTALL13: #3324 pdd --version warns on stale PDD skills in .codex/skills,
 
   // 1. Current ~/.agents/skills must not hide a stale project .codex/skills copy.
   for (const name of PDD_SKILL_NAMES) cpSync(join(pkg, 'skills', name), join(home, '.agents/skills', name), { recursive: true });
-  copyOlderSkill(join(project, '.codex/skills'), 'pdd-prompting', '0.1.12');
+  copyOlderSkill(join(project, '.codex/skills'), 'pdd', '0.1.12');
   const localCodex = run(['--version']);
   assert.equal(localCodex.status, 0, localCodex.stderr);
   assert.equal(localCodex.stdout, `${version()}\n`);
   const localLine = localCodex.stderr.split('\n').find(line => line.startsWith(`PDD skills in ${join(project, '.codex/skills')} `));
   assert.ok(localLine, localCodex.stderr);
-  assert.match(localLine, /pdd-prompting is 0\.1\.12/);
+  assert.match(localLine, /pdd is 0\.1\.12/);
   assert.ok(localLine.includes(UPDATE.replace(' -g', '')), localLine);
   assert.doesNotMatch(localLine, / -g /);
 
   // 2. User ~/.codex/skills and custom $CODEX_HOME/skills warn with -g.
   rmSync(join(project, '.codex'), { recursive: true, force: true });
-  copyOlderSkill(join(home, '.codex/skills'), 'pdd-bug', '0.1.15');
+  copyOlderSkill(join(home, '.codex/skills'), 'pdd', '0.1.15');
   const customCodex = join(sandbox, 'custom-codex');
-  copyOlderSkill(join(customCodex, 'skills'), 'pdd-feature', '0.1.16');
+  copyOlderSkill(join(customCodex, 'skills'), 'pdd', '0.1.16');
   const bothCodex = run(['--version'], { CODEX_HOME: customCodex });
   assert.equal(bothCodex.status, 0, bothCodex.stderr);
-  assert.match(bothCodex.stderr, new RegExp(`PDD skills in ${join(home, '.codex/skills').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*pdd-bug is 0\\.1\\.15.* -g `));
-  assert.match(bothCodex.stderr, new RegExp(`PDD skills in ${join(customCodex, 'skills').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*pdd-feature is 0\\.1\\.16.* -g `));
+  assert.match(bothCodex.stderr, new RegExp(`PDD skills in ${join(home, '.codex/skills').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*pdd is 0\\.1\\.15.* -g `));
+  assert.match(bothCodex.stderr, new RegExp(`PDD skills in ${join(customCodex, 'skills').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*pdd is 0\\.1\\.16.* -g `));
 
-  // 3. Partial pre-pdd-graph 6-skill folder in ~/.agents/skills warns even without all 7 skills.
+  // 3. Stale ~/.agents/skills warns with -g.
   rmSync(join(home, '.agents'), { recursive: true, force: true });
   rmSync(join(home, '.codex'), { recursive: true, force: true });
-  for (const name of PDD_SKILL_NAMES.filter(n => n !== 'pdd-graph')) copyOlderSkill(join(home, '.agents/skills'), name, '0.1.12');
+  copyOlderSkill(join(home, '.agents/skills'), 'pdd', '0.1.12');
   const partial = run(['--version'], { CODEX_HOME: join(home, '.codex') });
   assert.equal(partial.status, 0, partial.stderr);
-  assert.match(partial.stderr, /pdd-prompting is 0\.1\.12/);
+  assert.match(partial.stderr, /pdd is 0\.1\.12/);
   assert.match(partial.stderr, /npx skills add promptdriven\/pdd -g -a codex -a claude-code -y/);
 });
 
-test('INSTALL14: #3424 setupSkills updates marked secondary .codex/skills and $CODEX_HOME/skills (including 6-skill bundles) without creating absent .codex/skills or touching custom/unmarked skills', t => {
-  const { pkg, home, project, sandbox, run } = packageCopy(t);
+test('INSTALL14: #3424 setupSkills updates marked secondary .codex/skills and $CODEX_HOME/skills without creating absent .codex/skills or touching custom/unmarked skills', t => {
+  const { pkg, home, sandbox, run } = packageCopy(t);
   const customCodex = join(sandbox, 'custom-codex');
 
   // 1. Absent .codex/skills and $CODEX_HOME/skills are never created by setup.
@@ -369,16 +415,18 @@ test('INSTALL14: #3424 setupSkills updates marked secondary .codex/skills and $C
   assert.equal(existsSync(join(home, '.codex/skills')), false);
   assert.equal(existsSync(join(customCodex, 'skills')), false);
 
-  // 2. Populate ~/.codex/skills with an older 6-skill marked bundle (missing pdd-graph),
-  //    a marked retired skill, an unmarked retired skill, a symlink, and a custom skill.
+  // 2. Populate ~/.codex/skills with an older marked pdd skill, marked retired skills,
+  //    an unmarked retired skill, a symlink, and a custom skill.
   const codexSkills = join(home, '.codex/skills');
-  for (const name of PDD_SKILL_NAMES.filter(n => n !== 'pdd-graph')) {
+  for (const name of PDD_SKILL_NAMES) {
     cpSync(join(pkg, 'skills', name), join(codexSkills, name), { recursive: true });
     writeFileSync(join(codexSkills, name, MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
   }
-  mkdirSync(join(codexSkills, 'pdd-autopilot'), { recursive: true });
-  writeFileSync(join(codexSkills, 'pdd-autopilot/SKILL.md'), '---\nname: pdd-autopilot\n---\nold\n');
-  writeFileSync(join(codexSkills, 'pdd-autopilot', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+  for (const retiredName of ['pdd-autopilot', 'pdd-feature']) {
+    mkdirSync(join(codexSkills, retiredName), { recursive: true });
+    writeFileSync(join(codexSkills, retiredName, 'SKILL.md'), `---\nname: ${retiredName}\n---\nold\n`);
+    writeFileSync(join(codexSkills, retiredName, MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+  }
 
   mkdirSync(join(codexSkills, 'pdd-check'), { recursive: true });
   writeFileSync(join(codexSkills, 'pdd-check/SKILL.md'), 'user unmarked retired skill\n');
@@ -393,8 +441,8 @@ test('INSTALL14: #3424 setupSkills updates marked secondary .codex/skills and $C
 
   // Populate $CODEX_HOME/skills with a marked older skill too.
   const customSkills = join(customCodex, 'skills');
-  cpSync(join(pkg, 'skills/pdd-bug'), join(customSkills, 'pdd-bug'), { recursive: true });
-  writeFileSync(join(customSkills, 'pdd-bug', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.15', digest: 'old' }));
+  cpSync(join(pkg, 'skills/pdd'), join(customSkills, 'pdd'), { recursive: true });
+  writeFileSync(join(customSkills, 'pdd', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.15', digest: 'old' }));
 
   const repair = run(['setup'], { CODEX_HOME: customCodex });
   assert.equal(repair.status, 0, repair.stderr);
@@ -405,6 +453,7 @@ test('INSTALL14: #3424 setupSkills updates marked secondary .codex/skills and $C
     }
   }
   assert.equal(existsSync(join(codexSkills, 'pdd-autopilot')), false);
+  assert.equal(existsSync(join(codexSkills, 'pdd-feature')), false);
   assert.equal(readFileSync(join(codexSkills, 'pdd-check/SKILL.md'), 'utf8'), 'user unmarked retired skill\n');
   assert.equal(readFileSync(join(codexSkills, 'finish-pr/SKILL.md'), 'utf8'), 'custom user skill\n');
   assert.equal(readFileSync(join(codexSkills, 'pdd-merge/SKILL.md'), 'utf8'), 'linked retired skill\n');
@@ -417,28 +466,28 @@ test('INSTALL15: #3424 syncOwnedUserSkills and post-upgrade CLI auto-sync write 
   const claudeConfig = join(sandbox, 'claude-cfg');
   const customCodex = join(sandbox, 'codex-cfg');
 
-  // 1. Brand-new empty HOME: zero writes anywhere (skills-sync.json is NOT created).
+  // 1. Brand-new empty HOME: zero skill folders created, and sync state is recorded once so subsequent commands do not rescan indefinitely (S1 L188 fix).
   assert.deepEqual(syncOwnedUserSkills({ packageRoot: pkg, home, claudeConfigDir: claudeConfig, codexHome: customCodex, stateRoot }), { updated: [] });
   assert.deepEqual(readdirSync(home), []);
-  assert.equal(existsSync(stateRoot), false);
+  assert.equal(JSON.parse(readFileSync(join(stateRoot, 'skills-sync.json'), 'utf8')).version, version());
   assert.equal(existsSync(claudeConfig), false);
 
-  // 2. Unmarked skills, symlinks and custom skills only: zero writes anywhere.
-  cpSync(join(pkg, 'skills/pdd-bug'), join(home, '.agents/skills/pdd-bug'), { recursive: true });
-  writeFileSync(join(home, '.agents/skills/pdd-bug/SKILL.md'), 'unmarked older copy\n');
+  // 2. Unmarked skills, symlinks and custom skills only: never modified even when forced.
+  cpSync(join(pkg, 'skills/pdd'), join(home, '.agents/skills/pdd'), { recursive: true });
+  writeFileSync(join(home, '.agents/skills/pdd/SKILL.md'), 'unmarked older copy\n');
   mkdirSync(join(home, '.agents/skills/pdd-autopilot'), { recursive: true });
   writeFileSync(join(home, '.agents/skills/pdd-autopilot/SKILL.md'), 'custom autopilot\n');
   mkdirSync(join(home, '.agents/skills/finish-pr'), { recursive: true });
   writeFileSync(join(home, '.agents/skills/finish-pr/SKILL.md'), 'custom finish-pr\n');
 
-  assert.deepEqual(syncOwnedUserSkills({ packageRoot: pkg, home, claudeConfigDir: claudeConfig, codexHome: customCodex, stateRoot }), { updated: [] });
-  assert.equal(existsSync(stateRoot), false);
-  assert.equal(readFileSync(join(home, '.agents/skills/pdd-bug/SKILL.md'), 'utf8'), 'unmarked older copy\n');
+  assert.deepEqual(syncOwnedUserSkills({ packageRoot: pkg, home, claudeConfigDir: claudeConfig, codexHome: customCodex, stateRoot, force: true }), { updated: [] });
+  assert.equal(readFileSync(join(home, '.agents/skills/pdd/SKILL.md'), 'utf8'), 'unmarked older copy\n');
   assert.equal(readFileSync(join(home, '.agents/skills/pdd-autopilot/SKILL.md'), 'utf8'), 'custom autopilot\n');
   assert.equal(readFileSync(join(home, '.agents/skills/finish-pr/SKILL.md'), 'utf8'), 'custom finish-pr\n');
 
-  // 3. Seed older .pdd-skill.json-marked folders across .agents/skills (6-skill 0.1.12), .codex/skills, $CODEX_HOME/skills and $CLAUDE_CONFIG_DIR/skills.
-  rmSync(join(home, '.agents/skills/pdd-bug'), { recursive: true, force: true });
+  // 3. Seed older .pdd-skill.json-marked folders across .agents/skills, .codex/skills, $CODEX_HOME/skills and $CLAUDE_CONFIG_DIR/skills.
+  rmSync(stateRoot, { recursive: true, force: true });
+  rmSync(join(home, '.agents/skills/pdd'), { recursive: true, force: true });
   const targetRoots = [
     join(home, '.agents/skills'),
     join(home, '.codex/skills'),
@@ -446,21 +495,23 @@ test('INSTALL15: #3424 syncOwnedUserSkills and post-upgrade CLI auto-sync write 
     join(claudeConfig, 'skills'),
   ];
   for (const skillRoot of targetRoots) {
-    for (const name of PDD_SKILL_NAMES.filter(n => n !== 'pdd-graph')) {
+    for (const name of PDD_SKILL_NAMES) {
       cpSync(join(pkg, 'skills', name), join(skillRoot, name), { recursive: true });
       writeFileSync(join(skillRoot, name, MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
     }
   }
-  // Marked retired skill in .claude/skills is removed; unmarked pdd-autopilot and finish-pr in .agents/skills stay untouched.
-  mkdirSync(join(claudeConfig, 'skills/pdd-check'), { recursive: true });
-  writeFileSync(join(claudeConfig, 'skills/pdd-check/SKILL.md'), 'marked retired\n');
-  writeFileSync(join(claudeConfig, 'skills/pdd-check', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+  // Marked retired skills in .claude/skills are removed; unmarked pdd-autopilot and finish-pr in .agents/skills stay untouched.
+  for (const retiredName of ['pdd-check', 'pdd-feature']) {
+    mkdirSync(join(claudeConfig, 'skills', retiredName), { recursive: true });
+    writeFileSync(join(claudeConfig, 'skills', retiredName, 'SKILL.md'), 'marked retired\n');
+    writeFileSync(join(claudeConfig, 'skills', retiredName, MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+  }
 
   const env = { HOME: home, CLAUDE_CONFIG_DIR: claudeConfig, CODEX_HOME: customCodex, PDD_STATE_DIR: stateRoot, PDD_NO_UPDATE_CHECK: '1', PATH: '' };
   const capture = (isTTY = false) => ({ text: '', isTTY, write(s) { this.text += s; } });
 
   // 4. Discovery, completion, files/owner and --json routes skip auto-sync completely.
-  for (const argv of [['--help'], ['--version'], ['completion', 'bash'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['files'], ['owner', 'AGENTS.md']]) {
+  for (const argv of [['--help'], ['--version'], ['completion', 'bash'], ['help', 'prompting'], ['accounts', 'status', '--json'], ['files'], ['owner', 'AGENTS.md']]) {
     const out = capture(true), err = capture(true);
     const useRepo = argv[0] === 'files' || argv[0] === 'owner';
     const code = await runPdd(argv, {
@@ -473,10 +524,10 @@ test('INSTALL15: #3424 syncOwnedUserSkills and post-upgrade CLI auto-sync write 
     });
     assert.equal(code, 0, `${argv.join(' ')}: ${err.text}`);
     assert.equal(existsSync(join(stateRoot, 'skills-sync.json')), false, `must not sync on ${argv.join(' ')}`);
-    assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd-bug', MARKER), 'utf8')).version, '0.1.12');
+    assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd', MARKER), 'utf8')).version, '0.1.12');
   }
 
-  // 5. First normal interactive command syncs all 4 marked folders, adds pdd-graph, removes marked retired pdd-check, preserves unmarked skills, and prints one TTY notice on stderr.
+  // 5. First normal interactive command syncs all 4 marked folders, removes marked retired skills, preserves unmarked skills, and prints one TTY notice on stderr.
   const ttyOut = capture(true), ttyErr = capture(true);
   const jobCode = await runPdd(['jobs'], {
     cwd: project,
@@ -497,13 +548,14 @@ test('INSTALL15: #3424 syncOwnedUserSkills and post-upgrade CLI auto-sync write 
     }
   }
   assert.equal(existsSync(join(claudeConfig, 'skills/pdd-check')), false);
+  assert.equal(existsSync(join(claudeConfig, 'skills/pdd-feature')), false);
   assert.equal(readFileSync(join(home, '.agents/skills/pdd-autopilot/SKILL.md'), 'utf8'), 'custom autopilot\n');
   assert.equal(readFileSync(join(home, '.agents/skills/finish-pr/SKILL.md'), 'utf8'), 'custom finish-pr\n');
 
   // 6. Cached skills-sync.json skips disk work on subsequent commands until CLI version advances.
-  writeFileSync(join(home, '.agents/skills/pdd-bug', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+  writeFileSync(join(home, '.agents/skills/pdd', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
   assert.deepEqual(syncOwnedUserSkills({ packageRoot: pkg, home, claudeConfigDir: claudeConfig, codexHome: customCodex, stateRoot }), { updated: [] });
-  assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd-bug', MARKER), 'utf8')).version, '0.1.12');
+  assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd', MARKER), 'utf8')).version, '0.1.12');
 
   // Non-TTY normal command when CLI version advances updates silently with zero stderr output.
   writeFileSync(join(stateRoot, 'skills-sync.json'), JSON.stringify({ version: '0.1.33' }));
@@ -517,5 +569,16 @@ test('INSTALL15: #3424 syncOwnedUserSkills and post-upgrade CLI auto-sync write 
     runtimeSlots: { jobs: async (_in, { stdout }) => { stdout.write('No active jobs.\n'); return 0; } },
   });
   assert.equal(quietErr.text, '');
-  assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd-bug', MARKER), 'utf8')).version, version());
+  assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd', MARKER), 'utf8')).version, version());
+
+  // Plugin-aware sync: when Claude plugin is installed, syncOwnedUserSkills skips claudeConfig/skills.
+  mkdirSync(join(claudeConfig, 'plugins'), { recursive: true });
+  writeFileSync(join(claudeConfig, 'plugins/installed_plugins.json'), JSON.stringify({
+    version: 2,
+    plugins: { 'pdd@promptdriven': [{ scope: 'user', installPath: '/plugins/pdd' }] },
+  }));
+  writeFileSync(join(claudeConfig, 'skills/pdd', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+  const pluginSync = syncOwnedUserSkills({ packageRoot: pkg, home, claudeConfigDir: claudeConfig, codexHome: customCodex, stateRoot, force: true });
+  assert.equal(pluginSync.updated.includes(join(claudeConfig, 'skills')), false, 'plugin-managed Claude skills folder must be skipped during background sync');
+  assert.equal(JSON.parse(readFileSync(join(claudeConfig, 'skills/pdd', MARKER), 'utf8')).version, '0.1.12');
 });

@@ -294,8 +294,8 @@
         { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/errors", "op": "equals", "value": [] },
         { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/merges", "op": "count", "value": 4 },
         { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/counts/ok", "op": "equals", "value": 0 },
-        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/counts/suspect", "op": "equals", "value": 2 },
-        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/counts/proven", "op": "equals", "value": 2 },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/counts/suspect", "op": "equals", "value": 1 },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/counts/proven", "op": "equals", "value": 3 },
         { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/merges/0/pr", "op": "equals", "value": 301 },
         { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/0/classification", "op": "equals", "value": "proven" },
         { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/0/signals/0/kind", "op": "equals", "value": "reference" },
@@ -307,14 +307,14 @@
         { "criterion_id": "ac-sha256-089a04f78bdaba8e56054b50cf1dd6930d144079ca369b7c", "target": "result", "path": "/merges/1/signals/0/kind", "op": "equals", "value": "revert" },
         { "criterion_id": "ac-sha256-089a04f78bdaba8e56054b50cf1dd6930d144079ca369b7c", "target": "result", "path": "/merges/1/signals/0/level", "op": "equals", "value": "proven" },
         { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/merges/2/pr", "op": "equals", "value": 303 },
-        { "criterion_id": "ac-sha256-4d7ef376f9dd0463713acdcb1669fc4c7313fb8976a76c7a", "target": "result", "path": "/merges/2/classification", "op": "equals", "value": "suspect" },
+        { "criterion_id": "ac-sha256-4d7ef376f9dd0463713acdcb1669fc4c7313fb8976a76c7a", "target": "result", "path": "/merges/2/classification", "op": "equals", "value": "proven" },
         { "criterion_id": "ac-sha256-4d7ef376f9dd0463713acdcb1669fc4c7313fb8976a76c7a", "target": "result", "path": "/merges/2/signals/0/kind", "op": "equals", "value": "reopened" },
-        { "criterion_id": "ac-sha256-4d7ef376f9dd0463713acdcb1669fc4c7313fb8976a76c7a", "target": "result", "path": "/merges/2/signals/0/level", "op": "equals", "value": "suspect" },
+        { "criterion_id": "ac-sha256-4d7ef376f9dd0463713acdcb1669fc4c7313fb8976a76c7a", "target": "result", "path": "/merges/2/signals/0/level", "op": "equals", "value": "proven" },
         { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/merges/3/pr", "op": "equals", "value": 305 },
         { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/3/classification", "op": "equals", "value": "suspect" },
         { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/3/signals/0/kind", "op": "equals", "value": "reference" },
         { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/3/signals/0/level", "op": "equals", "value": "suspect" },
-        { "criterion_id": "ac-sha256-089a04f78bdaba8e56054b50cf1dd6930d144079ca369b7c", "target": "result", "path": "/days", "op": "equals", "value": [{ "date": "2026-11-18", "proven": 1 }, { "date": "2026-11-19", "proven": 1 }] }
+        { "criterion_id": "ac-sha256-089a04f78bdaba8e56054b50cf1dd6930d144079ca369b7c", "target": "result", "path": "/days", "op": "equals", "value": [{ "date": "2026-11-18", "proven": 1 }, { "date": "2026-11-19", "proven": 2 }] }
       ]
     }
   ]

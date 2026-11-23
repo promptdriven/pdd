@@ -260,14 +260,8 @@ test('recorder drains a queued terminal report before disconnecting',async t=>{
   // Delay the terminal transport write for one event-loop turn. This models a
   // write queued behind output without timing assumptions or large buffers.
   const module=resolve('src/test-suite-recorder.mjs');
-  const child=spawn(process.execPath,['--input-type=module','-e',`
-    const send=process.send.bind(process);
-    process.send=(message,callback)=>{
-      if(message.result){setImmediate(()=>send(message,callback));return false;}
-      return send(message,callback);
-    };
-    await import(${JSON.stringify(module)});
-  `],{cwd:f.root,env:f.env,stdio:['ignore','ignore','pipe','ipc']});
+  const preload=`const send=process.send.bind(process);process.send=(message,callback)=>{if(message.result){setImmediate(()=>send(message,callback));return false;}return send(message,callback);};`;
+  const child=spawn(process.execPath,['--import',`data:text/javascript,${encodeURIComponent(preload)}`,module],{cwd:f.root,env:f.env,stdio:['ignore','ignore','pipe','ipc']});
   let terminal=null,stderr='';
   child.stderr.on('data',bytes=>{stderr+=bytes;});
   child.on('message',message=>{if(message.result)terminal=message.result;});

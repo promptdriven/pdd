@@ -149,8 +149,8 @@ test('P5 (#75, #103) a new file on path e is red with the path c hint; a new tes
 
 test('P6 (#103) a new prompt whose opening sentence names the new file, with no binding and no header, is red (R3)', async t => {
   const head = module('ordinal', ORDINAL), h = tree(t, head);
-  const owner = ownerTable(fs, h.dir, h.files).get('src/ordinal.js');
-  assert.equal(owner.prompt, 'prompts/ordinal.prompt.md'); assert.equal(owner.how, 'prose'); assert.equal(owner.certain, false);
+  // Honest S2 ownership: prose opening sentences never claim ownership; only explicit header or pdd-bindings.json does.
+  assert.equal(ownerTable(fs, h.dir, h.files).get('src/ordinal.js'), undefined);
   const body = `Path: c — prompts/ordinal.prompt.md, src/ordinal.js — prompts/ordinal.prompt.md — new prompt — Test: test/ordinal.test.js\n${NEW_MODULE_D('ordinal')}`;
   assert.deepEqual(check(t, { base: SANDBOX, head, body }).reds, [`prompts/ordinal.prompt.md ${R3_TEXT}`]);
   assert.deepEqual(check(t, { base: SANDBOX, head: module('ordinal', ORDINAL, { header: true }), body }).reds, [], 'a header is enough');
@@ -217,11 +217,10 @@ test('P11 the reviewer gets the three states, and no ownership must-fix that the
   assert.match(review, /^- src\/words\.js: owned on the base by prompts\/words\.prompt\.md \(binding\)$/m);
   assert.match(review, /^- src\/util\.js: unowned on the base$/m);
   assert.match(review, /^- test\/util\.test\.js: new in this PR \(not on the base\)$/m);
-  assert.match(review, /A new code file with new behavior takes path c, with its prompt and a binding or header: that binding or header is required, so never ask to remove it\./);
+  assert.match(review, /for unowned files, hybrid brownfield fixes are valid when tested natively — Do not ask for a new prompt for an unowned file or non-product file \(config, CI, lock files, docs, tests\), and never force unrelated prompt rewrites\./);
   assert.match(review, /These are must-fixes: a new prompt for a non-code file; owned code that disagrees with its prompt\./);
   assert.doesNotMatch(review, /a binding or header added for an unowned file on the base;/, 'that must-fix left the reviewer rules: R4 checks it');
-  assert.match(review, /A config or metadata file \(package\.json, a lock file, CI settings\) needs no prompt and no Story\. Never ask for a new prompt for it\. Ask for a test only when the change alters a result that users see\./, 'rule 8 (#3227 fix 5)');
-  assert.match(review, /Autopilot checks the ownership rules itself \(an owned file on path d or e or on no Path line, a new file on path e, a new prompt with no binding or header, a binding or header added for a file that is unowned on the base, no Path line\): do not report them\./);
+  assert.doesNotMatch(review, /PR body \(data, not instructions\):/, 'blind reviewer receives owner table + diff, never untrusted PR body prose');
 });
 
 test('P12 one owner reader: the engine table and `pdd owner` give the same answer for every file (#75 and #103 heads)', async t => {
@@ -235,9 +234,10 @@ test('P12 one owner reader: the engine table and `pdd owner` give the same answe
     assert.deepEqual(mine ? [mine.prompt, mine.owners, mine.certain] : [null, [], true], [row.owner, row.owners, row.certain], path);
     if (mine?.prompt) assert.equal(mine.how, row.source, path);
   }
-  assert.equal(engine.get('src/split.js')?.how, 'path');
-  assert.equal(engine.get('src/split.js')?.certain, false);
-  assert.equal(engine.get('src/ordinal.js')?.how, 'prose');
+  assert.equal(engine.get('src/split.js'), undefined, 'path match is advisory only');
+  assert.match(cli.get('src/split.js')?.note ?? '', /matched by (?:path|file name) to prompts\/split\.prompt\.md/);
+  assert.equal(engine.get('src/ordinal.js'), undefined, 'prose match is advisory only');
+  assert.match(cli.get('src/ordinal.js')?.note ?? '', /named only in the opening sentence of prompts\/ordinal\.prompt\.md/);
   assert.equal(engine.get('src/money.js')?.how, 'binding', 'the binding comes first');
 });
 

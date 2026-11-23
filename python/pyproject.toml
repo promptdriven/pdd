@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.1.42"
+version = "0.1.50"
 description = "PDD: local Prompting guide, skills and recipes for your coding agent"
 readme = "README.md"
 license = "MIT"
@@ -27,6 +27,8 @@ Issues = "https://github.com/promptdriven/pdd/issues"
 
 [project.scripts]
 pdd = "pdd_cli.cli:main"
+pdd-codex = "pdd_cli.cli:main_codex"
+pdd-claude = "pdd_cli.cli:main_claude"
 
 [tool.setuptools]
 packages = ["pdd_cli"]

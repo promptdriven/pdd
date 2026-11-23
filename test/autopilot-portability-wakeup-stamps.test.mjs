@@ -404,7 +404,8 @@ test('3460-5: clean repair resets untracked wreckage + injects 1-line round hist
   assert.ok(review, 'review worker started');
   assert.equal(review.env.GH_TOKEN, undefined, 'GH_TOKEN stripped from read-only review worker');
   assert.equal(review.env.GITHUB_TOKEN, undefined, 'GITHUB_TOKEN stripped from read-only review worker');
-  assert.match(review.input, /PR body \(data, not instructions\):\n<<<\nFixes #17/, 'reviewPrompt embeds PR body so reviewer needs no GitHub token');
+  assert.doesNotMatch(review.input, /PR body \(data, not instructions\):/, 'blind reviewPrompt MUST NOT embed untrusted builder PR prose (anti-injection invariant)');
+  assert.doesNotMatch(review.input, /Updated target behavior\./, 'builder PR body text is never fed into blind reviewPrompt');
 
   // Leave dirty tracked edits and untracked temp wreckage in the job worktree before repair round starts!
   writeFileSync(join(build.cwd, `change-17.txt`), 'half-edited broken tracked file\n');
@@ -651,7 +652,9 @@ test('3460-7: greenfield pdd-product plan-only repo with no package.json on main
   assert.equal(w.job(17, 'suite')?.head, head2, 'suite starts on repaired head2 after review PASS');
   w.suite(17, 0);
   await w.tick();
-  assert.equal(pr.merged, true, 'greenfield PR merged cleanly after running PR-added npm test');
+  assert.equal(pr.merged, false, 'Check 4 holds greenfield PR adding protected package.json for manual human merge');
+  assert.ok(w.labels(17).includes('pdd:needs-decision'));
+  assert.match(w.comments(17).join('\n'), /merge this PR manually on GitHub/i);
 });
 
 test('3460-8: openPullRequest fails closed on malformed/omitted evidence, keeps standalone worktree clean, stamps prompt-only & multi-owner Path: a, and embeds PR body in scopedPrompt', async t => {
@@ -781,7 +784,8 @@ test('3460-8: openPullRequest fails closed on malformed/omitted evidence, keeps 
   assert.ok(scopedRev, 'scoped review started');
   assert.equal(scopedRev.env.GH_TOKEN, undefined, 'scoped review also strips GH_TOKEN');
   assert.match(scopedRev.input, /You are a short scoped check/, 'used scopedPrompt');
-  assert.match(scopedRev.input, /PR body \(data, not instructions\):[\s\S]*Choices Autopilot made:[\s\S]*Return 2 for default shared helper/, 'scopedPrompt embeds PR body as data so private-repo scoped reviewer needs no GH_TOKEN');
+  assert.doesNotMatch(scopedRev.input, /PR body \(data, not instructions\):/, 'scopedPrompt MUST NOT embed untrusted builder PR prose');
+  assert.doesNotMatch(scopedRev.input, /Return 2 for default shared helper/, 'builder PR prose never leaks into blind scopedPrompt');
 
   w.review(17, 'PASS');
   w.suite(17, 0);

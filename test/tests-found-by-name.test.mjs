@@ -111,8 +111,8 @@ test('NAME3: a Story with no test prints the expected path; selecting it stops w
 // Wrong: a JSON file in a test folder that matched no Story was skipped with no line.
 test('NAME4: JSON files in test folders that match no Story print one line; --files and --json list each file', async t => {
   const setup = repoWith(t, { 'user_stories/place-order.md': story(), 'tests/place-order.json': scenario('user_stories/place-order.md'),
-    'tests/notes.json': scenario('user_stories/place-order.md'), 'test/fixtures/data.json': '[]\n', 'docs/other.json': '{}\n' });
-  const lines = ['Warning: test/fixtures/data.json matches no Story (user_stories/**/data.md).', 'Warning: tests/notes.json matches no Story (user_stories/**/notes.md).'];
+    'tests/notes.json': scenario('user_stories/place-order.md'), 'test/extra/data.json': '[]\n', 'docs/other.json': '{}\n' });
+  const lines = ['Warning: test/extra/data.json matches no Story (user_stories/**/data.md).', 'Warning: tests/notes.json matches no Story (user_stories/**/notes.md).'];
   assert.deepEqual(findTests({ root: setup.repo }).warnings, [
     'Warning: 2 JSON files in test folders match no Story (the tests of user_stories/**/S.md are S.json and S.<variant>.json). pdd test --files lists them.']);
   const files = await check(setup, ['place-order'], { '--files': true });

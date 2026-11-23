@@ -6,7 +6,7 @@ import { hostname as osHostname, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { acquireRunLock } from './workflow-runner.mjs';
+import { acquireRunLock } from './shared/file-lock.mjs';
 
 const execute = promisify(execFile);
 export const ALERT_KINDS = Object.freeze(['usage-limit', 'resource', 'interpreter', 'interpreter-access', 'access', 'decision', 'stuck', 'test-suite', 'long-running', 'recovered']);
@@ -50,7 +50,7 @@ const configFile = (env, ports, destination = 'autopilot') => {
   const home = homeFolder(env, ports);
   return home ? join(home, '.config', 'pdd', name) : null;
 };
-const stateRoot = (env, ports) => ports.stateRoot ?? (home => home && join(home, '.local', 'state', 'pdd', 'autopilot'))(homeFolder(env, ports));
+const stateRoot = (env, ports) => ports.stateRoot ?? (isAbsolute(env?.PDD_STATE_DIR ?? '') ? join(env.PDD_STATE_DIR, 'autopilot') : (home => home && join(home, '.local', 'state', 'pdd', 'autopilot'))(homeFolder(env, ports)));
 const recordFile = (repo, env, ports) => {
   const root = stateRoot(env, ports);
   return root ? join(root, 'alerts', `${createHash('sha256').update(repo.toLowerCase()).digest('hex').slice(0, 20)}.json`) : null;

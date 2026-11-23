@@ -22,11 +22,15 @@ read-only pass inspect the repository checkout, still with no GitHub token.
 
 ## Domain decisions
 
-- **Pre-flight intake enforcement (`#3534`, building on `#3500`):** Before claiming an issue, spawning an AI intake card, or starting a build, run `classifyPreflightIssue` from [Pre-flight intake classifier](autopilot-intake-preflight.prompt.md) (passing the issue row, trusted comments, local `repoFiles` / `cwd` inventory, optional `decisionNote`, and optional `workerCapabilities`). Re-export `PREFLIGHT_REASON_CODES`, `sanitizeIssueText`, `classifyPreflightIssue`, and `summarizeIntakeFilterPrecision` from `src/autopilot-intake.mjs` so callers have one intake entry point without duplicating pure classifier rules.
-- **Consequential operations and failure edges (`applyPreflightDecision`):**
-  - In `shadow` mode, record pre-flight skips only in local `ROOT/intake/` state (`cards/N.json`, `diff-YYYY-MM-DD.jsonl`, `preflight-skips.jsonl`, deduplicated per `(issue, version, decision, reasonCode)`) with zero GitHub writes.
-  - In `active` mode and core pre-claim, `cross_repo` routes through `routeWrongRepositoryIssue` (posting at most one deduplicated `<!-- pdd:autopilot-intake:other-repo:N -->` comment before applying `needs-other-repo`); `human_decision` and `unverifiable_boundary` post at most one deduplicated comment ending with `<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->` naming the crisp skip reason and question before applying `pdd:needs-decision`, and emit one `decision` alert via `ports.alert`. Both `activeIntake` and `preflightCoreIssue` recognize `<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->`, `<!-- pdd:autopilot-core:question:N:intake-... -->`, and `<!-- pdd:autopilot-core:question:N:... -->` when checking trusted `pdd:needs-decision` removals so a resolved issue never re-parks.
-  - If a GitHub write fails during `applyPreflightDecision`, warn via `ctx.warn`, do not claim the issue, and do not mark its body digest as routed so the next tick retries unfinished annotations without duplicating an already-posted comment.
+- **Pre-flight intake enforcement (`#3534`, building on `#3500`):** Before claiming an issue, spawning an AI intake card, or starting a build, run `classifyPreflightIssue` from [Pre-flight intake classifier](autopilot-intake-preflight.prompt.md) (passing the issue row, trusted comments, local `repoFiles` / `cwd` inventory, optional `decisionNote`, and optional `workerCapabilities`). Re-export `PREFLIGHT_REASON_CODES`, `sanitizeIssueText`, `classifyPreflightIssue`, and `summarizeIntakeFilterPrecision` from `src/autopilot-intake.mjs` so callers have one intake entry point without duplicating pure classifier rules, and re-export the conservative auto-dependency and local file-claim helpers (`AUTO_DEPS_MARKER_PREFIX`, `DEPENDENCY_EVIDENCE_KINDS`, `DEPENDENCY_ACTIONS`, `DEFAULT_FILE_CLAIM_TTL_MS`, `issueContentHash`, `parseExplicitDependencies`, `inspectEdgeTimeline`, `reconcileAutoDependencies`, `acquireFileClaim`, `releaseFileClaim`, `activeFileConflicts`, `sweepExpiredClaims`) from `src/autopilot/intake/auto-deps.mjs`.
+- **Live auto-dependency reconciliation & local file-claim reservations:** Export `reconcileIntakeAutoDependencies(ctx, row, openIssues, {mode, dryRun, force})`, `reserveIntakeFileClaim(ctx, {issue, files, leaseId, owner, ttlMs})`, `releaseIntakeFileClaim(ctx, {issue, leaseId, owner})`, and `checkIntakeFileConflicts(ctx, {files, excludeIssue, excludeOwner, excludeLeaseId})`. In `activeIntake`, sweep expired local file claims under `ROOT/intake/claims/`, run `reconcileIntakeAutoDependencies` for trusted issues with explicit prerequisite syntax (forcing `dryRun: true` in `shadow` mode, zero file-overlap edges), update `row.issue_dependencies_summary` / save `waiting` native cards when a prerequisite blocker or `not_planned` hold applies, and deprioritize ready issues with active local file-claim conflicts in `wouldPick` without writing GitHub `blocked_by`.
+- **Consequential operations and failure edges (`applyPreflightDecision`, `commentWhyDeclined`):**
+  - Export `DEFAULT_MIN_INTAKE_CONFIDENCE = 0.75`, `DECLINED_MARKER_PREFIX = "<!-- pdd:autopilot-intake:declined:"`, `normalizeSiblingRepos`, and `commentWhyDeclined(ctx, row, decline, { mode, version })`.
+  - Pass `ctx.settings?.siblingRepos` to `classifyPreflightIssue`, `detectForeignOnlyTarget`, `extractForeignMissingPaths`, and `repoInventoryForIssue` (zero hardcoded repository names).
+  - Enforce `minIntakeConfidence` (`ctx.settings?.minIntakeConfidence ?? DEFAULT_MIN_INTAKE_CONFIDENCE`, default `0.75`) across `cardPrompt` (interpolating the normalized effective floor to two decimal places into the readiness rule), `collectActiveIntake`, `activeReadyCards`, and `wouldPick`: a `ready` card below the confidence floor (or with missing confidence in `collectActiveIntake`) is demoted to `person` with `reasonCode: "unclear_or_unsound"` instead of claiming.
+  - In `shadow` mode, record pre-flight skips and cards only in local `ROOT/intake/` state (`cards/N.json`, `diff-YYYY-MM-DD.jsonl`, `preflight-skips.jsonl`, deduplicated per `(issue, version, decision, reasonCode)`) with **zero** GitHub writes (`commentWhyDeclined` performs zero writes in shadow mode).
+  - In `active` mode and core pre-claim, **every** declined class posts at most one marker-deduped comment explaining why Autopilot did not claim the issue before any label write: `cross_repo` / `elsewhere` routes through `routeWrongRepositoryIssue` (`<!-- pdd:autopilot-intake:other-repo:N -->` + `needs-other-repo`); `human_decision`, `unverifiable_boundary`, and `unclear_or_unsound` pre-flight parks post `<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->` + `pdd:needs-decision` + one `decision` alert; and active-mode declined card outcomes (`person`, low-confidence `unclear_or_unsound`, `elsewhere`, `duplicate`, `blocked`, `fixed`, `held`) invoke `commentWhyDeclined` (`<!-- pdd:autopilot-intake:declined:N:CLASS:BODYKEY -->`, applying `pdd:needs-decision` for `person`/`unclear_or_unsound`, or `routeWrongRepositoryIssue` for `elsewhere`) and persist both `preCommentVersion` and updated `version` so Autopilot's own comment never triggers a re-evaluation loop. Both `activeIntake` and `preflightCoreIssue` recognize `<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->`, `<!-- pdd:autopilot-intake:declined:N:... -->`, `<!-- pdd:autopilot-core:question:N:intake-... -->`, and `<!-- pdd:autopilot-core:question:N:... -->` when checking trusted `pdd:needs-decision` removals so a resolved issue never re-parks.
+  - If a GitHub write fails during `applyPreflightDecision` or `commentWhyDeclined` (`applied: false`), warn via `ctx.warn`, do not claim the issue, and do not mark its body digest as routed; in `collectActiveIntake`, save `declineCommentPending: true` on the declined card alongside `version` and `preCommentVersion`, and on matching ticks in `activeIntake` retry `commentWhyDeclined` directly without re-running the LLM card job until `applied: true` clears `declineCommentPending` (promoting `elsewhere` to `native: { kind: "elsewhere", ... }` once applied) without duplicating an already-posted comment.
 
 ## Rules
 
@@ -44,9 +48,9 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   GitHub call. A tick that ends before the hook (core mode off, the GitHub reserve)
   runs no pass; the [launcher](autopilot-launcher.prompt.md) calls `stopCardJobs`
   for core mode off and for `pdd autopilot stop`.
-- Scope: `intakeRows(rows, label)` keeps the open issues (no pull requests) without
-  a report label (`pdd:runtime`, `pdd:autopilot-report`) and, when the core has an
-  opt-in label, with that label; oldest first, then the lower number. The scope is
+- Scope: `intakeRows(rows, label, allowedIssues)` keeps the open issues (no pull requests) without
+  a report label (`pdd:runtime`, `pdd:autopilot-report`), matching `label` when set and
+  matching `allowedIssues` when a non-empty array of positive safe integers is supplied; oldest first, then the lower number. The scope is
   wider than the core's ready rule: it does not skip issues that cool down after a
   no-result, or issues whose blocker is named only in the text or in an END comment.
   A person who reads the would-pick list must keep that in mind.
@@ -91,13 +95,10 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   as `cross_repo`). High-confidence wrong-repo signals are: (A) an explicit repository
   metadata header naming a repository different from `repo`; (B) GitHub `blob` or
   `tree` URLs into another repository with zero local files or local-root greenfield
-  paths; (C) explicit root paths belonging to sibling repositories (`pdd_cloud/...`,
-  `pdd-workflow/...`, `pdd_workflow/...`, `extensions/github_pdd_app/...`,
-  `prompt-runtime/...`, `runtime-client/...`, `packages/runtime-client/...`) absent
-  from `cwd`; or (D) prose targeting a known sibling service/repository
-  (`prompt-runtime`, `runtime-client`, `pdd_cloud` / `pdd-cloud`, `pdd-workflow` /
-  `pdd_workflow`, `github_pdd_app`) absent from `cwd` with foreign missing paths or
-  explicit sibling framing and without local `pdd` modules, CLI settings, or
+  paths; (C) explicit root paths belonging to configured sibling repositories
+  (`autopilot.siblingRepos`) absent from `cwd`; or (D) prose targeting a configured
+  sibling repository/service absent from `cwd` with foreign missing paths or
+  explicit sibling framing and without local repository modules, CLI settings, or
   local-root greenfield paths. In `active` intake (when `classifyPreflightIssue`
   rejects/parks, `detectWrongRepositoryIssue` matches, or a card evaluates to
   `elsewhere`) and pre-claim in the core (never in read-only `shadow` mode),
@@ -106,9 +107,9 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   `<!-- pdd:autopilot-intake:other-repo:N -->` naming the target repository/service
   and verified missing paths, recording the routed body digest locally so later polls
   make zero duplicate comments; `applyPreflightDecision` delegates `cross_repo` to
-  `routeWrongRepositoryIssue` and parks `human_decision` / `unverifiable_boundary`
-  with `pdd:needs-decision`, one deduplicated pre-flight comment, and a structured
-  skip entry in `ROOT/intake/preflight-skips.jsonl`.
+  `routeWrongRepositoryIssue` and parks `human_decision` / `unverifiable_boundary` /
+  `unclear_or_unsound` with `pdd:needs-decision`, one deduplicated pre-flight comment,
+  and a structured skip entry in `ROOT/intake/preflight-skips.jsonl`.
 - Trust: a card job starts only for an issue whose author passes the core's own
   trust check (`ports.trusted`, the same check that the core uses before it gives an
   issue to an agent). An issue that fails it gets the native-style record
@@ -184,9 +185,13 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   unavailable to the worker), duplicate (same problem or goal as another listed
   issue; same words are not enough), blocked, held, fixed (the comments show it no
   longer happens) and elsewhere (another repository or coordinated edits in another
-  repository such as `pdd_cloud`, `pdd-workflow`, or external services). Ask for
-  optional `reason_code` (`cross_repo`, `human_decision`, `unverifiable_boundary`,
-  or `null`) whenever a card is `elsewhere` or `person`.
+  repository or external service). Ask for optional `reason_code` (`cross_repo`,
+  `human_decision`, `unverifiable_boundary`, `unclear_or_unsound`, or `null`)
+  whenever a card is `elsewhere` or `person`, and instruct the grader to stay
+  skeptical: only return `ready` with confidence at least `0.75` when scope, target
+  files/behavior, and local verification are clear and sound. Both `cardPrompt` and
+  `improvePrompt` treat unresolved ambiguity, missing reproduction, or unsound
+  premises as valid grounds for `person` (`reason_code: "unclear_or_unsound"`).
 - Answer: Codex's ANSWER file, or the last top-level JSON envelope with a `result`
   string in Claude's single-line or multiline log; at most 64 KB, else an error
   card. `parseCardText` uses the linear string-aware top-level JSON object scanner

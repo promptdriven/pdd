@@ -5,8 +5,17 @@ import {serializeValidationReceipt, safeEvidenceText} from './validation-evidenc
 import { join, isAbsolute, resolve } from 'node:path';
 import { createHash, hash as contentDigest, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { machineCheckPorts } from './machine-resources.mjs';
+import {
+  alive,
+  collectSignalDiagnostics,
+  delay,
+  executeSuite,
+  formatSignalDiagnostic,
+  groupAlive,
+} from './autopilot/suite-executor.mjs';
+import { RECORDER_ENTRY_PATH } from './test-suite-recorder.mjs';
+export { collectSignalDiagnostics, executeSuite };
 
 export function calculateCheckCapacity({checks, runs} = {}, ports = {}) {
   const native = machineCheckPorts(ports.env ?? process.env, ports);
@@ -82,29 +91,6 @@ export function readCheckStatus({env = process.env, checks, runs}, ports = {}) {
   const p = portsFor(env, ports), capacity = admissionCapacity(p, env), all = records(p);
   return {...capacity, busyChecks:all.filter(row=>row.state==='running').length, waitingChecks:all.filter(row=>row.state==='waiting').length};
 }
-const delay = ms => new Promise(done => setTimeout(done, ms));
-const alive = pid => {
-  if (pid < 0) return groupAlive(-pid) !== false;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return error.code !== 'ESRCH'; }
-};
-function groupAlive(pgid) {
-  try { process.kill(-pgid,0); } catch (error) { return error.code === 'ESRCH' ? false : null; }
-  if (process.platform !== 'linux') return true;
-  // Orphaned zombies cannot execute or hold resources for a validation command.
-  // A permission or parse error is uncertainty, never evidence of termination.
-  try {
-    for (const name of files.readdirSync('/proc').filter(name=>/^\d+$/.test(name))) {
-      let stat;
-      try { stat = files.readFileSync(`/proc/${name}/stat`,'utf8'); }
-      catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') continue; return null; }
-      const fields = stat.slice(stat.lastIndexOf(') ')+2).split(' ');
-      if (fields.length < 3) return null;
-      if (Number(fields[2]) === pgid && !['Z','X'].includes(fields[0])) return true;
-    }
-    return false;
-  } catch { return null; }
-}
 export function suiteQueueRoot(env = process.env) {
   const root = env.PDD_SUITE_QUEUE ?? (env.PDD_VM_SUITE_LOCK ? `${env.PDD_VM_SUITE_LOCK}.queue` : `/tmp/pdd-full-suite-${process.getuid?.() ?? 'user'}`);
   if (!isAbsolute(root)) throw Error('The shared suite queue needs an absolute path.');
@@ -176,7 +162,19 @@ function reconciledRow(row, p, finishedAt, signal = null) {
       const reason = row.startedAt === null
         ? (sig ? `Test suite interrupted while waiting in the queue (${sig}); no tests ran.` : 'Test suite runner ended while waiting in the queue; no tests ran.')
         : (sig ? `Test suite interrupted before starting tests (${sig}); no tests ran.` : 'Test suite runner ended before starting tests; no tests ran.');
-      return { ...row, state: 'finished', finishedAt, outcome: 'interrupted', exitCode: null, signal: sig, counts: null, reason: safeEvidenceText(reason) };
+      const signalDiagnostics = row.signalDiagnostics ?? (sig ? collectSignalDiagnostics({
+        signal: sig,
+        exitCode: null,
+        phase: 'reconciled',
+        source: 'reconcile',
+        pid: row.pid,
+        ppid: null,
+        queuedAt: row.queuedAt,
+        startedAt: row.startedAt,
+        now: () => finishedAt,
+        fs: p.fs,
+      }) : null);
+      return { ...row, state: 'finished', finishedAt, outcome: 'interrupted', exitCode: null, signal: sig, ...(signalDiagnostics ? { signalDiagnostics } : {}), counts: null, reason: safeEvidenceText(reason) };
     }
     if (row.childPid && !p.alive(-row.childPid)) {
       return { ...row, state: 'finished', finishedAt, outcome: 'unknown', exitCode: null, counts: null,
@@ -222,8 +220,47 @@ export async function reconcileSuiteQueue({ cwd = null, env = process.env, signa
     return count;
   });
 }
+const suiteLockBusy = cause => Object.assign(Error('Another shared suite queue operation is already running; retry.'), { code: 'run_busy', ...(cause ? { cause } : {}) });
+const sameLockOwner = (a, b) => a && b && a.pid === b.pid && a.token === b.token;
+function readSuiteLock(path) {
+  const value = JSON.parse(files.readFileSync(path, 'utf8'));
+  if (!value || typeof value !== 'object' || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.token !== 'string' || !value.token) {
+    throw suiteLockBusy();
+  }
+  return value;
+}
+function isLockOwnerDead(owner) {
+  try { process.kill(owner.pid, 0); return false; }
+  catch (error) { if (error.code === 'ESRCH') return true; throw suiteLockBusy(error); }
+}
+export function acquireSuiteLock(dir, filename = 'suite-admission.lock') {
+  const path = join(dir, filename), claim = `${path}.claim`, owner = { pid: process.pid, token: randomUUID() };
+  const create = () => {
+    const fd = files.openSync(path, 'wx', 0o600);
+    try { files.writeFileSync(fd, JSON.stringify(owner)); files.fsyncSync(fd); } finally { files.closeSync(fd); }
+  };
+  try { create(); } catch (error) {
+    if (error.code !== 'EEXIST') throw suiteLockBusy(error);
+    let prior, claimFd;
+    try {
+      prior = readSuiteLock(path);
+      if (!isLockOwnerDead(prior)) throw suiteLockBusy();
+      claimFd = files.openSync(claim, 'wx', 0o600);
+      if (!sameLockOwner(prior, readSuiteLock(path)) || !isLockOwnerDead(prior)) throw suiteLockBusy();
+      files.unlinkSync(path);
+      create();
+    } catch { throw suiteLockBusy(); }
+    finally {
+      if (claimFd !== undefined) {
+        try { files.closeSync(claimFd); } catch {}
+        try { files.unlinkSync(claim); } catch {}
+      }
+    }
+  }
+  return () => { try { if (sameLockOwner(owner, readSuiteLock(path))) files.unlinkSync(path); } catch {} };
+}
 async function underLock(p, action) {
-  const lock = p.acquireLock ?? (await import('./workflow-runner.mjs')).acquireRunLock;
+  const lock = p.acquireLock ?? acquireSuiteLock;
   for (;;) {
     let release;
     try { release = lock(p.root, 'suite-admission.lock'); }
@@ -250,7 +287,7 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
   return { ticket: row.ticket, state: row.state, position: row.state === 'waiting' ? positionOf(all, row) : null,
     queuedAt: row.queuedAt, startedAt: row.startedAt, finishedAt: row.finishedAt, reason: row.reason,
     pausedMs: pausedTime(own, since, p.now()),
-    ...Object.fromEntries(['command','commandFingerprint','evidence','source','logPath','receiptPath','recorderPid','recorderIdentity','childPid','exitCode','signal','counts','outcome'].map(key=>[key,row[key] ?? null])) };
+    ...Object.fromEntries(['command','commandFingerprint','evidence','source','logPath','receiptPath','recorderPid','recorderIdentity','childPid','exitCode','signal','signalDiagnostics','counts','outcome'].map(key=>[key,row[key] ?? null])) };
 }
 export function suiteStatusWords(suite) {
   return suite.state === 'unavailable' ? `full test suite queue unavailable: ${suite.reason}`
@@ -268,6 +305,10 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
   let p, row, environmentRoot, executionStarted = false, keepEnvironment = false;
   const signals = ports.signals ?? process;
   let pendingSignal = null, wakeWait = null, signalCleanup = () => {};
+  const onSignal = sig => { if (executionStarted || pendingSignal) return; pendingSignal = sig; wakeWait?.(); };
+  const onSigint = () => onSignal('SIGINT'), onSigterm = () => onSignal('SIGTERM');
+  signals.on?.('SIGINT', onSigint); signals.on?.('SIGTERM', onSigterm);
+  signalCleanup = () => { signals.off?.('SIGINT', onSigint); signals.off?.('SIGTERM', onSigterm); signalCleanup = () => {}; };
   try {
     p = portsFor(env, ports);
     p.fs.mkdirSync(p.root, { recursive: true, mode: 0o700 });
@@ -291,23 +332,33 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       catch (error) { try { p.fs.unlinkSync(record.logPath); } catch {} throw error; }
       return record;
     });
-    const onSignal = sig => { if (executionStarted || pendingSignal) return; pendingSignal = sig; wakeWait?.(); };
-    const onSigint = () => onSignal('SIGINT'), onSigterm = () => onSignal('SIGTERM');
-    signals.on?.('SIGINT', onSigint); signals.on?.('SIGTERM', onSigterm);
-    signalCleanup = () => { signals.off?.('SIGINT', onSigint); signals.off?.('SIGTERM', onSigterm); signalCleanup = () => {}; };
     const finishInterrupted = async sig => {
       signalCleanup();
+      const exitCode = sig === 'SIGINT' ? 130 : 143;
+      const diag = collectSignalDiagnostics({
+        signal: sig,
+        exitCode,
+        phase: row.startedAt === null ? 'waiting' : 'pre-exec',
+        source: 'process-signal',
+        pid: p.pid,
+        ppid: p.ppid ?? process.ppid,
+        queuedAt: row.queuedAt,
+        startedAt: row.startedAt,
+        now: p.now,
+        fs: p.fs,
+      });
       const apply = () => {
         row.state = 'finished'; row.finishedAt = p.now(); row.outcome = 'interrupted';
-        row.exitCode = null; row.signal = sig; row.counts = null;
+        row.exitCode = null; row.signal = sig; row.signalDiagnostics = diag; row.counts = null;
         row.reason = safeEvidenceText(row.startedAt === null
           ? `Test suite interrupted while waiting in the queue (${sig}); no tests ran.`
           : `Test suite interrupted before starting tests (${sig}); no tests ran.`);
         save(p, row);
       };
       try { await underLock(p, apply); } catch { try { apply(); } catch {} }
+      if (ports.announceReceipt !== false) p.say(formatSignalDiagnostic(diag));
       announceReceipt(ports, p, row);
-      return { exitCode: sig === 'SIGINT' ? 130 : 143, signal: sig, message: row.reason };
+      return { exitCode, signal: sig, message: row.reason };
     };
     const waitTurn = () => ports.sleep
       ? new Promise(done => { wakeWait = () => { wakeWait = null; done(); }; Promise.resolve(p.sleep(250)).then(() => { wakeWait = null; done(); }, () => { wakeWait = null; done(); }); })
@@ -343,7 +394,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     p.say('running the full test suite');
     environmentRoot = p.fs.mkdtempSync(join(p.root, 'suite-env-'));
     const childEnv = Object.fromEntries(Object.entries(env).filter(([key, value]) =>
-      typeof value === 'string' && /^(?:PATH|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TERM|CI|SystemRoot|WINDIR)$/.test(key)));
+      typeof value === 'string' && /^(?:PATH|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TERM|CI|SystemRoot|WINDIR|GOPATH|GOMODCACHE|CARGO_HOME|RUSTUP_HOME|VIRTUAL_ENV|UV_CACHE_DIR|PDD_TEST_ENV_[A-Z0-9_]+)$/.test(key)));
     childEnv.PATH ??= '/usr/bin:/bin';
     childEnv.POCKET_BROWSER_BIN = env.POCKET_BROWSER_BIN ?? '/usr/bin/google-chrome';
     for (const [folder, names] of [
@@ -367,10 +418,14 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       const confirmed = result.ownershipConfirmed !== false;
       if (!confirmed) keepEnvironment = true;
       row.exitCode = confirmed ? result.exitCode : null; row.signal = result.signal ?? null;
+      if (result.signalDiagnostics) row.signalDiagnostics = result.signalDiagnostics;
       row.outcome = confirmed ? 'completed' : 'unknown';
       row.state = confirmed ? 'finished' : 'running'; row.finishedAt = confirmed ? p.now() : null;
       row.reason = result.reason == null ? (!confirmed ? 'Test suite descendant ownership is unknown.' : result.exitCode ? `Test suite exited with status ${result.exitCode}.` : null) : safeEvidenceText(result.reason);
       save(p, row);
+    }
+    if (ports.announceReceipt !== false && (row.signalDiagnostics || result.signalDiagnostics)) {
+      p.say(formatSignalDiagnostic(row.signalDiagnostics ?? result.signalDiagnostics));
     }
     announceReceipt(ports, p, row);
     const sigOut = row.signal ?? result.signal ?? null;
@@ -388,53 +443,10 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     if (environmentRoot && !keepEnvironment) p.fs.rmSync(environmentRoot, {recursive:true, force:true});
   }
 }
-export async function executeSuite(command, { cwd, env, timeoutMs, onChild, onOutput, startGate = false, cpuIds = [], taskset = null }, ports = {}) {
-  return new Promise(done => {
-    const file = taskset ?? '/bin/bash', args = taskset ? ['--cpu-list',cpuIds.join(','),'/bin/bash','-c',command] : ['-c',command];
-    const child = (ports.spawn ?? spawn)(startGate ? '/bin/bash' : file,
-      startGate ? ['-c','read -r _pdd_gate; exec "$@" </dev/null','pdd-suite-gate',file,...args] : args,
-      {cwd,env,detached:true,stdio:[startGate ? 'pipe' : 'ignore',onOutput ? 'pipe' : 'inherit',onOutput ? 'pipe' : 'inherit']});
-    if (onOutput) for (const stream of ['stdout','stderr']) child[stream]?.on('data', bytes => {
-      try { onOutput(stream,bytes); } catch (error) { stop(1, `Test suite output could not be saved: ${error.code ?? error.message}`); }
-    });
-    child.stdin?.on('error', () => {});
-    let reason = null, forcedCode = null, escalation;
-    const killGroup = signal => { if (child.pid) { try { (ports.kill ?? process.kill)(-child.pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; } } };
-    const stop = (code, why) => {
-      if (forcedCode !== null) return;
-      forcedCode = code; reason = why; killGroup('SIGTERM');
-      escalation = setTimeout(() => killGroup('SIGKILL'), 2000);
-    };
-    const interrupt = () => stop(130, 'Test suite interrupted (SIGINT).');
-    const terminate = () => stop(143, 'Test suite interrupted (SIGTERM).');
-    process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
-    const timer = timeoutMs ? setTimeout(() => stop(124, `Test suite execution timeout after ${timeoutMs / 60_000} minutes.`), timeoutMs) : null;
-    const cleanup = () => { clearTimeout(timer); clearTimeout(escalation); process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); killGroup('SIGKILL'); };
-    let settled = false;
-    const finish = async result => {
-      if (settled) return;
-      settled = true; cleanup();
-      let ownershipConfirmed = !child.pid;
-      if (child.pid) for (let attempt=0;attempt<=100;attempt++) {
-        let live;
-        try { live = (ports.groupAlive ?? groupAlive)(child.pid); } catch { live = null; }
-        if (live === false) { ownershipConfirmed = true; break; }
-        if (attempt < 100) await (ports.sleep ?? delay)(20);
-      }
-      done(ownershipConfirmed ? {...result,...(result.reason == null ? {} : {reason:safeEvidenceText(result.reason)}),ownershipConfirmed:true} : {exitCode:1,signal:result.signal ?? null,
-        reason:'Test suite descendants could not be confirmed stopped.',ownershipConfirmed:false});
-    };
-    child.once('error', error => { void finish({exitCode:1, reason:`Test suite could not start: ${error.code ?? error.message}`}); });
-    child.once('close', (code, signal) => { void finish({ signal, exitCode: forcedCode ?? code ?? 1, reason: reason ?? (signal ? `Test suite ended by ${signal}.` : null) }); });
-    try { if (child.pid) onChild(child.pid); if (startGate) child.stdin.end('\n'); }
-    catch (error) { stop(1, `Test suite could not save its child ownership: ${error.code ?? error.message}`); }
-  });
-}
-
 // The recorder starts no command until its caller has saved its custody.
 async function executeRecordedSuite(command, options, ports) {
   return new Promise((done, reject) => {
-    const child = (ports.spawnRecorder ?? spawn)(process.execPath, [fileURLToPath(new URL('./test-suite-recorder.mjs',import.meta.url))],
+    const child = (ports.spawnRecorder ?? spawn)(process.execPath, [RECORDER_ENTRY_PATH],
       {cwd:options.cwd,env:options.env,detached:true,stdio:['ignore','ignore','ignore','ipc']});
     let terminal = false;
     const cancel = signal => { if (child.connected) child.send({cancel:signal},()=>{}); };

@@ -26,13 +26,29 @@ function writeAtomic(file, text) {
   writeFileSync(temp, text, { mode: 0o600 }); renameSync(temp, file);
 }
 
-export function agentCommand(agent, { model } = {}) {
+const FALSY_TOGGLE = new Set(['0', 'false', 'off', 'no']);
+const TRUTHY_TOGGLE = new Set(['1', 'true', 'on', 'yes']);
+
+export function resolveCodexMultiAgent({ multiAgent = undefined, agent = null, env = process.env } = {}) {
+  if (typeof multiAgent === 'boolean') return multiAgent;
+  if (typeof agent?.multiAgent === 'boolean') return agent.multiAgent;
+  const rawEnv = typeof env?.PDD_CODEX_MULTI_AGENT === 'string' ? env.PDD_CODEX_MULTI_AGENT.trim().toLowerCase() : '';
+  if (FALSY_TOGGLE.has(rawEnv)) return false;
+  if (TRUTHY_TOGGLE.has(rawEnv)) return true;
+  return true;
+}
+
+export function agentCommand(agent, { model, multiAgent, env = process.env, schemaArgs = null } = {}) {
   const extra = model ? ['--model', model] : [];
-  if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false', ...extra, '-'] };
+  const cleanSchemaArgs = Array.isArray(schemaArgs) ? schemaArgs.filter(a => typeof a === 'string' && a.length > 0) : [];
+  if (agent?.kind === 'codex') {
+    const multiAgentArgs = resolveCodexMultiAgent({ multiAgent, agent, env }) ? [] : ['-c', 'features.multi_agent=false'];
+    return { command: agent.command ?? 'codex', args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', ...multiAgentArgs, ...extra, ...cleanSchemaArgs, '-'] };
+  }
   // Claude streams its events (stream-json) so that its log grows while it works; the core reads the result file.
-  if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', ...extra] };
+  if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', ...extra, ...cleanSchemaArgs] };
   if (agent?.kind === 'gemini') return { command: typeof agent.command === 'string' && agent.command.trim() ? agent.command.trim() : 'gemini', args: ['-p', '', '--output-format', 'stream-json', '--approval-mode', 'yolo', ...extra] };
-  if (agent?.kind === 'agy') return { command: agent.command ?? 'agy', args: ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions', ...extra] };
+  if (agent?.kind === 'agy') return { command: agent.command ?? 'agy', args: ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions', ...extra, ...cleanSchemaArgs] };
   throw Error('Autopilot core jobs need codex, claude, gemini or agy');
 }
 
@@ -886,7 +902,7 @@ export function checkShellPdd(spec, out, ports = {}) {
 // engine's own skills: another version gives one line in the job log and ID.skills-check.json; the agent reads
 // "$PDD_SKILLS" either way. Missing or unreadable folders write nothing.
 export const skillsCheckFile = log => String(log).replace(/\.log$/, '') + '.skills-check.json';
-const skillVersion = folder => { try { return /^\s*pdd-skills:\s*(\d+\.\d+\.\d+)\s*$/m.exec(readFileSync(join(folder, 'pdd-feature', 'SKILL.md'), 'utf8'))?.[1] ?? null; } catch { return null; } };
+const skillVersion = folder => { try { return /^\s*pdd-skills:\s*(\d+\.\d+\.\d+)\s*$/m.exec(readFileSync(join(folder, 'pdd', 'SKILL.md'), 'utf8'))?.[1] ?? null; } catch { return null; } };
 export function checkSkills(spec, out) {
   const skills = spec.pddCheck?.skills;
   if (!skills?.version || !Array.isArray(skills.read)) return null;

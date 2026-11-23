@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { resolveWorkflowRepository, sameRepo } from './workflow-github.mjs';
+import { resolveWorkflowRepository, sameRepo } from './shared/github-repo.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 
 const MODES = ['off', 'observe', 'auto'];

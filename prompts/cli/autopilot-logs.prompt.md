@@ -89,7 +89,7 @@ Injectable `ports` provide `fs`, `git(args, {cwd, env})`, `gitRoot`, `now()`,
 `ports.gitRoot` is already supplied. Outside a Git repository, return
 `{exitCode: 1, message: "This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again."}`.
 Derive the state key from `sha256(gitToplevel).slice(0, 20)` under `stateRoot`
-(default `<HOME>/.local/state/pdd/autopilot`), reading `<hash>.json`,
+(default `<PDD_STATE_DIR>/autopilot` when `PDD_STATE_DIR` is set, else `<HOME>/.local/state/pdd/autopilot`), reading `<hash>.json`,
 `<hash>-core/core.json`, `<hash>-core/jobs/*.json`,
 `<hash>-core/intake/jobs/*.json`, `<hash>-core/logs/*` and
 `<hash>-core/history.jsonl` plus the checkout's `pdd.json` mode.

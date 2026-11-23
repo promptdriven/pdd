@@ -88,13 +88,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        env:
-          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
-          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
-          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
-        run: node .github/scripts/ci-install.mjs
+        run: npm ci --ignore-scripts
 
       - name: Verify GitHub Release, npm and PyPI version parity
         id: meta
@@ -133,6 +127,12 @@ jobs:
           pypi_version=$(PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" --version 2>"$smoke_dir/ver.err")
           test "$pypi_version" = "$EXPECTED_VERSION"
           test ! -s "$smoke_dir/ver.err"
+          PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd-codex" --pdd-help >"$smoke_dir/codex.out" 2>"$smoke_dir/codex.err"
+          grep -q "pdd-codex" "$smoke_dir/codex.out"
+          test ! -s "$smoke_dir/codex.err"
+          PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd-claude" --pdd-help >"$smoke_dir/claude.out" 2>"$smoke_dir/claude.err"
+          grep -q "pdd-claude" "$smoke_dir/claude.out"
+          test ! -s "$smoke_dir/claude.err"
 
           cp -R test/fixtures/harbor "$smoke_dir/harbor"
           git -C "$smoke_dir/harbor" init -q
@@ -161,13 +161,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        env:
-          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
-          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
-          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
-        run: node .github/scripts/ci-install.mjs
+        run: npm ci --ignore-scripts
 
       - name: Verify release tag parity before npm publish
         env:
@@ -187,6 +181,9 @@ jobs:
 
           dist_tag="latest"
           case "$EXPECTED_VERSION" in
+            *-rc.*|*-rc[0-9]*|*-rc) dist_tag="next" ;;
+            *-beta.*|*-beta[0-9]*|*-beta) dist_tag="beta" ;;
+            *-alpha.*|*-alpha[0-9]*|*-alpha) dist_tag="alpha" ;;
             *-*) dist_tag="alpha" ;;
           esac
 
@@ -226,14 +223,9 @@ jobs:
 
       - name: Install dependencies and stage bundled CLI
         env:
-          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
-          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
-          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
           TARGET_TAG: ${{ needs.verify-release.outputs.tag }}
         run: |
-          node .github/scripts/ci-install.mjs
+          npm ci --ignore-scripts
           node scripts/sync-pypi-version.mjs --check --tag "$TARGET_TAG"
           node scripts/sync-pypi-version.mjs --stage-bundle
 

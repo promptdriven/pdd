@@ -1,16 +1,16 @@
 # Waiting for interpreter capacity
 
-When the interpreter is busy and confirms that lint did not start, `pdd test`,
-`pdd lint` and `pdd simulate` wait and try again. You see:
+When the interpreter is busy and confirms that remote lint did not start, `pdd test`,
+`pdd lint --remote` and `pdd simulate` wait and try again. You see:
 
 > The server is busy. Waiting for a lint slot…
 
 pdd follows the server's requested delay and keeps trying until your wait ends.
 There is no fixed number of attempts. It keeps the same selected files and saves
 every request ID. Check and saved-batch reads have no default wait limit in any shell; `--timeout`
-sets an explicit limit. Standalone remote lint retains its 90-second agent default
-and unlimited interactive wait, with `--timeout` override. `pdd simulate` follows the
-[Try lint deadline policy](../prompts/cli/runtime-seam.prompt.md).
+sets an explicit limit. Standalone remote lint (`pdd lint --remote`) retains its 90-second agent default
+and unlimited interactive wait, with `--timeout` override. `pdd simulate` uses the
+interpreter's Try lint deadline policy (see [Interpreter boundaries](runtime-boundaries.md)).
 For a new Check with `--timeout MIN`, preliminary lint has its own MIN-minute
 wait, capped at 90 seconds in an agent shell. The paid Check clock starts after
 lint returns. With no explicit timeout, preliminary lint has no default limit.
@@ -79,5 +79,4 @@ If the interpreter confirms that a check ended because the service restarted, pd
 tries that Story row once more. It saves both request IDs, receipts and usage,
 and prevents a second replacement across later or overlapping reads and retries.
 Other uncertain outcomes and paid simulation actions are never sent again automatically.
-The [Runtime seam](../prompts/cli/runtime-seam.prompt.md) binds `@promptdriven/runtime-client`,
-which defines the exact retry and slot rules.
+`@promptdriven/runtime-client` (bound through `src/runtime-seam.mjs`) defines the exact retry and slot rules; see [Interpreter boundaries](runtime-boundaries.md).

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/files.prompt.md (sha256: b1c41e3ab9a7d41978976452e04408d31a4c4be0aca4ad8d347a6cc621754433).
+// Prompt: prompts/cli/files.prompt.md
 import { spawnSync } from 'node:child_process';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
 
@@ -62,21 +62,57 @@ export function inspectProjectFiles(root) {
   return { schema_version: 'pdd.files.v1', prompts: promptRows, stories, tests, orphans: found.orphans, refusals, warnings: [...new Set(warnings)] };
 }
 
+const epipeGuards = new WeakMap();
+function guardEpipe(stream) {
+  if (!stream || typeof stream.on !== 'function') return { closed: false };
+  let state = epipeGuards.get(stream);
+  if (!state) {
+    state = { closed: false };
+    epipeGuards.set(stream, state);
+    // Keep the EPIPE handler attached through async stream drain so `pdd files | head -1` exits 0 cleanly.
+    stream.on('error', err => {
+      if (err?.code === 'EPIPE') { state.closed = true; return; }
+      throw err;
+    });
+  }
+  state.closed = false;
+  return state;
+}
+
 export function runProjectFiles({ cwd = process.cwd(), json = false } = {}, ports = {}) {
   const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr;
   const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   if (top.status !== 0) { stderr.write('pdd files works in a Git repository.\n'); return 2; }
+  const pipeState = guardEpipe(stdout);
+  const safeWrite = text => {
+    if (pipeState.closed) return false;
+    try {
+      stdout.write(text);
+      return !pipeState.closed;
+    } catch (error) {
+      if (error?.code === 'EPIPE') { pipeState.closed = true; return false; }
+      throw error;
+    }
+  };
   try {
     const view = inspectProjectFiles(top.stdout.trim());
-    if (json) stdout.write(`${JSON.stringify(view)}\n`);
-    else {
-      for (const prompt of view.prompts) stdout.write(`Prompt: ${prompt.path}${prompt.has_interface === null ? ' (unreadable)' : prompt.native_only ? ' (native-only)' : ''}\n`);
-      for (const story of view.stories) stdout.write(`Story: ${story.path}; tests: ${story.tests.join(', ') || 'none'}\n`);
-      for (const test of view.tests) stdout.write(`Test: ${test.files.join(', ')}; Stories: ${test.stories.join(', ')}; prompts: ${test.prompts.join(', ')}\n`);
-      for (const orphan of view.orphans) stdout.write(`${orphan.line}\n`);
-      for (const problem of view.refusals) stdout.write(`${problem.path}: ${problem.code} ${problem.section} ${problem.message}\n`);
-      for (const warning of view.warnings) stdout.write(`${warning}\n`);
+    if (json) {
+      safeWrite(`${JSON.stringify(view)}\n`);
+    } else {
+      const lines = [
+        ...view.prompts.map(prompt => `Prompt: ${prompt.path}${prompt.has_interface === null ? ' (unreadable)' : prompt.native_only ? ' (native-only)' : ''}`),
+        ...view.stories.map(story => `Story: ${story.path}; tests: ${story.tests.join(', ') || 'none'}`),
+        ...view.tests.map(test => `Test: ${test.files.join(', ')}; Stories: ${test.stories.join(', ')}; prompts: ${test.prompts.join(', ')}`),
+        ...view.orphans.map(orphan => orphan.line),
+        ...view.refusals.map(problem => `${problem.path}: ${problem.code} ${problem.section} ${problem.message}`),
+        ...view.warnings,
+      ];
+      for (const text of lines) if (!safeWrite(`${text}\n`)) break;
     }
     return 0;
-  } catch (error) { stderr.write(`${error.message}\n`); return error.exitCode ?? 4; }
+  } catch (error) {
+    if (error?.code === 'EPIPE') return 0;
+    stderr.write(`${error.message}\n`);
+    return error.exitCode ?? 4;
+  }
 }

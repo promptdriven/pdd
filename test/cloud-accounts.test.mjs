@@ -44,17 +44,20 @@ import {
   managedCodexConfigPath,
   materializeLocalClaudeAuth,
   materializeLocalCodexAuth,
+  pddManagedClaudeHome,
   pddManagedCodexHome,
   normalizeUsagePercentInt,
   prepareCloudStepExecution,
   reportCloudAccountUsage,
+  REQUIRED_CODEX_SUBSHELL_EXCLUDES,
   resolveCloudAccountsEndpoint,
+  resolvePddStateBase,
   restoreLocalCodexGatewayConfig,
   selectCloudPoolLogin,
   stopCodexAppServerDaemon,
   sweepActiveCodexOverlays,
 } from '../src/login-pool.mjs';
-import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
+import { parse as parseToml } from '../src/shared/toml/parse.js';
 import { redactSecrets } from '../src/secret-redaction.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 import { tickAutopilot, runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
@@ -2343,7 +2346,7 @@ test('3426 & 3427 review regressions: shell_environment_policy migration, pddg_ 
       'AWS_*': 'exclude',
       PATH: 'include',
       HOME: 'include',
-      PDD_CODEX_GATEWAY_GRANT: 'exclude',
+      ...Object.fromEntries(REQUIRED_CODEX_SUBSHELL_EXCLUDES.map(k => [k, 'exclude'])),
     });
     assert.deepEqual({ ...ovCfg.shell_environment_policy?.set }, {
       SAFE_KEY: 'ok',
@@ -2621,7 +2624,13 @@ test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, sy
   const spyCodex = join(binDir, 'codex');
   writeFileSync(spyCodex, [
     `#!${nodeBin}`,
-    'console.log(JSON.stringify({ codexHome: process.env.CODEX_HOME ?? null, args: process.argv.slice(2) }));',
+    'console.log(JSON.stringify({ via: "codex", codexHome: process.env.CODEX_HOME ?? null, args: process.argv.slice(2) }));',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  const spyPddCodex = join(binDir, 'pdd-codex');
+  writeFileSync(spyPddCodex, [
+    `#!${nodeBin}`,
+    'console.log(JSON.stringify({ via: "pdd-codex", failOpen: process.env.PDD_CODEX_AUTO_FAIL_OPEN ?? null, codexHome: process.env.CODEX_HOME ?? null, args: process.argv.slice(2) }));',
     '',
   ].join('\n'), { mode: 0o755 });
   const wrapperPdd = join(binDir, 'pdd');
@@ -2636,6 +2645,7 @@ test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, sy
     PATH: `${binDir}:${process.env.PATH ?? '/usr/bin:/bin'}`,
   };
   delete shellEnvBase.CODEX_HOME;
+  const legacyShellEnv = { ...shellEnvBase, PDD_LEGACY_PTY_ROTATE: '1' };
 
   const shellsToTest = [
     { name: 'bash', bin: 'bash', runCmd: cmd => ['--norc', '--noprofile', '-c', `source ${JSON.stringify(bashrc)}; ${cmd}`] },
@@ -2663,12 +2673,25 @@ test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, sy
   );
 
   for (const sh of shellsToTest) {
-    // A) Healthy lease + normal command (including non-auth subcommands passing "logout" as prompt) -> CODEX_HOME points to pddManagedCodexHome!
+    // A0) Default unified mode delegates normal commands to `PDD_CODEX_AUTO_FAIL_OPEN=1 pdd-codex`!
     for (const [cmd, expectedArgs] of [
       ['codex exec "ship it"', ['exec', 'ship it']],
       ['codex exec logout', ['exec', 'logout']],
     ]) {
-      const execRun = await execShellAsync(sh.bin, sh.runCmd(cmd), { env: shellEnvBase });
+      const unifiedRun = await execShellAsync(sh.bin, sh.runCmd(cmd), { env: shellEnvBase });
+      assert.equal(unifiedRun.status, 0, `${sh.name} default ${cmd} failed: ${unifiedRun.stderr}`);
+      const unifiedParsed = JSON.parse(unifiedRun.stdout.trim());
+      assert.equal(unifiedParsed.via, 'pdd-codex', `${sh.name} ${cmd} delegates to pdd-codex by default`);
+      assert.equal(unifiedParsed.failOpen, '1', `${sh.name} ${cmd} sets PDD_CODEX_AUTO_FAIL_OPEN=1`);
+      assert.deepEqual(unifiedParsed.args, expectedArgs);
+    }
+
+    // A) Legacy opt-in (`PDD_LEGACY_PTY_ROTATE=1`): healthy lease + normal command -> CODEX_HOME points to pddManagedCodexHome!
+    for (const [cmd, expectedArgs] of [
+      ['codex exec "ship it"', ['exec', 'ship it']],
+      ['codex exec logout', ['exec', 'logout']],
+    ]) {
+      const execRun = await execShellAsync(sh.bin, sh.runCmd(cmd), { env: legacyShellEnv });
       assert.equal(execRun.status, 0, `${sh.name} ${cmd} failed: ${execRun.stderr}`);
       const execParsed = JSON.parse(execRun.stdout.trim());
       assert.equal(execParsed.codexHome, managedHome, `${sh.name} ${cmd} sets CODEX_HOME to managedHome`);
@@ -2680,6 +2703,7 @@ test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, sy
       const guardUnset = await execShellAsync(sh.bin, sh.runCmd(cmd), { env: shellEnvBase });
       assert.equal(guardUnset.status, 0, `${sh.name} ${cmd} failed: ${guardUnset.stderr}`);
       const parsed = JSON.parse(guardUnset.stdout.trim());
+      assert.equal(parsed.via, 'codex');
       assert.equal(parsed.codexHome, null, `${sh.name} ${cmd} does NOT point CODEX_HOME at managedHome`);
     }
 
@@ -2697,9 +2721,9 @@ test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, sy
     }
   }
 
-  // D) Fail-safe fallback when no valid active lease exists or Cloud is unreachable -> leaves/unsets CODEX_HOME so ~/.codex/auth.json works!
+  // D) Fail-safe fallback when no valid active lease exists or Cloud is unreachable (legacy mode) -> leaves/unsets CODEX_HOME so ~/.codex/auth.json works!
   const deadEnv = {
-    ...shellEnvBase,
+    ...legacyShellEnv,
     PDD_ACCOUNTS_URL: 'http://127.0.0.1:1',
     PDD_STATE_DIR: join(sb.root, 'offline-empty-state'),
   };
@@ -4001,4 +4025,141 @@ test('#3426 borrower revocation: gateway_grant_revoked and borrowed generic 401 
   assert.equal(quotaRes.code, 0);
   assert.equal(quotaRes.stdout, 'QUOTA_OK');
   assert.equal(usageReports.length, 1, 'quota exhaustion must still report usage when stdout mentions gateway_grant_revoked');
+});
+
+test('SEC-1, SEC-3, SEC-4, SEC-8 & REL-2: shared subshell excludes, no empty-subshell or /tmp root, unconditional codex env scrub, conditional grant env, and Claude symlink guard', t => {
+  const sb = makeTempSandbox(t, 'https://api.promptdriven.ai');
+  mkdirSync(join(sb.home, '.codex'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(sb.home, '.codex', 'config.toml'), [
+    '[shell_environment_policy]',
+    'filters = { pdd_token = "include", codex_home = "include", USER_VAR = "exclude" }',
+    'set = { codex_home = "/evil/home", KEEP_ME = "1" }',
+    '',
+  ].join('\n'), { mode: 0o600 });
+
+  // 1. SEC-1 & REL-2: createCodexStepOverlay defaults under resolvePddStateBase(env)/codex-runtime (never /tmp),
+  //    enforces all REQUIRED_CODEX_SUBSHELL_EXCLUDES in filters, and does NOT create empty-subshell or set.CODEX_HOME.
+  const embeddedLease = {
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_sec1',
+    codex_backend_api_url: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
+    codex_gateway_token: 'pddg_lse_sec1_secret_token',
+  };
+  const envNoTmpRoot = { ...sb.env };
+  delete envNoTmpRoot.PDD_CODEX_RUNTIME_ROOT;
+  const ov = createCodexStepOverlay(embeddedLease, { env: envNoTmpRoot });
+  try {
+    const expectedRoot = join(resolvePddStateBase(envNoTmpRoot), 'codex-runtime');
+    assert.ok(ov.overlayDir.startsWith(`${expectedRoot}/`), `overlay must live under ${expectedRoot}, got ${ov.overlayDir}`);
+    assert.equal(existsSync(join(ov.overlayDir, 'empty-subshell')), false, 'must not create empty-subshell directory');
+    const cfg = parseToml(readFileSync(ov.configPath, 'utf8'));
+    assert.equal(cfg.shell_environment_policy?.set?.CODEX_HOME, undefined);
+    assert.equal(cfg.shell_environment_policy?.set?.codex_home, undefined);
+    assert.equal(cfg.shell_environment_policy?.set?.KEEP_ME, '1');
+    for (const key of REQUIRED_CODEX_SUBSHELL_EXCLUDES) {
+      assert.equal(cfg.shell_environment_policy?.filters?.[key], 'exclude', `missing required exclude ${key}`);
+    }
+    assert.equal(cfg.shell_environment_policy?.filters?.pdd_token, undefined);
+    assert.equal(cfg.shell_environment_policy?.filters?.codex_home, undefined);
+    assert.equal(cfg.shell_environment_policy?.filters?.USER_VAR, 'exclude');
+  } finally {
+    ov.cleanup();
+  }
+
+  // 2. SEC-3 & SEC-4: prepareCloudStepExecution unconditionally scrubs ambient Codex auth/base vars even on direct_stripped,
+  //    omits PDD_CODEX_GATEWAY_GRANT for pddg_lse_* grants, and injects it only for legacy non-pddg_lse_* grants.
+  const pollutedEnv = {
+    ...envNoTmpRoot,
+    OPENAI_API_KEY: 'sk-ambient-leak',
+    CODEX_API_KEY: 'ck-ambient-leak',
+    CODEX_ACCESS_TOKEN: 'at-ambient-leak',
+    CODEX_CONNECTORS_TOKEN: 'ct-ambient-leak',
+    OPENAI_BASE_URL: 'https://evil-proxy.example.com/v1',
+    PDD_CODEX_GATEWAY_GRANT: 'pddg_stale_ambient',
+  };
+
+  const embeddedStep = prepareCloudStepExecution(
+    { account: { provider: 'codex', plan_type: 'pro' }, lease: embeddedLease },
+    pollutedEnv,
+  );
+  try {
+    assert.equal(embeddedStep.env.OPENAI_API_KEY, undefined);
+    assert.equal(embeddedStep.env.CODEX_API_KEY, undefined);
+    assert.equal(embeddedStep.env.CODEX_ACCESS_TOKEN, undefined);
+    assert.equal(embeddedStep.env.CODEX_CONNECTORS_TOKEN, undefined);
+    assert.equal(embeddedStep.env.OPENAI_BASE_URL, undefined);
+    assert.equal(embeddedStep.env.PDD_CODEX_GATEWAY_GRANT, undefined, 'pddg_lse_* grant must not be exported into child env');
+  } finally {
+    embeddedStep.cleanup?.();
+  }
+
+  const legacyStep = prepareCloudStepExecution(
+    {
+      account: { provider: 'codex' },
+      lease: {
+        delivery_mode: 'gateway_grant',
+        codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_legacy',
+        codex_gateway_token: 'pddg_legacyNonEmbeddedToken123',
+      },
+    },
+    pollutedEnv,
+  );
+  try {
+    assert.equal(legacyStep.env.OPENAI_API_KEY, undefined);
+    assert.equal(legacyStep.env.CODEX_CONNECTORS_TOKEN, undefined);
+    assert.equal(legacyStep.env.PDD_CODEX_GATEWAY_GRANT, 'pddg_legacyNonEmbeddedToken123', 'legacy non-pddg_lse_* grant keeps env header');
+  } finally {
+    legacyStep.cleanup?.();
+  }
+
+  const directStep = prepareCloudStepExecution(
+    {
+      account: { provider: 'codex' },
+      lease: {
+        delivery_mode: 'direct_stripped',
+        codex_auth_json: {
+          auth_mode: 'chatgpt',
+          tokens: { access_token: 'tok-direct', id_token: makeJwt({ email: 'a@b.c' }), account_id: 'acct_1', refresh_token: 'must-strip' },
+        },
+      },
+    },
+    pollutedEnv,
+  );
+  try {
+    assert.equal(directStep.env.OPENAI_API_KEY, undefined, 'SEC-3: direct_stripped must still scrub ambient OPENAI_API_KEY');
+    assert.equal(directStep.env.CODEX_API_KEY, undefined, 'SEC-3: direct_stripped must still scrub ambient CODEX_API_KEY');
+    assert.equal(directStep.env.CODEX_ACCESS_TOKEN, undefined, 'SEC-3: direct_stripped must still scrub ambient CODEX_ACCESS_TOKEN');
+    assert.equal(directStep.env.CODEX_CONNECTORS_TOKEN, undefined, 'SEC-3: direct_stripped must still scrub ambient CODEX_CONNECTORS_TOKEN');
+    assert.equal(directStep.env.OPENAI_BASE_URL, undefined, 'SEC-3: direct_stripped must still scrub ambient OPENAI_BASE_URL');
+    assert.equal(directStep.env.PDD_CODEX_GATEWAY_GRANT, undefined);
+  } finally {
+    directStep.cleanup?.();
+  }
+
+  // 3. SEC-8: restoreLocalClaudeGatewayConfig refuses a ~/.claude/settings.json symlink pointing inside pddManagedClaudeHome(env),
+  //    while allowing a valid dotfile symlink pointing to an external regular file.
+  const managedClaudeDir = pddManagedClaudeHome(sb.env);
+  mkdirSync(managedClaudeDir, { recursive: true, mode: 0o700 });
+  const trapInsideManaged = join(managedClaudeDir, 'trap-settings.json');
+  writeFileSync(trapInsideManaged, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'pddg_should_not_touch' } }), { mode: 0o600 });
+  mkdirSync(join(sb.home, '.claude'), { recursive: true, mode: 0o700 });
+  const claudeSettings = join(sb.home, '.claude', 'settings.json');
+  symlinkSync(trapInsideManaged, claudeSettings);
+
+  assert.throws(
+    () => restoreLocalClaudeGatewayConfig({ env: sb.env, removeManagedFile: false }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+    'SEC-8: symlink targeting pddManagedClaudeHome must be refused',
+  );
+  assert.equal(JSON.parse(readFileSync(trapInsideManaged, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, 'pddg_should_not_touch');
+
+  rmSync(claudeSettings);
+  const externalDotfile = join(sb.root, 'dotfiles-claude-settings.json');
+  writeFileSync(externalDotfile, JSON.stringify({ theme: 'dark', env: { CLAUDE_CODE_OAUTH_TOKEN: 'pddg_legacy_cleanme' } }), { mode: 0o600 });
+  symlinkSync(externalDotfile, claudeSettings);
+
+  const okRestore = restoreLocalClaudeGatewayConfig({ env: sb.env, removeManagedFile: false });
+  assert.equal(okRestore.restoredSettings, true, 'valid external dotfile symlink is cleaned safely');
+  assert.equal(lstatSync(claudeSettings).isSymbolicLink(), true, 'dotfile symlink itself is preserved');
+  assert.deepEqual(JSON.parse(readFileSync(externalDotfile, 'utf8')), { theme: 'dark' });
 });

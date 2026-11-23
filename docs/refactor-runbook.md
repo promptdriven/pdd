@@ -34,7 +34,7 @@ structural cleanup into a bug or feature pull request.**
 When one pull request changes structure and behavior together, test failures become ambiguous and
 reverts discard working fixes along with structural moves. If you find a live bug during a refactor
 pass, preserve the current behavior in the structural pull request, file a separate issue, and fix
-the defect in its own `pdd-bug` pull request.
+the defect in its own `/pdd` `bug` pull request.
 
 Declare one of three structural classes in every cleanup pull request:
 
@@ -47,19 +47,21 @@ Declare one of three structural classes in every cleanup pull request:
 - **Class A (Internal structure):** Deduplicate helpers, simplify control flow, or remove
   non-essential comments inside existing prompt boundaries. Owning `.prompt.md` files and public
   behavior stay unchanged, and `pdd owner` stays green with zero AI calls. For unowned repository
-  files outside PDD (docs, CI, config, lockfiles, or test-only maintenance), `pdd-small-change`
-  applies directly.
+  files outside PDD (docs, CI, config, lockfiles, or test-only maintenance), `/pdd` `small-change`
+  mode applies directly.
 - **Class B (Module and boundary splits):** Split an oversized source file along real domain
   responsibilities, not arbitrary line counts. First, split code only while keeping the source
   file's ownership header on extracted modules and re-exporting compatibility bindings when needed:
   ```js
   // src/orders-pricing.mjs
-  // Generated from prompts/orders.prompt.md (sha256: <same-hash-as-orders.mjs>).
+  // Prompt: prompts/orders.prompt.md
+
   export function calculateOrderTotal(items, taxRate) { /* ... */ }
   ```
   ```js
   // src/orders.mjs
-  // Generated from prompts/orders.prompt.md (sha256: <same-hash-as-orders.mjs>).
+  // Prompt: prompts/orders.prompt.md
+
   export { calculateOrderTotal } from './orders-pricing.mjs';
   ```
   Because prompt contracts do not change in this first pull request, no prompt re-approval is
@@ -115,7 +117,7 @@ GitHub's `pulls/{pr}/files` REST endpoint caps at 3,000 files; for any pull requ
 to list every path.
 
 Exclude every file touched by an open pull request, along with files claimed by active
-`pdd workflow` runs or high-churn shared command catalogs. Leaving active paths untouched prevents
+`pdd autopilot` jobs or high-churn shared command catalogs. Leaving active paths untouched prevents
 rebase pileups across open branches.
 
 ### 2. Pin observable behavior at the edge
@@ -181,9 +183,9 @@ security or error contracts.
 Agents copy the comment density of surrounding files, and stale comments can mislead future edits.
 Keep only four comment kinds in source code:
 
-1. **Generated ownership headers** on line 1 (or line 2 in executable scripts that start with a `#!` shebang on line 1):
-   `// Generated from prompts/<module>.prompt.md (sha256: <hash>)`. `pdd owner` reads the first 4 KiB—never
-   strip this header or place `import` statements above it (commentless files use `pdd-bindings.json`).
+1. **Prompt ownership headers** inside the first 4 KiB (after any shebang `#!`, directive, or SPDX line, followed by a blank line):
+   `// Prompt: prompts/<module>.prompt.md`. `pdd owner` reads the first 4 KiB—never
+   strip this header or place `import` statements above it (commentless files use `pdd-bindings.json`; legacy `Generated from` headers stay readable).
 2. **Shebangs** on line 1 of executable scripts, such as `#!/usr/bin/env node`.
 3. **License notices** required by your project or third-party code.
 4. **Non-obvious external or OS invariants** forced by an operating system, language runtime,
@@ -198,8 +200,7 @@ change history:
 - If the owning `.prompt.md` already records the rule behind a comment, delete the duplicate comment
   in a Class A pull request.
 - If a comment captures a real domain decision that is absent from the owning prompt, add that rule
-  under `## Domain decisions` in a dedicated prompt pull request first, update the ownership header
-  hash, and delete the code comment afterward.
+  under `## Domain decisions` in the owning prompt before updating code, keep the `// Prompt:` header intact, and delete the code comment afterward.
 - Delete changelog narration (`// Added for #128`, `// Phase 2`, `// Temporary workaround`) and
   comments that repeat what the code already says. Run `pdd lint --local` (zero AI calls) to check
   local prompt and source-comment hygiene.

@@ -11,7 +11,7 @@ import { isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs
 import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
 const isRotatablePoolFailure = text => isQuotaExhaustionMessage(text) || isAuthFailureMessage(text);
 import { redactSecrets, rememberSecrets } from './secret-redaction.mjs';
-import { parse as parseToml } from './vendor/smol-toml/parse.js';
+import { parse as parseToml } from './shared/toml/parse.js';
 
 export const EXTERNAL_REPO_LABELS = Object.freeze(['external', 'other-repo', 'elsewhere', 'pdd:elsewhere']);
 const EXTERNAL_LABEL_SET = new Set(EXTERNAL_REPO_LABELS);
@@ -325,6 +325,7 @@ export function readOnlyAgentCommand(
     addDirs = null,
     geminiAdminPolicy = null,
     geminiSandbox = false,
+    schemaArgs = null,
   } = {},
 ) {
   const cleanModel = cleanModelName(model ?? agent?.model);
@@ -337,6 +338,9 @@ export function readOnlyAgentCommand(
   const cleanPolicy = typeof geminiAdminPolicy === 'string' && geminiAdminPolicy.trim() && !SAFE_CONTROL_RE.test(geminiAdminPolicy)
     ? geminiAdminPolicy.trim()
     : null;
+  const cleanSchemaArgs = Array.isArray(schemaArgs)
+    ? schemaArgs.filter(a => typeof a === 'string' && a.length > 0 && !SAFE_CONTROL_RE.test(a))
+    : [];
   if (agent?.kind === 'codex') {
     const providerArgs = codexProviderConfigArgs({ env, agent, fs });
     return {
@@ -353,6 +357,7 @@ export function readOnlyAgentCommand(
         ...providerArgs,
         ...(typeof resultFile === 'string' && resultFile ? ['--output-last-message', resultFile] : []),
         ...(cleanModel ? ['--model', cleanModel] : []),
+        ...cleanSchemaArgs,
         '-',
       ],
     };
@@ -368,6 +373,7 @@ export function readOnlyAgentCommand(
         ...(stream ? ['--verbose'] : []),
         ...(effort ? ['--effort', effort] : []),
         ...(cleanModel ? ['--model', cleanModel] : []),
+        ...cleanSchemaArgs,
       ],
     };
   }
@@ -393,6 +399,7 @@ export function readOnlyAgentCommand(
         '--sandbox', '--disable-slash-commands',
         ...(effort ? ['--effort', effort] : []),
         ...(cleanModel ? ['--model', cleanModel] : []),
+        ...cleanSchemaArgs,
       ],
     };
   }

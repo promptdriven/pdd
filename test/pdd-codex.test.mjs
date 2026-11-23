@@ -20,22 +20,34 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
+  acquirePinnedRuntimeSession,
+  acquireSharedRuntimeSession,
   parsePddCodexArgs,
+  releaseSharedRuntimeSession,
   runPddCodexCli,
   sharedRuntimeDirPath,
 } from '../src/pdd-codex.mjs';
 import {
+  registerProcessCleanupHooks,
+  startLeaseHeartbeat,
+} from '../src/accounts/runtime-session.mjs';
+import {
   buildCodexGatewayCliArgs,
   buildCodexHomeMirrorCliArgs,
+  CloudAccountsError,
   createCodexStepOverlay,
   localCodexHome,
   materializeLocalCodexAuth,
   normalizeCodexConfigWriteback,
+  REQUIRED_CODEX_SUBSHELL_EXCLUDES,
+  resolveCodexGatewayEndpoints,
   resolveEffectiveSqliteHome,
   stopCodexAppServerDaemon,
+  writeCloudAccountsState,
 } from '../src/login-pool.mjs';
-import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
+import { parse as parseToml } from '../src/shared/toml/parse.js';
 
 function makeSandbox(t) {
   const root = mkdtempSync(join(tmpdir(), 'pdd-codex-test-'));
@@ -438,7 +450,11 @@ test('materializeLocalCodexAuth and createCodexStepOverlay enable native /backen
     assert.equal(stepCfg.features?.shell_snapshot, false);
     assert.equal(stepCfg.features?.responses_websockets, undefined);
     assert.equal(stepCfg.model_providers?.pdd_codex_gateway?.supports_websockets, undefined);
-    assert.equal(stepCfg.shell_environment_policy?.set?.CODEX_HOME, join(overlay.overlayDir, 'empty-subshell'));
+    assert.equal(stepCfg.shell_environment_policy?.set?.CODEX_HOME, undefined);
+    assert.equal(existsSync(join(overlay.overlayDir, 'empty-subshell')), false);
+    for (const key of REQUIRED_CODEX_SUBSHELL_EXCLUDES) {
+      assert.equal(stepCfg.shell_environment_policy?.filters?.[key], 'exclude', `overlay must exclude ${key}`);
+    }
   } finally {
     overlay.cleanup();
   }
@@ -1085,6 +1101,351 @@ test('re-review P1 & P2 regressions: symlink-safe writeback, logout --help safet
   });
   assert.equal(profGw.includes('model_provider="openai"'), true, 'active profile custom model_provider must be overridden to openai');
 });
+
+test('SEC-2, REL-3, REL-4 & currentAccountId: dash --account= guard, ENOENT->127, bin entry hygiene, post-mkdir symlink check, heartbeat stopped race, exit cleanup, and seat persistence', async t => {
+  const sb = makeSandbox(t);
+
+  // 1. REL-4a: Reject dash-prefixed --account=-foo on `=` syntax just like space syntax.
+  assert.throws(() => parsePddCodexArgs(['--account=-foo', 'exec', 'hi']), err => err.exitCode === 2);
+  assert.throws(() => parsePddCodexArgs(['--account=--flag']), err => err.exitCode === 2);
+  assert.throws(() => parsePddCodexArgs(['--account=']), err => err.exitCode === 2);
+
+  // 2. REL-3: bin/pdd-codex.mjs and bin/pdd-claude.mjs use .then(...) + process.exitCode (no top-level await or hard process.exit).
+  for (const binFile of ['bin/pdd-codex.mjs', 'bin/pdd-claude.mjs']) {
+    const src = readFileSync(join(process.cwd(), binFile), 'utf8');
+    assert.doesNotMatch(src, /^\s*await\s+/m, `${binFile} must not use top-level await`);
+    assert.doesNotMatch(src, /\bprocess\.exit\s*\(/, `${binFile} must use process.exitCode instead of process.exit()`);
+  }
+  const helpRun = spawnSync(process.execPath, [join(process.cwd(), 'bin', 'pdd-codex.mjs'), '--pdd-help'], {
+    env: sb.env,
+    encoding: 'utf8',
+  });
+  assert.equal(helpRun.status, 0, helpRun.stderr);
+  assert.match(helpRun.stdout, /pdd-codex/);
+
+  // 3. REL-4c: ENOENT when spawning codex returns exit code 127.
+  let errOut = '';
+  const enoentRes = await runPddCodexCli(
+    ['--version'],
+    { env: { ...sb.env, PDD_CODEX_BIN: join(sb.root, 'definitely-missing-codex-bin') }, stdout: { write() {} }, stderr: { write: s => { errOut += s; } } },
+  );
+  assert.equal(enoentRes.exitCode, 127);
+  assert.match(errOut, /Failed to start .*ENOENT/i);
+
+  // 4. SEC-2: Reject symlinked runtime root AND post-mkdirSync symlink swap race.
+  const symRoot = join(sb.root, 'symlink-runtime-root');
+  symlinkSync(sb.tmpRoot, symRoot);
+  await assert.rejects(
+    () => acquireSharedRuntimeSession(
+      { cwd: sb.root, env: { ...sb.env, PDD_CODEX_RUNTIME_ROOT: symRoot } },
+      { uid: 790, leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_sym' }) },
+    ),
+    /Refusing unsafe PDD Codex runtime/,
+  );
+
+  const raceTarget = join(sb.root, 'race-real-target');
+  mkdirSync(raceTarget, { recursive: true, mode: 0o700 });
+  const raceDir = sharedRuntimeDirPath({ env: sb.env, tmpRoot: sb.tmpRoot, uid: 791 });
+  const nativeFs = await import('node:fs');
+  const raceFs = {
+    ...nativeFs,
+    mkdirSync(p, opts) {
+      if (resolve(p) === resolve(raceDir)) {
+        nativeFs.symlinkSync(raceTarget, p);
+        return undefined;
+      }
+      return nativeFs.mkdirSync(p, opts);
+    },
+  };
+  await assert.rejects(
+    () => acquireSharedRuntimeSession(
+      { cwd: sb.root, env: sb.env },
+      { fs: raceFs, uid: 791, leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_race' }) },
+    ),
+    /Refusing unsafe PDD Codex runtime/,
+  );
+  rmSync(raceDir, { force: true });
+
+  // 5. REL-4d: startLeaseHeartbeat guards `if (stopped) return;` inside the lock on 401/403/404.
+  const hbDir = join(sb.root, 'hb-stop-race');
+  mkdirSync(hbDir, { recursive: true, mode: 0o700 });
+  const hbLeasePath = join(hbDir, 'lease.json');
+  writeFileSync(hbLeasePath, JSON.stringify({ lease_id: 'lse_hb_1', expires_at: new Date(Date.now() + 3600_000).toISOString() }), { mode: 0o600 });
+  let rejectBeat = null;
+  let clearedCount = 0;
+  const stopHb = startLeaseHeartbeat({
+    initialLeaseId: 'lse_hb_1',
+    leasePath: hbLeasePath,
+    runtimeDir: hbDir,
+    shared: true,
+    intervalMs: 10,
+    heartbeatFn: () => new Promise((_res, rej) => { rejectBeat = rej; }),
+    onInvalidated: () => { clearedCount += 1; },
+  });
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(typeof rejectBeat, 'function', 'heartbeat request started');
+  stopHb();
+  rejectBeat(new CloudAccountsError('gone', { status: 404 }));
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(clearedCount, 0, '404 arriving after stop() must not run onInvalidated cleanup');
+  assert.equal(existsSync(hbLeasePath), true);
+
+  // 6. REL-4b: registerProcessCleanupHooks cleans up synchronously on process exit event.
+  const pinFile = join(sb.root, 'exit-pin-file');
+  writeFileSync(pinFile, '1', { mode: 0o600 });
+  const fakeProc = new (await import('node:events')).EventEmitter();
+  const unregister = registerProcessCleanupHooks({
+    onEmergencyExit: () => { rmSync(pinFile, { force: true }); },
+    onSignal: () => {},
+    proc: fakeProc,
+  });
+  fakeProc.emit('exit', 0);
+  assert.equal(existsSync(pinFile), false, 'emergency exit hook removed tracked runtime artifact');
+  unregister();
+
+  // 7. currentAccountId propagation: shared session forwards active ready Codex seat from accounts-state.json
+  //    and refreshes an unreferenced stale seat after `use`/`next`, while pinned mode sends currentAccountId: null.
+  const seatEnv = { ...sb.env, PDD_STATE_DIR: join(sb.root, 'state-seat') };
+  writeCloudAccountsState({
+    enrolled: true,
+    providers: ['codex'],
+    active: { codex: { account_id: 'acc_seat_A', label: 'seat-a', provider: 'codex', state: 'ready' } },
+  }, { env: seatEnv });
+
+  const seenCurrentIds = [];
+  const sessA = await acquireSharedRuntimeSession(
+    { cwd: sb.root, env: seatEnv },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 792,
+      pid: 44101,
+      isPidAlive: p => p === 44101,
+      leaseCloudAccount: async req => {
+        seenCurrentIds.push(req.currentAccountId);
+        return {
+          ...makeLeaseReply({ leaseId: `lse_${req.currentAccountId ?? 'none'}` }),
+          account: { account_id: req.currentAccountId ?? 'acc_default', label: 'seat-a', provider: 'codex', plan_type: 'pro' },
+        };
+      },
+    },
+  );
+  assert.equal(seenCurrentIds[0], 'acc_seat_A', 'shared lease must propagate active ready seat from accounts-state.json');
+
+  // Simulate user switching seat via `pdd accounts use seat-b` while previous session crashed (dead PID 44101).
+  writeCloudAccountsState({
+    enrolled: true,
+    providers: ['codex'],
+    active: { codex: { account_id: 'acc_seat_B', label: 'seat-b', provider: 'codex', state: 'ready' } },
+  }, { env: seatEnv });
+
+  const sessB = await acquireSharedRuntimeSession(
+    { cwd: sb.root, env: seatEnv },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 792,
+      pid: 44102,
+      isPidAlive: p => p === 44102,
+      leaseCloudAccount: async req => {
+        seenCurrentIds.push(req.currentAccountId);
+        return {
+          ...makeLeaseReply({ leaseId: `lse_${req.currentAccountId ?? 'none'}` }),
+          account: { account_id: req.currentAccountId ?? 'acc_default', label: 'seat-b', provider: 'codex', plan_type: 'pro' },
+        };
+      },
+    },
+  );
+  assert.equal(seenCurrentIds[1], 'acc_seat_B', 'unreferenced stale lease from another seat must re-lease the newly selected active seat');
+  assert.equal(sessB.reused, false);
+  await releaseSharedRuntimeSession(sessB.runtimeDir, { cwd: sb.root, env: seatEnv }, {
+    pid: 44102,
+    isPidAlive: () => false,
+    releaseCloudLease: async () => ({ revoked: true }),
+    spawnSync: () => ({ status: 0 }),
+  });
+  assert.ok(sessA.runtimeDir === sessB.runtimeDir);
+
+  let pinnedCurrentId = 'unset';
+  const pinnedSess = await acquirePinnedRuntimeSession('seat-a', { cwd: sb.root, env: seatEnv }, {
+    tmpRoot: sb.tmpRoot,
+    uid: 792,
+    leaseCloudAccount: async req => {
+      pinnedCurrentId = req.currentAccountId;
+      return makeLeaseReply({ leaseId: 'lse_pin_seat', autoRotate: false });
+    },
+  });
+  assert.equal(pinnedCurrentId, null, 'pinned session must pass currentAccountId: null');
+  rmSync(pinnedSess.runtimeDir, { recursive: true, force: true });
+});
+
+test('PDD_CODEX_AUTO_FAIL_OPEN=1 matches pdd-claude fail-open contract, strips PDD_* in child env, and consolidates #3531 gateway endpoints', async t => {
+  const sb = makeSandbox(t);
+  const stateDir = join(sb.root, 'state');
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const autoEnv = {
+    ...sb.env,
+    PDD_STATE_DIR: stateDir,
+    PDD_CODEX_AUTO_FAIL_OPEN: '1',
+    PDD_TOKEN: 'pdd_secret_token_should_strip',
+    PDD_CUSTOM_VAR: 'custom_secret_should_strip',
+  };
+
+  const calls = [];
+  const captureSpawn = async (bin, args, opts) => {
+    calls.push({ bin, args, env: opts.env });
+    return { exitCode: 0 };
+  };
+  const quietStreams = { stdout: { write() {} }, stderr: { write() {} } };
+
+  // 1. Unenrolled/inactive pool -> passes straight to stock codex with ALL PDD_* vars stripped.
+  const rUnenrolled = await runPddCodexCli(['exec', 'hello'], { cwd: sb.root, env: autoEnv, ...quietStreams }, {
+    spawnCodex: captureSpawn,
+  });
+  assert.equal(rUnenrolled.exitCode, 0);
+  assert.deepEqual(calls.at(-1).args, ['exec', 'hello']);
+  assert.deepEqual(Object.keys(calls.at(-1).env).filter(k => k.startsWith('PDD_')), [], 'unenrolled fail-open must strip ALL PDD_* vars');
+
+  // 1b. Pass-through commands (--version) also strip ALL PDD_* vars even when autoFailOpen is false!
+  const rVersion = await runPddCodexCli(['--version'], { cwd: sb.root, env: { ...autoEnv, PDD_CODEX_AUTO_FAIL_OPEN: '0' }, ...quietStreams }, {
+    spawnCodex: captureSpawn,
+  });
+  assert.equal(rVersion.exitCode, 0);
+  assert.deepEqual(Object.keys(calls.at(-1).env).filter(k => k.startsWith('PDD_')), [], 'pass-through must strip ALL PDD_* vars');
+
+  // 2. logout / login (without status) under auto-wrapper -> passes straight to stock codex with ALL PDD_* stripped.
+  const rLogout = await runPddCodexCli(['logout'], { cwd: sb.root, env: autoEnv, ...quietStreams }, {
+    spawnCodex: captureSpawn,
+  });
+  assert.equal(rLogout.exitCode, 0);
+  assert.deepEqual(calls.at(-1).args, ['logout']);
+  assert.deepEqual(Object.keys(calls.at(-1).env).filter(k => k.startsWith('PDD_')), []);
+
+  const rLogin = await runPddCodexCli(['login', '--device-auth'], { cwd: sb.root, env: autoEnv, ...quietStreams }, {
+    spawnCodex: captureSpawn,
+  });
+  assert.equal(rLogin.exitCode, 0);
+  assert.deepEqual(calls.at(-1).args, ['login', '--device-auth']);
+  assert.deepEqual(Object.keys(calls.at(-1).env).filter(k => k.startsWith('PDD_')), []);
+
+  // 3. Transient / 401 / 503 / all_cooling / network fetch errors under auto-wrapper -> fail open cleanly,
+  //    strip ALL PDD_* vars, AND never touch/create ~/.codex baseline on a fresh HOME!
+  const freshFailOpenHome = join(sb.root, 'fresh-fo-home');
+  mkdirSync(freshFailOpenHome, { recursive: true, mode: 0o700 });
+  const freshAutoEnv = { ...autoEnv, HOME: freshFailOpenHome };
+  const fetchErr = new TypeError('fetch failed');
+  fetchErr.cause = { code: 'ECONNREFUSED' };
+  for (const err of [
+    new CloudAccountsError('network down', { code: 'network_error', status: 0 }),
+    new CloudAccountsError('expired gh auth', { code: 'unauthorized', status: 401 }),
+    new CloudAccountsError('gateway 503', { code: 'service_unavailable', status: 503 }),
+    new CloudAccountsError('all cooling', { code: 'all_cooling', status: 429 }),
+    fetchErr,
+  ]) {
+    const rErr = await runPddCodexCli(['exec', 'fallback'], { cwd: sb.root, env: freshAutoEnv, ...quietStreams }, {
+      tmpRoot: sb.tmpRoot,
+      uid: 793,
+      spawnCodex: captureSpawn,
+      leaseCloudAccount: async () => { throw err; },
+    });
+    assert.equal(rErr.exitCode, 0);
+    assert.deepEqual(calls.at(-1).args, ['exec', 'fallback']);
+    assert.deepEqual(Object.keys(calls.at(-1).env).filter(k => k.startsWith('PDD_')), [], 'fail-open spawn must strip ALL PDD_* vars');
+  }
+  assert.equal(existsSync(join(freshFailOpenHome, '.codex')), false, 'fail-open lease failure must never create or mutate ~/.codex baseline');
+
+  // 4. Explicit --account <label> disables auto fail-open; real production security/config codes,
+  //    reauth_required Cloud replies, AND plain uncoded Error ALWAYS fail closed!
+  let errOut = '';
+  const rPinnedErr = await runPddCodexCli(
+    ['--account', 'work', 'exec', 'strict'],
+    { cwd: sb.root, env: autoEnv, stdout: { write() {} }, stderr: { write: s => { errOut += s; } } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 793,
+      spawnCodex: captureSpawn,
+      leaseCloudAccount: async () => { throw new CloudAccountsError('offline', { code: 'network_error', status: 0 }); },
+    },
+  );
+  assert.equal(rPinnedErr.exitCode, 1);
+  assert.match(errOut, /offline/);
+
+  const callsBeforeClosed = calls.length;
+  for (const closedErr of [
+    new CloudAccountsError('unsafe runtime dir', { code: 'unsafe_runtime_dir' }),
+    new CloudAccountsError('symlink refused', { code: 'symlink_refused' }),
+    new CloudAccountsError('invalid settings', { code: 'invalid_settings' }),
+    new CloudAccountsError('invalid lease', { code: 'invalid_lease' }),
+    new CloudAccountsError('reauth required', { code: 'reauth_required' }),
+    new Error('uncoded state-dir error'),
+  ]) {
+    const rClosed = await runPddCodexCli(['exec', 'must-fail-closed'], { cwd: sb.root, env: autoEnv, ...quietStreams }, {
+      tmpRoot: sb.tmpRoot,
+      uid: 793,
+      spawnCodex: captureSpawn,
+      leaseCloudAccount: async () => { throw closedErr; },
+    });
+    assert.equal(rClosed.exitCode, 1, `fail-closed error (${closedErr.code || closedErr.message}) must NEVER fail open`);
+  }
+
+  // Cloud lease reply reporting state: 'reauth_required' (or reauth_required account) fails closed and is NOT collapsed into no_account_available!
+  let reauthErrText = '';
+  const rReauthReply = await runPddCodexCli(
+    ['exec', 'reauth-reply'],
+    { cwd: sb.root, env: autoEnv, stdout: { write() {} }, stderr: { write: s => { reauthErrText += s; } } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 793,
+      spawnCodex: captureSpawn,
+      leaseCloudAccount: async () => ({ state: 'reauth_required', account: { label: 'work-codex', state: 'reauth_required' } }),
+    },
+  );
+  assert.equal(rReauthReply.exitCode, 1);
+  assert.match(reauthErrText, /requires re-authentication/i);
+  assert.equal(calls.length, callsBeforeClosed, 'fail-closed cases must never spawn stock codex');
+
+  // 5. Normal leased child env strips ALL PDD_* variables!
+  const rLeased = await runPddCodexCli(['exec', 'clean-env'], { cwd: sb.root, env: autoEnv, ...quietStreams }, {
+    tmpRoot: sb.tmpRoot,
+    uid: 793,
+    pid: 45101,
+    isPidAlive: p => p === 45101,
+    heartbeatIntervalMs: 0,
+    spawnSync: () => ({ status: 0 }),
+    spawnCodex: captureSpawn,
+    leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_clean_env' }),
+    releaseCloudLease: async () => ({ revoked: true }),
+  });
+  assert.equal(rLeased.exitCode, 0);
+  const childEnvKeys = Object.keys(calls.at(-1).env);
+  assert.deepEqual(childEnvKeys.filter(k => k.startsWith('PDD_')), [], 'child env must contain zero PDD_* vars');
+
+  // 6. Consolidated #3531 endpoint builder handles native /backend-api and legacy fallback identically.
+  const nativeEp = resolveCodexGatewayEndpoints({
+    codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_abc',
+    codex_backend_api_url: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api/',
+    codex_gateway_token: 'pddg_lse_abc_secret',
+  });
+  assert.equal(nativeEp.nativeBackendApi, true);
+  assert.equal(nativeEp.backendApiUrl, 'https://api.promptdriven.ai/v1/codex-gateway/backend-api');
+  assert.equal(nativeEp.codexApiUrl, 'https://api.promptdriven.ai/v1/codex-gateway/backend-api/codex');
+  assert.equal(nativeEp.embeddedLeaseGrant, true);
+
+  const legacyEp = resolveCodexGatewayEndpoints({
+    codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_abc/',
+    codex_gateway_token: 'pddg_lse_abc_secret',
+  });
+  assert.equal(legacyEp.nativeBackendApi, false);
+  assert.equal(legacyEp.backendApiUrl, 'https://api.promptdriven.ai/v1/codex-gateway');
+  assert.equal(legacyEp.codexApiUrl, 'https://api.promptdriven.ai/v1/codex-gateway');
+
+  // 7. Direct import of src/accounts/toml-codec.mjs without parser registration throws loudly (never swallows as null).
+  const unreg = spawnSync(process.execPath, [
+    '--input-type=module',
+    '-e',
+    "import { parseCodexTomlQuiet } from './src/accounts/toml-codec.mjs'; try { parseCodexTomlQuiet('model = \"x\"'); process.exit(1); } catch (e) { process.exit(e?.code === 'toml_parser_unregistered' ? 0 : 2); }",
+  ], { cwd: process.cwd(), encoding: 'utf8' });
+  assert.equal(unreg.status, 0, `expected toml_parser_unregistered throw, got status=${unreg.status} stderr=${unreg.stderr}`);
+});
+
 
 
 

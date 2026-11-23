@@ -2,7 +2,7 @@
 
 Plain Markdown prompts let the PDD interpreter synthesize and cache their Runtime interfaces on demand. When an explicit Runtime interface block is present, PDD keeps the authored file and uploads its executable declaration to Runtime. For example, an authored `kind: partial` interface can declare one operation from a larger module. The uploaded interface contains those same operations and schemas. PDD removes only the top-level `kind` metadata. It keeps the authored file, approval state and prose hash. This does not assert that the whole module was checked.
 
-`pdd lint STORY` checks admission without an AI call. A successful lint is not an
+`pdd lint --remote STORY` checks hosted interpreter admission without an AI call (plain `pdd lint` runs fast offline checks only). A successful lint is not an
 executed behavior check. Use `pdd test STORY` for that check and inspect its receipt.
 
 ## Give each entry its own resources
