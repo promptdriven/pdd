@@ -28,10 +28,12 @@ function fixture(t, { stdinTTY = false, stdoutTTY = false } = {}) {
   return { home, cwd, options, output: () => out, errors: () => err };
 }
 
-test('3207/S1: setup --yes and --skills-dir parse cleanly and reject invalid options or extra operands', () => {
+test('3207/S1: setup --yes, --upgrade and --skills-dir parse cleanly and reject invalid options or extra operands', () => {
   assert.deepEqual(parseArgv(['setup', '--yes']).options, { '--yes': true });
+  assert.deepEqual(parseArgv(['setup', '--upgrade']).options, { '--upgrade': true });
+  assert.deepEqual(parseArgv(['setup', '--yes', '--upgrade']).options, { '--yes': true, '--upgrade': true });
   assert.deepEqual(parseArgv(['setup', '--skills-dir', '/tmp/s']).options, { '--skills-dir': '/tmp/s' });
-  for (const args of [['setup', '--yes', '--yes'], ['setup', '--yes=true'], ['setup', '--skills-dir'], ['setup', 'extra']]) {
+  for (const args of [['setup', '--yes', '--yes'], ['setup', '--yes=true'], ['setup', '--upgrade', '--upgrade'], ['setup', '--upgrade=true'], ['setup', '--skills-dir'], ['setup', 'extra']]) {
     assert.throws(() => parseArgv(args));
   }
 });
@@ -78,4 +80,26 @@ test('3207/S1: malformed MCP config fails setup with exit 1 while keeping error 
   writeFileSync(join(f.home, '.codex/config.toml'), '[broken');
   assert.equal(await runPdd(['setup', '--yes'], f.options), 1);
   assert.match(f.errors(), /malformed TOML/);
+});
+
+test('#3645 setup --upgrade skips gh hint and Done banner, prints removed retired skills for non-plugin agents, and skips unregistered MCP', async t => {
+  const f = fixture(t);
+  const code = await runPdd(['setup', '--upgrade'], {
+    ...f.options,
+    setupSkills: () => [{
+      agent: 'Codex',
+      root: join(f.home, '.agents/skills'),
+      found: null,
+      stale: null,
+      staleSkills: [],
+      installed: [join(f.home, '.agents/skills/pdd')],
+      updated: [],
+      removed: [join(f.home, '.agents/skills/pdd-bug'), join(f.home, '.agents/skills/pdd-feature')],
+    }],
+  });
+  assert.equal(code, 0, f.errors());
+  assert.doesNotMatch(f.output(), /GitHub CLI|Done!|No config change/);
+  assert.match(f.output(), /Removed retired PDD skills from .*\.agents\/skills: pdd-bug, pdd-feature/);
+  assert.match(f.output(), /Installed 1 PDD skill to .*\.agents\/skills: pdd/);
+  assert.equal(existsSync(join(f.home, '.codex/config.toml')), false, 'unregistered Codex MCP must not be created during --upgrade');
 });

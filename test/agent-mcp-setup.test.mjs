@@ -202,3 +202,135 @@ test('registration pins this package with spaces despite an older pdd on PATH an
   assert.equal(errors.includes('OLD-PDD'), false);
   child.stdin.end();
 });
+
+test('#3646 MCP setup treats 0-byte, whitespace-only, and BOM-only JSON config files as {} while preserving file mode and TOCTOU check', async t => {
+  const f = fixture(t);
+  writeFileSync(f.files[3], '', { mode: 0o644 }); // 0-byte Antigravity mcp_config.json
+  writeFileSync(f.files[2], '   \n\t\r\n  ', { mode: 0o640 }); // whitespace-only Gemini settings.json
+  writeFileSync(f.files[1], '\uFEFF  \n', { mode: 0o600 }); // UTF-8 BOM + whitespace Claude .claude.json
+  chmodSync(f.files[3], 0o644);
+  chmodSync(f.files[2], 0o640);
+  chmodSync(f.files[1], 0o600);
+
+  assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, yes: true }), 0, f.errors());
+  assert.equal(f.errors(), '');
+
+  const agy = JSON.parse(readFileSync(f.files[3], 'utf8'));
+  assert.deepEqual(agy, { mcpServers: { pdd: pinned } });
+  const gemini = JSON.parse(readFileSync(f.files[2], 'utf8'));
+  assert.deepEqual(gemini, { mcpServers: { pdd: { ...pinned, trust: true, timeout: 600000 } } });
+  const claude = JSON.parse(readFileSync(f.files[1], 'utf8'));
+  assert.deepEqual(claude, { mcpServers: { pdd: { type: 'stdio', ...pinned } } });
+
+  if (process.platform !== 'win32') {
+    const { statSync } = await import('node:fs');
+    assert.equal(statSync(f.files[3]).mode & 0o777, 0o644, '0-byte file mode preserved');
+    assert.equal(statSync(f.files[2]).mode & 0o777, 0o640, 'whitespace-only file mode preserved');
+    assert.equal(statSync(f.files[1]).mode & 0o777, 0o600, 'BOM-only file mode preserved');
+  }
+
+  // TOCTOU race check still fires when a 0-byte file changes between preview and write.
+  const f2 = fixture(t);
+  writeFileSync(f2.files[3], '');
+  assert.equal(await setupAgentMcp({ env: f2.env }, { ...f2.ports, confirm: () => {
+    writeFileSync(f2.files[3], '{"other":true}\n');
+    return 'y';
+  } }), 1);
+  assert.deepEqual(JSON.parse(readFileSync(f2.files[3], 'utf8')), { other: true });
+  assert.match(f2.errors(), /changed after the preview/);
+
+  // Non-empty malformed JSON and non-object JSON still fail cleanly.
+  const f3 = fixture(t);
+  writeFileSync(f3.files[3], '{not-json');
+  writeFileSync(f3.files[2], '[]');
+  assert.equal(await setupAgentMcp({ env: f3.env }, { ...f3.ports, yes: true }), 1);
+  assert.match(f3.errors(), /malformed JSON/);
+  assert.match(f3.errors(), /must contain an object/);
+
+  // UTF-8 BOM + valid JSON object parses cleanly while preserving existing keys.
+  const f4 = fixture(t);
+  writeFileSync(f4.files[3], '\uFEFF{"theme":"dark"}\n');
+  assert.equal(await setupAgentMcp({ env: f4.env }, { ...f4.ports, yes: true }), 0, f4.errors());
+  const bomParsed = JSON.parse(readFileSync(f4.files[3], 'utf8'));
+  assert.equal(bomParsed.theme, 'dark');
+  assert.deepEqual(bomParsed.mcpServers.pdd, pinned);
+});
+
+test('#3645 setupAgentMcp upgradeOnly silently refreshes only already-registered stale PDD entries and never touches unregistered agents', async t => {
+  const f = fixture(t);
+  const bin = join(f.home, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'gemini'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const env = { ...f.env, PATH: bin };
+
+  // Codex & Claude have stale registered PDD entries (with custom env keys);
+  // Antigravity has a 0-byte config (unregistered); Gemini has binary on PATH + no config file (unregistered).
+  writeFileSync(f.files[0], '[mcp_servers.pdd]\ncommand = "/old/node"\nargs = ["/old/pdd/bin/pdd.mjs", "mcp"]\nenv = { KEEP = "codex" }\n');
+  writeFileSync(f.files[1], JSON.stringify({ theme: 'dark', mcpServers: { pdd: { type: 'stdio', command: '/old/node', args: ['/old/pdd/bin/pdd.mjs', 'mcp'], env: { KEEP: 'claude' } } } }) + '\n');
+  writeFileSync(f.files[3], '');
+
+  assert.equal(await setupAgentMcp({ env }, {
+    ...f.ports,
+    upgradeOnly: true,
+    confirm: () => { throw new Error('upgradeOnly must never prompt'); },
+  }), 0, f.errors());
+  assert.equal(f.errors(), '');
+
+  // Stale registered entries updated silently preserving custom keys.
+  const codex = parse(readFileSync(f.files[0], 'utf8'));
+  assert.deepEqual(codex.mcp_servers.pdd.args, pinned.args);
+  assert.equal(codex.mcp_servers.pdd.env?.KEEP, 'codex');
+  const claude = JSON.parse(readFileSync(f.files[1], 'utf8'));
+  assert.deepEqual(claude.mcpServers.pdd.args, pinned.args);
+  assert.deepEqual(claude.mcpServers.pdd.env, { KEEP: 'claude' });
+  assert.equal(claude.theme, 'dark');
+
+  // Unregistered agents untouched (0-byte Antigravity stays 0-byte; Gemini settings.json not created).
+  assert.equal(readFileSync(f.files[3], 'utf8'), '');
+  assert.equal(existsSync(f.files[2]), false);
+  assert.doesNotMatch(f.output(), /Register these|No config change/);
+  assert.match(f.output(), /Updated PDD Simulator MCP tools for Codex/);
+  assert.match(f.output(), /Updated PDD Simulator MCP tools for Claude Code/);
+
+  // Second run when already current emits zero stdout and zero stderr.
+  let out2 = '', err2 = '';
+  assert.equal(await setupAgentMcp({ env }, {
+    stdin: { isTTY: false },
+    stdout: { write: s => { out2 += s; } },
+    stderr: { write: s => { err2 += s; } },
+    upgradeOnly: true,
+  }), 0);
+  assert.equal(out2, '');
+  assert.equal(err2, '');
+
+  // Unregistered malformed/JSONC file (no `pdd` reference), non-object JSON (`[]`, `{"mcpServers":null}`), symlinked unregistered config, and ENOTDIR are skipped silently in upgradeOnly mode.
+  const fBad = fixture(t);
+  writeFileSync(fBad.files[2], '{ /* user jsonc comment */ "theme": "dark", }\n');
+  const extTarget = join(fBad.home, 'dotfiles-claude.json');
+  writeFileSync(extTarget, '{"theme":"light"}\n');
+  symlinkSync(extTarget, fBad.files[1]);
+  rmSync(join(fBad.home, '.gemini/config'), { recursive: true, force: true });
+  writeFileSync(join(fBad.home, '.gemini/config'), 'not-a-dir\n');
+  let out3 = '', err3 = '';
+  assert.equal(await setupAgentMcp({ env: fBad.env }, {
+    stdin: { isTTY: false },
+    stdout: { write: s => { out3 += s; } },
+    stderr: { write: s => { err3 += s; } },
+    upgradeOnly: true,
+  }), 0, err3);
+  assert.equal(out3, '');
+  assert.equal(err3, '');
+
+  const fShape = fixture(t);
+  writeFileSync(fShape.files[1], '[]\n');
+  writeFileSync(fShape.files[3], '{"mcpServers":null}\n');
+  let out4 = '', err4 = '';
+  assert.equal(await setupAgentMcp({ env: fShape.env }, {
+    stdin: { isTTY: false },
+    stdout: { write: s => { out4 += s; } },
+    stderr: { write: s => { err4 += s; } },
+    upgradeOnly: true,
+  }), 0, err4);
+  assert.equal(out4, '');
+  assert.equal(err4, '');
+});

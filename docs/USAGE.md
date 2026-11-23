@@ -85,7 +85,7 @@ Important:
 pdd setup
 ```
 
-`pdd setup` installs the global `/pdd` skill into user folders (marked with `.pdd-skill.json`) and previews PDD Simulator MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to apply previewed MCP registration without prompting, or `--skills-dir PATH` for a custom folder.
+`pdd setup` installs the global `/pdd` skill into user folders (marked with `.pdd-skill.json`), removes retired PDD split skills and their agent-folder/dangling symlinks, and previews PDD Simulator MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to apply previewed MCP registration without prompting, `--skills-dir PATH` for a custom folder, or `--upgrade` to sync skills and silently refresh only already-registered stale PDD MCP entries.
 
 **Alternative (skill-only installer, without MCP registration):**
 
@@ -96,7 +96,7 @@ npx skills add promptdriven/pdd --skill pdd       # for one project only
 
 [Section 4](#4-the-pdd-skills) lists where the skill goes. Next, run `pdd init` inside your repository ([Section 5](#5-set-up-a-repo-and-use-the-skills)).
 
-`pdd upgrade` updates a global npm or Volta `@promptdriven/pdd` installation and its `.pdd-skill.json`-marked user skill, and normal CLI commands refresh existing `.pdd-skill.json`-marked user folders once per version without touching unmarked copies or symlinks.
+`pdd upgrade` updates a global npm or Volta `@promptdriven/pdd` installation and then delegates skill sync, retired-skill cleanup, and stale PDD MCP refresh to the newly installed binary (`pdd setup --upgrade`). Normal CLI commands also refresh existing PDD-managed user folders once per version without touching custom skills or local git-checkout symlinks.
 
 ### 2.3 Start Autopilot on your repository
 
@@ -178,11 +178,11 @@ Where the skill goes:
 |---|---|---|---|
 | `npx skills add promptdriven/pdd` | `.agents/skills/` in your project | `.claude/skills/` in your project | — |
 | `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` | — |
-| `pdd setup` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` (skips copying `/pdd` when the Claude Code plugin is installed, while cleaning marked retired split skills) | `~/.gemini/config/skills/` |
+| `pdd setup` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` (skips copying `/pdd` when the Claude Code plugin is installed, while cleaning retired PDD split skills and symlinks) | `~/.gemini/config/skills/` |
 
-`pdd setup` installs missing skills in user folders and says where. Pass `--skills-dir PATH` to sync a custom folder. It also updates eligible marked copies there. A complete copy installed by `npx skills` needs no extra copy. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies skills into your repo.
+`pdd setup` installs missing skills in user folders and says where. Pass `--skills-dir PATH` to sync a custom folder. It updates eligible PDD-managed user copies (either `.pdd-skill.json`-marked or carrying `pdd-skills:` frontmatter in `SKILL.md`) and cleans retired PDD skills. When a project copy or a symlinked/unmanaged copy is older than this pdd or differs from its skills, `pdd setup` says so and prints the command that updates it: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` warns on stderr when your skills are older or retired PDD skills remain. pdd never copies skills into your repo.
 
-Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces a marked copy when its version is older, when the same version has different files, or when its marker is invalid. It keeps a copy with a newer marker version. It also removes marked copies of retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`, `pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`), including when Claude Code has the PDD plugin installed. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
+Each copy that pdd writes carries a marker file, `.pdd-skill.json`. `pdd setup` upgrades any PDD-managed user copy (`.pdd-skill.json`-marked or `SKILL.md` with `pdd-skills:` frontmatter) when its version is older, when the same version has different files, or when its marker is invalid, and keeps a copy with a newer version. It removes PDD-managed user copies of retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`, `pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`) and unlinks retired symlinks that are dangling or target another PDD-managed agent skill folder, including when Claude Code has the PDD plugin installed. It never touches unrelated custom skills, unmarked folders without `pdd-skills:` frontmatter, or symlinks pointing into a local git checkout.
 
 `npx skills add promptdriven/pdd --skill pdd` installs the skill directly. `npx skills list` shows what you have. The `pdd-skills:` line at the top of `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.50`.
 

@@ -161,7 +161,7 @@ pdd prove --base origin/main
 
 | Command | What it does |
 |---|---|
-| `pdd setup [--yes] [--skills-dir PATH]` | Install laptop-wide `/pdd` skill and preview Simulator MCP setup. |
+| `pdd setup [--yes] [--skills-dir PATH] [--upgrade]` | Install laptop-wide `/pdd` skill and preview Simulator MCP setup (`--upgrade` refreshes skills and registered MCP entries silently). |
 | `pdd init` | Add the 4-line PDD block to `CLAUDE.md` (else `AGENTS.md`) and detect stack/tests. |
 | `pdd status [PATH...] [--changed] [--json]` | Compact offline overview of prompts, Stories, ownership, and `pdd.json` Feature Map. |
 | `pdd lint [STORY...] [--diff [BASE]]` | Offline structural, SVG, scenario, and diff lint (0 AI, 0 network). Pass `--remote` for hosted lint. |
@@ -170,7 +170,7 @@ pdd prove --base origin/main
 | `pdd simulate [STORY\|PROMPT.md]` | Try prompts interactively in the PDD Simulator (short: `pdd sim`; `--cli`, `--serve PORT`, `--stop`). |
 | `pdd approve PROMPT [--said WORDS]` | Review prompt diff and record approval (terminal y/N or `--said -`; strict mode requires terminal). |
 | `pdd update [FILE...] [--branch] [--check]` | Inspect changed code vs owning prompts offline. |
-| `pdd upgrade [--main]` | Update global `@promptdriven/pdd` and refresh marked user skill (`--main` tracks pinned `main`). |
+| `pdd upgrade [--main]` | Update global `@promptdriven/pdd` and run `pdd setup --upgrade` (`--main` tracks pinned `main`). |
 | `pdd product status\|next\|start` | Track multi-part product plans and prepare scoped `/pdd` run handoffs. |
 | `pdd autopilot doctor\|start\|status\|logs` | Preflight, start, inspect, and follow headless Autopilot workers. |
 | `pdd accounts` | Manage enrolled and shared Codex/Claude logins in PDD Cloud and optional shell auto-switch. |
