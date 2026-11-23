@@ -222,7 +222,7 @@ function tokenizeShellCommand(cmd) {
     }
     if (ch === '\'' || ch === '"') { quote = ch; continue; }
     if (ch === '\\' && i + 1 < src.length) { cur += src[i + 1]; i += 1; continue; }
-    if (/[\s;&|()]/.test(ch)) {
+    if (/[\s;&|()<>`]/.test(ch)) {
       if (cur) { tokens.push(cur); cur = ''; }
       continue;
     }
@@ -230,6 +230,20 @@ function tokenizeShellCommand(cmd) {
   }
   if (cur) tokens.push(cur);
   return tokens;
+}
+
+function collectCommandCandidates(cmd, depth = 0, out = []) {
+  for (const token of tokenizeShellCommand(cmd)) {
+    out.push(token);
+    const eqIdx = token.indexOf('=');
+    if (eqIdx > 0 && eqIdx < token.length - 1) {
+      out.push(token.slice(eqIdx + 1));
+    }
+    if (depth < 3 && /[\s"'`=<>|&;()]/.test(token)) {
+      collectCommandCandidates(token, depth + 1, out);
+    }
+  }
+  return out;
 }
 
 function readGitHeadSha(cwd) {
@@ -269,18 +283,7 @@ function extractRecipeScriptPaths(baseVerify, { headTree = null, baseTree = null
   ];
   const candidateTokens = [];
   for (const cmd of commands) {
-    for (const token of tokenizeShellCommand(cmd)) {
-      candidateTokens.push(token);
-      const eqIdx = token.indexOf('=');
-      if (eqIdx > 0 && eqIdx < token.length - 1) {
-        candidateTokens.push(token.slice(eqIdx + 1));
-      }
-      if (/\s/.test(token)) {
-        for (const sub of token.split(/\s+/)) {
-          if (sub) candidateTokens.push(sub);
-        }
-      }
-    }
+    collectCommandCandidates(cmd, 0, candidateTokens);
   }
   const hasBaseLookup = Boolean(baseTree || (headTree && baseTipValid));
   for (const raw of candidateTokens) {
@@ -307,17 +310,23 @@ function redactTextWithValues(text, sandbox, secretValues = []) {
   return out;
 }
 
+function deepRedactValue(value, sandbox, secretValues = [], depth = 0) {
+  if (depth > 12 || value === null || value === undefined) return value;
+  if (typeof value === 'string') return redactTextWithValues(value, sandbox, secretValues);
+  if (Array.isArray(value)) return value.map(item => deepRedactValue(item, sandbox, secretValues, depth + 1));
+  if (isObj(value)) {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = deepRedactValue(v, sandbox, secretValues, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
 function redactProveReceipt(receipt, sandbox, secretValues = []) {
   if (!receipt || (!sandbox && !secretValues.length)) return receipt;
-  const r = text => redactTextWithValues(text, sandbox, secretValues);
-  return {
-    ...receipt,
-    ...(receipt.test ? { test: { ...receipt.test, summary: r(receipt.test.summary), setupError: r(receipt.test.setupError) } } : {}),
-    ...(Array.isArray(receipt.paths) ? { paths: receipt.paths.map(p => ({ ...p, summary: r(p.summary) })) } : {}),
-    ...(Array.isArray(receipt.notProvedReasons) ? { notProvedReasons: receipt.notProvedReasons.map(r) } : {}),
-    ...(receipt.lint ? { lint: { ...receipt.lint, errors: (receipt.lint.errors ?? []).map(r), warnings: (receipt.lint.warnings ?? []).map(r) } } : {}),
-    ...(receipt.diff ? { diff: { ...receipt.diff, errors: (receipt.diff.errors ?? []).map(r) } } : {}),
-  };
+  return deepRedactValue(receipt, sandbox, secretValues, 0);
 }
 
 /**
@@ -374,12 +383,13 @@ export async function collectLiveEvidenceContract({
     baseVerify = loadVerifyConfig(headTree, { gitRef: cleanBaseTip });
   }
   if (baseVerify.loadStatus === 'unreadable' && baseTree) {
-    // Only trust a fallback baseTree when either no commit SHA was requested OR baseTree actually points at cleanBaseTip.
+    // Only trust a fallback baseTree when either no commit SHA was requested OR baseTree actually points at cleanBaseTip;
+    // when baseTree is inside a Git checkout matching cleanBaseTip, load from the commit object so subdirs cannot miss root pdd.json.
     const baseTreeHead = readGitHeadSha(baseTree);
-    const fallbackMatchesRequestedBase = !baseTipValid
-      || (baseTreeHead !== null && baseTreeHead.toLowerCase() === cleanBaseTip.toLowerCase());
-    if (fallbackMatchesRequestedBase) {
-      baseVerify = loadVerifyConfig(baseTree);
+    if (baseTipValid && baseTreeHead !== null && baseTreeHead.toLowerCase() === cleanBaseTip.toLowerCase()) {
+      baseVerify = loadVerifyConfig(baseTree, { gitRef: cleanBaseTip });
+    } else if (!baseTipValid) {
+      baseVerify = baseTreeHead ? loadVerifyConfig(baseTree, { gitRef: baseTreeHead }) : loadVerifyConfig(baseTree);
     }
   }
   const basePolicyInvalid = baseVerify.loadStatus === 'invalid'
@@ -568,8 +578,8 @@ export async function collectLiveEvidenceContract({
     // Configured verify.report without a base baseline MUST fail closed independently of test IDs.
     reportReadErrors.push('report:base-missing');
     testResults.push({ id: 'report:base-missing', status: 'unknown', source: 'harness' });
-  } else if (strictMode && baseReport !== null && baseReport !== undefined && !nonEmpty(resolvedBaseReport)) {
-    // Explicitly supplied empty/whitespace base report MUST fail closed, never silently skip diffing.
+  } else if (baseReport !== null && baseReport !== undefined && !nonEmpty(resolvedBaseReport)) {
+    // Explicitly supplied empty/whitespace base report MUST fail closed in both strict and advisory modes.
     reportReadErrors.push('report:base-empty');
     testResults.push({ id: 'report:base-empty', status: 'unknown', source: 'harness' });
   }

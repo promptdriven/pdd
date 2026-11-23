@@ -1176,6 +1176,109 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   });
   assert.equal(badFallback.advisory, false);
   assert.equal(evaluateEvidenceContract(badFallback.contractInput).decision, 'HOLD');
+
+  // 7. Loop 5 Astra P0/P1 regressions: nested `sh -c` quoted/flag script extraction, fallback baseTree subdirectory,
+  // deep receipt metadata redaction, and empty supplied baseReport in advisory mode!
+  const nestedShellDir = makeTmpDir(t, 'pdd-live-loop5-');
+  const ngit = (...args) => execFileSync('git', args, { cwd: nestedShellDir, encoding: 'utf8' }).trim();
+  ngit('init', '-b', 'main');
+  ngit('config', 'user.email', 'dev@example.com');
+  ngit('config', 'user.name', 'Dev');
+  mkdirSync(join(nestedShellDir, 'src'), { recursive: true });
+  mkdirSync(join(nestedShellDir, 'tools'), { recursive: true });
+  mkdirSync(join(nestedShellDir, 'scripts'), { recursive: true });
+  writeFileSync(join(nestedShellDir, 'tools/setup.mjs'), 'export {};\n');
+  writeFileSync(join(nestedShellDir, 'scripts/verify my app.mjs'), 'process.exit(0);\n');
+  writeFileSync(join(nestedShellDir, 'src/ab12-mod.mjs'), 'export const v = 1;\n');
+  writeFileSync(join(nestedShellDir, 'pdd.json'), JSON.stringify({
+    verify: {
+      test: 'node -e "process.exit(0)"',
+      paths: [
+        {
+          id: 'nested',
+          when: ['src/**', 'tools/**', 'scripts/**'],
+          needs: ['account:alpha'],
+          run: 'sh -c "node --import=./tools/setup.mjs \'scripts/verify my app.mjs\'"',
+        },
+      ],
+    },
+  }, null, 2));
+  ngit('add', '.');
+  ngit('commit', '-m', 'base');
+  const nBase = ngit('rev-parse', 'HEAD');
+  writeFileSync(join(nestedShellDir, 'src/ab12-mod.mjs'), 'export const v = 2;\n');
+  ngit('add', '.');
+  ngit('commit', '-m', 'head');
+  const nHead = ngit('rev-parse', 'HEAD');
+
+  for (const nestedTarget of ['tools/setup.mjs', 'scripts/verify my app.mjs']) {
+    const nestedProt = await collectLiveEvidenceContract({
+      repo: 'acme/nested',
+      job: { issue: 60, head: nHead },
+      headTree: nestedShellDir,
+      baseTip: nBase,
+      changedFiles: ['src/ab12-mod.mjs', nestedTarget],
+      suite: { state: 'pass' },
+      suiteCmd: 'node -e "process.exit(0)"',
+      runProveFn: provedStub,
+    });
+    assert.equal(evaluateEvidenceContract(nestedProt.contractInput).holdReason, 'protected_path', `nested sh -c must protect ${nestedTarget}`);
+  }
+
+  // Deep receipt metadata redaction: touchedFiles containing short secret `ab12` must be redacted in proveReceipt!
+  const deepRedact = await collectLiveEvidenceContract({
+    repo: 'acme/nested',
+    job: { issue: 61, head: nHead, review: { verdict: 'PASS', head: nHead } },
+    headTree: nestedShellDir,
+    baseTip: nBase,
+    changedFiles: ['src/ab12-mod.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node -e "process.exit(0)"',
+    testEnvPath,
+    env: { PATH: process.env.PATH },
+  });
+  assert.equal(JSON.stringify(deepRedact.proveReceipt).includes('ab12'), false, 'proveReceipt metadata must deep-redact injected secrets');
+
+  // Fallback baseTree pointing at subdirectory (`src/`) of matching base commit MUST still read root `pdd.json` (never advisory MERGE)!
+  const subdirBase = makeTmpDir(t, 'pdd-live-loop5-subdir-');
+  execFileSync('git', ['clone', '-q', nestedShellDir, subdirBase], { stdio: 'ignore' });
+  execFileSync('git', ['checkout', '-q', nBase], { cwd: subdirBase, stdio: 'ignore' });
+  const subdirFallback = await collectLiveEvidenceContract({
+    repo: 'acme/nested',
+    job: { issue: 62, head: nHead },
+    headTree: null,
+    baseTree: join(subdirBase, 'src'),
+    baseTip: nBase,
+    changedFiles: ['src/ab12-mod.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node -e "process.exit(0)"',
+  });
+  assert.equal(subdirFallback.verifyPathsConfigured, true, 'fallback baseTree subdir must still load commit root pdd.json');
+  assert.equal(subdirFallback.advisory, false);
+  assert.equal(evaluateEvidenceContract(subdirFallback.contractInput).decision, 'HOLD');
+
+  // Empty supplied baseReport in no-map advisory mode STILL holds with report:base-empty!
+  const noMapAdvDir = makeTmpDir(t, 'pdd-live-loop5-adv-');
+  execFileSync('git', ['init', '-b', 'main'], { cwd: noMapAdvDir, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'dev@example.com'], { cwd: noMapAdvDir, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'Dev'], { cwd: noMapAdvDir, stdio: 'ignore' });
+  writeFileSync(join(noMapAdvDir, 'a.txt'), 'hi\n');
+  execFileSync('git', ['add', '.'], { cwd: noMapAdvDir, stdio: 'ignore' });
+  execFileSync('git', ['commit', '-m', 'init'], { cwd: noMapAdvDir, stdio: 'ignore' });
+  const advSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: noMapAdvDir, encoding: 'utf8' }).trim();
+  const emptyBaseAdv = await collectLiveEvidenceContract({
+    repo: 'acme/adv',
+    job: { issue: 63, head: advSha },
+    headTree: noMapAdvDir,
+    baseTip: advSha,
+    changedFiles: ['a.txt'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node --test',
+    baseReport: '   ',
+    headReport: junitOk,
+  });
+  assert.equal(evaluateEvidenceContract(emptyBaseAdv.contractInput).decision, 'HOLD');
+  assert.ok(emptyBaseAdv.contractInput.reportReadErrors.includes('report:base-empty'));
 });
 
 test('G3 polyglot base-control and diffTestReports detect missing/skipped/failing tests across ecosystems', async t => {

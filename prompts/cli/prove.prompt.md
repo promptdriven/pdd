@@ -19,7 +19,7 @@ Own `src/core/prove.mjs` and `src/core/verify-paths.mjs`. Provide one stateless,
 ## Public contract
 
 - `parseVerifyConfig(raw, {sourcePath})`: pure parser returning `{configured, source, test, report, paths, errors}`.
-- `loadVerifyConfig(rootOrObject, {gitRef})`: loads `pdd.json` safely from disk (no symlinks) or from `git show <gitRef>:pdd.json`, returning `{configured, source, test, report, paths, errors, loadStatus}` where `loadStatus` distinguishes `'ok'` (parsed clean config), `'absent'` (verified directory or Git commit exists with no `pdd.json` or no `verify` block), `'invalid'` (malformed JSON or schema errors), `'unreadable'` (unreadable path or unavailable Git commit object), or `'object'` (in-memory object input).
+- `loadVerifyConfig(rootOrObject, {gitRef})`: loads `pdd.json` safely from disk (no symlinks) or from `git show <gitRef>:pdd.json`, returning `{configured, source, test, report, paths, errors, loadStatus}` where `loadStatus` is one of four values: `'ok'` (parsed clean config), `'absent'` (verified directory, Git commit, or object input has no `pdd.json` or no `verify` block), `'invalid'` (malformed JSON or schema errors), or `'unreadable'` (unreadable path or unavailable Git commit object).
 - `matchVerifyPaths(verifyConfig, touchedFiles)`: returns `{matched, changedSurfaces, unmappedSurfaces}`.
 - `detectHostCapabilities(requiredNeeds, {env, capabilities, probe, isTTY})`: lazily checks only requested capabilities and returns `{available, checked}`.
 - `matchCapabilities(needs, capabilityState)`: returns `{satisfied, missing}`.
