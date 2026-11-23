@@ -98,18 +98,7 @@ Check these boundaries in order and continue after failures:
   read-only account port. Limited and unknown are warnings. For Claude,
   unsupported read-only usage evidence is warning with `claude` and /usage advice;
   no generation call to discover allowance, and no credit/reset advice. On Linux when Codex is selected, `/proc/sys/kernel/apparmor_restrict_unprivileged_userns` is `1`, and `bwrap` is missing on `PATH`, emit an advisory `WARN codex-sandbox` with fix `sudo apt-get install -y bubblewrap` so read-only Codex sandboxes have Ubuntu's system AppArmor profile.
-- Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, all seven skill
-  entrypoints in one selected provider's supported project/user skill root (fix:
-  `pdd setup`), and valid pdd.json autopilot mode/trust. Also scan user skill roots
-  (`~/.agents/skills` and `CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`) for
-  unmarked non-symlink retired skill folders (`pdd-autopilot`, `pdd-check`,
-  `pdd-merge` lacking `.pdd-skill.json` and carrying `pdd-skills:` in `SKILL.md`
-  frontmatter): when any are present, emit a `WARN retired-skills` advisory naming
-  the folder(s) and a safely quoted `mkdir -p '<root>/.pdd-retired' && mv ...`
-  backup command without deleting anything or blocking readiness. Off warns; native
-  start owns mode admission. Describe observe versus auto authority,
-  owner/write-access trust even with [], explicit trusted users and strict approvals
-  in plain words. Never change mode or trust.
+- Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, the bundled `PDD_SKILL_NAMES` entrypoint (imported from [skills install](skills-install.prompt.md)) in one selected provider's supported project/user skill root (fix: `pdd setup`), and valid pdd.json autopilot mode/trust. Also scan user skill roots (`~/.agents/skills` and `CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`) for unmarked non-symlink `RETIRED_SKILL_NAMES` folders (imported from [skills install](skills-install.prompt.md), lacking `.pdd-skill.json` and carrying `pdd-skills:` in `SKILL.md` frontmatter): when any are present, emit a `WARN retired-skills` advisory naming the folder(s) and a safely quoted `mkdir -p '<root>/.pdd-retired' && mv ...` backup command without deleting anything or blocking readiness. Off warns; native start owns mode admission. Describe observe versus auto authority, owner/write-access trust even with [], explicit trusted users and strict approvals in plain words. Never change mode or trust.
 - GitHub settings (`settings-github`): Autopilot job worktrees and other machines
   start from GitHub, so they read `pdd.json` of the default branch there. Read it
   with `gh api repos/REPO/contents/pdd.json?ref=BRANCH` (REPO and BRANCH from the
