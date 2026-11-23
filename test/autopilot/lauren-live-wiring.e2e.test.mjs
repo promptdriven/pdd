@@ -1203,13 +1203,20 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
         {
           id: 'cd-gate',
           when: ['src/**', 'tools/**'],
-          run: 'cd tools && node gate.mjs',
+          run: 'cd tools && node gate.mjs && cd scripts && node sub/eval.mjs',
+        },
+        {
+          id: 'untracked-case-probe',
+          when: ['src/**'],
+          run: 'cat readme.md node_modules/.package-lock.json README.md',
         },
       ],
     },
   }, null, 2));
   writeFileSync(join(nestedShellDir, 'tools/plain-nested.mjs'), 'process.exit(0);\n');
   writeFileSync(join(nestedShellDir, 'tools/gate.mjs'), 'process.exit(0);\n');
+  mkdirSync(join(nestedShellDir, 'scripts/sub'), { recursive: true });
+  writeFileSync(join(nestedShellDir, 'scripts/sub/eval.mjs'), 'process.exit(0);\n');
   writeFileSync(join(nestedShellDir, 'README.md'), '# Demo\n');
   ngit('add', '.');
   ngit('commit', '-m', 'base');
@@ -1222,7 +1229,7 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   ngit('commit', '-m', 'head');
   const nHead = ngit('rev-parse', 'HEAD');
 
-  for (const nestedTarget of ['tools/plain-nested.mjs', 'tools/setup.mjs', 'tools/gate.mjs', 'scripts/verify my app.mjs']) {
+  for (const nestedTarget of ['tools/plain-nested.mjs', 'tools/setup.mjs', 'tools/gate.mjs', 'scripts/sub/eval.mjs', 'scripts/verify my app.mjs']) {
     const nestedProt = await collectLiveEvidenceContract({
       repo: 'acme/nested',
       job: { issue: 60, head: nHead },
@@ -1235,6 +1242,9 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
       runProveFn: provedStub,
     });
     assert.equal(evaluateEvidenceContract(nestedProt.contractInput).holdReason, 'protected_path', `nested/cd recipe must protect ${nestedTarget}`);
+    assert.equal(nestedProt.contractInput.protectedPatterns.includes('README.md'), true, 'tracked README.md blob matched');
+    assert.equal(nestedProt.contractInput.protectedPatterns.includes('readme.md'), false, 'wrong-case readme.md must NOT match base commit blob');
+    assert.equal(nestedProt.contractInput.protectedPatterns.includes('node_modules/.package-lock.json'), false, 'untracked disk file must NOT match base commit blob');
   }
 
   // Loop 6 Astra P2: quoted filename `'scripts/verify my app.mjs'` MUST NOT falsely protect unrelated root `app.mjs`!
