@@ -20,7 +20,7 @@ Inject outside-world boundaries (databases, filesystem, HTTP, clocks, randomness
 | Fixed / varying service | `fixture.lookup` | `world_pointer`, `cases: [{args, call_index, result}]`, `result_template: null`, `result_value_pointer: ""` |
 | Write-only / error fake | `port.write` | `world_pointer`, `result_template` |
 
-- **One family per `<port>.*` prefix:** never mix e.g. `key-value.get` and `port.write` under the same prefix (`archive.read` + `archive.write`). Keep one family per prefix or split prefixes (`archive_store.read` + `archive_sink.write`).
+- **One family per `<port>.*` prefix:** never mix e.g. `key-value.get` and `port.write` under the same prefix (`archive.read` + `archive.write`). Keep one family per prefix or split prefixes (`archive_store.read` + `archive_sink.write`). A single `store.load` (`key-value.get`) + `store.save` (`key-value.put`) pair storing one document/list per key is standard for CLI persistence.
 - **Entry scope:** bind only `<port>.<op>` operations declared for the entry invoked by that test; unused sibling-entry bindings fail with `unknown-simulation-operation`.
 - **Deterministic digests & IDs:** pass deterministic IDs or bind `compute.hash_json` / `compute.hash_utf8` for SHA-256; keep keyed crypto (HMAC, signatures) in native tests.
 

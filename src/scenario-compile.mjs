@@ -176,7 +176,7 @@ const refusal = (code, section, message, extra = {}) => ({
   code,
   section,
   message,
-  hint: extra.hint ?? 'Fix the Short JSON scenario syntax, then run pdd lint --local or pdd lint --emit-v1.',
+  hint: extra.hint ?? 'Fix the compact scenario syntax, then run pdd lint.',
   ...(extra.step !== undefined ? { step: extra.step } : {}),
 });
 
@@ -1141,7 +1141,14 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
       }
       const unknownStepKeys = Object.keys(step).filter(k => !ALLOWED_STEP_KEYS.has(k));
       if (unknownStepKeys.length) {
-        fail('invalid-step', section, `Step has unknown keys: ${unknownStepKeys.map(k => `"${k}"`).join(', ')}.`, at);
+        const hasPromptPath = unknownStepKeys.includes('prompt_path');
+        const msg = hasPromptPath
+          ? `Step has unknown keys: ${unknownStepKeys.map(k => `"${k}"`).join(', ')}. Did you mean "entry_path"? ("prompt_path" is only for app-map.json.)`
+          : `Step has unknown keys: ${unknownStepKeys.map(k => `"${k}"`).join(', ')}.`;
+        const hint = hasPromptPath
+          ? 'Rename "prompt_path" to "entry_path" in the scenario step (or set top-level "entry_path"), then rerun `pdd lint`.'
+          : undefined;
+        fail('invalid-step', section, msg, { ...at, ...(hint ? { hint } : {}) });
       }
       if (Object.hasOwn(step, 'step_id') && Object.hasOwn(step, 'id') && step.step_id !== step.id) {
         fail('invalid-step', section, 'Step specifies conflicting "step_id" and "id".', at);

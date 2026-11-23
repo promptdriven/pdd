@@ -730,7 +730,7 @@ example "$PDD_SKILLS/pdd-feature/SKILL.md"), never from ~/.agents/skills or
 ~/.claude/skills: the installed copies can be older than this Autopilot."; the review
 and conflict briefs say "Read any PDD skill or rules file from "$PDD_SKILLS"." Every
 agent brief names the short job rules file of the package (#3227 fix 5) as
-`"$PDD_SKILLS/pdd-prompting/autopilot-job-rules.md"`: build, repair and conflict say
+`"$PDD_JOB_RULES"` (`src/autopilot/job-rules.md`, kept outside user-facing `skills/`): build, repair and conflict say
 "Read FILE in full before you write the PR body"; review says "Read FILE in full before
 you check the PR body".
 

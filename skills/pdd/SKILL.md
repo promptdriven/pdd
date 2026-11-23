@@ -53,8 +53,9 @@ Read [references/verification.md](references/verification.md) before finalizing 
 
 - **Spec / Story / Prompt:** 1 session for a coupled slice; parallel subagents for independent modules (`stories > 1` or multi-part).
 - **Build / Verify / Review:**
-  - *Small change* (1–2 files, ~<100 LOC, short chat): build in the same session + **1 fresh verifier**.
-  - *Medium / big change* (3+ files, >100 LOC, >15 turns, or tricky state/security): **Fresh Builder + Fresh Verifier + Blind Read-Only Reviewer** via your editor's native subagents, passing **only clean file paths** (prompt, Story, `git diff`, real test outputs — zero Builder chat history). Fresh Verifier/Reviewer runs a fast **1-to-3 line mutation check** (flip 1–3 changed logic conditions/returns in a scratch edit, verify a test goes red, revert).
+  - *Trivial interactive fix* (`1` file, `<20` LOC pure-code bug with causal `pdd prove --base ... --expect ...` Red→Green and a human reviewing the diff): verify in the same session (never skip independent review in unattended runs).
+  - *Small change* (`1–2` files, `~<100` LOC, prompt/Story/behavior change, or short chat): build in the same session + **1 scoped fresh verifier** (inside Autopilot, builders skip self-spawning a verifier because Autopilot's own Blind Fresh Reviewer runs next).
+  - *Medium / big change* (`3+` files, `>100` LOC, `>15` turns, or tricky state/security): **Fresh Builder + Fresh Verifier + Blind Read-Only Reviewer** via your editor's native subagents, passing **only clean file paths** (prompt, Story, `git diff`, real test outputs — zero Builder chat history). Fresh Verifier/Reviewer runs a fast **1-to-3 line mutation check** (flip 1–3 changed logic conditions/returns in a scratch edit, verify a test goes red, revert).
   - On hosts without subagents, run offline `pdd lint --diff` + real test outputs and disclose same-session verification honestly.
 - Cap automatic repair loops at **2 rounds** before escalating to the human.
 
@@ -68,4 +69,3 @@ Read [references/verification.md](references/verification.md) before finalizing 
 | External fakes, DB/HTTP/CLI, 3-Port Rule, telemetry & `pdd mcp` | [references/ports-and-cli.md](references/ports-and-cli.md) |
 | Single-file plain-prose UI, optional `app-map.json`, `.ui.svg` & `pdd sim` | [references/ui-and-screens.md](references/ui-and-screens.md) |
 | Native testing, bug TDD, 1-to-3 line mutation checks, PBT, Feature Map & `pdd prove` | [references/verification.md](references/verification.md) |
-| Headless Autopilot worker rules & single-PR execution boundaries | [references/autopilot-job-rules.md](references/autopilot-job-rules.md) |

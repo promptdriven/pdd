@@ -11,7 +11,6 @@ const read = rel => readFileSync(join(skills, rel), 'utf8');
 
 const RETIRED_SKILLS = ['pdd-setup', 'pdd-bug', 'pdd-feature', 'pdd-graph', 'pdd-product', 'pdd-prompting', 'pdd-small-change'];
 const EXPECTED_REFERENCES = [
-  'autopilot-job-rules.md',
   'ports-and-cli.md',
   'product.md',
   'prompting.md',
@@ -89,8 +88,9 @@ test('SKILLS3: zero broken local markdown links or heading anchors inside skills
   }
 });
 
-test('SKILLS4: root guide mirrors stay removed and autopilot-job-rules lives in skills/pdd/references', () => {
-  assert.equal(existsSync(join(skills, 'pdd/references/autopilot-job-rules.md')), true);
+test('SKILLS4: root guide mirrors stay removed and autopilot job rules live in src/autopilot/job-rules.md', () => {
+  assert.equal(existsSync(join(root, 'src/autopilot/job-rules.md')), true);
+  assert.equal(existsSync(join(skills, 'pdd/references/autopilot-job-rules.md')), false, 'autopilot-job-rules moved out of user-facing skills/');
   assert.equal(existsSync(join(root, 'RUNBOOK.md')), false, 'root RUNBOOK.md mirror removed');
   assert.equal(existsSync(join(root, 'docs/prompting-guide.md')), false, 'docs/prompting-guide.md mirror removed');
   assert.equal(existsSync(join(root, 'docs/story-guide.md')), false, 'docs/story-guide.md mirror removed');

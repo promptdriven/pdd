@@ -7,6 +7,7 @@ loses its middle: read big files in parts.
 These rules are for a job of the Autopilot core engine (`pdd autopilot start`). The job makes one PR.
 It writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot checks each
 line against its own records. A line that the records do not support is red.
+Do not self-spawn a Fresh Verifier subagent during build or repair: Autopilot runs its own independent Blind Fresh Reviewer right after your PR.
 
 ## Mode choice (inside `$PDD_SKILLS/pdd/SKILL.md`)
 

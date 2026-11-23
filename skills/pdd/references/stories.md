@@ -46,7 +46,7 @@ Place `<slug>.json` in `tests/` or `test/` (use `tests/runtime/` or `test/runtim
 
 - Omit `schema_version`, `story_path`, and `criteria` so PDD infers `user_stories/<slug>.md` and binds numbered criteria automatically to current `ac-sha256-...` IDs.
 - Set top-level `"entry_path"` (override per step when calling another prompt; add `"app_maps": ["app-map.json"]` only when using one).
-- Use top-level `"seeds"` + step `"from"` + `"patch"` so steps run in parallel and isolate failures. Because `"patch"` uses RFC 7396 JSON Merge Patch (where `null` deletes keys), use `"set": {"/a/b": null}` to assign literal `null` or replace array elements.
+- Use top-level `"seeds"` + step `"from"` + `"patch"` so steps run in parallel and isolate failures. Steps sharing `"initial_world"` without `"seeds"`/`"from"` run sequentially and carry state mutations forward; steps with `"seeds"` + `"from"` run in parallel on isolated copies. Because `"patch"` uses RFC 7396 JSON Merge Patch (where `null` deletes keys), use `"set": {"/a/b": null}` to assign literal `null` or replace array elements.
 - Chain `{"$step": "step-id#/field"}` or mutate shared `"initial_world"` only for persistence criteria.
 - Keep scenarios compact: **1 focused step per criterion** (`5–8` steps typical, cap `15` steps, `<= 10` moves/rows/calls per step, `10` min server cap per step). Omit step `"model"`.
 
@@ -73,4 +73,4 @@ Place `<slug>.json` in `tests/` or `test/` (use `tests/runtime/` or `test/runtim
 - **Exact integer conservation (`integer_relation`):** compare `left` vs `right` (`eq`/`le`/`ge`) across `result`, `input`, and `world` with `field`, `ref_target`/`ref_path`, `integer`, `sum`, `product`.
 - **Explicit `$contract` / `state_schema` rules:** top-level `"type": "object"`, explicit `properties`, `required`, `"additionalProperties": false`; single-string `type` (nullable uses `oneOf`); arrays require `items`; `$ref`, `$defs`, `anyOf`, `if` are refused.
 - **Money & dates:** integer minor units (e.g. `cents: 1099`), explicit rounding in `## Domain decisions`, ISO-8601 strings, clock injected as input or `clock.now` port.
-- **Commands:** `pdd lint` (offline deterministic check), `pdd lint --remote` (hosted whole-program cross-prompt lint, 0 AI calls), `pdd test [STORY...]`, `pdd test --read <batch> --details`, `pdd lint --emit-v1`, `pdd lint --bind-criteria`.
+- **Commands:** `pdd lint` (offline deterministic check), `pdd lint --remote` (hosted whole-program cross-prompt lint, 0 AI calls), `pdd test [STORY...]`, `pdd test --read <batch> --details`.

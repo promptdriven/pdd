@@ -59,7 +59,7 @@ Open Codex, Claude Code, Gemini CLI, or Antigravity in your repository and invok
 Autopilot runs headless agent workers (`codex`, `claude`, `gemini`, or `agy`) on a 10-minute user timer (`systemd` on Linux, `LaunchAgent` on macOS). Empty ticks make zero AI calls.
 
 1. **Preflight:** `pdd autopilot doctor` checks tools, sign-ins, permissions, GitHub `pdd.json` parity, and interpreter access read-only.
-2. **Queue and execute:** Each tick claims ready opt-in issues (`pdd:autopilot` or vetted ready cards under `--intake active`), allocates an isolated worktree, and runs a headless worker following [`skills/pdd/references/autopilot-job-rules.md`](../skills/pdd/references/autopilot-job-rules.md).
+2. **Queue and execute:** Each tick claims ready opt-in issues (`pdd:autopilot` or vetted ready cards under `--intake active`), allocates an isolated worktree, and runs a headless worker following [`src/autopilot/job-rules.md`](../src/autopilot/job-rules.md).
 3. **Inspect live progress:** Run `pdd autopilot status` for an overview, `pdd autopilot logs` to list active workers, or `pdd autopilot logs ISSUE -f` to follow one worker live without disturbing it.
 4. **Full-suite queue:** Parallel jobs serialize heavy test suites through the shared machine queue (`pdd autopilot suite --command "npm test"`), sizing check slots to CPU and memory limits.
 5. **Merge lane and verification:** Before merging in `auto` mode, Autopilot verifies green CI, a passing full test suite on the current head, verified `Runtime:` and `Evidence:` records, and a fresh independent reviewer PASS.

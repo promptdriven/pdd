@@ -30,7 +30,7 @@ Add `app-map.json` (or `app/app-map.json`) **only** when the UI needs host `time
 }
 ```
 
-- **Host timers (`timers`):** optional root array (`<= 16` timers, `<= 1` per screen, `interval_ms` integer `1000..3600000`) with `id`, `screen`, `interval_ms`, `enabled_pointer` (Boolean), `generation_pointer` (integer), `handler`, `input`, `state`, `next` (and optional `after`).
+- **Host timers (`timers`):** optional root array (`<= 16` timers, `<= 1` per screen, `interval_ms` integer `1000..3600000`) with `id`, `screen`, `interval_ms`, `enabled_pointer` (Boolean), `generation_pointer` (integer), `handler`, `input`, `state`, `next` (and optional `after`). Omit `timers` unless automatic ticks are requested; prefer `handle_event` over separate `apply`+`render` handlers in `app-map.json` (avoids 2× calls per click), and keep grid HTML compact (avoid verbose per-cell attributes).
 - **Follow-up `after` handlers:** chain a secondary operation after a handler and bind its result into state via `"bind": "/path"`.
 - Run `pdd sim <story> --new` after changing prompts or `app-map.json` so the Simulator uploads the new version.
 

@@ -48,7 +48,7 @@ test('ALPHA4: actual packed package runs every advertised local command without 
     { cwd: root, env, encoding: 'utf8', timeout: 30000 }))[0];
   const archive = join(sandbox, pack.filename), names = pack.files.map(f => f.path);
   for (const required of ['bin/pdd.mjs', 'skills/pdd/SKILL.md', 'skills/pdd/references/prompting.md',
-    'skills/pdd/references/stories.md', 'skills/pdd/references/verification.md', 'skills/pdd/references/autopilot-job-rules.md']) assert.ok(names.includes(required), required);
+    'skills/pdd/references/stories.md', 'skills/pdd/references/verification.md', 'src/autopilot/job-rules.md']) assert.ok(names.includes(required), required);
   for (const file of readdirSync(join(root, 'skills'), { recursive: true }))
     if (file.startsWith('pdd/') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
   // Installed examples require these six runnable scenarios; no native tests, fixtures or other test assets ship.

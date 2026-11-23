@@ -88,8 +88,8 @@ const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
 // The fallback blocked-by record in an END comment: the report and the cause fingerprint.
 const BLOCK_MARKER = /<!-- pdd:core-blocked-by:([\w.-]+\/[\w.-]+)?#(\d+)(?::([a-z0-9.-]+))? -->/;
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-// Short job rules reference bundled with this package.
-const JOB_RULES = '"$PDD_SKILLS/pdd/references/autopilot-job-rules.md"';
+// Short job rules reference bundled with this package (kept outside user-facing skills/).
+const JOB_RULES = '"$PDD_JOB_RULES"';
 const RULES_LINE = `Read ${JOB_RULES} in full before you start.`;
 // A job that needs a person's decision posts one question and adds this label; the person answers in a comment and
 // removes the label, and then the issue is ready again.
@@ -2143,8 +2143,8 @@ function pddOnPath(ctx, env) {
   ctx.fs.mkdirSync(ctx.dirs.bin, { recursive: true, mode: 0o700 });
   if (readText(ctx.fs, file) !== text) { const temp = `${file}.${process.pid}.tmp`; ctx.fs.writeFileSync(temp, text, { mode: 0o700 }); ctx.fs.renameSync(temp, file); }
   // #3177: PDD_CLI names this pdd for the agent, because a login shell can put another pdd first on PATH again;
-  // PDD_SKILLS names the skills folder of this same package, because the installed skills can be older.
-  return { ...env, PDD_CLI: file, PDD_SKILLS: join(PACKAGE_ROOT, 'skills'), PATH: [ctx.dirs.bin, ...String(env.PATH ?? '').split(':').filter(dir => dir && dir !== ctx.dirs.bin)].join(':') };
+  // PDD_SKILLS names the skills folder and PDD_JOB_RULES names the internal Autopilot rules file of this package.
+  return { ...env, PDD_CLI: file, PDD_SKILLS: join(PACKAGE_ROOT, 'skills'), PDD_JOB_RULES: join(PACKAGE_ROOT, 'src', 'autopilot', 'job-rules.md'), PATH: [ctx.dirs.bin, ...String(env.PATH ?? '').split(':').filter(dir => dir && dir !== ctx.dirs.bin)].join(':') };
 }
 // #3177: the agent roles run commands in a shell; their wrapper checks which pdd that shell finds.
 const SHELL_ROLES = new Set(['build', 'repair', 'conflict', 'review']);
@@ -3577,7 +3577,7 @@ async function prepareReviewContext(ctx, job, cwd, scoped = null) {
   ctx.fs.writeFileSync(diffFile, boundedFullDiff, { mode: 0o600 });
 
   let rulesFile = null;
-  const rulesSrc = readText(ctx.fs, join(PACKAGE_ROOT, 'skills', 'pdd', 'references', 'autopilot-job-rules.md'));
+  const rulesSrc = readText(ctx.fs, join(PACKAGE_ROOT, 'src', 'autopilot', 'job-rules.md'));
   if (rulesSrc !== null) {
     rulesFile = join(dir, 'autopilot-job-rules.md');
     ctx.fs.writeFileSync(rulesFile, rulesSrc, { mode: 0o600 });
