@@ -26,6 +26,21 @@ const gitExec = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8', m
 const resolveGitRoot = cwd => { const r = gitExec(cwd, ['rev-parse', '--show-toplevel']); return r.status === 0 && r.stdout.trim() ? realpathSync(r.stdout.trim()) : realpathSync(cwd); };
 const resolveCommit = (root, ref) => { const r = gitExec(root, ['rev-parse', '--verify', `${ref}^{commit}`]); return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null; };
 
+const SEPARATOR_LINE_RE = /^[=\-*_~#\s]+$/;
+const TEST_SUMMARY_LINE_RE = /\b(?:\d+\s+(?:passed|failed|passing|failing|errors?|skipped)|tests?\s+\d+|fail\s+\d+|pass\s+\d+|FAILED\b|ERROR\b|test result:|ok\s+\S+|FAIL\s+\S+)/i;
+
+function summarizeTestOutput(stdout, stderr, setupError, timedOut) {
+  const combined = `${stdout || ''}\n${stderr || ''}`
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(l => l && !SEPARATOR_LINE_RE.test(l));
+  for (let i = combined.length - 1; i >= 0; i--) {
+    if (TEST_SUMMARY_LINE_RE.test(combined[i])) return causeText(combined[i]);
+  }
+  if (combined.length > 0) return causeText(combined.at(-1));
+  return causeText(setupError || (timedOut ? 'command timed out' : ''));
+}
+
 function execShellCommand(command, { cwd, env, timeoutMs }, ports = {}) {
   const runner = ports.spawnSync ?? spawnSync;
   const started = Date.now();
@@ -45,7 +60,7 @@ function execShellCommand(command, { cwd, env, timeoutMs }, ports = {}) {
   return {
     command, ok: exitCode === 0 && !proc.error && !signal, exitCode, signal, timedOut,
     durationMs: Math.max(0, Date.now() - started), stdout, stderr, setupError,
-    summary: causeText(stderr || stdout || setupError || (timedOut ? 'command timed out' : '')),
+    summary: summarizeTestOutput(stdout, stderr, setupError, timedOut),
   };
 }
 
@@ -65,7 +80,9 @@ export function detectRepoTestCommand(root) {
   }
   if (existsSync(join(root, 'go.mod'))) return 'go test ./...';
   if (existsSync(join(root, 'Cargo.toml'))) return 'cargo test';
-  if (existsSync(join(root, 'pyproject.toml')) || existsSync(join(root, 'pytest.ini')) || existsSync(join(root, 'setup.cfg'))) return 'pytest';
+  if (existsSync(join(root, 'pyproject.toml')) || existsSync(join(root, 'pytest.ini')) || existsSync(join(root, 'setup.cfg'))) {
+    return existsSync(join(root, 'src')) ? 'PYTHONPATH=src pytest' : 'pytest';
+  }
   return null;
 }
 
@@ -259,7 +276,9 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
 
   try {
     const changedFromBase = listChangedFiles(root, baseSha);
-    const overlayPaths = changedFromBase.filter(f => (overlayGlobs.length > 0 && overlayGlobs.some(m => m.test(f))) || COLOCATED_TEST_RE.test(f) || isTestOwnedPath(f));
+    const overlayPaths = overlayGlobs.length > 0
+      ? changedFromBase.filter(f => overlayGlobs.some(m => m.test(f)))
+      : changedFromBase.filter(f => COLOCATED_TEST_RE.test(f) || isTestOwnedPath(f));
     const wtBase = gitExec(root, ['worktree', 'add', '--detach', baseWorktree, baseSha]);
     if (wtBase.status !== 0) throw new Error(wtBase.stderr || wtBase.stdout || 'git worktree add base failed');
     createdWorktrees.push(baseWorktree);
@@ -465,7 +484,7 @@ export function runProve(
   const exitCode = outcome === OUTCOME_FAILED ? EXIT_FAILED : (outcome === OUTCOME_NOT_PROVED ? EXIT_NOT_PROVED : EXIT_PROVED);
   const receipt = {
     schema_version: 'pdd.prove.v1', mode: 'verify', outcome, exit_code: exitCode, baseRef, baseSha, headSha,
-    configSource: baseVerify.source, touchedFiles: diff.touchedFiles, changedSurfaces,
+    configSource: baseVerify.configured ? baseVerify.source : (testCommand ? 'auto-detected' : null), touchedFiles: diff.touchedFiles, changedSurfaces,
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
     test: testResult, paths: pathResults, notProvedReasons,

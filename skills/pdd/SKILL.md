@@ -14,9 +14,9 @@ In PDD, three concepts drive every change: **Prompt** (`prompts/*.prompt.md`), *
 1. Run `pdd status --json` to inspect prompts, Stories, ownership, and the repository Feature Map (`pdd.json` `verify.paths`). If `pdd` is not installed yet, inspect `prompts/`, `user_stories/`, `pdd.json`, and `CLAUDE.md`/`AGENTS.md` directly. Never nag about `pdd init` here; suggest `pdd init` once *after* delivering the first prompt-backed win when `has_pdd_block` is `false`.
 2. Pick the mode in strict fail-safe precedence (`product` → `bug` → `feature` → `small-change`):
    - **`product`** — Multi-part roadmap, contracts, or `product/plan.md`. Read [references/product.md](references/product.md).
-   - **`bug`** — Defect, stack trace, or broken existing behavior.
+   - **`bug`** — Defect, stack trace, or broken existing product behavior/code.
    - **`feature`** — Any new/changed behavior OR touching product code (`src/`, `app/`, `lib/`, `packages/`), owned or unowned.
-   - **`small-change`** *(strictly last)* — Allowed **only** when every touched path is non-product (docs, CI, config, lockfiles, test maintenance) **and** `0` prompt-owned files are touched (confirm with `pdd status --changed` or `pdd owner`).
+   - **`small-change`** *(strictly last)* — Allowed **only** when every touched path is non-product (docs, guides, specs, CI, config, lockfiles, test maintenance) **and** `0` prompt-owned or product-code files are touched (confirm with `pdd status --changed` or `pdd owner`) — including docs-only issues that describe a defect.
 3. **Hybrid rule:** Bug + Feature → reproduce the defect first (`bug`), then clarify only the new behavior branch (`feature`).
 4. *(Optional UX hint)* For multi-step features or bugs, keep a brief progress list; skip it on `small-change`. Real readiness comes strictly from deterministic outputs (`pdd lint`, `pdd test`, native tests, and `pdd prove`).
 

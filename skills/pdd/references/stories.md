@@ -46,7 +46,7 @@ Place `<slug>.json` in `tests/` or `test/` (use `tests/runtime/` or `test/runtim
 
 - Omit `schema_version`, `story_path`, and `criteria` so PDD infers `user_stories/<slug>.md` and binds numbered criteria automatically to current `ac-sha256-...` IDs.
 - Set top-level `"entry_path"` (override per step when calling another prompt; add `"app_maps": ["app-map.json"]` only when using one).
-- Use top-level `"seeds"` + step `"from"` + `"patch"` so steps run in parallel and isolate failures. Steps sharing `"initial_world"` without `"seeds"`/`"from"` run sequentially and carry state mutations forward; steps with `"seeds"` + `"from"` run in parallel on isolated copies. Because `"patch"` uses RFC 7396 JSON Merge Patch (where `null` deletes keys), use `"set": {"/a/b": null}` to assign literal `null` or replace array elements.
+- Use top-level `"seeds"` + step `"from"` + `"patch"` to template repeated step inputs cleanly (do not combine `"from"` and `"input"` on the same step). All steps execute against top-level `"initial_world"` (carrying world mutations forward across sequential steps). Because `"patch"` uses RFC 7396 JSON Merge Patch (where `null` deletes keys), use `"set": {"/a/b": null}` to assign literal `null` or replace array elements.
 - Chain `{"$step": "step-id#/field"}` or mutate shared `"initial_world"` only for persistence criteria.
 - Keep scenarios compact: **1 focused step per criterion** (`5–8` steps typical, cap `15` steps, `<= 10` moves/rows/calls per step, `10` min server cap per step). Omit step `"model"`.
 

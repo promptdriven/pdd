@@ -313,8 +313,30 @@ function analyzeTestBoundaryCoverage(source, lang) {
   if (lang === 'py') {
     const importsRealSubproc = /\b(?:import\s+subprocess|from\s+subprocess\s+import)\b/.test(noComments);
     const importsRealNet = /\b(?:import\s+(?:socket|urllib\.request|http\.client|requests|httpx)|from\s+(?:socket|urllib\.request|http\.client|requests|httpx)\s+import)\b/.test(noComments);
-    const callsReal = /\b(?:subprocess\.(?:run|Popen|check_output|check_call)|socket\.create_connection|urlopen|HTTPServer)\s*\(/.test(noComments);
-    return { hasMock, hasRealUnmockedBoundary: Boolean(!hasMock && (importsRealSubproc || importsRealNet) && callsReal) };
+    const pyRealCallRe = /\b(?:subprocess\.(?:run|Popen|check_output|check_call)|socket\.create_connection|urlopen|HTTPServer)\s*\(/;
+    const callsReal = pyRealCallRe.test(noComments);
+    if (!callsReal || (!importsRealSubproc && !importsRealNet)) {
+      return { hasMock, hasRealUnmockedBoundary: false };
+    }
+    if (!hasMock) return { hasMock: false, hasRealUnmockedBoundary: true };
+    // Check per-test-function so a file mixing mocked unit tests and a genuine unmocked subprocess/network test passes.
+    const pyLines = noComments.split(/\r?\n/);
+    const pyMockUseRe = /\b(?:mock\.patch|patch\s*\(|monkeypatch\.(?:setattr|delattr)|MagicMock\b)/;
+    for (let at = 0; at < pyLines.length; at++) {
+      const m = /^(\s*)(?:async\s+)?def\s+(test_\w+)\s*\(/.exec(pyLines[at]);
+      if (!m) continue;
+      let start = at;
+      while (start > 0 && /^\s*@/.test(pyLines[start - 1])) start--;
+      let end = pyLines.length - 1;
+      for (let i = at + 1; i < pyLines.length; i++) {
+        if (pyLines[i].trim() && /^\s*/.exec(pyLines[i])[0].length <= m[1].length) { end = i - 1; break; }
+      }
+      const fnText = pyLines.slice(start, end + 1).join('\n');
+      if (pyRealCallRe.test(fnText) && !pyMockUseRe.test(fnText)) {
+        return { hasMock, hasRealUnmockedBoundary: true };
+      }
+    }
+    return { hasMock, hasRealUnmockedBoundary: false };
   }
   if (lang === 'go') {
     const callsReal = /\b(?:httptest\.NewServer|net\.Listen|exec\.Command)\s*\(/.test(noComments);

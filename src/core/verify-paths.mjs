@@ -11,7 +11,7 @@ import { SHARED_SURFACE_COLS, clean, csv, findSectionLines, isSeparatorRow, tabl
 const MAX_VERIFY_PATHS = 100;
 const PATH_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
 const CAPABILITY_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
-const NON_SURFACE_PATH_RE = /^(?:docs|prompts|user_stories|pdd\/stories)\/|\.prompt\.md$|\.mdx?$|^(?:README|CHANGELOG|LICENSE)(?:\.[^/]+)?$|(?:^|\/)(?:__pycache__|\.pytest_cache|node_modules)\/|\.(?:pyc|pyo)$|(?:^|\/)\.DS_Store$/i;
+const NON_SURFACE_PATH_RE = /^(?:docs|prompts|user_stories|pdd\/stories|contracts)\/|\.prompt\.md$|\.mdx?$|^(?:README|CHANGELOG|LICENSE|AGENTS|CLAUDE)(?:\.[^/]+)?$|^(?:pdd|pdd-workspace|pdd-bindings)\.json$|(?:^|\/)(?:__pycache__|\.pytest_cache|node_modules)\/|\.(?:pyc|pyo)$|(?:^|\/)\.DS_Store$/i;
 
 export const isProductionSurfaceFile = filePath =>
   canonicalRepoPath(filePath) && !isTestOwnedPath(filePath) && !NON_SURFACE_PATH_RE.test(filePath);
@@ -100,7 +100,7 @@ export function loadVerifyConfig(rootOrObject, { gitRef } = {}) {
   } else {
     rawText = readSafeUtf8(realRoot, 'pdd.json');
   }
-  if (rawText === null) return parseVerifyConfig(null, { sourcePath });
+  if (rawText === null) return parseVerifyConfig(null, { sourcePath: null });
   try { return parseVerifyConfig(JSON.parse(rawText), { sourcePath }); }
   catch { return { configured: true, source: sourcePath, test: null, report: null, paths: [], errors: [`${sourcePath}: invalid JSON.`] }; }
 }
@@ -273,13 +273,15 @@ function extractProductPartsFromPlan(planText, mapText = '') {
     }
   }
 
-  const boundariesTable = parseSectionTableRows(planText, 'Boundaries');
-  if (boundariesTable.heading) {
-    const fromIdx = boundariesTable.heading.findIndex(c => PLAN_FROM_COLS.has(c.toLowerCase()));
-    const toIdx = boundariesTable.heading.findIndex(c => PLAN_TO_COLS.has(c.toLowerCase()));
-    for (const cells of boundariesTable.rows) {
-      if (fromIdx >= 0) for (const token of csv(cells[fromIdx])) addPart(token);
-      if (toIdx >= 0) for (const token of csv(cells[toIdx])) addPart(token);
+  if (partSet.size === 0) {
+    const boundariesTable = parseSectionTableRows(planText, 'Boundaries');
+    if (boundariesTable.heading) {
+      const fromIdx = boundariesTable.heading.findIndex(c => PLAN_FROM_COLS.has(c.toLowerCase()));
+      const toIdx = boundariesTable.heading.findIndex(c => PLAN_TO_COLS.has(c.toLowerCase()));
+      for (const cells of boundariesTable.rows) {
+        if (fromIdx >= 0) for (const token of csv(cells[fromIdx])) addPart(token);
+        if (toIdx >= 0) for (const token of csv(cells[toIdx])) addPart(token);
+      }
     }
   }
 

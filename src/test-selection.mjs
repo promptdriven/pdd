@@ -19,7 +19,7 @@ const NON_SCENARIO_TEST_DIRS = new Set([
   'data', 'testdata', 'golden', 'cassettes',
 ]);
 const NON_SCENARIO_JSON_NAME_RE =
-  /^(?:tsconfig(?:\.[^/]+)?|jsconfig|package(?:-lock)?|npm-shrinkwrap|composer|biome|deno|jsr|eslint|prettier|vitest|jest|babel)\.json$/i;
+  /^(?:\..+|tsconfig(?:\.[^/]+)?|jsconfig|package(?:-lock)?|npm-shrinkwrap|composer|biome|deno|jsr|eslint|prettier|vitest|jest|babel|firebase|firestore\.indexes|vercel|netlify|wrangler)\.json$/i;
 
 const isTestFolderJson = path => {
   if (!path.endsWith('.json')) return false;
@@ -186,7 +186,7 @@ export function selectTests(found, words = [], { native = false, captureSource }
   return { selected: found.tests.filter(test => selected.has(test)), nativeSelections: descriptors, unknown, untested };
 }
 
-export const NO_TESTS = 'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See skills/pdd/references/stories.md.';
+export const NO_TESTS = 'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. Run `pdd help prompting` for the Story and scenario guide.';
 
 // Why a repo has no tests, by the test name rule (it opens no JSON file): Stories with no test, test-folder JSON
 // that matches no Story, and *.prompt names.

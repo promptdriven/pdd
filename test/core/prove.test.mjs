@@ -706,3 +706,47 @@ test('#3575 multi-part integration guard: product/plan.md with >=2 parts require
   assert.equal(solo.exitCode, EXIT_PROVED, JSON.stringify(solo.receipt));
   assert.equal(solo.outcome, OUTCOME_PROVED);
 });
+
+test('live-repo polish: prove summary extracts failure/pass tail, --overlay restricts strictly, configSource=auto-detected, pdd.json excluded from surfaces, Python src layout uses PYTHONPATH=src', t => {
+  const nodeBin = JSON.stringify(process.execPath);
+  // 1. detectRepoTestCommand adds PYTHONPATH=src for Python src/-layout repos
+  const pySrcRepo = initGitRepo(t, 'pdd-prove-py-src-');
+  mkdirSync(join(pySrcRepo, 'src', 'pkg'), { recursive: true });
+  writeFileSync(join(pySrcRepo, 'pyproject.toml'), '[project]\nname = "pkg"\n');
+  assert.equal(detectRepoTestCommand(pySrcRepo), 'PYTHONPATH=src pytest');
+
+  // 2. configSource='auto-detected', pdd.json excluded from changedSurfaces, and summary picks pass/fail tail (not pytest banner)
+  const repo = initGitRepo(t, 'pdd-prove-polish-');
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({
+    name: 'demo',
+    scripts: {
+      test: `${nodeBin} -e "console.log('============================= test session starts =============================='); console.log('12 passed in 0.42s')"`,
+    },
+  }, null, 2) + '\n');
+  writeFileSync(join(repo, 'a.js'), 'export const a = 1;\n');
+  commitAll(repo, 'base');
+  execFileSync('git', ['checkout', '-q', '-b', 'feat-polish'], { cwd: repo });
+  writeFileSync(join(repo, 'pdd.json'), '{}\n');
+  const vRes = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  assert.equal(vRes.receipt.configSource, 'auto-detected');
+  assert.deepEqual(vRes.receipt.changedSurfaces, [], 'pdd.json must not be classified as a production surface');
+  assert.match(vRes.receipt.test.summary, /12 passed in 0\.42s/, `expected summary tail, got: ${vRes.receipt.test.summary}`);
+
+  // 3. Bug-contrast --overlay strictly scopes overlayPaths to the requested glob
+  const bcRepo = initGitRepo(t, 'pdd-prove-overlay-strict-');
+  mkdirSync(join(bcRepo, 'test'), { recursive: true });
+  writeFileSync(join(bcRepo, 'lib.mjs'), 'export const val = () => 1;\n');
+  writeFileSync(join(bcRepo, 'test', 'a.test.mjs'), "import assert from 'node:assert/strict'; import { val } from '../lib.mjs'; assert.equal(val(), 1);\n");
+  writeFileSync(join(bcRepo, 'test', 'b.test.mjs'), "import assert from 'node:assert/strict'; import { val } from '../lib.mjs'; assert.equal(val(), 1);\n");
+  commitAll(bcRepo, 'base');
+  execFileSync('git', ['checkout', '-q', '-b', 'fix-both'], { cwd: bcRepo });
+  writeFileSync(join(bcRepo, 'lib.mjs'), 'export const val = () => 2;\n');
+  writeFileSync(join(bcRepo, 'test', 'a.test.mjs'), "import assert from 'node:assert/strict'; import { val } from '../lib.mjs'; assert.equal(val(), 2, 'EXPECTED_A');\n");
+  writeFileSync(join(bcRepo, 'test', 'b.test.mjs'), "import assert from 'node:assert/strict'; import { val } from '../lib.mjs'; assert.equal(val(), 2, 'EXPECTED_B');\n");
+  const ov = runProve(
+    { cwd: bcRepo, base: 'main', test: `${nodeBin} test/a.test.mjs`, expect: 'EXPECTED_A', overlay: 'test/a.test.mjs', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(ov.exitCode, EXIT_PROVED, JSON.stringify(ov.receipt));
+  assert.deepEqual(ov.receipt.overlayPaths, ['test/a.test.mjs'], '--overlay must not union unrelated changed test files');
+});

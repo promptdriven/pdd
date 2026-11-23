@@ -97,12 +97,8 @@ async function detectChangedFiles(root, ports = {}) {
       if (typeof mod.analyzeChangedMap === 'function') {
         const res = mod.analyzeChangedMap({ cwd: root }, ports);
         if (res?.ok && res.report) {
-          const all = [
-            ...(res.report.modules ?? []).map(m => m?.path),
-            ...(res.report.unowned ?? []).map(u => u?.path),
-            ...(res.report.scope?.files ?? []),
-          ].filter(canonicalPath);
-          if (all.length) return [...new Set(all)].sort();
+          const scoped = (res.report.scope?.files ?? []).filter(canonicalPath);
+          if (scoped.length) return [...new Set(scoped)].sort();
         }
       }
       const fn = mod.mapChangedFiles ?? mod.inspectChangedMap ?? mod.default;

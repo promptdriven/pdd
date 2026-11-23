@@ -167,7 +167,7 @@ const initialFstatSync = fs.fstatSync;
 const TRY_LAUNCHER_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
 
 export const NO_TESTS =
-  'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See skills/pdd/references/stories.md.';
+  'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. Run `pdd help prompting` for the Story and scenario guide.';
 export const STATE_EXIT_CODES = Object.freeze({
   passed: 0,
   failed: 1,
