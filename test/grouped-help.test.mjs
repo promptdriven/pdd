@@ -52,7 +52,7 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   const statusIdx = baseline.indexOf('  pdd status [--changed]', coreIdx);
   assert.ok(statusIdx > coreIdx && statusIdx < productIdx);
   assert.ok(baseline.indexOf('  pdd autopilot status|logs') > autopilotIdx);
-  assert.ok(baseline.includes('  pdd --version | -V | -VV       Show CLI version & interpreter build.'));
+  assert.ok(baseline.includes('  pdd --version, pdd -V, pdd -VV Show CLI version & interpreter build.'));
 
   // No duplicate approval heredoc blocks or stale removed-engine migration note on root help
   assert.doesNotMatch(baseline, /<<'PDD_SAID'/);

@@ -1225,7 +1225,31 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
     assert.equal(evaluateEvidenceContract(nestedProt.contractInput).holdReason, 'protected_path', `nested sh -c must protect ${nestedTarget}`);
   }
 
-  // Deep receipt metadata redaction: touchedFiles containing short secret `ab12` must be redacted in proveReceipt!
+  // Loop 6 Astra P2: quoted filename `'scripts/verify my app.mjs'` MUST NOT falsely protect unrelated root `app.mjs`!
+  const unrelatedRootApp = await collectLiveEvidenceContract({
+    repo: 'acme/nested',
+    job: { issue: 601, head: nHead },
+    headTree: nestedShellDir,
+    baseTip: nBase,
+    changedFiles: ['app.mjs'],
+    suite: { state: 'pass' },
+    suiteCmd: 'node -e "process.exit(0)"',
+    runProveFn: provedStub,
+  });
+  assert.equal(unrelatedRootApp.contractInput.protectedPatterns.includes('app.mjs'), false, 'must not split quoted script path into unrelated root app.mjs');
+  assert.equal(evaluateEvidenceContract(unrelatedRootApp.contractInput).checks.protectedPaths.ok, true);
+
+  // Loop 6 Astra P1: Deep receipt redaction removes BOTH 4-char & 10-char secrets at depth 15 AND inside object keys!
+  const deepNestedSecret = {
+    a1: { a2: { a3: { a4: { a5: { a6: { a7: { a8: { a9: { a10: { a11: { a12: { a13: { a14: { a15: { 'key_ab12_val': 'deep_ab12_value', 'key_long': 'deep_longsecret99' } } } } } } } } } } } } } } },
+  };
+  const cfgDirLong = makeTmpDir(t, 'pdd-loop6-env-');
+  chmodSync(cfgDirLong, 0o700);
+  const longEnvPath = join(cfgDirLong, 'autopilot-test-env.json');
+  writeFileSync(longEnvPath, JSON.stringify({
+    accounts: { alpha: { SHORT_KEY: 'ab12', LONG_KEY: 'longsecret99' } },
+  }), { mode: 0o600 });
+  chmodSync(longEnvPath, 0o600);
   const deepRedact = await collectLiveEvidenceContract({
     repo: 'acme/nested',
     job: { issue: 61, head: nHead, review: { verdict: 'PASS', head: nHead } },
@@ -1234,10 +1258,25 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
     changedFiles: ['src/ab12-mod.mjs'],
     suite: { state: 'pass' },
     suiteCmd: 'node -e "process.exit(0)"',
-    testEnvPath,
+    testEnvPath: longEnvPath,
     env: { PATH: process.env.PATH },
+    runProveFn: async () => ({
+      exitCode: 0,
+      outcome: 'Proved',
+      receipt: {
+        dirty: false, proofScope: 'commit',
+        touchedFiles: ['src/ab12-mod.mjs'],
+        meta: deepNestedSecret,
+        lint: { ok: true, errors: [] }, diff: { ok: true, errors: [] },
+        test: { ok: true, exitCode: 0, summary: 'pass' },
+        paths: [{ id: 'nested', status: 'proved', exitCode: 0, summary: 'ok', run: 'sh -c ""', needs: ['account:alpha'] }],
+        notProvedReasons: [],
+      },
+    }),
   });
-  assert.equal(JSON.stringify(deepRedact.proveReceipt).includes('ab12'), false, 'proveReceipt metadata must deep-redact injected secrets');
+  const serializedDeep = JSON.stringify(deepRedact.proveReceipt);
+  assert.equal(serializedDeep.includes('ab12'), false, 'proveReceipt must deep-redact 4-char secret at depth 15 and in object keys');
+  assert.equal(serializedDeep.includes('longsecret99'), false, 'proveReceipt must deep-redact 10-char secret at depth 15 and in object keys');
 
   // Fallback baseTree pointing at subdirectory (`src/`) of matching base commit MUST still read root `pdd.json` (never advisory MERGE)!
   const subdirBase = makeTmpDir(t, 'pdd-live-loop5-subdir-');

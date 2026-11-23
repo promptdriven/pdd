@@ -57,7 +57,7 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
       "  pdd metrics [stages|skills]    Show local Autopilot metrics (or full).",
       "  pdd completion bash|zsh        Print shell tab-completion script.",
       "  pdd help prompting             Show the 6-step PDD authoring guide.",
-      "  pdd --version | -V | -VV       Show CLI version & interpreter build.",
+      "  pdd --version, pdd -V, pdd -VV Show CLI version & interpreter build.",
     ]),
   ]),
   focusedHelpLines: Object.freeze([
@@ -85,11 +85,11 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
     "6. Build & Prove: code from approved prompts, then run pdd prove.",
   ]),
 });
-const approvalHelp = command => `Show the prompt diff first, then record the person's later reply with --said (chat alone never approves). Without --said, a person approves interactively via terminal y/N. Default quoted heredoc:
+const approvalHelp = command => `Show the prompt diff first and ask the person; then relay their words with --said in any chat (pdd records nonblank words without grading them; chat alone never approves). Without --said, use a separate person terminal for terminal y/N approval. Default quoted heredoc for agent relay:
 ${command} --said - <<'PDD_SAID'
 <the person's exact words>
 PDD_SAID
-Choose a delimiter absent as a whole line from the words and keep it quoted (--said - reads UTF-8 stdin including newlines; simple replies may use --said WORDS). Root pdd.json "strict_approvals": true requires a person terminal.`;
+Choose a delimiter absent as a whole line from the words and keep it quoted (--said - reads UTF-8 stdin including newlines and trims only trailing newlines; simple replies may use --said WORDS). Root pdd.json "strict_approvals": true requires a person terminal.`;
 const routes = [
   // Core PDD workflow
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }, { name: '--skills-dir', kind: 'text' }],

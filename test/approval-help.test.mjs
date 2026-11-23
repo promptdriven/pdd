@@ -23,7 +23,7 @@ test('public approval help keeps root overview concise and shows full person-rel
   assert.ok(line, 'approve must appear in focused help');
   assert.doesNotMatch(line, /no-said keeps terminal\/native-chat approval|or use terminal\/native area-chat approval/i, 'help must not advertise independent native-chat approval');
   assert.match(line, /--said/);
-  const out = promptApprove.stdout;
+  const out = promptApprove.stdout.replace(/\s+/g, ' ');
   assert.match(out, /nonblank|non-empty|nonempty/i);
   assert.match(out, /any chat/i);
   assert.match(out, /without grading|does not grade|no grading/i);

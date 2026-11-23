@@ -97,7 +97,7 @@ test('SETUP4: pdd help says how to call the single /pdd skill in Codex and in Cl
   const help = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), '--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr);
   assert.ok(
-    help.stdout.includes('Open Codex or Claude as usual and invoke the PDD skill: $pdd in Codex,\n/pdd in Claude Code (covers product, bug, feature, and small-change).'),
+    help.stdout.includes('Open Codex ($pdd) or Claude Code (/pdd) to plan products, build features,\nfix bugs, or make small changes.'),
     help.stdout,
   );
 });

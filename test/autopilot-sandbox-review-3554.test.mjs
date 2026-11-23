@@ -678,7 +678,9 @@ test('#3554 (3): base-trusted testCommand, fail-closed diff/base gating, referen
   assert.ok(!pddSuiteCmd.includes('evil.example'), 'PR pdd.json testCommand must never run');
   wPdd.suite(18, 0);
   await wPdd.tick();
-  assert.deepEqual(wPdd.github.merges, [pddPr.number]);
+  assert.deepEqual(wPdd.github.merges, [], 'Check 4 always holds PR modifying protected pdd.json for manual human merge');
+  assert.ok(wPdd.labels(18).includes('pdd:needs-decision'));
+  assert.match(wPdd.comments(18).join('\n'), /Protected path approval required \(pdd\.json\)/);
 
   // Trap F: Greenfield repo (origin/main has NO test runner) holds suite until review PASS.
   const wGreen = await coreWorld(t, { settings: { runs: 1, testCommand: null } });

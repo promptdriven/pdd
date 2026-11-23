@@ -232,6 +232,8 @@ function tokenizeShellCommand(cmd) {
   return tokens;
 }
 
+const SHELL_OP_OR_QUOTE_RE = /["'`=<>|&;()]/;
+
 function collectCommandCandidates(cmd, depth = 0, out = []) {
   for (const token of tokenizeShellCommand(cmd)) {
     out.push(token);
@@ -239,7 +241,9 @@ function collectCommandCandidates(cmd, depth = 0, out = []) {
     if (eqIdx > 0 && eqIdx < token.length - 1) {
       out.push(token.slice(eqIdx + 1));
     }
-    if (depth < 3 && /[\s"'`=<>|&;()]/.test(token)) {
+    const cleanToken = token.replace(/^(?:\.\/)+/, '');
+    const isSingleScriptPath = SCRIPT_EXT_RE.test(cleanToken) && !SHELL_OP_OR_QUOTE_RE.test(cleanToken);
+    if (depth < 3 && !isSingleScriptPath && /[\s"'`=<>|&;()]/.test(token)) {
       collectCommandCandidates(token, depth + 1, out);
     }
   }
@@ -310,23 +314,31 @@ function redactTextWithValues(text, sandbox, secretValues = []) {
   return out;
 }
 
-function deepRedactValue(value, sandbox, secretValues = [], depth = 0) {
-  if (depth > 12 || value === null || value === undefined) return value;
+function deepRedactValue(value, sandbox, secretValues = [], depth = 0, seen = new WeakSet()) {
+  if (value === null || value === undefined) return value;
   if (typeof value === 'string') return redactTextWithValues(value, sandbox, secretValues);
-  if (Array.isArray(value)) return value.map(item => deepRedactValue(item, sandbox, secretValues, depth + 1));
-  if (isObj(value)) {
+  if (typeof value !== 'object') return value;
+  // Fail closed on cycles or excessive nesting depth: NEVER return unredacted raw data.
+  if (depth > 64 || seen.has(value)) return '[redacted]';
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map(item => deepRedactValue(item, sandbox, secretValues, depth + 1, seen));
+    }
     const out = {};
     for (const [k, v] of Object.entries(value)) {
-      out[k] = deepRedactValue(v, sandbox, secretValues, depth + 1);
+      const redactedKey = redactTextWithValues(k, sandbox, secretValues);
+      out[redactedKey] = deepRedactValue(v, sandbox, secretValues, depth + 1, seen);
     }
     return out;
+  } finally {
+    seen.delete(value);
   }
-  return value;
 }
 
 function redactProveReceipt(receipt, sandbox, secretValues = []) {
   if (!receipt || (!sandbox && !secretValues.length)) return receipt;
-  return deepRedactValue(receipt, sandbox, secretValues, 0);
+  return deepRedactValue(receipt, sandbox, secretValues, 0, new WeakSet());
 }
 
 /**

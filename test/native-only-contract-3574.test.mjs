@@ -609,15 +609,18 @@ test('3574 Part 4 integration: Layer-2 validator flags mock-only tests on kind: 
   assert.ok(bigMs < 300, `expected linear O(N) probe scan on 100KB input, got ${bigMs.toFixed(1)}ms`);
 });
 
-test('3574 docs & skills: product and verification references define native-only contract and all 4 real-host classes without history words', () => {
+test('3574 docs & skills: prompting, product, and verification references define native-only contract and all 4 real-host classes without history words', () => {
+  const promptingDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/prompting.md'), 'utf8');
   const productDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/product.md'), 'utf8');
   const verificationDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/verification.md'), 'utf8');
 
-  assert.match(productDoc, /## 5\. `kind: native-only` boundary prompt contract/);
-  assert.match(productDoc, /Boundary & runtime contract/);
-  assert.match(productDoc, /Error mapping & failure behavior/);
-  assert.match(productDoc, /Real-host verification cases/);
-  assert.match(productDoc, /complete executable specification/i);
+  assert.match(promptingDoc, /## 3\. Dependency declarations and `kind: native-only`/);
+  assert.match(promptingDoc, /Boundary & runtime contract/);
+  assert.match(promptingDoc, /Error mapping & failure behavior/);
+  assert.match(promptingDoc, /Real-host verification cases/);
+  assert.match(promptingDoc, /complete executable boundary specification/i);
+  assert.match(productDoc, /## 5\. `kind: native-only` boundary specs/);
+  assert.match(productDoc, /prompting\.md#3-dependency-declarations-and-kind-native-only/);
   assert.doesNotMatch(productDoc, /thin\s+`kind: native-only`/i);
 
   for (const needle of [
@@ -630,6 +633,7 @@ test('3574 docs & skills: product and verification references define native-only
   }
 
   for (const [name, content] of [
+    ['skills/pdd/references/prompting.md', promptingDoc],
     ['skills/pdd/references/product.md', productDoc],
     ['skills/pdd/references/verification.md', verificationDoc],
   ]) {
@@ -919,10 +923,12 @@ test('3574 R1 regressions (#1, #3-#10): ReDoS safety, mocked primitives, 4-class
   assert.ok(batchProbe.classes.includes('multi-turn-cli-state'));
   assert.ok(ms9 < 250, `batch helper scan took ${ms9.toFixed(1)}ms on 8000 single-line calls`);
 
-  // Finding #10 [P2]: skills/pdd/references/product.md defines complete executable native-only specification prompts (not thin stubs).
+  // Finding #10 [P2]: skills/pdd/references/prompting.md §3 defines complete executable native-only boundary specs (and product.md links it, never thin stubs).
+  const promptingDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/prompting.md'), 'utf8');
   const productDoc = readFileSync(join(process.cwd(), 'skills/pdd/references/product.md'), 'utf8');
   assert.doesNotMatch(productDoc, /thin\s+`kind: native-only`/i);
-  assert.match(productDoc, /complete executable specification/i);
+  assert.match(promptingDoc, /complete executable boundary specification/i);
+  assert.doesNotMatch(promptingDoc, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i);
   assert.doesNotMatch(productDoc, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i);
 });
 
@@ -1692,9 +1698,13 @@ test('R1 Finding #2 integration: autopilot-core runValidatorV2Gate enforces nati
     'human verification card names the unverified native-only module',
   );
 
-  // Now verify a second PR on the same kind: native-only module (discovered via pdd-bindings.json) WITH a real executed SQLite smoke test PASSES and merges!
+  // Now verify a second PR on the same kind: native-only module (discovered via base pdd-bindings.json) WITH a real executed SQLite smoke test PASSES and merges!
   const w2 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
   w2.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  w2.baseCommit('pdd-bindings.json', JSON.stringify({
+    schema_version: 'pdd.bindings.v1',
+    modules: [{ module: 'src/trust/store.mjs', prompt: 'prompts/trust/store.prompt.md' }],
+  }, null, 2));
   w2.issue(102, { title: 'Add real SQLite smoke for native-only trust store' });
   await w2.tick();
   const buildCwd2 = w2.job(102, 'build').cwd;
@@ -1713,10 +1723,6 @@ test('R1 Finding #2 integration: autopilot-core runValidatorV2Gate enforces nati
     '## Dependencies',
     'None.',
   ].join('\n'));
-  writeFile(buildCwd2, 'pdd-bindings.json', JSON.stringify({
-    schema_version: 'pdd.bindings.v1',
-    modules: [{ module: 'src/trust/store.mjs', prompt: 'prompts/trust/store.prompt.md' }],
-  }, null, 2));
   writeFile(buildCwd2, 'src/trust/store.mjs', 'export function openTrustStore(db) { return db; }\n');
   writeFile(
     buildCwd2,

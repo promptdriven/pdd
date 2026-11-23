@@ -1744,7 +1744,10 @@ test('R4 sync regression: package.json manifest is covered by executed real test
   await wOk.tick(); // #3554 defers suiteState until review PASS because PR modifies package.json.
   wOk.suite(73, 0);
   await wOk.tick();
-  assert.equal(wOk.github.merges.length, 1, 'package.json + covered src/a.mjs + real test merges cleanly');
+  assert.equal(wOk.github.merges.length, 0, 'Check 4 holds protected package.json edit for manual human merge');
+  const comments73 = wOk.comments(73).join('\n');
+  assert.doesNotMatch(comments73, /missing-e2e|Unverified boundary: runtime-code/i, 'Validator v2 accepted covered src/a.mjs + real test');
+  assert.match(comments73, /Protected path approval required \(package\.json\)/i);
 
   // 2. package.json + covered src/a.mjs + UNCOVERED src/b.mjs MUST still fail closed
   const wPartial = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });

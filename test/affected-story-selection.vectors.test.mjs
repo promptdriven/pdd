@@ -129,7 +129,7 @@ test('3146 invalid-option-combinations rejects before state/auth/network',async 
 
 test('3146 public-help-completion-and-docs publishes exact form and accepts flag',async t=>{
   const data=vector('public-help-completion-and-docs'),setup=affectedFixture(t);
-  const help=await cli(setup,['test','--help']);assert.equal(help.code,0);assert.ok(help.stdout.includes(data.given.new_form));
+  const help=await cli(setup,['test','--help']);assert.equal(help.code,0);assert.ok(help.stdout.replace(/\n      /g,' ').includes(data.given.new_form));
   const completion=await cli(setup,['completion','bash']);assert.equal(completion.code,0);assert.match(completion.stdout,/--affected/);
   assert.ok(readFileSync(new URL('../docs/cli.md',import.meta.url),'utf8').includes(data.given.new_form));
 });
