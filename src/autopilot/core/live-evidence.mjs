@@ -307,55 +307,46 @@ function extractRecipeScriptPaths(baseVerify, { headTree = null, baseTree = null
   ];
   const hasBaseLookup = Boolean((baseTipValid && (headTree || baseTree)) || (!baseTipValid && baseTree));
   const baseCtx = { hasBaseLookup, headTree, baseTree, baseTip, baseTipValid, fs };
-  const candidateTokens = [];
-  const cdDirs = new Set();
   for (const cmd of commands) {
     const tokens = collectCommandCandidates(cmd, 0, [], baseCtx);
+    let curDir = '';
+    const dirStack = [];
     for (let i = 0; i < tokens.length; i += 1) {
       const tok = tokens[i];
-      candidateTokens.push(tok);
-      if (tok === 'cd' && i + 1 < tokens.length) {
-        const dir = normalizeCandidateRepoPath(tokens[i + 1]);
-        if (dir) cdDirs.add(dir);
-      }
-    }
-  }
-  for (const raw of candidateTokens) {
-    const trimmedRaw = typeof raw === 'string' ? raw.trim() : '';
-    const cand = normalizeCandidateRepoPath(trimmedRaw);
-    if (!cand) {
-      // Handle `cd <dir> && node ../rel/script.mjs` by resolving relative to tracked `cd` directories before rejecting `..`.
-      if (trimmedRaw && !trimmedRaw.startsWith('-') && !trimmedRaw.startsWith('/') && !trimmedRaw.includes('\\') && !trimmedRaw.includes('\0') && cdDirs.size > 0) {
-        for (const dir of cdDirs) {
-          const joined = normalizeCandidateRepoPath(`${dir}/${trimmedRaw}`);
-          if (!joined || TEST_FILE_RE.test(joined)) continue;
-          if (SCRIPT_EXT_RE.test(joined) || (hasBaseLookup && fileExistsInBase(joined, baseCtx))) {
-            found.add(joined);
-          }
+      if ((tok === 'cd' || tok === 'pushd') && i + 1 < tokens.length) {
+        const arg = String(tokens[i + 1] ?? '').trim();
+        if (tok === 'pushd') dirStack.push(curDir);
+        if (arg && !arg.startsWith('-') && !arg.startsWith('/') && !arg.includes('\\') && !arg.includes('\0')) {
+          const rawDir = curDir ? `${curDir}/${arg}` : arg;
+          const normDir = posix.normalize(rawDir).replace(/^(?:\.\/)+/, '');
+          if (normDir === '.' || normDir === '') curDir = '';
+          else if (!normDir.startsWith('..')) curDir = normDir;
         }
+        i += 1;
+        continue;
       }
-      continue;
-    }
-    if (TEST_FILE_RE.test(cand)) continue;
-    if (SCRIPT_EXT_RE.test(cand)) {
-      found.add(cand);
-      // Resolve relative script paths (both bare and nested, e.g. `cd scripts && node benchmark/run.mjs`) against cd dirs.
-      for (const dir of cdDirs) {
-        const joined = normalizeCandidateRepoPath(`${dir}/${cand}`);
-        if (joined && !TEST_FILE_RE.test(joined)) found.add(joined);
+      if (tok === 'popd') {
+        if (dirStack.length > 0) curDir = dirStack.pop();
+        continue;
       }
-      if (!cand.includes('/') && (!hasBaseLookup || !fileExistsInBase(cand, baseCtx))) {
-        found.add(`**/${cand}`);
+      const trimmedRaw = typeof tok === 'string' ? tok.trim() : '';
+      if (!trimmedRaw || trimmedRaw.startsWith('-') || trimmedRaw.startsWith('/') || trimmedRaw.includes('\\') || trimmedRaw.includes('\0')) continue;
+      const relCandidates = new Set();
+      if (curDir) {
+        const joined = normalizeCandidateRepoPath(`${curDir}/${trimmedRaw}`);
+        if (joined) relCandidates.add(joined);
       }
-      continue;
-    }
-    if (hasBaseLookup && fileExistsInBase(cand, baseCtx)) {
-      found.add(cand);
-    } else if (hasBaseLookup) {
-      for (const dir of cdDirs) {
-        const joined = normalizeCandidateRepoPath(`${dir}/${cand}`);
-        if (joined && !TEST_FILE_RE.test(joined) && fileExistsInBase(joined, baseCtx)) {
-          found.add(joined);
+      const rootCand = normalizeCandidateRepoPath(trimmedRaw);
+      if (rootCand) relCandidates.add(rootCand);
+      for (const cand of relCandidates) {
+        if (TEST_FILE_RE.test(cand)) continue;
+        if (SCRIPT_EXT_RE.test(cand)) {
+          found.add(cand);
+          if (!cand.includes('/') && (!hasBaseLookup || !fileExistsInBase(cand, baseCtx))) {
+            found.add(`**/${cand}`);
+          }
+        } else if (hasBaseLookup && fileExistsInBase(cand, baseCtx)) {
+          found.add(cand);
         }
       }
     }

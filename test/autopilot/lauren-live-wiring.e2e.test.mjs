@@ -1202,8 +1202,8 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
         },
         {
           id: 'cd-gate',
-          when: ['src/**', 'tools/**'],
-          run: 'cd tools && node gate.mjs && cd scripts && node sub/eval.mjs',
+          when: ['src/**', 'tools/**', 'scripts/**'],
+          run: 'cd tools && node gate.mjs && cd ../scripts && cd sub && node eval.mjs && cat MANIFEST',
         },
         {
           id: 'untracked-case-probe',
@@ -1217,6 +1217,8 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   writeFileSync(join(nestedShellDir, 'tools/gate.mjs'), 'process.exit(0);\n');
   mkdirSync(join(nestedShellDir, 'scripts/sub'), { recursive: true });
   writeFileSync(join(nestedShellDir, 'scripts/sub/eval.mjs'), 'process.exit(0);\n');
+  writeFileSync(join(nestedShellDir, 'scripts/sub/MANIFEST'), 'sub manifest\n');
+  writeFileSync(join(nestedShellDir, 'MANIFEST'), 'root manifest\n');
   writeFileSync(join(nestedShellDir, 'README.md'), '# Demo\n');
   ngit('add', '.');
   ngit('commit', '-m', 'base');
@@ -1229,7 +1231,7 @@ test('Loop 4 P0/P1 regressions: inherited account-key scrubbing + short secret r
   ngit('commit', '-m', 'head');
   const nHead = ngit('rev-parse', 'HEAD');
 
-  for (const nestedTarget of ['tools/plain-nested.mjs', 'tools/setup.mjs', 'tools/gate.mjs', 'scripts/sub/eval.mjs', 'scripts/verify my app.mjs']) {
+  for (const nestedTarget of ['tools/plain-nested.mjs', 'tools/setup.mjs', 'tools/gate.mjs', 'scripts/sub/eval.mjs', 'scripts/sub/MANIFEST', 'scripts/verify my app.mjs']) {
     const nestedProt = await collectLiveEvidenceContract({
       repo: 'acme/nested',
       job: { issue: 60, head: nHead },
