@@ -98,18 +98,23 @@ Check these boundaries in order and continue after failures:
   read-only account port. Limited and unknown are warnings. For Claude,
   unsupported read-only usage evidence is warning with `claude` and /usage advice;
   no generation call to discover allowance, and no credit/reset advice. On Linux when Codex is selected, `/proc/sys/kernel/apparmor_restrict_unprivileged_userns` is `1`, and `bwrap` is missing on `PATH`, emit an advisory `WARN codex-sandbox` with fix `sudo apt-get install -y bubblewrap` so read-only Codex sandboxes have Ubuntu's system AppArmor profile.
-- Setup: require a complete PDD block in AGENTS.md or CLAUDE.md, all seven skill
-  entrypoints in one selected provider's supported project/user skill root (fix:
-  `pdd setup`), and valid pdd.json autopilot mode/trust. Also scan user skill roots
+- Setup: require a complete PDD block in AGENTS.md or CLAUDE.md (`setup-block`,
+  fix: `pdd init`), the bundled `PDD_SKILL_NAMES` entrypoint (imported from
+  [skills install](skills-install.prompt.md)) in one selected provider's
+  supported project/user skill root (`setup-skills`, fix: `pdd setup`), and valid
+  pdd.json autopilot mode/trust (`setup-mode`, warning detail `Choose mode with
+  pdd autopilot observe or pdd autopilot auto; off does not start work`, fix:
+  `pdd autopilot observe`). Also scan user skill roots
   (`~/.agents/skills` and `CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`) for
-  unmarked non-symlink retired skill folders (`pdd-autopilot`, `pdd-check`,
-  `pdd-merge` lacking `.pdd-skill.json` and carrying `pdd-skills:` in `SKILL.md`
-  frontmatter): when any are present, emit a `WARN retired-skills` advisory naming
-  the folder(s) and a safely quoted `mkdir -p '<root>/.pdd-retired' && mv ...`
-  backup command without deleting anything or blocking readiness. Off warns; native
-  start owns mode admission. Describe observe versus auto authority,
-  owner/write-access trust even with [], explicit trusted users and strict approvals
-  in plain words. Never change mode or trust.
+  unmarked non-symlink `RETIRED_SKILL_NAMES` folders (imported from
+  [skills install](skills-install.prompt.md), lacking `.pdd-skill.json` and
+  carrying `pdd-skills:` in `SKILL.md` frontmatter): when any are present, emit a
+  `WARN retired-skills` advisory naming the folder(s) and a safely quoted
+  `mkdir -p '<root>/.pdd-retired' && mv ...` backup command without deleting
+  anything or blocking readiness. Off warns; native start owns mode admission.
+  Describe observe versus auto authority, owner/write-access trust even with [],
+  explicit trusted users and strict approvals in plain words. Never change mode
+  or trust.
 - GitHub settings (`settings-github`): Autopilot job worktrees and other machines
   start from GitHub, so they read `pdd.json` of the default branch there. Read it
   with `gh api repos/REPO/contents/pdd.json?ref=BRANCH` (REPO and BRANCH from the
@@ -123,7 +128,7 @@ Check these boundaries in order and continue after failures:
   |---|---|---|---|
   | No REPO or BRANCH, a failed read, or a file that is not a base64 JSON object | warn | `Autopilot settings on GitHub are unproved; doctor could not read pdd.json of the default branch` | `gh auth login && ` plus the read command, or `gh auth login` without REPO or BRANCH |
   | This checkout has a `pdd.json` that is not a JSON object | warn | `pdd.json in this checkout is not a JSON object; the GitHub comparison is unproved` | `vi pdd.json` |
-  | No file on GitHub and none in this checkout | warn | `pdd.json is missing in this checkout and on GitHub (BRANCH)` | `pdd setup` |
+  | No file on GitHub and none in this checkout | warn | `pdd.json is missing in this checkout and on GitHub (BRANCH)` | `pdd autopilot observe` |
   | No file on GitHub | warn | `pdd.json is only in this checkout; GitHub (BRANCH) has none, so other machines and Autopilot job worktrees do not see it` | `git add pdd.json && git commit -m "Add PDD settings" && git push`, plus ` # or pdd autopilot MODE` when the local mode is observe or auto |
   | No file in this checkout | warn | `pdd.json is only on GitHub (BRANCH): SETTINGS; this checkout has none` | `git fetch origin && git checkout origin/BRANCH -- pdd.json` |
   | The settings differ | warn | `GitHub: SETTINGS; this checkout: SETTINGS; Autopilot jobs use the GitHub copy` | The publish commands of that prompt's Check, joined with ` && `: `pdd autopilot MODE` (the local mode) when the modes differ, `pdd autopilot trust NAMES` and `pdd autopilot untrust NAME` |
@@ -133,11 +138,24 @@ Check these boundaries in order and continue after failures:
   'Accept: application/vnd.github.raw'`. A trust name or `origin/BRANCH` in a fix
   is shell-quoted unless it has only letters, digits and `_ . @ / -`. Doctor
   makes no GitHub write here: only the printed fix publishes.
-- Enumerate tracked *.prompt.md and report embedded Runtime interface blocks whose
-  status is not approved as advisory drafts that may need approval on first check
-  (plain Markdown prompts without an embedded Runtime interface block are ready as
-  is). Malformed or unreadable embedded blocks warn. Never approve them or block
-  doctor solely for drafts.
+- Enumerate tracked `*.prompt.md` and check approval state across plain-Markdown,
+  frontmatter `kind: native-only`, and legacy embedded `Runtime interface` prompts
+  without mutating files or blocking readiness. Resolve the Git common dir read-only
+  (`git rev-parse --path-format=absolute --git-common-dir`, falling back to
+  `git rev-parse --git-common-dir` resolved against `cwd`) and read
+  `<commonDir>/pdd/approvals.json` through `readPromptApprovals` using the injected
+  file port (warning with `approval journal unreadable` without throwing if the
+  common dir cannot be resolved or the journal cannot be read or parsed). Reject
+  symlinked, non-regular, or repo-escaping tracked prompt files as unreadable.
+  Report as advisory drafts (`warn`, fix `pdd approve <first-draft>`): any prompt
+  with malformed frontmatter or conflicting/duplicate declarations (both frontmatter
+  and an embedded block, or more than one embedded block); any legacy embedded
+  `Runtime interface` block that is invalid JSON, lacks `status === "approved"`, or
+  lacks a matching `prose_sha256` (`!== proseSha256(text)`); and any plain-Markdown or
+  valid frontmatter `kind: native-only` prompt without a matching `(path, proseSha256(text))`
+  entry in the approval journal (requiring `actor.kind === "terminal"` when `pdd.json`
+  sets `strict_approvals: true`). Unreadable files warn. Never approve prompts or
+  block doctor solely for drafts.
 - Read interpreter access through the [Runtime seam](runtime-seam.prompt.md) `health` check (`checkRuntimeHealth`)
   with the selected environment and injected gh/fetch/clock ports. No upload or job.
   Preserve its health rules, including a JSON 404 from an interpreter without the
@@ -163,7 +181,8 @@ Check these boundaries in order and continue after failures:
 - Workflow agents: read-only agy readiness.
 - [Codex limits](codex-limits.prompt.md): read-only account usage states.
 - [Multi-harness login pool](login-pool.prompt.md): `isCloudAccountsActive`, `pddManagedCodexHome`, `managedCodexAuthPath` and `managedClaudeSettingsPath` for isolated Cloud Codex and Cloud Claude sign-in detection.
-- [PDD to Runtime seam](runtime-seam.prompt.md#public-contract): required `health` (`checkRuntimeHealth`) classification and `runtimeOrigin` address rules.
+- [Approval policy](approval-policy.prompt.md): read-only `readPromptApprovals` journal lookup for plain-Markdown and frontmatter prompt approval state.
+- [PDD to Runtime seam](runtime-seam.prompt.md#public-contract): required `health` (`checkRuntimeHealth`) classification, `runtimeOrigin` address rules, and `runtimePreflightSlice` (`interfaceBlocks`, `parsePromptFrontmatter`, `proseSha256`).
 - [Autopilot settings on GitHub](autopilot-github.prompt.md): owns when two
   Autopilot settings differ, the `MODE, trust NAMES` form and the publish commands.
   Doctor reads GitHub with its own read-only run port, not with that module's ports.

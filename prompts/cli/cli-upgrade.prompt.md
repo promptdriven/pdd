@@ -18,12 +18,13 @@ Own `src/setup/cli-upgrade.mjs`. Export `detectGlobalInstallPrefix(packageRoot, 
   - On `--main`, resolve the 40-hex commit SHA of `promptdriven/pdd` `main` and install `github:promptdriven/pdd#<sha>`.
 - **Clean `EEXIST` remediation (no legacy backup/rollback):**
   - When `npm install` fails with `EEXIST`, print a clear 4-part remediation naming the conflicting `bin/pdd` path, the `npm uninstall -g pdd` fix, and the retry command without running destructive backup/rollback logic.
-- **Skill refresh and honest reporting:**
-  - Clear stale `release-check.json` under `resolvePddStateBase(env)`.
-  - Run `syncOwnedUserSkills({ packageRoot: targetPkgRoot, home, claudeConfigDir, codexHome, stateRoot, force: true, onError })`.
-  - Report updated skill folders, preserved/skipped unmarked stale folders (via `findSkills`), and any failed folders accurately without misleading `0 skills` wording.
+- **Two-step post-upgrade delegation, skill & MCP refresh, and honest reporting (`#3645`):**
+  - Clear stale `release-check.json` under `resolvePddStateBase(env)` (and `ports.stateHome` when injected).
+  - Resolve `targetPkgRoot` via `resolveInstalledRoot` and delegate post-upgrade skill and stale-MCP sync to the **newly installed binary** by spawning `[nodeBin, resolveInstalledBinEntry(targetPkgRoot, fs), 'setup', '--upgrade']` (with scrubbed Volta env when Volta, clean `env`, `PDD_NO_UPDATE_CHECK: '1'`, and bounded 60-second timeout) — both after a CLI upgrade and when the CLI is already up to date — so post-upgrade skill layouts never clash with pre-upgrade in-RAM `PDD_SKILL_NAMES`.
+  - Keep a safe fallback to `skills-install.mjs` (passing `env` to `syncOwnedUserSkills`) only when a unit test explicitly injects `ports.skillsInstall`, when `resolveInstalledBinEntry` returns `null`, or when spawning an older target binary (for example via `--main`) returns exit `2` for unknown `--upgrade`.
+  - Forward non-empty sync lines cleanly, report failures to `stderr` with exit `1`, and never print `"PDD skills are current."` when skills were updated, skipped, failed, or retired skills remain.
 
 ## Dependencies
 
 - Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before changing this prompt.
-- Uses [install kind](install-kind.prompt.md), [skills install](skills-install.prompt.md), [cached release notice](release-notice.prompt.md), and Layer-0 `src/shared/{state-dir,package-root}.mjs`.
+- Uses [install kind](install-kind.prompt.md), [skills install](skills-install.prompt.md) (fallback only), [cached release notice](release-notice.prompt.md), and Layer-0 `src/shared/{state-dir,package-root}.mjs`.

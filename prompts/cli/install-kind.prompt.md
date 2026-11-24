@@ -1,6 +1,6 @@
 # Global installation kind and Volta detection
 
-Own `src/shared/install-kind.mjs`. Export `quoteShellArg(text)`, `resolveVoltaNpmBin(voltaHome, ports)`, `scrubVoltaEnv(env, voltaHome)`, `classifyInstallKind(packageRoot, ports)`, `detectGlobalInstallPrefix(packageRoot, ports)`, `isLegacyUnscopedPddDir(pkgDir, fs, uid)`, `hasLegacyUnscopedPdd(prefixOrInstall, ports)`, `resolveInstalledRoot(installOrPrefix, fallbackRoot, fs)`, `npmCommandForInstall(install, action, spec, env)`, `formatNpmInstallCommand(install, spec)`, and `formatNpmUninstallCommand(install)`.
+Own `src/shared/install-kind.mjs`. Export `quoteShellArg(text)`, `resolveVoltaNpmBin(voltaHome, ports)`, `scrubVoltaEnv(env, voltaHome)`, `classifyInstallKind(packageRoot, ports)`, `detectGlobalInstallPrefix(packageRoot, ports)`, `isLegacyUnscopedPddDir(pkgDir, fs, uid)`, `hasLegacyUnscopedPdd(prefixOrInstall, ports)`, `resolveInstalledRoot(installOrPrefix, fallbackRoot, fs)`, `resolveInstalledBinEntry(pkgRoot, fs)`, `npmCommandForInstall(install, action, spec, env)`, `formatNpmInstallCommand(install, spec)`, and `formatNpmUninstallCommand(install)`.
 
 ## Domain decisions
 
@@ -23,6 +23,7 @@ Own `src/shared/install-kind.mjs`. Export `quoteShellArg(text)`, `resolveVoltaNp
 - **Legacy unscoped `pdd` and post-install root resolution:**
   - `hasLegacyUnscopedPdd` checks classic `<prefix>/[lib/]node_modules/pdd` and Volta `<voltaHome>/tools/image/packages/pdd[/[lib/]node_modules/pdd]` directories via `isLegacyUnscopedPddDir` (real non-symlink user-owned directory, no `.git`, `package.json` `"name": "pdd"` owning regular file `bin/pdd.mjs`).
   - `resolveInstalledRoot` checks Volta image paths (`@promptdriven/pdd` before `pdd`) for Volta installs and classic `[lib/]node_modules/` paths for npm-global installs.
+  - `resolveInstalledBinEntry(pkgRoot, fs)` reads `package.json`'s `bin` (`bin.pdd` or string `bin`, defaulting to `bin/pdd.mjs`) under `pkgRoot`, rejects absolute paths or `..` traversal/symlinks escaping `pkgRoot`, and returns the resolved path when it exists as a regular file inside `pkgRoot`, else `null`.
 
 ## Dependencies
 

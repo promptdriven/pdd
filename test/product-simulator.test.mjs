@@ -39,6 +39,11 @@ function trying(entry, fake) {
   if (entry.url.endsWith('/tests') || entry.url.endsWith('/approvals')) return { status: 200, json: { tests: [], approvals: [] } };
   return { status: 200, json: fake.tryJob(entry.url.split('/').at(-1)) };
 }
+async function productFake(t, answer) {
+  const fake = await fakeRuntime(t, answer);
+  fake.capacity = () => ({ status: 200, json: { ok: true, maintenance: false, features: ['lazy-interfaces'] } });
+  return fake;
+}
 async function open(setup, fake, options, words = []) {
   const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }, { openUrl: async () => true });
   const code = await runTry({ cwd: setup.repo, words, options: { '--no-open': true, '--no-wait': true, ...options } }, ports);
@@ -47,7 +52,7 @@ async function open(setup, fake, options, words = []) {
 
 
 test('whole product sends a composed map and source-bound owners, without authored writes',async t=>{
- const setup=coffee(t),fake=await fakeRuntime(t,trying);
+ const setup=coffee(t),fake=await productFake(t,trying);
  const result=await open(setup,fake,{'--product':true,'--journey':'J1'});
  assert.equal(result.code,0,result.err+result.out);
  assert.deepEqual(fake.posts.map(x=>x.command),['lint','try']);
@@ -63,7 +68,7 @@ test('whole product sends a composed map and source-bound owners, without author
  assert.ok(request.product_parts.find(p=>p.name==='server').prompt_paths.includes('prompts/server/server.prompt.md'));
  assert.equal(readFileSync(join(setup.repo,request.seed),'utf8'),setup.authored);
  assert.equal(existsSync(join(setup.repo,request.app_map)),false);
- assert.match(result.err,/up to 40 AI calls/);
+ assert.match(result.err,/up to 4 AI calls/);
  assert.match(result.err,/Product screens: phone · menu, barista · board/);
  assert.match(result.err,/3 handler\/background operations per tap, before drawing/);
  assert.equal((await open(setup,fake,{},[request.seed])).code,0);
@@ -76,7 +81,7 @@ test('whole product sends a composed map and source-bound owners, without author
 test('missing product capability stops before upload and old ignored names remain private',async t=>{
  const setup=coffee(t);
  let supported=false;
- const fake=await fakeRuntime(t,(entry,f)=>entry.url==='/v1/version'?{status:200,json:{features:supported?['product-parts-v1']:[]}}:trying(entry,f));
+ const fake=await productFake(t,(entry,f)=>entry.url==='/v1/version'?{status:200,json:{features:supported?['product-parts-v1']:[]}}:trying(entry,f));
  assert.equal((await open(setup,fake,{'--product':true})).code,5);
  assert.equal(fake.posts.length,0);
  supported=true;
@@ -89,7 +94,7 @@ test('missing product capability stops before upload and old ignored names remai
 });
 test('paused product is reopened with its same ID and no new upload',async t=>{
  const setup=coffee(t);let id=null,paused=false;
- const fake=await fakeRuntime(t,(entry,f)=>{
+ const fake=await productFake(t,(entry,f)=>{
   if(entry.url==='/v1/version')return {status:200,json:{features:['product-parts-v1']}};
   if(entry.url.endsWith('/reopen')){paused=false;return {status:200,json:f.tryJob(id)};}
   if(entry.method==='GET'&&entry.url.startsWith('/v1/runs/'))return {status:200,json:f.tryJob(id,undefined,paused?'paused':'running')};
@@ -104,7 +109,7 @@ test('paused product is reopened with its same ID and no new upload',async t=>{
 
 test('owner-tool access reopens the same paused product without resetting its world',async t=>{
  const setup=coffee(t);let paused=false,id=null,parts;
- const fake=await fakeRuntime(t,(entry,f)=>{
+ const fake=await productFake(t,(entry,f)=>{
   if(entry.url.endsWith('/model'))return paused?{status:409,json:{error:{code:'session-stopped'}}}:{status:200,json:{entries:[],product_parts:parts}};
   if(entry.url.endsWith('/state'))return {status:200,json:{world:{retained:'data'},actions:[]}};
   if(entry.url.endsWith('/reopen')){paused=false;return {status:200,json:f.tryJob(id)};}
@@ -120,7 +125,7 @@ test('owner-tool access reopens the same paused product without resetting its wo
 });
 test('an unknown product setup is read by its original ID and never resent',async t=>{
  const setup=coffee(t);let id=null;
- const fake=await fakeRuntime(t,(entry,f)=>{
+ const fake=await productFake(t,(entry,f)=>{
   if(entry.command==='try'){id=entry.request.requestId;return {status:200,json:f.job(id,'try','unknown',{session:{id,state:'unknown'}})};}
   if(entry.method==='GET'&&entry.url.startsWith('/v1/runs/'))return {status:200,json:f.job(id,'try','unknown',{session:{id,state:'unknown'}})};
   return trying(entry,f);
@@ -133,7 +138,7 @@ test('an unknown product setup is read by its original ID and never resent',asyn
 });
 
 test('a default selected journey retains its explicit starting values',async t=>{
- const setup=coffee(t),fake=await fakeRuntime(t,trying);
+ const setup=coffee(t),fake=await productFake(t,trying);
  const result=await open(setup,fake,{'--product':true});
  assert.equal(result.code,0,result.err+result.out);
  const posted=fake.posts.find(entry=>entry.command==='try');

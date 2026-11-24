@@ -4,13 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.1.50"
-description = "PDD: local Prompting guide, skills and recipes for your coding agent"
+version = "0.1.51"
+description = "Prompt Driven Development (PDD) CLI — write prompts as source, test and run them with the interpreter, and prove real code"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
+authors = [{ name = "PromptDriven" }]
 dependencies = []
-keywords = ["pdd", "prompt-driven-development", "cli", "ai", "coding-agent"]
+keywords = [
+  "pdd",
+  "prompt-driven-development",
+  "prompts",
+  "cli",
+  "ai",
+  "coding-agent",
+  "mcp",
+  "testing",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
@@ -18,11 +28,24 @@ classifiers = [
   "Operating System :: OS Independent",
   "Programming Language :: JavaScript",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development",
+  "Topic :: Software Development :: Code Generators",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Testing",
 ]
 
 [project.urls]
-Homepage = "https://github.com/promptdriven/pdd"
+Homepage = "https://promptdriven.ai"
+Documentation = "https://github.com/promptdriven/pdd/tree/main/docs"
 Repository = "https://github.com/promptdriven/pdd"
+Changelog = "https://github.com/promptdriven/pdd/releases"
 Issues = "https://github.com/promptdriven/pdd/issues"
 
 [project.scripts]
