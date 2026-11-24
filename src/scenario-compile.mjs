@@ -695,7 +695,7 @@ function normalizeOp(rawOp, section, extra) {
   fail(
     'invalid-check',
     section,
-    `Unknown check operator "${rawOp}". Allowed operators: =, !=, >=, <=, len>=, len<=, equals, not_equals, contains, not_contains, contains_all, count, exists, one_of, all_in, equals_ignore_case, at_least, at_most.`,
+    `Unknown check operator "${rawOp}". Allowed operators: =, ==, !=, <, <=, >, >=, len>=, length_at_least, len<=, length_at_most, equals, not_equals, contains, not_contains, contains_all, includes_all, count, exists, one_of, all_in, equals_ignore_case, at_least, at_most, lt, lte, gt, gte, integer_relation.`,
     extra,
   );
 }
