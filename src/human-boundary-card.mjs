@@ -1,4 +1,4 @@
-// Generated from prompts/cli/human-boundary-card.prompt.md (sha256: 298d633397532c9d24801ff1c9a34153d62bf374707ff04c5bb43cd1a8f5d36f).
+// Generated from prompts/cli/human-boundary-card.prompt.md (sha256: 3bb2a85af2ef244d2ee46cad58826432be719ff36abf8893084d16b3da80f4ca).
 import {
   TEST_SCHEMA,
   findTests,

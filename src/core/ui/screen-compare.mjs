@@ -272,7 +272,7 @@ export async function compareScreen({ url, drawingPath, cwd = process.cwd(), chr
     const messages = {
       'not-open': 'Deliberately open the app before rerunning this comparison. Opening can spend AI calls.',
       timeout: 'The Screen did not finish its 10-second ready wait. Wait for the app to settle, then rerun.',
-      'viewer-update-required': 'Update the Simulator Screen viewer to the supported readiness protocol, then rerun.',
+      'viewer-update-required': 'Update the Prompt Interpreter Screen viewer to the supported readiness protocol, then rerun.',
       'surface-unavailable': 'The ready Screen has no single accessible app surface. Reload or update the viewer, then rerun.',
       'state-read-failed': 'The Screen state could not be read. Reload to read its state, then rerun.',
       'render-failed': 'The app Screen could not render. Repair the render error, then rerun.',

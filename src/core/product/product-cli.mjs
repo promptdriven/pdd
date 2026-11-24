@@ -173,7 +173,7 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', t
         : [];
       // #3328 mechanical fix: only single-part slices mock other parts from contracts; `all`/journey runs test real unmocked cross-part integration while still protecting contracts/.
       const integrationGuidance = planned.part === 'all'
-        ? `Integration run across all parts: verify real unmocked cross-part journeys (no fake parts) and run \`pdd sim --product\`.${contractFiles.length ? ' Do not change contracts/ in this run.' : ''}`
+        ? `Integration run across all parts: verify real unmocked cross-part journeys (no fake parts) and run \`pdd --product\`.${contractFiles.length ? ' Do not change contracts/ in this run.' : ''}`
         : (contractFiles.length ? 'Other parts are fakes from their contracts. Do not change contracts/ in this run.' : '');
       const body = [
         parentIssueNumber ? `Part of #${parentIssueNumber} (product).` : '',

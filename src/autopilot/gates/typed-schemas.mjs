@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 75fde4547979ce8f760b5cb49996fe40b92c8567837622ceac4c2dd1c41f41ce).
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 691dd6196bed4cd3f73c6e54357b81dbbd926f01249066f198c14749055ad53b).
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { redactSecrets } from '../../secret-redaction.mjs';
 import { writeAtomicPrivate } from '../../shared/atomic-fs.mjs';

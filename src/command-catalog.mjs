@@ -3,32 +3,32 @@ import { NAMES } from './shared/command-names.mjs';
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of core commands; a later rename changes only NAMES.
 export { NAMES };
-const { test, lint, simulate } = NAMES;
+const { test, lint } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const group = (title, lines) => Object.freeze({ title, lines: Object.freeze(lines) });
 export const PUBLIC_HELP_TEXT = Object.freeze({
   heading: "PDD: prompt-driven development for your coding agent.",
-  usageLine: "Usage: pdd <command> [options]",
+  usageLine: "Usage: pdd <PROMPT.md|STORY|.> [args...]  |  pdd <command> [options]",
   quickStartLines: Object.freeze([
-    "  1. pdd setup                   Install /pdd skill & Simulator MCP (once).",
+    "  1. pdd setup                   Install /pdd skill & MCP tools (once).",
     "  2. pdd init                    Add the 4-line PDD block to this repo.",
     "  3. /pdd <task>                 Ask Claude Code (/pdd) or Codex ($pdd).",
     "  4. pdd prove                   Verify lint, tests, and real user paths.",
   ]),
   groups: Object.freeze([
     group("Core PDD workflow", [
+      "  pdd <PROMPT.md|STORY|.>        Run prompts on the Prompt Interpreter.",
       "  pdd status [--changed]         Offline prompts, Stories & Feature Map.",
       `  pdd ${lint} [STORY] [--diff]      Offline structural, SVG & diff lint.`,
       "  pdd prove [--base REF]         Run lint, tests & Feature Map recipes.",
       `  pdd ${test} [STORY...]            Run Story tests on the PDD interpreter.`,
-      `  pdd ${simulate} [STORY]           Try prompts interactively (short: sim).`,
       "  pdd approve PROMPT             Review prompt diff and record approval.",
       "  pdd update [FILE...]           Check changed code vs owning prompts.",
       "  pdd files [--json]             List prompts, Stories, tests & refusals.",
       "  pdd owner PATH...              Show which prompt owns each file.",
       "  pdd contracts [sync]           List or sync shared record schemas.",
       "  pdd jobs                       List active local interpreter jobs.",
-      "  pdd mcp                        Serve repository Simulator MCP tools.",
+      "  pdd mcp                        Serve repository Prompt Interpreter MCP.",
       "  pdd upgrade [--main]           Update global pdd & installed /pdd skill.",
     ]),
     group("Product & graph (pdd product --help)", [
@@ -93,7 +93,7 @@ Choose a delimiter absent as a whole line from the words and keep it quoted (--s
 const routes = [
   // Core PDD workflow
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }, { name: '--skills-dir', kind: 'text' }],
-    forms: [form('pdd setup [--yes] [--skills-dir PATH]', 'Install or refresh global PDD skills (~/.agents/skills, ~/.claude/skills, ~/.gemini/config/skills; plugin-aware for Claude Code; or custom PATH with --skills-dir) and offer Simulator MCP registration for detected Codex, Claude Code, Gemini and Antigravity configs. Never edits repositories or Autopilot settings. Pass --yes to register previewed MCP tools without prompting.')] },
+    forms: [form('pdd setup [--yes] [--skills-dir PATH]', 'Install or refresh global PDD skills (~/.agents/skills, ~/.claude/skills, ~/.gemini/config/skills; plugin-aware for Claude Code; or custom PATH with --skills-dir) and offer Prompt Interpreter MCP registration for detected Codex, Claude Code, Gemini and Antigravity configs. Never edits repositories or Autopilot settings. Pass --yes to register previewed MCP tools without prompting.')] },
   { id: 'init', prefix: ['init'], local: 'init', operands: [], options: [],
     forms: [form('pdd init', "Add or refresh the 4-line PDD block in this repository's CLAUDE.md (else AGENTS.md) and report detected language and test command; never edits root .gitignore.")] },
   { id: 'status', prefix: ['status'], local: 'status', operands: [{ name: 'path', type: 'text', optional: true, repeat: true }], options: [{ name: '--changed', kind: 'flag' }, { name: '--json', kind: 'flag' }],
@@ -109,7 +109,7 @@ const routes = [
       form(`pdd ${test} --retry BATCH [--json] [--details] [--timeout MIN]`, 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form(`pdd ${test} --reconcile REQUEST_ID [--json]`, 'Read-only reconciliation of a historical CHECK request UUID against the PDD interpreter without replaying checks, changing saved batches or releasing reservations.'),
       form(`pdd ${test} --explain-bindings [STORY...] [--json]`, 'Explain local resource edges, fixture selection and repairs before any paid call.'),
-      form(`pdd ${test} --files [STORY...] [--app-map PATH] [--json]`, 'List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator\'s app map.'),
+      form(`pdd ${test} --files [STORY...] [--app-map PATH] [--json]`, 'List the exact selected upload files and byte sizes; no network. --app-map selects the Prompt Interpreter\'s app map.'),
       form(`pdd ${test} --screen URL --drawing PATH [--look] [--json]`, 'Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium (--look also checks main colors, painted boxes and spacing within tolerance); no AI or interpreter calls.')] },
   // Offline-first PDD structural, SVG and diff lint (0 AI, 0 network, 0 batch-state writes); --remote runs hosted interpreter lint.
   { id: 'lint', prefix: [lint], local: 'lint', removed: ['check', '--lint'], implies: ['--lint'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
@@ -126,18 +126,23 @@ const routes = [
       form('pdd prove [--base REF] [--timeout MIN] [--json]', 'Run offline lint, diff checks, repository tests, and merge-base trusted verify.paths recipes against REF (default timeout: 10 min per step). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
       form('pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]', 'Run isolated base-vs-head bug-contrast proof in temporary worktrees: proves CMD fails on base with TEXT and passes on head (default timeout: 10 min per phase; --overlay adds extra files alongside changed tests). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
     ] },
-  // A quiet word (`sim`) parses like the prefix, with nothing added; help names `sim` once, completion never.
-  { id: 'try', prefix: [simulate], local: 'runtime-try', quiet: ['sim'], removed: ['try'], operands: [{ name: 'story', type: 'text', optional: true }],
-    options: [{name:'--product',kind:'flag'},{name:'--parts',kind:'text'},{name:'--journey',kind:'text'}, { name: '--agent', kind: 'text' }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' }, { name: '--fresh', kind: 'flag' },
+  // Direct Prompt Interpreter execution (empty prefix): pdd [OPTIONS] <PROMPT.md|STORY|.> [ARGS...]
+  { id: 'try', prefix: [], local: 'runtime-try', operands: [{ name: 'target', type: 'text', optional: true, repeat: true }],
+    options: [{ name: '--product', kind: 'flag' }, { name: '--parts', kind: 'text' }, { name: '--journey', kind: 'text' }, { name: '--agent', kind: 'text' }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' }, { name: '--fresh', kind: 'flag' },
       { name: '--page', kind: 'flag' }, { name: '--cli', kind: 'flag' }, { name: '--shell', kind: 'flag' }, { name: '--save-last', kind: 'flag' },
       { name: '--serve', kind: 'optional-integer', min: 1, max: 65535, default: 8080 }, { name: '--max-calls', kind: 'integer', min: 1, max: 1000 },
-      { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--no-wait', kind: 'flag' }],
-    forms: [form(`pdd ${simulate} --product [--parts PARTS] [--journey JOURNEY] [--max-calls N] [--no-open] [--no-wait]`, 'Compose declared product maps, data and planned operations into one Simulator.'),form(`pdd ${simulate} [STORY|PROMPT.md] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--fresh] [--no-open] [--no-wait] [--agent NAME]`, 'Open the Story or prompt automatically: a command-line program opens a shell, HTTP routes start on localhost with an example request, screens (including single-file plain-prose UI prompts without app-map.json or Runtime interface) open the PDD Simulator page, and typed operations open its Form tab. With no operand, open the whole project (or the sole .prompt.md when no Stories exist). Make a session on the PDD interpreter with your gh login; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. --fresh requests fresh uncached interpreter execution (fresh: true; also accepted with --page, --cli and --serve). With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story\'s test file.'),
-      form(`pdd ${simulate} [STORY|PROMPT.md] --page [--new] [--fresh]`, 'Open the Simulator page explicitly.'),
-      form(`pdd ${simulate} [STORY|PROMPT.md] --cli [--shell] [--max-calls N] [--new] [--fresh]`, 'Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell. Use --shell alone to open the shell.'),
-      form(`pdd ${simulate} [STORY|PROMPT.md] --serve [PORT] [--max-calls N] [--new] [--fresh]`, 'Serve real HTTP requests through your Simulator session on localhost (default port 8080).'),
-      form(`pdd ${simulate} --save-last`, 'Save the last terminal command and its output in the original Story test file.'),
-      form(`pdd ${simulate} --stop [STORY|PROMPT.md]`, 'Stop the open Simulator link of a Story, prompt, or exact Try ID.')] },
+      { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--no-wait', kind: 'flag' },
+      { name: '--data', kind: 'text' }, { name: '--show-data', kind: 'flag' }, { name: '--quiet', kind: 'flag' }, { name: '-q', kind: 'flag' }],
+    forms: [
+      form('pdd [OPTIONS] <PROMPT.md|app-map.json> [ARGS...]', 'Run a prompt program directly on the PDD interpreter (Python-style: options before the file belong to pdd; trailing args pass verbatim to CLI or typed prompts, or use -- to force passthrough). Prefix options include --fresh, --new, --data FILE, --show-data, -q/--quiet, --page, --cli, --shell, --serve [PORT], --max-calls N, --tab, --app-map PATH, --no-open, --no-wait, --agent NAME, and --stop.'),
+      form('pdd <PROMPT.md|STORY|.> [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--fresh] [--no-open] [--no-wait] [--agent NAME]', 'Open the prompt, Story, or whole project (.) automatically on the Prompt Interpreter: a command-line program opens a shell, HTTP routes start on localhost with an example request, screens (including single-file plain-prose UI prompts without app-map.json or Runtime interface) open the Prompt Interpreter Screen page, and typed operations open its Form tab. Make a session on the PDD interpreter with your gh login; it ends in 24 hours. A new session defaults to 400 calls; --max-calls accepts 1 to 1000. --fresh requests fresh uncached interpreter execution (fresh: true; also accepted with --page, --cli and --serve). With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each saved test case to the Story\'s test file.'),
+      form('pdd <PROMPT.md|STORY|.> --page [--new] [--fresh]', 'Open the Prompt Interpreter browser page explicitly.'),
+      form('pdd <PROMPT.md|STORY|.> --cli [--shell] [--max-calls N] [--new] [--fresh]', 'Run your program in your terminal through a Prompt Interpreter session; prints a PATH line, or opens a shell with --shell. Use --shell alone to open the shell.'),
+      form('pdd <PROMPT.md|STORY|.> --serve [PORT] [--max-calls N] [--new] [--fresh]', 'Serve real HTTP requests through your Prompt Interpreter session on localhost (default port 8080).'),
+      form('pdd --product [--parts PARTS] [--journey JOURNEY] [--max-calls N] [--no-open] [--no-wait]', 'Compose declared product maps, data and planned operations into one Prompt Interpreter session.'),
+      form('pdd --save-last [STORY]', 'Save the last terminal command and its output in the original Story test file.'),
+      form('pdd --stop [STORY|PROMPT.md]', 'Stop the open Prompt Interpreter link of a Story, prompt, or exact Try ID.'),
+    ] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [{name:'--said',kind:'text'}],
     forms: [form('pdd approve PROMPT [--said WORDS]', "Show one prompt's changes since its last approval and approve only that prompt. " + approvalHelp('pdd approve PATH'))] },
   { id: 'files', prefix: ['files'], local: 'project-files', operands: [], options: [{ name: '--json', kind: 'flag' }],
@@ -278,11 +283,15 @@ const routes = [
   { id: 'version.detailed', prefix: ['-VV'], local: 'version-detailed', operands: [], options: [],
     forms: [form('pdd -VV', 'Show this package version and the interpreter build and supported formats; unknown when unavailable. Uses existing gh sign-in, with no AI call.')] },
 ];
+const retired = (words, next) => Object.freeze({
+  words: Object.freeze(words),
+  message: `pdd ${words.join(' ')} was removed. ${next}`,
+});
 export const REMOVED_COMMANDS = Object.freeze([
-  Object.freeze({
-    words: Object.freeze(['workflow']),
-    message: 'pdd workflow was removed. Use /pdd (or $pdd) in your coding agent, pdd prove for base-vs-head proof, or pdd autopilot for headless issue runs.',
-  }),
+  retired(['simulate'], 'Run pdd <PROMPT.md|STORY> instead.'),
+  retired(['sim'], 'Run pdd <PROMPT.md|STORY> instead.'),
+  retired(['try'], 'Run pdd <PROMPT.md|STORY> instead.'),
+  retired(['workflow'], 'Use /pdd (or $pdd) in your coding agent, pdd prove for base-vs-head proof, or pdd autopilot for headless issue runs.'),
 ]);
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/completion.prompt.md (sha256: 6cf21ebda8c11a0eb521f53e1f32f111ccda79a8d6e46e30eeb5ded301e9350a).
+// Generated from prompts/cli/completion.prompt.md (sha256: 0cdf98aaefc93c87c7c35056987bf0053c42ca5f19671dc7d54ca5bb584009ac).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 function add(map, key, value) {
@@ -13,6 +13,7 @@ function candidateMaps() {
   const fourth = new Map();
   for (const { options, ...rest } of PUBLIC_COMMAND_ROUTES) {
     const route = { ...rest, options: options.filter(option => !option.hidden) };
+    if (!route.prefix.length) continue;
     if (route.prefix[0]) first.add(route.prefix[0]);
     if (route.prefix.length > 1) add(second, route.prefix[0], route.prefix[1]);
     else {
@@ -33,7 +34,7 @@ function candidateMaps() {
       }
     }
   }
-  for (const route of PUBLIC_COMMAND_ROUTES) if (!route.prefix[0].startsWith('-')) add(second, 'help', route.prefix[0]);
+  for (const route of PUBLIC_COMMAND_ROUTES) if (route.prefix[0] && !route.prefix[0].startsWith('-')) add(second, 'help', route.prefix[0]);
   return { first: [...first].sort(), second, third, fourth };
 }
 
@@ -44,7 +45,14 @@ export function renderCompletion(shell) {
   if (shell !== 'bash' && shell !== 'zsh') throw new TypeError('Choose bash or zsh.');
   const maps = candidateMaps();
   const valueChoices = new Map();
-  for(const route of PUBLIC_COMMAND_ROUTES) for(const option of route.options) if(option.choices) valueChoices.set(`${route.prefix[0]}:${option.name}`,option.choices);
+  for (const route of PUBLIC_COMMAND_ROUTES) {
+    for (const option of route.options) {
+      if (!option.hidden && option.choices) {
+        const key = route.prefix.length ? `${route.prefix[0]}:${option.name}` : `*:${option.name}`;
+        valueChoices.set(key, option.choices);
+      }
+    }
+  }
   const bashValues = [...valueChoices].map(([name,values])=>`    ${name}) COMPREPLY=( $(compgen -W '${quoteWords(values)}' -- "$current") ); return ;;`).join('\n');
   const zshValues = [...valueChoices].map(([name,values])=>`    ${name}) choices=(${quoteWords(values)}); _describe "PDD option" choices; return ;;`).join('\n');
   const secondCases = [...maps.second].map(([key, values]) => `      ${key}) choices='${quoteWords(values)}' ;;`).join('\n');

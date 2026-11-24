@@ -216,21 +216,21 @@ export async function setupAgentMcp(
   if (!changes.length) {
     if (!hadError) {
       say(candidates.length
-        ? 'PDD Simulator MCP tools already registered. No config change.'
+        ? 'PDD Prompt Interpreter MCP tools already registered. No config change.'
         : 'No Codex, Claude Code, Gemini or Antigravity installation found. No config change.');
     }
     return hadError ? 1 : 0;
   }
 
   for (const change of changes) say(`${change.name}: ${change.file}\n${change.preview}`);
-  say('Only the PDD server is approved to run on your intent. Runs use the Simulator call budget and appear on its page. Claude Code keeps its normal tool approval controls.');
+  say('Only the PDD server is approved to run on your intent. Runs use the Prompt Interpreter call budget and appear on its page. Claude Code keeps its normal tool approval controls.');
 
   if (!yes) {
     if (!interactive) {
       say('PDD MCP registration skipped. No config change.');
       return hadError ? 1 : 0;
     }
-    const question = 'Register these PDD Simulator MCP tools? [y/N] ';
+    const question = 'Register these PDD Prompt Interpreter MCP tools? [y/N] ';
     let answer;
     if (confirm) {
       stdout.write(question);
@@ -269,7 +269,7 @@ export async function setupAgentMcp(
       safePath(change.file, change.boundary);
       const mode = change.before === null ? 0o600 : existingMode(change.file);
       writeAtomicPrivate(null, change.file, change.after, 0o700, mode);
-      say(`${change.updating ? 'Updated' : 'Registered'} PDD Simulator MCP tools for ${change.name} in ${change.file}.`);
+      say(`${change.updating ? 'Updated' : 'Registered'} PDD Prompt Interpreter MCP tools for ${change.name} in ${change.file}.`);
     } catch (error) {
       const warning = error.code === 'PDD_MCP_SYMLINK';
       stderr.write(`pdd setup: ${warning ? 'warning: ' : ''}${String(error.message).split(/[\r\n]/)[0]}\n`);
