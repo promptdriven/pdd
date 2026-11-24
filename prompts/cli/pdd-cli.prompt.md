@@ -46,9 +46,13 @@ All existing interface declarations and transport defaults remain in force.
   - Non-blocking `gh auth token` check (skipped when `--upgrade` is passed): when `gh` is present and returns a non-empty token, print `GitHub CLI (gh) sign-in detected (for promptdriven.ai).`; when `gh` is missing or signed out, print `GitHub CLI (gh) is not signed in — run \`gh auth login\` or visit https://promptdriven.ai/login (continuing setup).` (never blocks exit 0 and never claims a live network check).
   - Calls [skills install](skills-install.prompt.md) `setupSkills({ packageRoot, cwd, home, claudeConfigDir, env, codexHome, skillsDir })`: installs/syncs bundled skills into user global roots (`~/.agents/skills`, `~/.claude/skills` unless Claude plugin is installed, and `~/.gemini/config/skills` when Antigravity is detected), or targets ONLY `skillsDir` when `--skills-dir PATH` is provided. Shortens paths under `$HOME` to `~/...` in status output lines (keeping exact paths outside `$HOME` and in error/stale diagnostics). Prints `Removed retired PDD skills from <displayRoot>: <summary>` for **every** agent whose retired skills/symlinks were removed (not only `pluginManaged`), listing all names when `<= 3` removed or `<first>, <second>, +<rest> more (<total> total)` when `> 3` to avoid multi-line wrapping walls. In `--upgrade` mode, omits idle `PDD skills found in ...` and `Done!` chatter when nothing changed, and runs read-only `findSkills` after sync so any remaining project-local, secondary, or plugin-adjacent stale/retired skills are surfaced honestly.
   - Calls [agent MCP setup](agent-mcp-setup.prompt.md) `setupAgentMcp({ env, packageRoot }, { stdin, stdout, stderr, confirm, interactive, yes, upgradeOnly: upgrade })`: `--yes` prints the compact MCP summary and applies registrations without prompting; `--upgrade` silently refreshes only already-registered stale PDD MCP entries without prompting or touching unregistered agents; without `--yes`/`--upgrade` in a non-interactive terminal, MCP registration is skipped safely; in a TTY without `--yes`/`--upgrade`, shows a compact 1-line-per-agent `~/` summary and prompts `[y/N/d]` where `d` expands exact per-agent JSON/TOML diffs before confirming.
-  - Calls [PATH diagnostics](path-diagnostic.prompt.md) with `mode: 'setup'` (skipped when `--upgrade` is passed; quiet when clean, conflict report on stderr when shadowed).
+  - Calls [PATH diagnostics](path-diagnostic.prompt.md) with `mode: 'setup'` (skipped when `--upgrade` is passed; quiet when clean, conflict report on stderr when shadowed) and proactively emits concise dual-install / login-shell split warnings via `formatHostInstallWarnings` (or injected `hostInstallWarnings`) on stderr whenever competing installs or shell splits exist (also skipped when `--upgrade` is passed, because `pdd upgrade` emits them once after `setup --upgrade`).
   - Skips post-command automatic skill sync and release-notice network checks.
 - **Ordinary `--version` retired-skill warning:** alongside `stale` warnings from `findSkills`, emit a clear `stderr` warning whenever `result.retiredSkills` is non-empty (naming the folder and retired skill names, advising `pdd setup` for user folders).
+- **`doctor [--json]` (read-only host health check):**
+  - Dispatches directly to [Host doctor](doctor.prompt.md) `runDoctor({ cwd, env, packageRoot, json }, { stdout, stderr, ...doctorPorts })` (or injected `doctor`).
+  - Strictly read-only: skips post-command automatic skill sync, release-notice checks, and top-level `pathDiagnostic`.
+  - Exits `0` when healthy, `1` when actionable host issues are found, or `2` on invalid arguments.
 - **`init` (per-repo):**
   - Calls [project setup](project-setup.prompt.md) `initProject({ cwd, packageRoot })` to upsert the canonical 4-line PDD block in `CLAUDE.md` (if present) else `AGENTS.md`, detect language/test command, and never edit root `.gitignore`. Prints concise status lines and exits 0 (or prints error to stderr and exits 1).
   - Skips post-command automatic skill sync and release-notice network checks.
@@ -56,7 +60,7 @@ All existing interface declarations and transport defaults remain in force.
   - Calls [repo status](status.prompt.md) `runStatus({ cwd, paths, changed, json }, { stdout, stderr })`. Zero network or AI calls; skips skill sync and release-notice checks.
 - **`upgrade [--main]`:**
   - Dispatches directly to [CLI upgrade](cli-upgrade.prompt.md) `runCliUpgrade({ cwd, env, main, packageRoot }, ports)` with zero Autopilot imports.
-- **Release-notice exclusions:** skip the cached release-notice check on discovery, `--json`, `update-sync`, `project-files`, `setup`, `init`, and `status` routes.
+- **Release-notice exclusions:** skip the cached release-notice check on discovery, `--json`, `update-sync`, `project-files`, `setup`, `doctor`, `init`, and `status` routes.
 
 ## Authoring
 
@@ -97,6 +101,15 @@ true only for --json and file from --file. Allow dependencies.autopilotRegressio
 and autopilotRegressionsPorts for tests. Validate the normal {exitCode,message}
 reply, print once to stdout on zero and stderr otherwise. An exception prints a
 finite safe failure and exits 1. Do not load the launcher or remote settings.
+
+Dispatch `autopilot-investigate` directly to
+[Autopilot core engine](autopilot-core.prompt.md)
+`runAutopilotInvestigate({cwd,env,date,json,writeIssues,maxIssues}, autopilotInvestigatePorts)`,
+with `json` true only for `--json`, `writeIssues` true only for `--write-issues`,
+`date` from `--date`, and `maxIssues` from `--max-issues`. Allow
+`dependencies.autopilotInvestigate` and `autopilotInvestigatePorts` for tests.
+Validate the `{exitCode,message}` reply, print once to stdout on zero and stderr
+otherwise, and catch unexpected errors with one finite stderr line and exit 1.
 
 ## Dependencies
 
@@ -140,7 +153,7 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
   generation, runtime, verification and testing: it owns command validation and
   exact input-error messages. The CLI owns only their stream and exit handling.
 
-- [Skills install](skills-install.prompt.md), [CLI upgrade](cli-upgrade.prompt.md), [project setup](project-setup.prompt.md), [agent MCP setup](agent-mcp-setup.prompt.md), [PATH diagnostics](path-diagnostic.prompt.md), and [cached release notice](release-notice.prompt.md): required authoring/generation/runtime/verification/testing context for laptop `pdd setup`, per-repo `pdd init`, automatic post-upgrade sync of marker-owned user skill folders, `pdd upgrade [--main]` dispatch, their streams and consent, optional PATH reporting, and the 24-hour cached CLI update notice.
+- [Skills install](skills-install.prompt.md), [CLI upgrade](cli-upgrade.prompt.md), [Host doctor](doctor.prompt.md), [project setup](project-setup.prompt.md), [agent MCP setup](agent-mcp-setup.prompt.md), [PATH diagnostics](path-diagnostic.prompt.md), and [cached release notice](release-notice.prompt.md): required authoring/generation/runtime/verification/testing context for laptop `pdd setup`, read-only `pdd doctor [--json]`, per-repo `pdd init`, automatic post-upgrade sync of marker-owned user skill folders, `pdd upgrade [--main]` dispatch, their streams and consent, optional PATH reporting, and the 24-hour cached CLI update notice.
 
 Native integration uses the public APIs linked in the route sections below. Runtime bindings cover only the declared operations and supplied replies; unrelated command effects remain native.
 
@@ -207,7 +220,7 @@ exit code as the result fields below. This transport does not change that
 function's signature. Invalid syntax is resolved locally before any dependency
 with external effects is invoked; no runtime resource is called for that path.
 
-Optional fields in the existing `dependencies` object may inject `setupSkills`, `setupProject`, `initProject`, `projectStatus`, `setupAgentMcp`, `cliUpgrade`, `localLint`, `proveRunner`, and `pathDiagnostic` functions. Defaults remain the public package modules; these are dependency substitutions, not argv options or new operations.
+Optional fields in the existing `dependencies` object may inject `setupSkills`, `setupProject`, `initProject`, `projectStatus`, `setupAgentMcp`, `cliUpgrade`, `doctor`, `doctorPorts`, `hostInstallWarnings`, `localLint`, `proveRunner`, and `pathDiagnostic` functions. Defaults remain the public package modules; these are dependency substitutions, not argv options or new operations.
 
 ## Local contract commands
 
@@ -1221,4 +1234,4 @@ Route `pdd test --target code` to the local compiled Story checker without conta
 
 Dispatch local `accounts` by dynamically importing [Cloud accounts CLI](accounts-cli.prompt.md) (`accountsCli ?? await import('./accounts-cli.mjs')`) and calling `runAccountsCli({commandId: plan.commandId, operands: [...plan.operands], options: {...plan.options}, cwd, env, stdin}, accountsPorts)`. When `result.message` is non-empty, write it to `stdout` on exit 0 or `stderr` otherwise; keep `stdout` silent when `result.message === ''` (such as `pdd accounts sync --quiet`).
 
-Before command dispatch on normal CLI invocations (excluding `help`, `version`, `version-detailed`, `completion`, `workflow-list`, `project-files`, `file-owner`, `status`, `init`, `update-sync`, `mcp`, `setup`, `upgrade`, `autopilot-logs`, `accounts` with `--quiet`, and any command with `--json` in `plan.options` or `argv`), call [skills install](skills-install.prompt.md) `syncOwnedUserSkills({packageRoot, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, codexHome: env.CODEX_HOME, stateRoot: env.PDD_STATE_DIR, env})` (or injected `syncOwnedUserSkills`) fail-open (#3424). When `updated.length > 0` and `stderr?.isTTY === true`, write `Updated PDD skills to VERSION (FOLDERS).` to `stderr`. Dispatch local `upgrade` by dynamically importing [CLI upgrade](cli-upgrade.prompt.md) (`cliUpgrade ?? await import('./setup/cli-upgrade.mjs')`) and calling `runCliUpgrade({env, stdout, stderr, main: plan.options['--main'] === true, packageRoot, home: env.HOME || homedir(), cwd}, cliUpgradePorts)`; return its `exitCode` without running the post-command release notice.
+Before command dispatch on normal CLI invocations (excluding `help`, `version`, `version-detailed`, `completion`, `workflow-list`, `project-files`, `file-owner`, `status`, `init`, `update-sync`, `mcp`, `setup`, `doctor`, `upgrade`, `autopilot-logs`, `accounts` with `--quiet`, and any command with `--json` in `plan.options` or `argv`), call [skills install](skills-install.prompt.md) `syncOwnedUserSkills({packageRoot, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, codexHome: env.CODEX_HOME, stateRoot: env.PDD_STATE_DIR, env})` (or injected `syncOwnedUserSkills`) fail-open (#3424). When `updated.length > 0` and `stderr?.isTTY === true`, write `Updated PDD skills to VERSION (FOLDERS).` to `stderr`. Dispatch local `upgrade` by dynamically importing [CLI upgrade](cli-upgrade.prompt.md) (`cliUpgrade ?? await import('./setup/cli-upgrade.mjs')`) and calling `runCliUpgrade({env, stdout, stderr, main: plan.options['--main'] === true, packageRoot, home: env.HOME || homedir(), cwd}, cliUpgradePorts)`; return its `exitCode` without running the post-command release notice.

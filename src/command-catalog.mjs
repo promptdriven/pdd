@@ -30,6 +30,7 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
       "  pdd jobs                       List active local interpreter jobs.",
       "  pdd mcp                        Serve repository Simulator MCP tools.",
       "  pdd upgrade [--main]           Update global pdd & installed /pdd skill.",
+      "  pdd doctor [--json]            Check CLI, PATH, skills, MCP & gh health.",
     ]),
     group("Product & graph (pdd product --help)", [
       "  pdd product status|next        Inspect multi-part plan & ready waves.",
@@ -157,6 +158,8 @@ const routes = [
     forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
   { id: 'upgrade', prefix: ['upgrade'], local: 'upgrade', operands: [], options: [{ name: '--main', kind: 'flag' }],
     forms: [form('pdd upgrade [--main]', 'Upgrade a user-owned global npm @promptdriven/pdd installation from npm (with GitHub tag fallback, or pinned main commit with --main) and refresh installed user PDD skills.')] },
+  { id: 'doctor', prefix: ['doctor'], local: 'doctor', operands: [], options: [{ name: '--json', kind: 'flag' }],
+    forms: [form('pdd doctor [--json]', 'Run read-only health checks for Node, competing pdd installs, login-shell PATH splits, agent skills, MCP configs, and gh sign-in. Exits 0 when healthy, 1 when actionable issues are found.')] },
   // Cloud accounts
   { id: 'accounts', prefix: ['accounts'], local: 'accounts', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd accounts [--json]', 'List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites.')] },
@@ -243,6 +246,9 @@ const routes = [
     forms: [form('pdd autopilot report', 'List the local Autopilot report drafts of this machine; no GitHub call.'), form('pdd autopilot report send FINGERPRINT', 'File one local report draft to promptdriven/pdd, or count it on the matching open report.')] },
   { id: 'autopilot.regressions', prefix: ['autopilot', 'regressions'], local: 'autopilot-regressions', operands: [], options: [{name:'--json',kind:'flag'},{name:'--file',kind:'text'}],
     forms: [form('pdd autopilot regressions [--json] [--file PATH]', 'Read core merge history and GitHub regression evidence; optionally save a local report, without GitHub writes or reverts.')] },
+  { id: 'autopilot.investigate', prefix: ['autopilot', 'investigate'], local: 'autopilot-investigate', operands: [],
+    options: [{name:'--date',kind:'text'},{name:'--json',kind:'flag'},{name:'--write-issues',kind:'flag'},{name:'--max-issues',kind:'integer',min:1,max:20}],
+    forms: [form('pdd autopilot investigate [--date YYYY-MM-DD] [--json] [--write-issues] [--max-issues N]', 'Run the deterministic 4-bucket Autopilot incident investigator against local history, post-merge regressions, flakes, and report drafts (read-only by default; pass --write-issues to auto-file deduplicated strong-evidence GitHub issues up to --max-issues N).')] },
   { id: 'autopilot.alerts', prefix: ['autopilot', 'alerts'], local: 'autopilot-alerts', operands: [{name:'action',type:'choice:set,test,clear'}], options: [{name:'--discord-channel',kind:'text'},{name:'--token-command',kind:'text'},{name:'--destination',kind:'value',choices:['autopilot','infrastructure']}],
     forms: [form('pdd autopilot alerts set [--destination autopilot|infrastructure]', 'Read a Discord or Slack incoming webhook URL from stdin and save it for this machine outside every repository, readable only by you; the URL is never printed. Post changed causes, decisions and recoveries; an unchanged stuck review sends nothing. Send one digest of open work per repository and machine at most every 6 hours. Use --destination infrastructure to separate machine incidents.'),
       form('pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot|infrastructure]', 'Use a Discord bot instead: read its token from stdin and save it readable only by you, or save CMD and run it at each send so the token is never written to disk. The token and the command output are never printed.'),
