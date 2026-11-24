@@ -14,16 +14,22 @@ import {
 } from '../file-owner.mjs';
 import { gitFiles } from '../shared/git-context.mjs';
 import { isSecretPath } from '../shared/safe-read.mjs';
+import { allowsRuntimePath } from '../shared/workspace-policy.mjs';
 import { resolveDefaultBaseRef } from './lint/diagnostics.mjs';
+import { compileGlobMatcher } from './lint/regex-safety.mjs';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_BINDINGS_BYTES = 65_536;
 const BINARY_PROBE_BYTES = 8_192;
 const EXTRA_SECRET_NAME = /^(?:\.env(?:\..+)?|credentials(?:\.[^/]+)?|\.aws-credentials)$/i;
 const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
-const NON_CANDIDATE_DIR = /^(?:user_stories|docs?|\.github|\.pdd)\//i;
-const NON_CANDIDATE_EXT = /\.(?:mdx?|rst|txt|json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
-const DOTFILE_SEG = /(?:^|\/)\.[^/]+$/;
+const NON_CANDIDATE_DIR = /^(?:user_stories|docs?|prompts|\.github|\.pdd)\//i;
+const FIXTURE_EXAMPLE_DIR = /(?:^|\/)(?:fixtures|examples)\//i;
+const DOT_SEGMENT = /(?:^|\/)\.[^/]+(?:\/|$)/;
+const CONFIG_FILE = /(?:^|\/)(?:package[^/]*\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|pdd[^/]*\.json|tsconfig[^/]*\.json|jsconfig\.json|Makefile|GNUmakefile|Procfile|Justfile|Vagrantfile|Rakefile|Gemfile(?:\.lock)?|Cargo\.lock|poetry\.lock|uv\.lock|go\.(?:mod|sum)|pyproject\.toml|requirements[^/]*\.txt|CODEOWNERS|AGENTS\.md|CLAUDE\.md|(?:eslint|prettier|vitest|jest|vite|webpack|rollup|babel|postcss|tailwind|next|nuxt|svelte|astro|playwright|tsup|esbuild)\.config\.[^/]+)$/i;
+const ROOT_META_FILE = /(?:^|\/)(?:LICENSE|LICENCE|NOTICE|AUTHORS|README|CHANGELOG)$/i;
+const CONTAINER_FILE = /(?:^|\/)(?:Dockerfile|Containerfile)(?:\.(?!mjs$|cjs$|js$|ts$|tsx$|jsx$|py$|go$|rs$|rb$|java$|kt$|cs$|swift$|c$|cc$|cpp$|h$|hpp$|php$|sh$)[^/]+)?$/;
+const NON_CANDIDATE_EXT = /\.(?:mdx?|rst|txt|json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|lockb|sum|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?|ttf|eot|map)$/i;
 const SAFE_GIT_DIFF_PREFIX = ['--literal-pathspecs', '-c', 'core.quotepath=false', '-c', 'diff.noprefix=false', '-c', 'diff.mnemonicPrefix=false'];
 
 const SYMBOL_PATTERNS = [
@@ -39,7 +45,7 @@ const SYMBOL_PATTERNS = [
 const cmpPath = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const unique = values => [...new Set(values)];
 const sanitizeOneLine = text => String(text ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').slice(0, 200);
-const canonicalPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
+const canonicalPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value) && !value.startsWith('-')
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
 const isBlockedSecretPath = path => isSecretPath(path) || EXTRA_SECRET_NAME.test(posix.basename(path));
 const isPddInternalPath = path => path === '.pdd' || path.startsWith('.pdd/');
@@ -196,11 +202,11 @@ function defaultGitAllEntries(root, listFiles, ports = {}) {
     catch { tracked = listFiles(); }
   }
   for (const p of tracked) {
-    if (!isPddInternalPath(p)) byPath.set(p, { path: p, status: 'M', renamedFrom: null, deleted: false, untracked: false });
+    if (!isPddInternalPath(p)) byPath.set(p, { path: p, status: 'M', renamedFrom: null, deleted: false, untracked: false, trackedOnly: true });
   }
   const working = ports.gitWorkingEntries ? ports.gitWorkingEntries(root) : defaultGitWorkingEntries(root);
   for (const e of working) {
-    if (!isPddInternalPath(e.path)) byPath.set(e.path, e);
+    if (!isPddInternalPath(e.path)) byPath.set(e.path, { ...e, trackedOnly: false });
   }
   return [...byPath.values()].sort((a, b) => cmpPath(a.path, b.path));
 }
@@ -283,6 +289,60 @@ function validateBindings(readBytes) {
   return doc;
 }
 
+const validWorkspaceAllowedPath = value => typeof value === 'string'
+  && Boolean(value)
+  && !/[\\\x00-\x1f\x7f*?\[\]{}:$%]/.test(value)
+  && !value.startsWith('~')
+  && !value.startsWith('/')
+  && !value.replace(/\/$/, '').split('/').some(p => !p || p === '.' || p === '..' || p.toLowerCase() === '.git');
+
+function loadWorkspacePolicy(readBytes) {
+  const res = readBytes('pdd-workspace.json', MAX_BINDINGS_BYTES);
+  if (res.status === 'missing') return { configured: false, allowed_paths: [] };
+  if (res.status === 'symlink') throw new ChangedMapStop(2, 'Symlinks are not allowed: pdd-workspace.json.');
+  if (res.status !== 'ok' || res.bytes.includes(0)) return { configured: false, allowed_paths: [] };
+  try {
+    const doc = JSON.parse(new TextDecoder('utf-8').decode(res.bytes));
+    if (doc && typeof doc === 'object' && !Array.isArray(doc) && Array.isArray(doc.allowed_paths) && doc.allowed_paths.every(validWorkspaceAllowedPath)) {
+      return { configured: true, allowed_paths: [...new Set(doc.allowed_paths)] };
+    }
+  } catch {}
+  return { configured: false, allowed_paths: [] };
+}
+
+function loadIgnoreMatchers(readBytes) {
+  const res = readBytes('pdd.json', MAX_BINDINGS_BYTES);
+  if (res.status === 'missing') return [];
+  if (res.status === 'symlink') throw new ChangedMapStop(2, 'Symlinks are not allowed: pdd.json.');
+  if (res.status !== 'ok' || res.bytes.includes(0)) return [];
+  try {
+    const doc = JSON.parse(new TextDecoder('utf-8').decode(res.bytes));
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return [];
+    const rawGlobs = [
+      ...(Array.isArray(doc.ignore) ? doc.ignore : []),
+      ...(Array.isArray(doc.workspace?.ignore) ? doc.workspace.ignore : []),
+      ...(Array.isArray(doc.update?.ignore) ? doc.update.ignore : []),
+    ].filter(g => typeof g === 'string' && g.trim());
+    return rawGlobs.map(g => compileGlobMatcher(g.trim())).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+const isNonPromptOwnedPath = (path, workspacePolicy, ignoreMatchers) => !canonicalPath(path)
+  || path.endsWith('.prompt.md')
+  || isPddInternalPath(path)
+  || isTestOwnedPath(path)
+  || NON_CANDIDATE_DIR.test(path)
+  || FIXTURE_EXAMPLE_DIR.test(path)
+  || DOT_SEGMENT.test(path)
+  || CONFIG_FILE.test(path)
+  || ROOT_META_FILE.test(path)
+  || CONTAINER_FILE.test(path)
+  || NON_CANDIDATE_EXT.test(path)
+  || !allowsRuntimePath(workspacePolicy, path)
+  || ignoreMatchers.some(m => m.test(path));
+
 /**
  * Read-only diff -> owner -> changed-symbols analysis. Never mutates files or writes sidecars.
  */
@@ -307,6 +367,9 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from, all =
     const probeBytes = ports.probeBytes ?? ((path, limit) => readRegularBytes(root, path, limit, { truncate: true }));
     const listFiles = () => (ports.files ? ports.files() : gitFiles(root)).filter(p => !isBlockedSecretPath(p));
     const bindingsDoc = validateBindings(readBytes);
+    const boundModules = new Set((bindingsDoc?.modules ?? []).filter(item => typeof item?.module === 'string').map(item => item.module));
+    const workspacePolicy = loadWorkspacePolicy(readBytes);
+    const ignoreMatchers = loadIgnoreMatchers(readBytes);
 
     const codeBytesMap = new Map(), unownedMap = new Map(), touchedMap = new Map();
     if (scopeKind === 'files') {
@@ -378,17 +441,29 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from, all =
         const probe = probeBytes(raw.path, BINARY_PROBE_BYTES);
         if (probe.status === 'missing') { touchedMap.set(raw.path, { ...raw, deleted: true }); continue; }
         if (probe.status === 'symlink') {
-          if (scopeKind === 'all') { unownedMap.set(raw.path, { path: raw.path, reason: 'symlink (skipped)' }); continue; }
+          if (scopeKind === 'all' && !boundModules.has(raw.path)) {
+            if (!isNonPromptOwnedPath(raw.path, workspacePolicy, ignoreMatchers)) {
+              unownedMap.set(raw.path, { path: raw.path, reason: 'symlink (skipped)' });
+            }
+            continue;
+          }
           throw new ChangedMapStop(2, `Symlinks are not allowed: ${raw.path}.`);
         }
-        if (probe.status === 'non-file') { unownedMap.set(raw.path, { path: raw.path, reason: 'non-regular entry (skipped)' }); continue; }
+        if (probe.status === 'non-file') {
+          if (boundModules.has(raw.path)) throw new ChangedMapStop(2, `Not a regular file: ${raw.path}.`);
+          if (!isNonPromptOwnedPath(raw.path, workspacePolicy, ignoreMatchers)) {
+            unownedMap.set(raw.path, { path: raw.path, reason: 'non-regular entry (skipped)' });
+          }
+          continue;
+        }
         touchedMap.set(raw.path, { ...raw, deleted: false });
       }
     }
 
     const touchedEntries = [...touchedMap.values()].sort((a, b) => cmpPath(a.path, b.path));
     const scope = { kind: scopeKind, range: scopeRange, ...(widenedFrom ? { widened_from: widenedFrom } : {}), files: touchedEntries.map(e => e.path) };
-    if (!touchedEntries.length && !unownedMap.size) {
+    const shouldAuditBindings = Boolean(bindingsDoc?.modules?.length) && (scopeKind === 'all' || (scopeKind !== 'files' && touchedMap.has('pdd-bindings.json')));
+    if (!touchedEntries.length && !unownedMap.size && !shouldAuditBindings) {
       return { ok: true, exitCode: 0, error: null, root, report: { schema_version: 'pdd.changed-map.v1', ok: true, scope, prompts: [], modules: [], unowned: [] } };
     }
 
@@ -433,11 +508,33 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from, all =
       promptTextMap.set(entry.path, readTextOrStop(entry.path, { missingCode: 1, missingMsg: `Owning prompt is missing or unreadable: ${entry.path}.` }));
     }
 
+    if (shouldAuditBindings) {
+      for (const item of bindingsDoc.modules) {
+        if (!item || typeof item !== 'object' || typeof item.module !== 'string') continue;
+        const modPath = item.module;
+        if (!canonicalPath(modPath)) throw new ChangedMapStop(2, `Invalid bound module path in pdd-bindings.json: ${sanitizeOneLine(modPath)}.`);
+        if (isBlockedSecretPath(modPath)) throw new ChangedMapStop(2, `Secret-looking path is not allowed: ${modPath}.`);
+        const probe = probeBytes(modPath, BINARY_PROBE_BYTES);
+        if (probe.status === 'symlink') throw new ChangedMapStop(2, `Symlinks are not allowed: ${modPath}.`);
+        if (probe.status === 'non-file') throw new ChangedMapStop(2, `Not a regular file: ${modPath}.`);
+        if (!nonPromptMap.has(modPath)) {
+          nonPromptMap.set(modPath, {
+            path: modPath,
+            status: probe.status === 'missing' ? 'D' : 'M',
+            renamedFrom: null,
+            deleted: probe.status === 'missing',
+            untracked: false,
+            ...(scopeKind === 'all' ? { trackedOnly: true } : {}),
+          });
+        }
+      }
+    }
+
     if (touchedPromptTargets.size > 0 && scopeKind !== 'all') {
       const candidates = new Set();
       for (const item of bindingsDoc?.modules ?? []) if (touchedPromptTargets.has(item?.prompt) && canonicalPath(item?.module) && !isBlockedSecretPath(item.module)) candidates.add(item.module);
       for (const [p, text] of promptTextMap.entries()) for (const claimed of promptClaims(p, text)) if (canonicalPath(claimed) && !isBlockedSecretPath(claimed) && !claimed.endsWith('.prompt.md')) candidates.add(claimed);
-      for (const p of safeVisible) if (canonicalPath(p) && !p.endsWith('.prompt.md') && !isPddInternalPath(p) && !isTestOwnedPath(p) && !NON_CANDIDATE_DIR.test(p) && !DOTFILE_SEG.test(p) && !NON_CANDIDATE_EXT.test(p)) candidates.add(p);
+      for (const p of safeVisible) if (canonicalPath(p) && !p.endsWith('.prompt.md') && !isPddInternalPath(p) && !isTestOwnedPath(p) && !NON_CANDIDATE_DIR.test(p) && !FIXTURE_EXAMPLE_DIR.test(p) && !DOT_SEGMENT.test(p) && !CONFIG_FILE.test(p) && !ROOT_META_FILE.test(p) && !CONTAINER_FILE.test(p) && !NON_CANDIDATE_EXT.test(p)) candidates.add(p);
       if (candidates.size) {
         for (const row of findOwners({ root, paths: [...candidates].sort(cmpPath) }, ownerPorts).files) {
           if (nonPromptMap.has(row.path) || !row.owners.some(o => touchedPromptTargets.has(o))) continue;
@@ -455,12 +552,17 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from, all =
     for (const entry of candidateEntries) {
       const ownerRow = ownerByPath.get(entry.path) ?? { path: entry.path, owner: null, owners: [], source: null, certain: true, note: '', headers: [] };
       if (!ownerRow.owners.length) {
+        if (ownerRow.source === 'binding') {
+          throw new ChangedMapStop(1, `Owning prompt path is invalid or missing in pdd-bindings.json for ${entry.path}.`);
+        }
+        if (scopeKind !== 'files' && isNonPromptOwnedPath(entry.path, workspacePolicy, ignoreMatchers)) continue;
         const probe = !entry.deleted ? (codeBytesMap.has(entry.path) ? { status: 'ok', bytes: codeBytesMap.get(entry.path) } : probeBytes(entry.path, BINARY_PROBE_BYTES)) : null;
         unownedMap.set(entry.path, { path: entry.path, reason: probe?.status === 'ok' && probe.bytes.includes(0) ? 'binary file (skipped)' : 'no owning prompt' });
         continue;
       }
       for (const owner of ownerRow.owners) {
         if (isBlockedSecretPath(owner)) throw new ChangedMapStop(2, `Secret-looking path is not allowed: ${owner}.`);
+        if (!canonicalPath(owner) || !owner.endsWith('.prompt.md')) throw new ChangedMapStop(1, `Owning prompt path is invalid: ${sanitizeOneLine(owner)}.`);
         if (isTestPromptPath(owner)) throw new ChangedMapStop(1, `Error: misplaced test prompt: ${entry.path} is claimed by ${owner}. Prompts own production modules, not test files.`);
       }
       if (!entry.deleted) codeTextMap.set(entry.path, readTextOrStop(entry.path));
@@ -469,15 +571,28 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from, all =
 
     for (const promptPath of [...neededPrompts].sort(cmpPath)) {
       if (promptTextMap.has(promptPath)) continue;
-      if (!canonicalPath(promptPath)) throw new ChangedMapStop(1, `Owning prompt path is invalid: ${sanitizeOneLine(promptPath)}.`);
+      if (!canonicalPath(promptPath) || !promptPath.endsWith('.prompt.md')) throw new ChangedMapStop(1, `Owning prompt path is invalid: ${sanitizeOneLine(promptPath)}.`);
       if (isBlockedSecretPath(promptPath)) throw new ChangedMapStop(2, `Secret-looking path is not allowed: ${promptPath}.`);
       const text = readTextOrStop(promptPath, { missingCode: 1, missingMsg: `Owning prompt is missing or unreadable: ${promptPath}.`, allowMissing: !activeNeededPrompts.has(promptPath) });
       if (text !== null) promptTextMap.set(promptPath, text);
     }
 
-    const diffPaths = unique(ownedPairs.flatMap(p => [p.entry.path, ...(p.entry.renamedFrom ? [p.entry.renamedFrom] : [])])).sort(cmpPath);
+    const extraPromptDiffPaths = scopeKind === 'files' ? touchedPrompts.map(e => e.path) : [];
+    const diffPaths = unique([
+      ...ownedPairs.flatMap(p => [p.entry.path, ...(p.entry.renamedFrom ? [p.entry.renamedFrom] : [])]),
+      ...extraPromptDiffPaths,
+    ]).sort(cmpPath);
     const fullDiff = diffPaths.length ? (ports.gitUnifiedDiff ? ports.gitUnifiedDiff(root, diffTargetRange, diffPaths) : defaultGitUnifiedDiff(root, diffTargetRange, diffPaths)) : '';
-    const diffChunks = splitDiffByFile(fullDiff, new Set(ownedPairs.map(p => p.entry.path)));
+    const diffChunks = splitDiffByFile(fullDiff, new Set([...ownedPairs.map(p => p.entry.path), ...extraPromptDiffPaths]));
+    const changedPromptTargets = new Set();
+    if (scopeKind === 'all') {
+      for (const e of touchedPrompts) if (!e.trackedOnly) changedPromptTargets.add(e.path);
+      for (const e of touchedEntries) if (!e.trackedOnly && e.renamedFrom?.endsWith('.prompt.md')) changedPromptTargets.add(e.renamedFrom);
+    } else if (scopeKind === 'files') {
+      for (const e of touchedPrompts) if (e.untracked || e.status === 'A' || e.deleted || diffChunks.has(e.path)) changedPromptTargets.add(e.path);
+    } else {
+      for (const p of touchedPromptTargets) changedPromptTargets.add(p);
+    }
     const modules = [], byPrompt = new Map();
 
     for (const { entry, ownerRow, owner } of ownedPairs) {
@@ -487,15 +602,14 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from, all =
       const diff = chunk ? extractDiffSummary(chunk) : (!entry.deleted && (entry.untracked || entry.status === 'A') ? summarizeWholeFile(codeTextMap.get(entry.path) ?? '') : { added: 0, removed: 0, changed_symbols: [] });
       const headerRow = !entry.deleted ? (headerEntries(codeTextMap.get(entry.path)).find(h => h.prompt === owner) ?? null) : null;
       const headerState = headerRow && promptText !== null ? headerHashState(headerRow.sha256, promptText).state : null;
+      const codeChanged = diff.added > 0 || diff.removed > 0 || Boolean(entry.renamedFrom) || (!entry.deleted && (entry.untracked || entry.status === 'A'));
       const status = entry.deleted
         ? 'deleted'
         : headerState === 'stale'
           ? 'prompt-stale'
-          : (diff.added > 0 || diff.removed > 0 || entry.renamedFrom)
-            ? 'changed'
-            : (headerState === 'none' || (headerRow === null && promptText !== null))
-              ? 'unpinned'
-              : 'current';
+          : codeChanged
+            ? (changedPromptTargets.has(owner) ? 'reconciled' : 'changed')
+            : 'current';
       const row = {
         path: entry.path, owner, owners: ownerRow.owners, source: ownerRow.source, certain: ownerRow.certain, status,
         prompt_sha256, header_state: headerState, diff_stats: { added: diff.added, removed: diff.removed },
@@ -515,15 +629,15 @@ export function analyzeChangedMap({ cwd = process.cwd(), files = [], from, all =
       const statuses = new Set(rows.map(r => r.status));
       const status = statuses.has('prompt-stale')
         ? 'prompt-stale'
-        : statuses.has('changed')
-          ? 'changed'
-          : statuses.has('deleted')
-            ? 'deleted'
-            : statuses.has('unpinned')
-              ? 'unpinned'
+        : statuses.has('deleted')
+          ? 'deleted'
+          : statuses.has('changed')
+            ? 'changed'
+            : statuses.has('reconciled')
+              ? 'reconciled'
               : 'current';
       return {
-        prompt, status, prompt_sha256: rows[0]?.prompt_sha256 ?? null, owner_certain: rows.every(r => r.certain),
+        prompt, status, prompt_changed: changedPromptTargets.has(prompt), prompt_sha256: rows[0]?.prompt_sha256 ?? null, owner_certain: rows.every(r => r.certain),
         modules: rows.map(r => r.path), diff_stats: { added, removed },
         changed_symbols: [...symMap.entries()].sort(([a], [b]) => cmpPath(a, b)).map(([symbol, kind]) => ({ kind, symbol })),
       };
@@ -551,6 +665,13 @@ export function formatChangedMapText(report, heading = 'pdd status --changed') {
     for (const mod of byPrompt.get(group.prompt) ?? []) {
       const renamed = mod.renamed_from ? ` (renamed from ${mod.renamed_from})` : '';
       lines.push(`  - ${mod.path} [${mod.status}] (+${mod.diff_stats.added}/-${mod.diff_stats.removed})${formatSymbols(mod.changed_symbols)}${renamed}`);
+      if (mod.status === 'changed') {
+        lines.push(`    reminder: Verify ${mod.owner} still matches ${mod.path} (OK for pure bugfixes or split prompt/code PRs).`);
+      } else if (mod.status === 'prompt-stale') {
+        lines.push(`    error: Legacy header hash disagrees with ${mod.owner}; verify behavior and update or remove the legacy sha256 header.`);
+      } else if (mod.status === 'deleted') {
+        lines.push(`    error: Bound module is missing on disk; remove stale entry from pdd-bindings.json or restore ${mod.path}.`);
+      }
       if (mod.note) lines.push(`    note: ${mod.note}`);
     }
   }
