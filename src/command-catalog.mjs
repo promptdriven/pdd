@@ -30,6 +30,7 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
       "  pdd jobs                       List active local interpreter jobs.",
       "  pdd mcp                        Serve repository Simulator MCP tools.",
       "  pdd upgrade [--main]           Update global pdd & installed /pdd skill.",
+      "  pdd doctor [--json]            Check CLI, PATH, skills, MCP & gh health.",
     ]),
     group("Product & graph (pdd product --help)", [
       "  pdd product status|next        Inspect multi-part plan & ready waves.",
@@ -157,6 +158,8 @@ const routes = [
     forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
   { id: 'upgrade', prefix: ['upgrade'], local: 'upgrade', operands: [], options: [{ name: '--main', kind: 'flag' }],
     forms: [form('pdd upgrade [--main]', 'Upgrade a user-owned global npm @promptdriven/pdd installation from npm (with GitHub tag fallback, or pinned main commit with --main) and refresh installed user PDD skills.')] },
+  { id: 'doctor', prefix: ['doctor'], local: 'doctor', operands: [], options: [{ name: '--json', kind: 'flag' }],
+    forms: [form('pdd doctor [--json]', 'Run read-only health checks for Node, competing pdd installs, login-shell PATH splits, agent skills, MCP configs, and gh sign-in. Exits 0 when healthy, 1 when actionable issues are found.')] },
   // Cloud accounts
   { id: 'accounts', prefix: ['accounts'], local: 'accounts', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd accounts [--json]', 'List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites.')] },

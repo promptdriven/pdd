@@ -22,8 +22,10 @@ Own `src/setup/cli-upgrade.mjs`. Export `detectGlobalInstallPrefix(packageRoot, 
   - Clear stale `release-check.json` under `resolvePddStateBase(env)`.
   - Run `syncOwnedUserSkills({ packageRoot: targetPkgRoot, home, claudeConfigDir, codexHome, stateRoot, force: true, onError })`.
   - Report updated skill folders, preserved/skipped unmarked stale folders (via `findSkills`), and any failed folders accurately without misleading `0 skills` wording.
+- **Proactive dual-install and login-shell check:**
+  - After upgrade and skill refresh, invoke `formatHostInstallWarnings` (from [PATH & host install diagnostics](path-diagnostic.prompt.md), or optional injected `ports.hostInstallWarnings`) fail-open and write any competing-install or login-shell split warnings (with exact cleanup commands) to `stderr` without altering the upgrade exit code.
 
 ## Dependencies
 
 - Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before changing this prompt.
-- Uses [install kind](install-kind.prompt.md), [skills install](skills-install.prompt.md), [cached release notice](release-notice.prompt.md), and Layer-0 `src/shared/{state-dir,package-root}.mjs`.
+- Uses [install kind](install-kind.prompt.md), [skills install](skills-install.prompt.md), [PATH & host install diagnostics](path-diagnostic.prompt.md), [cached release notice](release-notice.prompt.md), and Layer-0 `src/shared/{state-dir,package-root}.mjs`.
