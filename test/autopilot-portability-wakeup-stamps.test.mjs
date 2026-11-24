@@ -345,6 +345,63 @@ test('3460-4: openPullRequest and advance deterministically create and stamp PR 
   );
   assert.match(noCheckStamp.body, /^Runtime: not run \(.+\)$/m);
   assert.match(noCheckStamp.body, /^Evidence: runtime=not-run; vectors=not-run; formal=not-applicable; tests=pass \(4\/4\)$/m);
+
+  // #3654: Plain-Markdown prompt without a matching Story or caller cause stamps "no Story reaches ...", never "has no Runtime interface".
+  const plainNoCauseStamp = await openPullRequest(
+    { state: w.state, settings: w.settings, budget: { state: 'normal', used: 0, allowed: 1000 } },
+    { issue: 17, branch: buildJob.branch, head, worktree: w.cwd, pr: pr.number },
+    {
+      pr: pr.number,
+      head,
+      summary: 'Summary only.',
+      tests: { state: 'pass', passed: 4, total: 4 },
+      ports: w.ports({ runtimeEvidence: async () => ({ tests: [], storyFiles: [], checks: [] }) }),
+    },
+  );
+  assert.match(plainNoCauseStamp.body, /^Runtime: not run \(no Story reaches prompts\/duration\.prompt\.md\)$/m);
+  assert.doesNotMatch(plainNoCauseStamp.body, /has no Runtime interface/);
+
+  // #3654: Frontmatter kind: native-only prompt stamps "Runtime: not run (native-only prompt)", while malformed native-only (missing reason) does not.
+  const nativeParent = mkdtempSync(join(tmpdir(), 'pdd-native-3654-'));
+  t.after(() => rmSync(nativeParent, { recursive: true, force: true }));
+  const nativeWorktree = join(nativeParent, 'wt');
+  w.git(w.cwd, 'worktree', 'add', '-q', '-b', 'feat/native-only-3654', nativeWorktree, 'origin/main');
+  writeFileSync(join(nativeWorktree, 'prompts/duration.prompt.md'), '---\nkind: native-only\nreason: direct host clock binding\n---\n# Duration\n\nFormat durations.\n');
+  w.git(nativeWorktree, 'add', 'prompts/duration.prompt.md');
+  w.git(nativeWorktree, 'commit', '-qm', 'mark native-only');
+  w.git(nativeWorktree, 'push', '-q', 'origin', 'HEAD:feat/native-only-3654');
+  const nativeHead = w.git(nativeWorktree, 'rev-parse', 'HEAD');
+  const nativeStamp = await openPullRequest(
+    { state: w.state, settings: w.settings, budget: { state: 'normal', used: 0, allowed: 1000 } },
+    { issue: 17, branch: 'feat/native-only-3654', head: nativeHead, worktree: w.cwd, pr: pr.number },
+    {
+      pr: pr.number,
+      head: nativeHead,
+      summary: 'Summary only.',
+      tests: { state: 'pass', passed: 4, total: 4 },
+      ports: w.ports({ runtimeEvidence: async () => ({ tests: [], storyFiles: [], checks: [] }) }),
+    },
+  );
+  assert.match(nativeStamp.body, /^Runtime: not run \(native-only prompt\)$/m);
+
+  writeFileSync(join(nativeWorktree, 'prompts/duration.prompt.md'), '---\nkind: native-only\n---\n# Duration\n\nFormat durations.\n');
+  w.git(nativeWorktree, 'add', 'prompts/duration.prompt.md');
+  w.git(nativeWorktree, 'commit', '-qm', 'malformed native-only');
+  w.git(nativeWorktree, 'push', '-q', 'origin', 'HEAD:feat/native-only-3654');
+  const badNativeHead = w.git(nativeWorktree, 'rev-parse', 'HEAD');
+  const badNativeStamp = await openPullRequest(
+    { state: w.state, settings: w.settings, budget: { state: 'normal', used: 0, allowed: 1000 } },
+    { issue: 17, branch: 'feat/native-only-3654', head: badNativeHead, worktree: w.cwd, pr: pr.number },
+    {
+      pr: pr.number,
+      head: badNativeHead,
+      summary: 'Summary only.',
+      tests: { state: 'pass', passed: 4, total: 4 },
+      ports: w.ports({ runtimeEvidence: async () => ({ tests: [], storyFiles: [], checks: [] }) }),
+    },
+  );
+  assert.doesNotMatch(badNativeStamp.body, /native-only prompt/);
+  assert.match(badNativeStamp.body, /^Runtime: not run \(no Story reaches prompts\/duration\.prompt\.md\)$/m);
 });
 
 test('3460-5: clean repair resets untracked wreckage + injects 1-line round history, caps owner/issue context, and strips GitHub tokens from review env', async t => {

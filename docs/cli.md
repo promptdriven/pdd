@@ -720,7 +720,7 @@ locally offline (`pdd.local-lint.v1`) with zero network calls and no report URL.
 - Lint and check results use `waiting`, `sent`, `passed`, `failed`, `refused`, `partial` or `not run`. Every result except `passed` includes a reason code in text, JSON, saved batches and PR evidence. Only `passed` is a full pass.
 - Default `pdd lint` runs fast offline structural, SVG, scenario, and optional `--diff` checks with 0 AI calls, 0 network calls, and 0 batch-state writes. `pdd lint --local` runs the offline local assessment path (including local scenario/criterion checks) and reports `partial` with code `local-only` when run through runtime assessment; it cannot substitute for hosted `pdd test`. Use `pdd lint --remote` for hosted interpreter cross-prompt lint (0 AI calls).
 - For a new check, `--timeout MIN` starts after the free lint. Preliminary lint has a separate wait of MIN minutes, capped at 90 seconds in an agent shell. This bound includes maintenance, local slots and capacity waits. A timeout reports `timeout-flag` and names `--timeout`. Standalone `pdd lint --remote --timeout MIN` bounds remote lint itself, including admission and capacity waits before sending. A caller stop cause takes precedence over `server-busy`; raw capacity receipts keep their server codes. A default remote lint wait reports `deadline`.
-- Offline-only work uses `pdd lint --local`, local authoring review, `pdd files` and `pdd test --files`. It is not a server lint pass. Factories can bind through interface v2 instances; ports and SQL, blob and compute resources cover declared simulation. Native effects stay unbound; see [Interpreter boundaries](runtime-boundaries.md).
+- Offline-only work uses `pdd lint --local`, local authoring review, `pdd files` and `pdd test --files`. It is not a server lint pass. Factories can bind through opaque handles and collections (or explicit interface v2 instances); ports and SQL, blob and compute resources cover declared simulation. Native effects stay unbound; see [Interpreter boundaries](runtime-boundaries.md).
 - Running `pdd simulate STORY` for a paused simulation explicitly reopens the same session before showing its link. Its original expiry and remaining call allowance stay in force; an unconfirmed reopen is nonzero.
 - A `draft` prompt can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 - With no test file, `pdd test` says `No tests found` and lists why, for example a Story with no `tests/<story>.json`, a `.json` file in a test folder that matches no Story, or a prompt that ends in `.prompt` instead of `.prompt.md`.
@@ -831,7 +831,7 @@ Before sending work, pdd asks whether the interpreter has room. During announced
 | `pdd contracts` | List shared records in working files, their prompt/test users, changed records and Stories needing a new check. Local; no interpreter calls |
 | `pdd contracts sync [--write]` | Preview replacing inline copies with references. `--write` applies unambiguous proposals and adopts the shared shape; ambiguous matches warn and stay unchanged |
 
-Use `{"$contract":"contracts/phone-server.md#order_in"}` in a schema of the Runtime interface.
+Link `contracts/*.md` under `## Dependencies` in plain Markdown prompts; in JSON schemas (such as `state_schema` or an optional explicit Runtime interface), use `{"$contract":"contracts/phone-server.md#order_in"}`.
 The Markdown section has a `### order_in` heading and one JSON code block;
 headings with spaces also accept their normal heading fragment. JSON records use
 `{"$contract":"contracts/records.json#/defs/order"}`. Local `title` and
@@ -1211,8 +1211,8 @@ Each tick, without AI calls:
    In `auto` and `observe` mode your `pdd autopilot start` is the approval of the job's
    prompt changes: the job records it for each changed prompt with `pdd approve PROMPT --said
    -`, in the PR. The words start with "Operator action: pdd autopilot start" and
-   name the real mode, the repository, the machine id and the time of the start. A changed prompt that
-   still has a draft interface is red: a draft, a stale or broken interface, or an
+   name the real mode, the repository, the machine id and the time of the start. A changed prompt without
+   a recorded approval is red: an unapproved prompt, a stale or broken interface, or an
    approval that `pdd approve` did not record. In a repository with `strict_approvals`,
    the job does not approve: in `auto` mode Autopilot asks a person
    (`pdd:needs-decision`) and keeps the PR open; in `observe` mode it asks no one and

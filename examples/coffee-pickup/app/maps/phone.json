@@ -10,7 +10,7 @@
     "required": [],
     "additionalProperties": false
   },
-  "synthetic": true,
+  "synthetic": false,
   "screens": [
     {
       "id": "menu",

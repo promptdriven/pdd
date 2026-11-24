@@ -1,6 +1,6 @@
 # database
 
-I can check database with a deterministic outside world.
+As a developer testing a SQL lookup module, I want to query a seeded book table deterministically, so that I verify query results without opening a live database.
 
 ## Acceptance criteria
 
