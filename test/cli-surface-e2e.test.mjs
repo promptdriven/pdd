@@ -926,7 +926,7 @@ const REGISTERED_E2E_ROUTES = Object.freeze([
   // Autopilot
   'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop',
   'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust',
-  'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.graph', 'autopilot.report', 'autopilot.regressions',
+  'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.graph', 'autopilot.report', 'autopilot.regressions', 'autopilot.investigate',
   'autopilot.alerts', 'autopilot.alert', 'autopilot.check-base',
   // Metrics
   'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off',
@@ -1715,6 +1715,13 @@ test('all 19 autopilot commands execute end-to-end safely in isolated temp HOME 
   assert.notEqual(regRes.code, 2, regRes.stderr);
   assert.doesNotMatch(regRes.stderr, /ReferenceError|TypeError|SyntaxError/);
   markExecuted('autopilot.regressions');
+
+  // 15b. autopilot investigate (--json read-only)
+  const invRes = await fx.cli(['autopilot', 'investigate', '--json'], { extraEnv: ghEnv });
+  assert.equal(invRes.code, 0, invRes.stderr);
+  assert.doesNotMatch(invRes.stderr, /ReferenceError|TypeError|SyntaxError/);
+  assert.equal(JSON.parse(invRes.stdout).schema, 'pdd.autopilot.investigator.v1');
+  markExecuted('autopilot.investigate');
 
   // 16. autopilot alerts (set webhook -> verify secret redacted & 0600 -> clear -> test)
   const fakeWebhook = 'https://discord.com/api/webhooks/123456789012345678/e2e_secret_token_value';

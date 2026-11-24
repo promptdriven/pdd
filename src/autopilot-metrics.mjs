@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseFlakeLedger } from './autopilot-regressions.mjs';
+import { listReportDrafts } from './autopilot-reports.mjs';
+import { collectCoreLocalIncidents } from './autopilot/investigator/investigator.mjs';
 import {
   applyMetricsToggle,
   isMetricsEnabled,
@@ -580,6 +582,7 @@ export function readAutopilotMetricsState(options = {}) {
   }
 
   const flakes = [];
+  const incidents = [];
   for (const name of entries.sort()) {
     if (!name.endsWith('.json') || SKIP_CONFIG_FILES.has(name)) continue;
     const cfg = readJsonSafe(fs, join(root, name), null);
@@ -589,13 +592,44 @@ export function readAutopilotMetricsState(options = {}) {
     const coreDir = join(root, `${stem}-core`);
     const coreRuns = readCoreRuns(fs, cfg.repo, coreDir, nowMs);
     const coreFlakes = readCoreFlakes(fs, cfg.repo, coreDir);
-    if (cfg.enabled === true || coreRuns.length > 0 || coreFlakes.length > 0) {
+    const coreIncidents = collectCoreLocalIncidents(coreDir, {
+      repo: cfg.repo,
+      reportRoot: join(coreDir, 'reports'),
+      fs,
+      parseFlakeLedger,
+      listReportDrafts,
+    });
+    if (cfg.enabled === true || coreRuns.length > 0 || coreFlakes.length > 0 || coreIncidents.length > 0) {
       rememberRepo(cfg.repo, cfg.enabled === true);
       const repoLower = cfg.repo.trim().toLowerCase();
       if (!coreDirs[repoLower] || cfg.enabled === true) coreDirs[repoLower] = coreDir;
     }
     for (const r of coreRuns) addRun(r, false);
     for (const fl of coreFlakes) flakes.push(fl);
+    for (const inc of coreIncidents) incidents.push(inc);
+  }
+
+  // Read-only machine-level report drafts (`core-reports` first, fallback `reports`) for unified views only; never attribute across repos.
+  if (!filterLower) {
+    for (const sharedReportsDir of [join(root, 'core-reports'), join(root, 'reports')]) {
+      try {
+        const st = fs.lstatSync?.(sharedReportsDir);
+        const draftsDir = join(sharedReportsDir, 'drafts');
+        if (st?.isSymbolicLink?.() || fs.lstatSync?.(draftsDir)?.isSymbolicLink?.()) continue;
+        for (const draft of listReportDrafts({ root: sharedReportsDir }, { fs })) {
+          if (!isPlainObject(draft)) continue;
+          incidents.push({
+            repo: null,
+            code: draft.code ?? draft.kind ?? 'harness-bug',
+            component: draft.component ?? 'autopilot',
+            title: draft.title ?? '',
+            reason: draft.cause || draft.detail || '',
+            detail: draft.detail || draft.cause || '',
+            stage: draft.step ?? 'report',
+          });
+        }
+      } catch { /* No shared report drafts. */ }
+    }
   }
 
   const runsPath = join(root, 'metrics', 'runs.jsonl');
@@ -624,5 +658,6 @@ export function readAutopilotMetricsState(options = {}) {
     runs: [...byRunKey.values()],
     coreDirs,
     flakes,
+    incidents,
   };
 }
