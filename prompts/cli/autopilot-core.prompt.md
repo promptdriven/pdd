@@ -841,7 +841,7 @@ the evidence record.
   pdd printed (the engine sends that check itself when maintenance ends: merge check
   step 5a); it never sends
   a check again itself and never cuts short a check that pdd has sent. When Runtime could
-  not check, the job does not stop and does not invent a Runtime interface block: it covers the case
+  not check, the job does not stop and does not invent an interface: it covers the case
   with native tests, ships the PR with the not-run line and puts the reason and the tool
   error in the result's `runtime` with kind `runtime`. One `Evidence:` line
   in the PR body and the same text as the result's `evidence` (below). No review
