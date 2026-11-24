@@ -63,3 +63,66 @@ export function formatCheckReconciliation(record) {
   if (provParts.length) lines.push(`Provenance: ${provParts.join(', ')}`);
   return lines.join('\n');
 }
+
+export function formatBatchReconciliation(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return 'Batch reconciliation: unavailable (malformed response).';
+  }
+  const batch = cleanText(record.batch || 'unknown', 64);
+  const rows = Array.isArray(record.rows) ? record.rows : [];
+  if (!rows.length && record.status === 'already-resolved') {
+    return `Batch ${batch}: no unresolved prior reservations remain.`;
+  }
+  const parts = [];
+  if (Number.isSafeInteger(record.settled_count) && record.settled_count > 0) parts.push(`${record.settled_count} settled`);
+  if (Number.isSafeInteger(record.terminated_count) && record.terminated_count > 0) parts.push(`${record.terminated_count} terminated`);
+  if (Number.isSafeInteger(record.expired_count) && record.expired_count > 0) parts.push(`${record.expired_count} expired`);
+  const breakdown = parts.length ? ` (${parts.join(', ')})` : '';
+  const cleared = Number.isSafeInteger(record.cleared_count) ? record.cleared_count : 0;
+  const remaining = Number.isSafeInteger(record.remaining_unresolved_count) ? record.remaining_unresolved_count : 0;
+  const lines = [
+    `Reconciled batch ${batch}: ${cleared} cleared${breakdown}, ${remaining} remaining unresolved.`,
+  ];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const testName = cleanText(row.test ?? '-', 160);
+    const status = cleanText(row.status ?? 'unknown', 64);
+    const calls = row.calls === 'unknown' || row.calls === undefined || row.calls === null
+      ? 'unknown'
+      : Number.isSafeInteger(row.calls) && row.calls >= 0
+        ? String(row.calls)
+        : cleanText(row.calls, 32);
+    const reason = cleanText(row.reason ?? '', 240);
+    lines.push(`  ${testName}: ${status} (calls: ${calls}; cleared: ${row.cleared ? 'yes' : 'no'})${reason ? ` — ${reason}` : ''}`);
+  }
+  return lines.join('\n');
+}
+
+export function formatStaleReconciliation(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return 'Stale reservation reconciliation: unavailable (malformed response).';
+  }
+  const batches = Array.isArray(record.batches) ? record.batches : [];
+  const inspected = Number.isSafeInteger(record.batches_inspected) ? record.batches_inspected : batches.length;
+  if (inspected === 0) {
+    return 'No unresolved prior reservations found for this repository.';
+  }
+  const cleared = Number.isSafeInteger(record.cleared_count) ? record.cleared_count : 0;
+  const remaining = Number.isSafeInteger(record.remaining_unresolved_count) ? record.remaining_unresolved_count : 0;
+  const lines = [
+    `Reconciled ${inspected} prior batch${inspected === 1 ? '' : 'es'}: ${cleared} reservation${cleared === 1 ? '' : 's'} cleared, ${remaining} remaining unresolved.`,
+  ];
+  for (const batch of batches) {
+    if (!batch || typeof batch !== 'object') continue;
+    const batchId = cleanText(batch.batch ?? 'unknown', 64);
+    const status = cleanText(batch.status ?? 'unknown', 64);
+    if (batch.reason) {
+      lines.push(`  ${batchId}: ${status} — ${cleanText(batch.reason, 240)}`);
+    } else {
+      const bCleared = Number.isSafeInteger(batch.cleared_count) ? batch.cleared_count : 0;
+      const bRem = Number.isSafeInteger(batch.remaining_unresolved_count) ? batch.remaining_unresolved_count : 0;
+      lines.push(`  ${batchId}: ${status} (${bCleared} cleared, ${bRem} remaining)`);
+    }
+  }
+  return lines.join('\n');
+}

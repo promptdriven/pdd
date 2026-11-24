@@ -55,7 +55,7 @@ const defaultReadPackageVersion = ({ packageRoot }) => {
   catch { return { ok: false, version: '' }; }
 };
 function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
-  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--reconcile', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => options[flag])) return null;
+  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--reconcile', '--reconcile-stale', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => options[flag])) return null;
   try {
     const found = runtime.findTests({ root: cwd });
     const { selected, unknown } = runtime.selectTests(found, words, options);
@@ -244,7 +244,7 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
 }
 const LINT_FORBIDDEN_TEST_FLAGS = [
   '--affected', '--journeys', '--lf', '--cache-clear', '--fresh', '--read', '--retry',
-  '--reconcile', '--explain-bindings', '--files', '--screen', '--drawing', '--look',
+  '--reconcile', '--reconcile-stale', '--batch-timeout', '--explain-bindings', '--files', '--screen', '--drawing', '--look',
   '--target', '--max-total-calls', '--no-restart-replacement', '--app-map', '--request',
 ];
 const NON_SCENARIO_TEST_DIRS = new Set([
@@ -1003,7 +1003,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
       if (plan.local === 'runtime-check' && plan.options['--reconcile'] !== undefined) {
         if (plan.operands.length > 0 || Object.keys(plan.options).some(key => !['--reconcile', '--json'].includes(key))) {
-          line(stderr, `Use pdd ${NAMES.test} --reconcile REQUEST_ID [--json] without other options or Stories.`);
+          line(stderr, `Use pdd ${NAMES.test} --reconcile REQUEST_ID|BATCH [--json] without other options or Stories.`);
           return 2;
         }
         try {
@@ -1019,8 +1019,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
             },
           );
         } catch (error) {
-          if (error?.code === 'invalid-request-id' || error?.exitCode === 2) {
-            line(stderr, causeText(error.message) || 'Invalid CHECK request UUID.');
+          if (error?.code === 'invalid-request-id' || error?.code === 'invalid-batch-id' || error?.exitCode === 2) {
+            line(stderr, causeText(error.message) || 'Invalid reconciliation target.');
             return 2;
           }
           if (error?.code === 'reconciliation-unsupported' || error?.exitCode === 5) {
@@ -1028,6 +1028,35 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
             return 5;
           }
           line(stderr, `CHECK receipt reconciliation failed.${reason(error)}`);
+          return 3;
+        }
+      }
+      if (plan.local === 'runtime-check' && plan.options['--reconcile-stale'] !== undefined) {
+        if (plan.operands.length > 0 || Object.keys(plan.options).some(key => !['--reconcile-stale', '--json'].includes(key))) {
+          line(stderr, `Use pdd ${NAMES.test} --reconcile-stale [--json] without other options or Stories.`);
+          return 2;
+        }
+        try {
+          const runtime = await import('./runtime-seam.mjs');
+          return await runtime.runCheck(
+            { words: [...plan.operands], options: { ...plan.options }, cwd },
+            {
+              env,
+              stdout,
+              stderr,
+              ...runtimeCheckReconcilePorts,
+            },
+          );
+        } catch (error) {
+          if (error?.exitCode === 2) {
+            line(stderr, causeText(error.message) || 'Invalid --reconcile-stale request.');
+            return 2;
+          }
+          if (error?.exitCode === 5) {
+            line(stderr, causeText(error.message) || 'Stale reservation reconciliation is unavailable.');
+            return 5;
+          }
+          line(stderr, `Stale reservation reconciliation failed.${reason(error)}`);
           return 3;
         }
       }

@@ -1,6 +1,6 @@
 {
   "name": "@promptdriven/pdd",
-  "version": "0.1.51",
+  "version": "0.1.52",
   "description": "PDD: local Prompting guide, skills and recipes for your coding agent",
   "type": "module",
   "repository": {
@@ -48,7 +48,7 @@
     "release:publish": "node scripts/publish-release.mjs"
   },
   "dependencies": {
-    "@promptdriven/runtime-client": "1.1.1"
+    "@promptdriven/runtime-client": "1.1.2"
   },
   "engines": {
     "node": ">=22.16.0"

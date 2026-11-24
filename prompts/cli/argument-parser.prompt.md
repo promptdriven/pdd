@@ -61,6 +61,7 @@ Routes accept exactly their catalogued operands and options:
 - `optional-integer`: consumes the next token when decimal digits within `min..max`, else stores the catalog default string.
 - `optional-text`: consumes the next token when present and not starting with `-` (nonblank), else stores Boolean `true`.
 - `uuid`: standard 8-4-4-4-12 hex UUID.
+- `uuid-or-batch`: standard 8-4-4-4-12 hex UUID or local batch ID (`YYYYMMDD-HHMMSS-xxxx`).
 - `value`: exact match against `option.choices`.
 - `issue` operand: positive number, `owner/repo#number`, or GitHub issue URL.
 - Routes whose last operand is repeated `text` accept `--` to end options.

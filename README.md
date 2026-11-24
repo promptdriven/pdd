@@ -30,7 +30,7 @@ pdd init
 1. `npm install -g @promptdriven/pdd` installs the `pdd` command.
 2. `pdd setup` installs the global `/pdd` skill into `~/.agents/skills`, `~/.claude/skills` (cleaning marked retired skills and skipping duplicates when a Claude Code plugin is installed), and `~/.gemini/config/skills`, and previews Prompt Interpreter MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to confirm previewed MCP registration without prompting, or `--skills-dir PATH` for a custom skill folder.
 3. If you prefer another skills installer, `npx skills add promptdriven/pdd -g --skill pdd` installs the `/pdd` skill globally (without MCP registration).
-4. `pdd --version` prints `0.1.51`. When an installed skill is older than pdd, it prints the update command on stderr.
+4. `pdd --version` prints `0.1.52`. When an installed skill is older than pdd, it prints the update command on stderr.
 5. `pdd init` adds a 4-line PDD block to `CLAUDE.md` (else `AGENTS.md`) inside a repository and detects its language and test command without editing root `.gitignore` (`.pdd/.gitignore` is managed automatically).
 
 To update a global npm or Volta installation and its `.pdd-skill.json`-marked user skill in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. `pdd upgrade` installs `@promptdriven/pdd@<version>` from npm first with a GitHub tag fallback (using Volta's `npm` without `--prefix` on Volta installs), guards against mutating Git checkouts, PyPI `pdd-cli`, `pnpm`, `npx`, or local `node_modules` installs, and prints `npx skills add promptdriven/pdd -g --skill '*'` when unmarked copies are older. When a global install prints `npm error code EEXIST` on `<prefix>/bin/pdd`, remove the conflicting unscoped `pdd` package with `npm uninstall -g pdd && npm install -g @promptdriven/pdd`.
@@ -255,7 +255,7 @@ See the [CLI reference](docs/cli.md#autopilot-on-this-machine) for all options a
 | `The runtime is busy` (exit 5) or `Too many Try links are open.` | Wait a few minutes or close unused sessions with `pdd --stop STORY`. |
 | `This Try has ended` | Session hit its call limit or 24-hour TTL; run `pdd STORY --new`. |
 | `Autopilot did not start: it works only on the issues that you mark with an opt-in label.` | Run `pdd autopilot add N`, then `pdd autopilot start --label pdd:autopilot`. |
-| `pdd --version` does not print `0.1.51` | Another `pdd` comes first on PATH. Run `"$(npm prefix -g)/bin/pdd" --version` for the exact fix line. |
+| `pdd --version` does not print `0.1.52` | Another `pdd` comes first on PATH. Run `"$(npm prefix -g)/bin/pdd" --version` for the exact fix line. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 
