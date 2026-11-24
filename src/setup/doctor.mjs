@@ -759,7 +759,7 @@ function checkGhHealth({ cwd, env, home, fs, spawnImpl, platform, timeout }) {
   }
   const hasGh = executableOnPath('gh', env, fs, platform);
   if (!hasGh) {
-    const advisory = 'gh CLI not installed (optional; needed for hosted pdd test / pdd simulate)';
+    const advisory = 'gh CLI not installed (optional; needed for hosted pdd test / pdd <PROMPT.md|STORY>)';
     const remediation = 'Install GitHub CLI (https://cli.github.com) and run: gh auth login';
     return {
       check: { status: 'advisory', installed: false, authenticated: false, method: 'missing', advisory, remediation },
@@ -768,7 +768,7 @@ function checkGhHealth({ cwd, env, home, fs, spawnImpl, platform, timeout }) {
   }
   // Never spawn `gh` when hosts.yml is absent, because `gh` creates ~/.local/state/gh on startup.
   if (!hasGhHostsConfig(env, home, fs, platform)) {
-    const advisory = 'not signed in (optional; needed for hosted pdd test / pdd simulate)';
+    const advisory = 'not signed in (optional; needed for hosted pdd test / pdd <PROMPT.md|STORY>)';
     return {
       check: { status: 'advisory', installed: true, authenticated: false, method: 'signed-out', advisory, remediation: 'gh auth login' },
       findings: [{ check: 'gh', severity: 'advisory', code: 'gh-signed-out', message: advisory, path: null, remediation: 'gh auth login' }],
@@ -800,7 +800,7 @@ function checkGhHealth({ cwd, env, home, fs, spawnImpl, platform, timeout }) {
     }
   } catch { /* Treat failed probe as signed out. */ }
 
-  const advisory = 'not signed in (optional; needed for hosted pdd test / pdd simulate)';
+  const advisory = 'not signed in (optional; needed for hosted pdd test / pdd <PROMPT.md|STORY>)';
   return {
     check: { status: 'advisory', installed: true, authenticated: false, method: 'signed-out', advisory, remediation: 'gh auth login' },
     findings: [{ check: 'gh', severity: 'advisory', code: 'gh-signed-out', message: advisory, path: null, remediation: 'gh auth login' }],

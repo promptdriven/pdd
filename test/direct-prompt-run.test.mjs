@@ -220,7 +220,7 @@ test('whole-project ., leading interpreter options, explicit subcommand priority
 
   // Explicit subcommands always route FIRST
   assert.equal(parseArgv(['test', 'prompts/app.prompt.md']).commandId, 'check');
-  assert.equal(parseArgv(['approve', 'prompts/app.prompt.md']).commandId, 'approve');
+  assert.equal(parseArgv(['update', 'prompts/app.prompt.md']).commandId, 'update');
   assert.equal(parseArgv(['owner', 'prompts/app.prompt.md']).commandId, 'owner');
   assert.equal(parseArgv(['lint', 'prompts/app.prompt.md']).commandId, 'lint');
   assert.equal(parseArgv(['--version']).commandId, 'version');
@@ -229,6 +229,7 @@ test('whole-project ., leading interpreter options, explicit subcommand priority
 
   // Removed commands & typos refuse cleanly with exit 2
   for (const [argv, expected] of [
+    [['approve', 'prompts/app.prompt.md'], 'pdd approve was removed. Review and approve prompt changes directly in chat or GitHub PR review.'],
     [['simulate'], 'pdd simulate was removed. Run pdd <PROMPT.md|STORY> instead.'],
     [['simulate', 'prompts/app.prompt.md'], 'pdd simulate was removed. Run pdd <PROMPT.md|STORY> instead.'],
     [['sim'], 'pdd sim was removed. Run pdd <PROMPT.md|STORY> instead.'],

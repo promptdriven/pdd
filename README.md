@@ -9,11 +9,11 @@ flowchart LR
   P["Prompt<br/>the source"] --> S["Story<br/>what a person can do"]
   S --> L["Lint & Test<br/>pdd lint · pdd test"]
   L --> T["Run Prompt<br/>pdd PROMPT.md"]
-  T --> A["Approve<br/>pdd approve"]
+  T --> A["Review & Approve<br/>chat · GitHub PR"]
   A --> K["Build & Prove<br/>code · pdd prove"]
 ```
 
-PDD is the `pdd` command and one `/pdd` skill (`$pdd` in Codex, `/pdd` in Claude Code) with on-demand references for your coding agent. In interactive workflows, you approve changed prompts and authorize pull requests. An explicit Autopilot auto setup and start can delegate ordinary gates; strict approvals and required human reviews still need a person.
+PDD is the `pdd` command and one `/pdd` skill (`$pdd` in Codex, `/pdd` in Claude Code) with on-demand references for your coding agent. In interactive workflows, you approve changed prompts in chat or GitHub PR review and authorize pull requests. An explicit Autopilot auto setup and start can delegate ordinary gates; required human reviews still need a person.
 
 ## Install
 
@@ -70,7 +70,7 @@ For a `feature` or prompt-level `bug`, the agent writes these files before imple
 | `tests/my-story.json` | The scenario tests of that Story. |
 | `app-map.json` | Optional, only for multi-screen or timed UIs (single-screen UIs work with one plain-prose prompt). |
 
-You read the Stories and approve changed prompts in the chat or terminal. Expected values come from you and the Stories, not from observed code output.
+You read the Stories and review changed prompts in chat or GitHub PR review. Expected values come from you and the Stories, not from observed code output.
 
 ### 2. Lint and test prompts
 
@@ -135,15 +135,9 @@ curl http://127.0.0.1:8091/api/items
 - **Stop it:** Sessions end after 24 hours, or sooner with `pdd --stop STORY`.
 - **Ask your agent:** While `pdd STORY` runs in your terminal, the Prompt Interpreter's **Ask your agent** panel connects to your local Codex, Claude, or Gemini (`--agent NAME` to choose).
 
-### 4. Approve prompts
+### 4. Review and approve prompts
 
-When the behavior matches what you want, approve each changed prompt in your terminal or via chat:
-
-```sh
-pdd approve prompts/NAME.prompt.md
-```
-
-In chat, review the prompt diff your agent shows and reply in your own words; your agent records your reply with `pdd approve PROMPT --said - <<'PDD_SAID'`. Questions and change requests keep the prompt unapproved. See [Record a chat approval](docs/cli.md#record-a-chat-approval) for strict-mode and heredoc details.
+When the behavior matches what you want, review the prompt diff your agent shows in chat (or on a GitHub pull request) and reply in your own words. Questions and change requests keep the prompt in review. Agents never invent your decision or merge without explicit permission.
 
 ### 5. Build, prove, and open one PR
 
@@ -168,7 +162,6 @@ pdd prove --base origin/main
 | `pdd prove [--base REF]` | Run offline lint, diff checks, repo tests, and merge-base `verify.paths` recipes (or `--test`/`--expect` bug contrast). |
 | `pdd test [STORY...]` | Run Story tests on the PDD interpreter (`--files` previews uploads; `--read` reads saved results). |
 | `pdd <PROMPT.md\|STORY\|.> [args...]` | Run prompts directly on the Prompt Interpreter (`--page`, `--cli`, `--serve PORT`, `--product`, `--stop`). |
-| `pdd approve PROMPT [--said WORDS]` | Review prompt diff and record approval (terminal y/N or `--said -`; strict mode requires terminal). |
 | `pdd update [FILE...] [--branch] [--check]` | Inspect changed code vs owning prompts offline. |
 | `pdd upgrade [--main]` | Update global `@promptdriven/pdd` and run `pdd setup --upgrade` (`--main` tracks pinned `main`). |
 | `pdd product status\|next\|start` | Track multi-part product plans and prepare scoped `/pdd` run handoffs. |
@@ -183,7 +176,7 @@ Run `pdd --help` for the overview, `pdd <command> --help` for full options, or r
 - **Prompt space and code space:** Your program lives in prompt space first (`prompts/*.prompt.md`, `user_stories/*.md`, `tests/*.json`). Check, run, and approve it there; code follows the approved prompts.
 - **Stories:** One cohesive user loop per Story (`<= 35` lines, `1–6` numbered acceptance criteria) with exact checks in its scenario JSON.
 - **Small test steps:** Keep each test step focused (one action or a short run; 10-minute server cap per step).
-- **Draft and approved:** Prompts start as drafts. New behavior needs human approval (or an applicable Autopilot delegation); editing an approved prompt returns it to draft.
+- **Prompt review:** New behavior needs human review in chat or GitHub PR review (or an explicit Autopilot run); agents never invent a person's decision.
 - **AI-call budgets:** Ceilings, not charges. Checks default to 12 calls/step (`18..1000`); new Prompt Interpreter sessions start at 400 calls (`--max-calls 1..1000`).
 - **Fakes:** The interpreter never touches real databases or external services; prompts declare `<port>.<op>` ports and tests bind deterministic fakes ([Ports and CLI](skills/pdd/references/ports-and-cli.md)).
 - **Scoped uploads:** `pdd test` uploads only Git-visible files needed by the selected Stories and refuses secret-like names (`pdd test --files` previews).
@@ -196,7 +189,7 @@ The `/pdd` skill and all other commands (`pdd setup`, `pdd init`, `pdd status`, 
 
 ## Autopilot on your own repository
 
-Autopilot runs headless background workers on GitHub issues you mark with an opt-in label. For each issue, it opens one pull request, runs a fresh Blind Read-Only Reviewer, runs your full test suite, and verifies the mechanical evidence contract (`pdd prove` + merge-base `verify.paths`). In `auto` mode, Autopilot merges the PR when CI, blind review, full tests, and the evidence contract pass; repositories with merge-base `verify.paths` (or `autopilot.strictEvidenceContract: true`) require clean commit-bound `Proved` receipts, while repositories without `verify.paths` run path receipts in compatibility advisory mode (emitting `Not proved` with zero forged `proved` receipts). Protected paths (`pdd.json`, `package.json`, `.github/workflows/**`, `CODEOWNERS`, gate scripts) always hold for manual human review and merge on GitHub. In `observe` mode, Autopilot runs the same checks and posts `"would merge"` for a person to merge. Required branch reviews, checks, and `strict_approvals` still apply.
+Autopilot runs headless background workers on GitHub issues you mark with an opt-in label. For each issue, it opens one pull request, runs a fresh Blind Read-Only Reviewer, runs your full test suite, and verifies the mechanical evidence contract (`pdd prove` + merge-base `verify.paths`). In `auto` mode, Autopilot merges the PR when CI, blind review, full tests, and the evidence contract pass; repositories with merge-base `verify.paths` (or `autopilot.strictEvidenceContract: true`) require clean commit-bound `Proved` receipts, while repositories without `verify.paths` run path receipts in compatibility advisory mode (emitting `Not proved` with zero forged `proved` receipts). Protected paths (`pdd.json`, `package.json`, `.github/workflows/**`, `CODEOWNERS`, gate scripts) always hold for manual human review and merge on GitHub. In `observe` mode, Autopilot runs the same checks and posts `"would merge"` for a person to merge. Required branch reviews and checks still apply.
 
 Use a repository you own or can write to (fork first if needed), with **Node.js 22.20.0 or newer**.
 

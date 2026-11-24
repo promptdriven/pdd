@@ -1,6 +1,6 @@
 # Repository Autopilot settings
 
-`src/autopilot.mjs` exports module function `runAutopilot(input, ports)` for setup, mode, trust, untrust and trust lookup. It owns repository Autopilot settings; the CLI dispatches to it. Preserve other `pdd.json` keys, including `strict_approvals`. The stored shape is `{"autopilot":{"mode":"off","trust":[]}}`: mode is `off`, `observe` or `auto`; trust contains explicitly added GitHub names. Missing settings mean effective off and an empty list. An invalid saved mode remains untouched on setup, reads as off and produces a one-line explanation containing the lowercase word "invalid", for example: `Saved Autopilot mode "turbo" is invalid; using off and leaving it unchanged.` Mode commands replace it. Choosing a mode starts no run or interpreter; approval policy is unchanged.
+`src/autopilot.mjs` exports module function `runAutopilot(input, ports)` for setup, mode, trust, untrust and trust lookup. It owns repository Autopilot settings; the CLI dispatches to it. Preserve other `pdd.json` keys. The stored shape is `{"autopilot":{"mode":"off","trust":[]}}`: mode is `off`, `observe` or `auto`; trust contains explicitly added GitHub names. Missing settings mean effective off and an empty list. An invalid saved mode remains untouched on setup, reads as off and produces a one-line explanation containing the lowercase word "invalid", for example: `Saved Autopilot mode "turbo" is invalid; using off and leaving it unchanged.` Mode commands replace it. Choosing a mode starts no run or interpreter.
 
 The optional object `autopilot.github`, for example `{"share":30,"floor":1000}`, sets the GitHub API budget. The [budget owner](github-calls.prompt.md#budget) defines the tick's share and the reserve floor for native dependency observations, including automatic start. This settings module preserves those values. When the setting has a `github` member, every result also has `github: {share, floor}`, read by `githubBudgetSettings` of [GitHub calls](github-calls.prompt.md#budget): a missing or invalid value takes its default (30 and 1000). Without the member the result has no `github` field and the defaults apply. No command writes this member; a person edits `pdd.json`, and mode and trust commands preserve it like other unknown Autopilot keys.
 
@@ -12,7 +12,7 @@ The input action is `setup`, `mode`, `trust`, `untrust`, or `isTrusted`. For mod
 
 For any settings write, acquire the existing admission boundary only after all human input, reread the latest setting inside it, merge only the intended fields and save before release. Setup adds its chosen names to current trust; its chosen initial mode applies only if the setting is still absent. Trust and untrust change only trust, and mode changes only mode; preserve concurrent unrelated settings. Read-only setup and trust lookup need no write boundary.
 
-Future workflow skills own run actions: in auto they record the checker’s PASS as approval words using `--said`, marked as decided by the checker; in off and observe the person approves as today. When GitHub supplies neither owner nor writers, only explicitly trusted names qualify for full auto; no other author's issue gets full auto. This does not change runtime approval enforcement or bypass strict approvals. See the [approval policy](approval-policy.prompt.md) for its independent policy.
+When GitHub supplies neither owner nor writers, only explicitly trusted names qualify for full auto; no other author's issue gets full auto. Required GitHub branch reviews and checks still apply.
 
 Autopilot config optionally accepts `parking: {hours,maxParked}`. Positive finite hours defaults to 48; positive safe-integer maxParked defaults to twice chosen run capacity. Expose recognized valid fields as optional parking in the native settings result; omit invalid fields so the defaults apply; preserve it on other setting edits.
 
@@ -338,7 +338,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
     "max_model_calls": 6
   },
   "conventions": [],
-  "prose_sha256":"551a26c7f6f78a1aefe2e131baa14e422a8f865144d3c6c5413d6ea0f2b83fa9"
+  "prose_sha256":"602c1c723c60323a61c1fd707d74e66e7cf28b5b97d4d5cc07af306625d7d77a"
 }
 ```
 </details>

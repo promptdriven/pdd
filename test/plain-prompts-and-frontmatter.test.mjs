@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { runApprove } from '../src/prompt-approve.mjs';
 import { promptClaims } from '../src/file-owner.mjs';
 import {
   buildProjectCard,
@@ -48,6 +47,8 @@ test('3367 CLI: removed interface draft, --fill-hash, --compact and approve --au
     ['interface', 'draft', PLACE],
     ['test', '--fill-hash'],
     ['test', '--compact'],
+    ['approve', PLACE],
+    ['approve', PLACE, '--said', 'ok'],
     ['approve', PLACE, '--automatic'],
     ['approve', PLACE, '--tests'],
   ]) {
@@ -186,57 +187,6 @@ test('3367 files, local lint and whyNoTests treat plain Markdown and frontmatter
   git(emptyRepo, 'add', '-A');
   const lines = whyNoTests(emptyRepo, ['prompts/plain.prompt.md'], { untested: [], orphans: [] });
   assert.deepEqual(lines, []);
-});
-
-test('3367 approve: records plain Markdown and frontmatter native-only approvals in journal without mutating prompt files', async t => {
-  const plainText = '# Plain prompt\n\nCompute total cents from items.\n';
-  const nativeText = '---\nkind: native-only\nreason: Reads hardware USB HID descriptor.\n---\n\n# USB reader\n\nRead frames.\n';
-  const setup = harbor(t, repo => {
-    writeFileSync(join(repo, 'prompts/plain.prompt.md'), plainText);
-    writeFileSync(join(repo, 'prompts/usb.prompt.md'), nativeText);
-  });
-  const firstCommit = git(setup.repo, 'rev-parse', '--short=12', 'HEAD');
-
-  const approveInteractive = async (path, answer = 'y') => {
-    const stdout = sink(), stderr = sink();
-    const code = await runApprove({ words: [path], cwd: setup.repo }, {
-      stdout, stderr, stdin: Readable.from([`${answer}\n`]), interactive: true,
-    });
-    return { code, out: stdout.text, err: stderr.text };
-  };
-
-  // Interactive approval of plain prompt does not mutate file on disk
-  const res1 = await approveInteractive('prompts/plain.prompt.md', 'y');
-  assert.equal(res1.code, 0, res1.err);
-  assert.match(res1.out, /Approved prompts\/plain\.prompt\.md\./);
-  assert.equal(readFileSync(join(setup.repo, 'prompts/plain.prompt.md'), 'utf8'), plainText);
-
-  const journal = JSON.parse(readFileSync(join(setup.repo, '.git/pdd/approvals.json'), 'utf8'));
-  assert.equal(journal.approvals.at(-1).prompts[0].path, 'prompts/plain.prompt.md');
-  assert.equal(journal.approvals.at(-1).prompts[0].proseSha256, proseSha256(plainText));
-
-  // Immediate re-run sees journaled current approval
-  const resAgain = await approveInteractive('prompts/plain.prompt.md', 'y');
-  assert.equal(resAgain.code, 0);
-  assert.equal(resAgain.out.trim(), 'prompts/plain.prompt.md is already approved and current.');
-
-  // After editing prose, lastApproved resolves firstCommit via journaled proseSha256 and shows diff
-  const editedPlain = plainText.replace('Compute total cents', 'Compute subtotal and tax cents');
-  writeFileSync(join(setup.repo, 'prompts/plain.prompt.md'), editedPlain);
-  const resDiff = await approveInteractive('prompts/plain.prompt.md', 'n');
-  assert.equal(resDiff.code, 1);
-  assert.ok(resDiff.out.includes(`Text changes since the last approved version (${firstCommit}):`), resDiff.out);
-  assert.ok(resDiff.out.includes('+ Compute subtotal and tax cents from items.'), resDiff.out);
-
-  // Frontmatter native-only approval shows reason and leaves file untouched
-  const stdout = sink(), stderr = sink();
-  const nativeCode = await runApprove(
-    { words: ['prompts/usb.prompt.md'], said: 'Approved USB native-only boundary.', cwd: setup.repo },
-    { stdout, stderr, interactive: false },
-  );
-  assert.equal(nativeCode, 0, stderr.text);
-  assert.match(stdout.text, /Kind: native-only[\s\S]*Reason: Reads hardware USB HID descriptor\./);
-  assert.equal(readFileSync(join(setup.repo, 'prompts/usb.prompt.md'), 'utf8'), nativeText);
 });
 
 test('3367 product composition and project card support plain Markdown prompts and refuse native-only tap handlers', t => {

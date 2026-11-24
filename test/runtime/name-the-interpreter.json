@@ -6,8 +6,7 @@
     {"id": "AC2", "text": "`pdd test --help` says that it checks Stories on the PDD interpreter with my gh login, never says \"PDD runtime\" and exits with code 0."},
     {"id": "AC3", "text": "`pdd lint --help` says that it runs the PDD interpreter lint with 0 AI calls, never says \"PDD runtime\" and exits with code 0."},
     {"id": "AC4", "text": "`pdd . --help` says that it opens the Prompt Interpreter on the PDD interpreter, never says \"PDD runtime\" or \"Simulator\", and exits with code 0."},
-    {"id": "AC5", "text": "`pdd product --help` says that the product commands make no interpreter calls, never says \"runtime\" and exits with code 0."},
-    {"id": "AC6", "text": "`pdd approve --help` still says \"runtime interface\", the name of the block in a prompt file, prints nothing to stderr and exits with code 0."}
+    {"id": "AC5", "text": "`pdd product --help` says that the product commands make no interpreter calls, never says \"runtime\" and exits with code 0."}
   ],
   "initial_world": {},
   "simulation": {},
@@ -72,17 +71,6 @@
         {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "interpreter calls"},
         {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "not_contains", "value": "runtime"},
         {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
-      ]
-    },
-    {
-      "step_id": "approve-help-keeps-the-block-name",
-      "entry_path": "prompts/cli/pdd-cli.prompt.md",
-      "operation": "runPdd",
-      "input": {"argv": ["approve", "--help"]},
-      "checks": [
-        {"criterion_id": "AC6", "target": "result", "path": "/stdout", "op": "contains", "value": "runtime interface"},
-        {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC6", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     }
   ]

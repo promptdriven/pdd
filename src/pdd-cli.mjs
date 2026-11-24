@@ -207,8 +207,8 @@ function wrapHelpDescription(text, width = 76, indent = '    ') {
   const out = [];
   for (const rawLine of String(text ?? '').split('\n')) {
     if (!rawLine.trim()) { out.push(''); continue; }
-    // Preserve short code/heredoc lines (like `pdd approve ... <<'PDD_SAID'`) verbatim without re-wrapping.
-    if (/^(?:pdd\s|<|PDD_SAID$)/.test(rawLine)) { out.push(`${indent}${rawLine}`); continue; }
+    // Preserve short code/heredoc lines verbatim without re-wrapping.
+    if (/^(?:pdd\s|<)/.test(rawLine)) { out.push(`${indent}${rawLine}`); continue; }
     let line = '';
     for (const word of rawLine.trim().split(/\s+/)) {
       if (!line) { line = word; continue; }
@@ -371,12 +371,6 @@ async function shouldUseRuntimeLocalLint(repoFeatures, cwd, operands) {
   }
 }
 
-const NON_SCENARIO_TEST_DIRS = new Set([
-  'fixtures', '__fixtures__', 'mocks', '__mocks__', 'snapshots', '__snapshots__',
-  'data', 'testdata', 'golden', 'cassettes',
-]);
-const NON_SCENARIO_JSON_NAME_RE =
-  /^(?:\..+|tsconfig(?:\.[^/]+)?|jsconfig|package(?:-lock)?|npm-shrinkwrap|composer|biome|deno|jsr|eslint|prettier|vitest|jest|babel|firebase|firestore\.indexes|vercel|netlify|wrangler)\.json$/i;
 const SKIP_DIRECT_WALK_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', 'vendor', '.pdd']);
 
 function findLocalProjectRoot(cwd) {
@@ -1077,10 +1071,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           json: plan.options['--json'] === true,
         }, { stdout, stderr });
       } catch (error) { line(stderr, `pdd update failed.${reason(error)}`); return 1; }
-    }
-    case 'prompt-approve': {
-      const { runApprove } = await import('./prompt-approve.mjs');
-      return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });
     }
     case 'completion': {
       const { renderCompletion } = await import('./completion.mjs');

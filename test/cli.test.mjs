@@ -18,14 +18,14 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'doctor', 'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use', 'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause', 'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log', 'product.status', 'product.next', 'product.start', 'product.contracts', 'graph', 'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop', 'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust', 'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.graph', 'autopilot.report', 'autopilot.regressions', 'autopilot.investigate', 'autopilot.alerts', 'autopilot.alert', 'autopilot.check-base', 'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off', 'completion', 'help', 'version', 'version.detailed']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'doctor', 'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use', 'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause', 'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log', 'product.status', 'product.next', 'product.start', 'product.contracts', 'graph', 'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop', 'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust', 'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.graph', 'autopilot.report', 'autopilot.regressions', 'autopilot.investigate', 'autopilot.alerts', 'autopilot.alert', 'autopilot.check-base', 'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off', 'completion', 'help', 'version', 'version.detailed']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['doctor'], ['doctor', '--json'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['setup', '--skills-dir', '/tmp/s'], ['init'], ['status'], ['status', '--changed', '--json'], ['prompts/app.prompt.md'], ['.'], ['--stop', 'demo'], ['product', '--help'], ['autopilot', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
   }
   // G1: people call the skills in their own chat; pdd starts no session and no named-workflow chat.
-  for (const argv of [['interface', 'draft'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'], ['workflow','list'], ['workflow','run','bug','1'],
+  for (const argv of [['interface', 'draft'], ['approve', 'prompts/foo.prompt.md'], ['approve', '--help'], ['help', 'approve'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'], ['workflow','list'], ['workflow','run','bug','1'],
     ['sim', 'demo'], ['simulate', 'demo'],
     ['setup', 'now'], ['setup', '--json'], ['doctor', 'extra'], ['run', 'start', 'issue'], ['verify'], ['runtime', 'discover'],
     ['replay'], ['call'], ['tests'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
@@ -71,7 +71,7 @@ for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync
 for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const original=fs[key];fs[key]=function(path,...args){if(/(?:\\/toolbox\\/|\\/\\.ssh(?:\\/|$)|\\/credentials(?:\\/|$)|\\/\\.npmrc$)/.test(String(path)))stop();return original.call(this,path,...args);};}syncBuiltinESMExports();`);
   const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', guard, bin, ...args],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['completion', '--help'], ['setup','--help'], ['doctor','--help'], ['init','--help'], ['status','--help'], ['lint','--help'], ['prove','--help'], ['test','--help'], ['approve','--help'], ['product','--help'], ['autopilot','--help']]) {
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['completion', '--help'], ['setup','--help'], ['doctor','--help'], ['init','--help'], ['status','--help'], ['lint','--help'], ['prove','--help'], ['test','--help'], ['product','--help'], ['autopilot','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|runtime|phone)\b/);
   }
@@ -182,4 +182,48 @@ test('3578 pdd lint --local enforces default-on structural errors without pdd.js
   const okCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: okOut, stderr: okErr });
   assert.equal(okCode, 0, okErr.text);
   assert.equal(okErr.text, '');
+});
+
+test('3537 CLI: pdd --help omits approve, pdd approve exits 2 cleanly, and leftover strict_approvals in pdd.json does not break lint or prove', t => {
+  const bin = join(root, 'bin', 'pdd.mjs');
+  const help = spawnSync(process.execPath, [bin, '--help'], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(help.status, 0, help.stderr);
+  assert.equal(help.stderr, '');
+  const helpWithoutPaths = help.stdout.split('\n').filter(line => !/^(?:Skill|Prompting guide): /.test(line)).join('\n');
+  assert.doesNotMatch(helpWithoutPaths, /\bapprove\b/i);
+
+  for (const args of [['approve', 'prompts/foo.prompt.md'], ['approve', '--help'], ['help', 'approve']]) {
+    const res = spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(res.status, 2, `${args.join(' ')}: ${res.stderr}`);
+    assert.equal(res.stdout, '');
+    assert.match(res.stderr, /pdd approve was removed.*chat or GitHub PR review/i);
+  }
+
+  // Real repo whose pdd.json still carries leftover "strict_approvals": true runs pdd lint --local and pdd prove cleanly.
+  const repo = temp(t), home = temp(t), state = temp(t);
+  mkdirSync(join(repo, 'prompts'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  mkdirSync(join(repo, 'test'), { recursive: true });
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({
+    strict_approvals: true,
+    verify: {
+      test: 'node --test test/app.test.mjs',
+      paths: [{ id: 'app', name: 'App', when: ['src/app.mjs'], run: 'node --test test/app.test.mjs' }],
+    },
+  }, null, 2) + '\n');
+  writeFileSync(join(repo, 'prompts/app.prompt.md'), '# App\n\nOwn `src/app.mjs`. Export `greet()` returning `"ok"`.\n\n## Dependencies\n\nNone.\n');
+  writeFileSync(join(repo, 'src/app.mjs'), '// Prompt: prompts/app.prompt.md\n\nexport const greet = () => "ok";\n');
+  writeFileSync(join(repo, 'test/app.test.mjs'), 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { greet } from "../src/app.mjs";\ntest("greet", () => { assert.equal(greet(), "ok"); });\n');
+  const gitEnv = { ...process.env, HOME: home, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com' };
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo, env: gitEnv });
+  execFileSync('git', ['add', '.'], { cwd: repo, env: gitEnv });
+  execFileSync('git', ['commit', '-q', '-m', 'seed'], { cwd: repo, env: gitEnv });
+
+  const env = { PATH: process.env.PATH, HOME: home, PDD_STATE_DIR: state };
+  const lintRes = spawnSync(process.execPath, [bin, 'lint', '--local'], { cwd: repo, env, encoding: 'utf8', timeout: 15000 });
+  assert.equal(lintRes.status, 0, `lint stderr: ${lintRes.stderr}\nstdout: ${lintRes.stdout}`);
+
+  const proveRes = spawnSync(process.execPath, [bin, 'prove', '--base', 'main'], { cwd: repo, env, encoding: 'utf8', timeout: 20000 });
+  assert.equal(proveRes.status, 0, `prove stderr: ${proveRes.stderr}\nstdout: ${proveRes.stdout}`);
+  assert.match(proveRes.stdout, /^Proved:/);
 });

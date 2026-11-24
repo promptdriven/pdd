@@ -1,4 +1,4 @@
-// Layer-0 sequential stdin line reader shared by prompt approval and Prompt Interpreter CLI doors.
+// Layer-0 sequential stdin line reader for Prompt Interpreter CLI doors.
 import { createInterface } from 'node:readline';
 
 export function lineReader(stdin) {

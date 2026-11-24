@@ -36,8 +36,8 @@ In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned mo
 
 ## Step 3 — Pre-code check, prompt approval, and 1 PR
 
-- Before writing implementation code, pause with a 1-screen plain-English Story/cases check unless the person said *"all the way"* (pure code bugs and `small-change` skip this pause; *"all the way"* skips only the pause, not prompt approval). For UI work, recommend `pdd <PROMPT.md|STORY>` so the person can try the live screen first.
-- Record the person's approval for changed prompts via `pdd approve PROMPT` (see [references/prompting.md §5](references/prompting.md#5-expected-values-approvals-and-merges)).
+- Before writing implementation code, pause with a 1-screen plain-English Story/cases check unless the person said *"all the way"* (pure code bugs and `small-change` skip this pause). For UI work, recommend `pdd <PROMPT.md|STORY>` so the person can try the live screen first.
+- Prompt approvals happen directly in chat or GitHub PR review — never invent a person's decision or auto-merge without explicit permission (see [references/prompting.md §5](references/prompting.md#5-expected-values-approvals-and-merges)).
 - Deliver **1 PR** when authorized to open a PR (never 2 stacked PRs; the only exception is a multi-part product run using `Through: prompt-pr` / `pdd product start RUN --through prompt-pr`, which explicitly stages a prompt PR first). Never merge unless explicitly requested by the person.
 
 ## Step 4 — Build, prove the real user path, and verify

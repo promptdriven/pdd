@@ -15,4 +15,4 @@ As a repository maintainer, I can change the saved mode, so that later skills ca
 - An invalid stored mode is treated as off with a one-line notice and is unchanged by setup; a mode command replaces it. Native test: use an invalid stored mode and inspect output and disk.
 - Native test: save with unrelated top-level and Autopilot keys; verify both remain unchanged.
 - Native test: exercise CLI parsing, dispatch and help with injected ports.
-- Future native skill test: auto records the checker’s PASS with `--said`, marked as decided by the checker; off and observe require the person’s approval. Approval policy does not read Autopilot and strict approvals remain enforced.
+- Future native skill test: auto delegates ordinary automatic gates while required human GitHub reviews still need a person; observe prepares full evidence without merging.

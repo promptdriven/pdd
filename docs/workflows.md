@@ -37,8 +37,8 @@ Open Codex, Claude Code, Gemini CLI, or Antigravity in your repository and invok
 4. **Lint, test, and run:**
    - Run offline `pdd lint` (0 AI, 0 network) to catch structural, SVG, scenario, and diff problems immediately.
    - Run `pdd test --files STORY && pdd test STORY` on the PDD interpreter, or `pdd STORY` / `pdd prompts/<app>.prompt.md` to run the program interactively on the Prompt Interpreter before writing code.
-5. **Approve prompts:**
-   - Review prompt changes and approve with `pdd approve PROMPT` in a terminal, or reply in chat so your agent records your exact words with `pdd approve PROMPT --said - <<'PDD_SAID'`. Strict mode (`"strict_approvals": true` in root `pdd.json`) requires a person terminal.
+5. **Review and approve prompts:**
+   - Review prompt changes in chat or on a GitHub pull request and reply in your own words. Never let an agent invent a person's decision or auto-merge without explicit permission.
 6. **Build, prove, and review:**
    - Implement code from the approved prompts and keep `// Prompt: ...` headers or `pdd-bindings.json` current (`pdd update --check`).
    - Run `pdd prove --base origin/main` to verify offline lint, diff checks, the repository test suite, and merge-base trusted `verify.paths` recipes. For bug fixes, prove base-vs-head contrast with `pdd prove --base origin/main --test "CMD" --expect "DEFECT_TEXT"`.
@@ -52,7 +52,7 @@ Open Codex, Claude Code, Gemini CLI, or Antigravity in your repository and invok
 | Start | Invoke `/pdd` (Claude Code) or `$pdd` (Codex) in your repo | `pdd autopilot add N` and `pdd autopilot start --label pdd:autopilot` |
 | Isolation | Works directly in your checkout or chosen branch | Isolated worktree, branch, and headless worker job per issue |
 | Inspection | `pdd status`, `pdd lint`, `pdd update`, `pdd prove` | `pdd autopilot status`, `pdd autopilot logs [ISSUE] [-f]`, `pdd graph` |
-| Approvals | Person approves prompts in chat or terminal (`pdd approve`) | Operator's `pdd autopilot start` delegates ordinary prompt approvals in `auto`/`observe` mode; `strict_approvals` still requires a person |
+| Approvals | Person reviews and approves prompts in chat or GitHub PR review | Operator's `pdd autopilot start` authorizes issue runs in `auto`/`observe` mode; required GitHub branch reviews still apply |
 | PRs and merges | Agent opens PRs and merges only on explicit human request | Autopilot opens one PR per issue; in `auto` mode merges after CI, fresh review, and full test suite pass (in `observe` mode posts "would merge") |
 
 ## Headless Autopilot workflow (`pdd autopilot`)

@@ -19,7 +19,7 @@ Check for removed commands first, before any other rule, also right after `help`
 | `check`, and `--lint` is one of the words after it | `pdd check --lint was removed. Use pdd lint.` |
 | `check`, any other words | `pdd check was removed. Use pdd test.` |
 
-2. Standalone retired commands (`REMOVED_COMMANDS` in the catalog): every input whose command word is `simulate`, `sim`, `try`, or `workflow` (with any subcommand, flags, invalid options, or after `help`) throws `CommandInputError` (exit 2) with one line and zero side effects:
+2. Standalone retired commands (`REMOVED_COMMANDS` in the catalog): every input whose command word is `simulate`, `sim`, `try`, `workflow`, or `approve` (with any subcommand, operands, flags, invalid options, or after `help`) throws `CommandInputError` (exit 2) with one line and zero side effects:
 
 | Input | Line |
 |---|---|
@@ -27,6 +27,7 @@ Check for removed commands first, before any other rule, also right after `help`
 | `sim`, any words | `pdd sim was removed. Run pdd <PROMPT.md|STORY> instead.` |
 | `try`, any words | `pdd try was removed. Run pdd <PROMPT.md|STORY> instead.` |
 | `workflow`, any words | Actionable pointer to `/pdd` (or `$pdd`), `pdd prove`, and `pdd autopilot`. |
+| `approve`, any words | Actionable pointer to review and approve prompt changes directly in chat or GitHub PR review. |
 
 ## Help topics
 
