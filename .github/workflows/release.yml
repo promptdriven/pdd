@@ -141,6 +141,20 @@ jobs:
             PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" lint --local
           )
 
+          # Verify PyPI wheel `pdd setup --yes` handles 0-byte mcp_config.json + retired skills and `pdd upgrade` advises `pip install -U pdd-cli`.
+          mkdir -p "$HOME/.agents/skills/pdd-bug" "$HOME/.gemini/config"
+          printf -- '---\nname: pdd-bug\nmetadata:\n  pdd-skills: 0.1.39\n---\nold\n' > "$HOME/.agents/skills/pdd-bug/SKILL.md"
+          : > "$HOME/.gemini/config/mcp_config.json"
+          PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" setup --yes >"$smoke_dir/setup.out"
+          grep -q "Done!" "$smoke_dir/setup.out"
+          test -f "$HOME/.agents/skills/pdd/SKILL.md"
+          test ! -e "$HOME/.agents/skills/pdd-bug"
+          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));' "$HOME/.gemini/config/mcp_config.json"
+          py_upg=0
+          PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" upgrade >"$smoke_dir/py-upg.out" 2>"$smoke_dir/py-upg.err" || py_upg=$?
+          test "$py_upg" -eq 1
+          grep -q "pip install -U pdd-cli" "$smoke_dir/py-upg.err"
+
   publish-npm:
     name: publish-npm
     needs: verify-release

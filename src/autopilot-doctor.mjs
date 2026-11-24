@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 84aaa7a5ad61a53e1ee91bb4edc155cd796ed85ca4cdfbc326dbf095b4c8f9eb).
+// Prompt: prompts/cli/autopilot-doctor.prompt.md
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
 import {constants} from 'node:fs';
@@ -10,6 +10,7 @@ import {isCloudAccountsActive, managedClaudeSettingsPath, managedCodexAuthPath, 
 import {checkWorkflowAgents} from './shared/agent-readiness.mjs';
 import {githubOriginRepository} from './shared/github-repo.mjs';
 import {readPromptApprovals} from './approval-policy.mjs';
+import {PDD_SKILL_NAMES, RETIRED_SKILL_NAMES} from './shared/skills-install.mjs';
 import {health as runtimeHealthCheck, runtimeClientSlice, runtimePreflightSlice} from './runtime-seam.mjs';
 
 const {runtimeOrigin} = runtimeClientSlice();
@@ -17,8 +18,8 @@ const {interfaceBlocks, parsePromptFrontmatter, proseSha256} = runtimePreflightS
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
-const skills = ['pdd'];
-const retiredSkills = ['pdd-autopilot','pdd-check','pdd-merge','pdd-setup','pdd-prompting','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph'];
+const skills = PDD_SKILL_NAMES;
+const retiredSkills = RETIRED_SKILL_NAMES;
 const ready = value => value?.code === 0;
 
 const PROVIDER_CONFIG_VARS = {codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME',agy:'ANTIGRAVITY_APP_DATA_DIR'};

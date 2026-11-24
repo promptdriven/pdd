@@ -42,6 +42,40 @@ function findUnscopedNpmPdd(cwd, env, paths) {
   return { foreign, legacy };
 }
 
+function isMatchingManagerShim(candidatePath, current) {
+  if (!current) return false;
+  const normCurrent = current.replace(/\\/g, '/');
+  // 1. Volta shim: `<voltaHome>/bin/pdd` -> `volta-shim` while `current` lives under `<voltaHome>/tools/image/packages/(@promptdriven/pdd|pdd)/`.
+  const voltaMatch = /^(.*?)\/tools\/image\/packages\/(?:@promptdriven\/pdd|pdd)\//.exec(normCurrent);
+  if (voltaMatch?.[1]) {
+    const resolvedCand = identity(candidatePath);
+    const candBase = basename(resolvedCand ?? '').toLowerCase();
+    const voltaBin = identity(join(current.slice(0, voltaMatch[1].length), 'bin'));
+    const candDir = identity(dirname(candidatePath));
+    if ((candBase === 'volta-shim' || candBase === 'volta-shim.exe') && voltaBin && candDir === voltaBin) {
+      return true;
+    }
+  }
+  // 2. Shell wrapper shim (e.g. pnpm global `pdd` script) whose exec target resolves to `current`.
+  try {
+    const st = statSync(candidatePath);
+    if (!st.isFile() || st.size === 0 || st.size > 16384) return false;
+    const text = readFileSync(candidatePath, 'utf8');
+    if (!text.startsWith('#!')) return false;
+    const dirs = [...new Set([dirname(candidatePath), dirname(identity(candidatePath) ?? candidatePath)])];
+    const refRe = /"([^"\r\n]*bin[\\/]pdd\.mjs)"|'([^'\r\n]*bin[\\/]pdd\.mjs)'|([^\s"']*bin[\\/]pdd\.mjs)/g;
+    for (const match of text.matchAll(refRe)) {
+      const rawRef = match[1] ?? match[2] ?? match[3];
+      if (!rawRef) continue;
+      for (const baseDir of dirs) {
+        const expanded = rawRef.replace(/^\$\{?basedir\}?[\\/]/, `${baseDir}/`);
+        if (identity(resolve(baseDir, expanded)) === current) return true;
+      }
+    }
+  } catch { /* Unreadable wrapper falls through to normal shadowing check. */ }
+  return false;
+}
+
 // Only --version probes another executable; the guard prevents another copy of this pdd from probing back.
 export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
   if (env.PDD_PATH_PROBE === '1') return [];
@@ -52,7 +86,7 @@ export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
     if (typeof version !== 'string' || !version || !executable(running)) return [];
   } catch { return []; }
   const paths = candidates(cwd, env), current = identity(running), selected = paths[0];
-  const isAlpha = path => current !== null && identity(path) === current;
+  const isAlpha = path => current !== null && (identity(path) === current || isMatchingManagerShim(path, current));
   const shadowed = selected && !isAlpha(selected);
   const { foreign: foreignNpm, legacy: rawLegacyNpm } = findUnscopedNpmPdd(cwd, env, paths);
   const legacyNpm = rawLegacyNpm && (mode === 'setup' || identity(join(rawLegacyNpm, 'bin/pdd.mjs')) !== current) ? rawLegacyNpm : null;

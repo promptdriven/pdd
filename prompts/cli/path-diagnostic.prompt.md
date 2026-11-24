@@ -4,7 +4,7 @@ Own `src/path-diagnostic.mjs`, exporting `pathDiagnostic({packageRoot, cwd, env,
 
 ## Domain decisions
 
-- Read this package's version and executable identity locally. Discover executable `pdd` paths in order with `which -a pdd`; if `which` is unavailable, enumerate executable files in `PATH` with the same relative/empty-directory semantics. Deduplicate repeated paths; recognize symlinks to this `pdd` executable as the same program.
+- Read this package's version and executable identity locally. Discover executable `pdd` paths in order with `which -a pdd`; if `which` is unavailable, enumerate executable files in `PATH` with the same relative/empty-directory semantics. Deduplicate repeated paths; recognize symlinks to this `pdd` executable, matching Volta shims (`<voltaHome>/bin/pdd -> volta-shim` when this `pdd` lives under `<voltaHome>/tools/image/packages/`), and small shell wrapper shims (such as `pnpm` global wrappers) whose target resolves to this `pdd` executable as the same program.
 - Probe only a shadowed first candidate with `--version` (bounded to 2 seconds and 64 KiB, with `PDD_PATH_PROBE=1` recursion guard). Sanitize child text to one readable line.
 - **Quiet when clean:** for `mode: 'version'` and `mode: 'setup'`, emit `[]` when `PATH` cleanly selects this `pdd` with no conflict, no extra distinct `pdd`, and no unscoped npm `"pdd"` package. For `mode: 'workflow'`, emit a one-line shadowing warning only when shadowed (including `"$PDD_BIN"`).
 - **Conflict remediation:** when an unrelated unscoped npm `"pdd"` package or legacy unscoped `"pdd"` CLI package is detected next to a `PATH` directory, recommend `npm uninstall -g pdd && npm install -g @promptdriven/pdd` (never `--force` and never the old `github:promptdriven/pdd` URL).
