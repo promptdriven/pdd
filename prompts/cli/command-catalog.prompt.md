@@ -39,6 +39,7 @@ Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before
 - `jobs` (`jobs`, local `runtime-jobs`): no operands or options. Form `pdd jobs`.
 - `mcp` (`mcp`, local `mcp`): no operands or options. Form `pdd mcp`.
 - `upgrade` (`upgrade`, local `upgrade`): flag `--main`. Form `pdd upgrade [--main]`.
+- `doctor` (`doctor`, local `doctor`): flag `--json`. Form `pdd doctor [--json]`. Read-only host health check for Node, competing `pdd` installs, login-shell `PATH` parity, agent skills, MCP configs, and `gh` sign-in.
 
 ## Cloud accounts routes
 
