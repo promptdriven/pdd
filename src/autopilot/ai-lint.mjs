@@ -332,7 +332,7 @@ export async function runAiLint(
     const rerunHint = resolvedProvider === 'codex' ? 'pdd lint --codex' : `${label} lint (--provider ${resolvedProvider})`;
     for (const batch of batches) {
       const remainingMs = deadline - now();
-      if (remainingMs <= 0) { writeErr(`${label} lint timed out after ${Math.max(1, Math.round(totalTimeoutMs / 1000))}s. Narrow the target selection, increase --timeout MIN, or run pdd lint --local.`); return 1; }
+      if (remainingMs <= 0) { writeErr(`${label} lint timed out after ${Math.max(1, Math.round(totalTimeoutMs / 1000))}s. Narrow the target selection, increase --timeout MIN, or run pdd lint.`); return 1; }
       const prompt = buildAiLintPrompt(batch.entries, {
         secrets, pairs: batch.pairs, issueContext,
         scenarios: issueContext ? collectScenarioSummaries(selectedStories, resolved.scenariosByStory, realRoot, secrets, batch.entries.filter(e => e.kind === 'story').map(e => e.path)) : [],
@@ -345,8 +345,8 @@ export async function runAiLint(
       }, { run: stepRunner });
       if (!res.ok) {
         writeErr(res.error === 'unreadable JSON response'
-          ? `${label} lint returned an unreadable response. Re-run ${rerunHint} or run pdd lint --local.`
-          : `${label} lint ${res.code === null ? 'could not run' : 'failed'}${res.error ? `: ${res.error}` : ''}. Check ${resolvedProvider} login status or run pdd lint --local.`);
+          ? `${label} lint returned an unreadable response. Re-run ${rerunHint} or run pdd lint.`
+          : `${label} lint ${res.code === null ? 'could not run' : 'failed'}${res.error ? `: ${res.error}` : ''}. Check ${resolvedProvider} login status or run pdd lint.`);
         return 1;
       }
       const graded = new Set(batch.entries.filter(e => !e.contextOnly).map(e => e.path));

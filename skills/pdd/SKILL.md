@@ -2,7 +2,7 @@
 name: pdd
 description: Prompt-driven development workflow. Use when planning a product, fixing a bug, adding a feature, or making a small non-product change in a repository that uses PDD.
 metadata:
-  pdd-skills: 0.1.50
+  pdd-skills: 0.1.51
 ---
 
 # PDD

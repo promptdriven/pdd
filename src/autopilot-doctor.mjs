@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 84aaa7a5ad61a53e1ee91bb4edc155cd796ed85ca4cdfbc326dbf095b4c8f9eb).
+// Prompt: prompts/cli/autopilot-doctor.prompt.md
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
 import {constants} from 'node:fs';
@@ -9,14 +9,17 @@ import {readCodexLimits} from './codex-limits.mjs';
 import {isCloudAccountsActive, managedClaudeSettingsPath, managedCodexAuthPath, pddManagedCodexHome} from './login-pool.mjs';
 import {checkWorkflowAgents} from './shared/agent-readiness.mjs';
 import {githubOriginRepository} from './shared/github-repo.mjs';
-import {health as runtimeHealthCheck, runtimeClientSlice} from './runtime-seam.mjs';
+import {readPromptApprovals} from './approval-policy.mjs';
+import {PDD_SKILL_NAMES, RETIRED_SKILL_NAMES} from './shared/skills-install.mjs';
+import {health as runtimeHealthCheck, runtimeClientSlice, runtimePreflightSlice} from './runtime-seam.mjs';
 
 const {runtimeOrigin} = runtimeClientSlice();
+const {interfaceBlocks, parsePromptFrontmatter, proseSha256} = runtimePreflightSlice();
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
-const skills = ['pdd'];
-const retiredSkills = ['pdd-autopilot','pdd-check','pdd-merge','pdd-setup','pdd-prompting','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph'];
+const skills = PDD_SKILL_NAMES;
+const retiredSkills = RETIRED_SKILL_NAMES;
 const ready = value => value?.code === 0;
 
 const PROVIDER_CONFIG_VARS = {codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME',agy:'ANTIGRAVITY_APP_DATA_DIR'};
@@ -241,7 +244,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   }
 
   const block = ['CLAUDE.md','AGENTS.md'].some(name=>/<!-- pdd:start -->[\s\S]*<!-- pdd:end -->/.test(read(join(cwd,name))??''));
-  add('setup-block',block?'pass':'warn','PDD instructions in AGENTS.md or CLAUDE.md','pdd setup');
+  add('setup-block',block?'pass':'warn','PDD instructions in AGENTS.md or CLAUDE.md','pdd init');
   const kind = agent?.kind ?? preferred?.kind ?? 'codex';
   const roots = kind==='claude'?[join(cwd,'.claude','skills'),join(env.CLAUDE_CONFIG_DIR??join(env.HOME??'','.claude'),'skills')]:[join(cwd,'.agents','skills'),join(env.HOME??'','.agents','skills')];
   const complete = roots.some(root=>skills.every(skill=>read(join(root,skill,'SKILL.md'))!==null));
@@ -276,7 +279,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   }
   const config = json(read(join(cwd,'pdd.json'))), auto = config?.autopilot;
   const valid = auto && ['auto','observe'].includes(auto.mode) && (auto.trust===undefined || Array.isArray(auto.trust)&&auto.trust.every(x=>typeof x==='string'&&x.trim()));
-  add('setup-mode',valid?'pass':'warn',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; ${config.strict_approvals===true?'strict person-terminal approvals required':'delegated ordinary gates allowed; required human reviews still apply'}`:'Choose mode and trust in pdd setup; off does not start work','pdd setup');
+  add('setup-mode',valid?'pass':'warn',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; ${config.strict_approvals===true?'strict person-terminal approvals required':'delegated ordinary gates allowed; required human reviews still apply'}`:'Choose mode with pdd autopilot observe or pdd autopilot auto; off does not start work','pdd autopilot observe');
   // Job worktrees and other machines read pdd.json of the default branch on GitHub.
   // The settings differ as autopilot-github defines: the mode, or the trust names ignoring case and order.
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -296,7 +299,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const localText = read(join(cwd,'pdd.json')), ours = auto, theirs = remote?.autopilot;
   if (!contents || !absent && !object(remote)) add('settings-github','warn','Autopilot settings on GitHub are unproved; doctor could not read pdd.json of the default branch',contents?`gh auth login && ${show}`:'gh auth login');
   else if (localText!==null && !object(config)) add('settings-github','warn','pdd.json in this checkout is not a JSON object; the GitHub comparison is unproved','vi pdd.json');
-  else if (absent && localText===null) add('settings-github','warn',`pdd.json is missing in this checkout and on GitHub (${branch})`,'pdd setup');
+  else if (absent && localText===null) add('settings-github','warn',`pdd.json is missing in this checkout and on GitHub (${branch})`,'pdd autopilot observe');
   else if (absent) add('settings-github','warn',`pdd.json is only in this checkout; GitHub (${branch}) has none, so other machines and Autopilot job worktrees do not see it`,`git add pdd.json && git commit -m "Add PDD settings" && git push${['observe','auto'].includes(modeOf(ours))?` # or pdd autopilot ${modeOf(ours)}`:''}`);
   else if (localText===null) add('settings-github','warn',`pdd.json is only on GitHub (${branch}): ${settingsOf(theirs)}; this checkout has none`,`git fetch origin && git checkout ${word(`origin/${branch}`)} -- pdd.json`);
   else if (modeOf(theirs)!==modeOf(ours) || trustKey(theirs)!==trustKey(ours)) {
@@ -305,16 +308,63 @@ export async function runAutopilotDoctor(input, ports = {}) {
     add('settings-github','warn',`GitHub: ${settingsOf(theirs)}; this checkout: ${settingsOf(ours)}; Autopilot jobs use the GitHub copy`,publish.join(' && '));
   } else add('settings-github','pass',`GitHub (${branch}) has the same Autopilot settings: ${settingsOf(ours)}`,show);
   const tracked = await run('git',['ls-files','-z','--','*.prompt.md']);
+  const promptPaths = ready(tracked)?tracked.stdout.split('\0').filter(Boolean):[];
   const drafts = [], unreadable = [];
-  for (const path of ready(tracked)?tracked.stdout.split('\0').filter(Boolean):[]) {
-    const text = read(join(cwd,path));
-    if (text===null) { unreadable.push(path); continue; }
-    const block = text.match(/<summary>Runtime interface<\/summary>[\s\S]*?```json\s*([\s\S]*?)```/i);
-    if (!block) continue;
-    const data = json(block[1]);
-    if (!data || data.status!=='approved') drafts.push(path);
+  let journal = [], journalUnreadable = false;
+  if (promptPaths.length) {
+    let commonDirReply = await run('git',['rev-parse','--path-format=absolute','--git-common-dir']);
+    let commonDir = ready(commonDirReply) && commonDirReply.stdout.trim() ? commonDirReply.stdout.trim() : null;
+    if (!commonDir) {
+      commonDirReply = await run('git',['rev-parse','--git-common-dir']);
+      commonDir = ready(commonDirReply) && commonDirReply.stdout.trim() ? resolve(cwd, commonDirReply.stdout.trim()) : null;
+    }
+    if (!commonDir) {
+      journalUnreadable = true;
+    } else {
+      try { journal = readPromptApprovals({commonDir},{fs:files}); }
+      catch { journalUnreadable = true; }
+    }
   }
-  add('draft-prompts',!ready(tracked)||drafts.length||unreadable.length?'warn':'pass',`First check may need prompt approval: ${drafts.join(', ')||'none'}${unreadable.length?`; unreadable: ${unreadable.join(', ')}`:''}`,'pdd files --json');
+  const strictApprovals = config?.strict_approvals === true;
+  const journalApproved = (path, text) => {
+    const hash = proseSha256(text);
+    return journal.some(entry => (!strictApprovals || entry.actor?.kind === 'terminal')
+      && entry.prompts?.some(item => item.path === path && item.proseSha256 === hash));
+  };
+  const realCwd = (() => { try { return typeof files.realpathSync === 'function' ? files.realpathSync(cwd) : resolve(cwd); } catch { return resolve(cwd); } })();
+  const isSafePromptFile = filePath => {
+    if (typeof files.lstatSync === 'function') {
+      try {
+        const st = files.lstatSync(filePath);
+        if (!st || st.isSymbolicLink?.() || (typeof st.isFile === 'function' && !st.isFile())) return false;
+      } catch { return false; }
+    }
+    if (typeof files.realpathSync === 'function') {
+      try {
+        const real = files.realpathSync(filePath);
+        if (real !== realCwd && !real.startsWith(`${realCwd}/`) && !real.startsWith(`${realCwd}\\`)) return false;
+      } catch { return false; }
+    }
+    return true;
+  };
+  for (const path of promptPaths) {
+    const absPath = join(cwd,path);
+    if (!isSafePromptFile(absPath)) { unreadable.push(path); continue; }
+    const text = read(absPath);
+    if (text===null) { unreadable.push(path); continue; }
+    const blocks = interfaceBlocks(text);
+    const fm = parsePromptFrontmatter(text);
+    if ((fm.hasFrontmatter && blocks.length > 0) || blocks.length > 1 || fm.error) { drafts.push(path); continue; }
+    if (blocks.length === 1) {
+      const data = json(blocks[0][1]);
+      if (!object(data) || data.status!=='approved' || data.prose_sha256!==proseSha256(text)) drafts.push(path);
+      continue;
+    }
+    if (!journalApproved(path, text)) drafts.push(path);
+  }
+  const draftDetail = `First check may need prompt approval: ${drafts.join(', ')||'none'}${unreadable.length?`; unreadable: ${unreadable.join(', ')}`:''}${journalUnreadable?'; approval journal unreadable':''}`;
+  const draftFix = drafts.length ? `pdd approve ${quote(drafts[0])}` : 'pdd files --json';
+  add('draft-prompts',!ready(tracked)||drafts.length||unreadable.length||journalUnreadable?'warn':'pass',draftDetail,draftFix);
 
   let health;
   try { runtimeOrigin(env); } catch { health={state:'address'}; }

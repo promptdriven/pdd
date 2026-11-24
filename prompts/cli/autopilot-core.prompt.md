@@ -832,7 +832,7 @@ the evidence record.
   no Story is valid only when the PR changes one Story or none; two lines for the same
   Story are red; a PASS of a Story that the PR does not change never counts; a FAIL line
   blocks the merge, and a failed check is a FAIL also when its batch has no verdict.
-  `not run` is only for a cause that this PR cannot fix: a native-only prompt, a Story
+  `not run` is only for a cause that this PR cannot fix: a `kind: native-only` prompt, a Story
   with no Runtime test, no verdict with no failed step, or a refusal that pdd gives no
   fix for; a refusal with a fix from pdd (for example a whole number outside the
   interpreter's range: apply the Number spelling that pdd prints) is this PR's work. The
@@ -849,14 +849,11 @@ the evidence record.
   comment: only the core's fresh reviewer gives one. **Approval (auto and observe
   mode):** observe mode does everything that auto mode does except the merge, so the
   operator's start is the approval of the job's prompt changes in both. For each changed
-  `*.prompt.md` that has a Runtime interface block, after its checks pass, the job runs
-  `printf '%s' 'WORDS' | pdd approve PROMPT --said -` (trial B5: a prompt with no
-  interface block needs no approval, as the prompt gate says; the rule says "A prompt
-  with no Runtime interface block needs no approval: do not run pdd approve for it, and
-  do not invent an interface.") with WORDS exactly `Operator action: pdd autopilot start --engine
+  `*.prompt.md`, after its checks pass, the job runs
+  `printf '%s' 'WORDS' | pdd approve PROMPT --said -` with WORDS exactly `Operator action: pdd autopilot start --engine
   core in MODE mode for REPO on MACHINE-ID at TIME` (MODE is the real mode, `auto` or
   `observe`, because the words must be true; the machine id, never the host; TIME =
-  `state.startedAt`, else `state.activatedAt`) and commits the result in the PR. The
+  `state.startedAt`, else `state.activatedAt`) and commits the result in the PR if the file changed (plain-Markdown and `kind: native-only` prompts record in the local approval journal without editing the file; legacy embedded blocks update the file; never invent a Runtime interface block). The
   merge check makes an unapproved changed prompt red in both modes, with the same
   command, so a repair records it. In a repository whose worktree `pdd.json` has
   `strict_approvals: true` the rule says instead: do not run `pdd approve` and do not
@@ -865,7 +862,7 @@ the evidence record.
   question only makes sense when a merge would follow), adds no `pdd:needs-decision`,
   and its would-merge note lists `Prompts that need a person's approval before a merge
   (strict_approvals): …`. Push the job
-  branch and either let `openPullRequest(ctx, job, options)` open/update the PR from the result's `head`, `title` and `summary` or open one PR against BASE with `Fixes #N`; `openPullRequest` (using a temporary scratch root cleaned up on exit without overwriting saved job files or polluting `job.worktree` when called standalone) deterministically stamps missing closing keywords (`Fixes #N` / `Closes #N`), `Path:` lines (from the Git diff and base/head `ownerRead`, grouping `Path: a` under the changed owner prompt even on multi-owner modules and placing modified existing `.prompt.md` files on `Path: a`), `Runtime:` lines (from verified saved `pdd test` checks at `head` or honest `not run` / `FAIL` state, never inventing a pass), and the `Evidence:` line in code (failing closed on malformed explicit `tests`/`vectors`/`formal` inputs or omitted `tests` without a valid existing `Evidence:` `tests=` claim, preserving contradictory test counts so `evidenceReds` catches them, preserving the mechanically classified `formal` tier (`proved_solver_code`, `bounded`, or `proved_spec_model`) without stomping `proved_solver_code` to `bounded` or upgrading disconnected `proved_spec_model` to `bounded`, and syncing `vectors=`/`formal=` counts in `mergeCheck` once engine replays finish on stamped heads while always respecting honest `proved_spec_model`) so the agent does not have to hand-type machine metadata strings. Never merge, push to BASE,
+  branch and either let `openPullRequest(ctx, job, options)` open/update the PR from the result's `head`, `title` and `summary` or open one PR against BASE with `Fixes #N`; `openPullRequest` (using a temporary scratch root cleaned up on exit without overwriting saved job files or polluting `job.worktree` when called standalone) deterministically stamps missing closing keywords (`Fixes #N` / `Closes #N`), `Path:` lines (from the Git diff and base/head `ownerRead`, grouping `Path: a` under the changed owner prompt even on multi-owner modules and placing modified existing `.prompt.md` files on `Path: a`), `Runtime:` lines (from verified saved `pdd test` checks at `head` or honest `not run` / `FAIL` state, never inventing a pass, treating plain-Markdown prompts without an embedded Runtime interface block as first-class checkable prompts that report `no Story reaches <prompts>` or the caller's cause when uncovered, and reporting `native-only prompt` only when every changed prompt has valid `kind: native-only`), and the `Evidence:` line in code (failing closed on malformed explicit `tests`/`vectors`/`formal` inputs or omitted `tests` without a valid existing `Evidence:` `tests=` claim, preserving contradictory test counts so `evidenceReds` catches them, preserving the mechanically classified `formal` tier (`proved_solver_code`, `bounded`, or `proved_spec_model`) without stomping `proved_solver_code` to `bounded` or upgrading disconnected `proved_spec_model` to `bounded`, and syncing `vectors=`/`formal=` counts in `mergeCheck` once engine replays finish on stamped heads while always respecting honest `proved_spec_model`) so the agent does not have to hand-type machine metadata strings. Never merge, push to BASE,
   force-push or close the issue, and never assign it or change its labels. The result
   file is JSON: `outcome` `pr` with `head`, optional `pr`, `title`, `summary`, optional `skill` (`small-change`, `bug` or `feature`), `tests`, optional `formal {state}`, `choices`, `promptChanged` (Boolean),
   `evidence` and optional `runtime {state, cause, kind, component, code, detail}`, or

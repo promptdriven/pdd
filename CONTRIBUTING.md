@@ -80,4 +80,4 @@ Run a focused file with
 The home isolation regression uses synthetic caller folders and the existing
 GitHub and interpreter fakes. It needs no account or live service.
 
-For repository structural maintenance, see the contributor [refactor runbook](docs/refactor-runbook.md).
+For repository structural maintenance, see `docs/refactor-runbook.md` in the source repository.

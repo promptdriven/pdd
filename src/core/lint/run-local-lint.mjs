@@ -118,11 +118,33 @@ export function runLocalLint(
   });
 
   const svgWarnings = [];
+  const scenarioErrors = [];
   if (includeSvg && repoFiles.length > 0) {
     try {
       const lintSvg = ports.lintSvgLayouts ?? defaultLintSvgLayouts;
-      const rawSvg = lintSvg({ root, files: repoFiles, ...(promptPaths !== undefined ? { promptPaths } : {}) });
-      if (Array.isArray(rawSvg)) svgWarnings.push(...rawSvg);
+      const rawSvg = lintSvg({
+        root,
+        files: repoFiles,
+        ...(promptPaths !== undefined ? { promptPaths } : {}),
+        ...(tests !== undefined ? { tests } : {}),
+        includeShortDiagnostics: true,
+      });
+      if (Array.isArray(rawSvg)) {
+        for (const entry of rawSvg) {
+          if (typeof entry === 'string' && entry.includes('compact scenario compile failed [')) {
+            const m = entry.match(/^Warning:\s*([^\s:(]+)(?:\s*\(([^)]+)\))?:\s*(compact scenario compile failed \[[^\]]+\]:\s*[\s\S]*)$/);
+            if (m) {
+              const [, filePath, section, detail] = m;
+              const locDetail = section ? `(${section}) ${detail}` : detail;
+              scenarioErrors.push(`Error: scenario: ${filePath}:1 [compact-scenario-compile] ${locDetail}\n  Fix: Fix the compact scenario structure or operator in ${filePath} (see stories.md in the pdd skill or run \`pdd help prompting\`).\n  Rerun: pdd lint`);
+            } else {
+              scenarioErrors.push(entry.replace(/^Warning:\s*/, 'Error: scenario: '));
+            }
+          } else {
+            svgWarnings.push(entry);
+          }
+        }
+      }
     } catch {
       // Missing or unconfigured SVG layouts never block offline PDD lint.
     }
@@ -147,7 +169,7 @@ export function runLocalLint(
           ...(trusted.skippedCommands ? ['"lint.commands"'] : []),
           ...(trusted.skippedMutationCommand ? ['"lint.mutation_command"'] : []),
         ].join(' and ') || '"lint.commands"';
-        commandWarnings.push(`Warning: lint config: pdd.json:1 [lint-commands-untrusted] Working-tree changes to ${changedKeys} were skipped because only merge-base pdd.json commands are trusted by default (pass --trust-working-tree to run locally).`);
+        commandWarnings.push(`Warning: lint config: pdd.json:1 [lint-commands-untrusted] Working-tree changes to ${changedKeys} were skipped because only merge-base pdd.json commands are trusted by default.`);
       }
     }
     if (cmdsToRun.length > 0) {
@@ -160,6 +182,7 @@ export function runLocalLint(
 
   const problems = [
     ...project.errors,
+    ...scenarioErrors,
     ...(diffResult ? diffResult.errors.map(e => e.formatted) : []),
     ...(commandResult ? commandResult.errors : []),
   ];
