@@ -14,7 +14,7 @@ const UTILITY_TEST_DIR = /(?:^|\/)(?:helpers?|fixtures?|mocks?|__mocks__|__fixtu
 const DOC_OR_FIXTURE_PATH = /(?:^|\/)(?:docs?|fixtures?|__fixtures__)\/|\.md$/i;
 const SNAPSHOT_PATH = /\.snap$|(?:^|\/)__snapshots__\//i;
 const HARNESS_PATH = /(?:^|\/)(?:pdd\.json|rules\/lint\/[^/]+\.json|package\.json|vitest\.config\.[^/]+|jest\.config\.[^/]+|pytest\.ini|pyproject\.toml|conftest\.py|tox\.ini|setup\.cfg|\.github\/workflows\/[^/]+\.ya?ml)$/i;
-const SHADOW_BIN_PATH_RE = /(?:^|\/)node_modules\/\.bin\/.+/;
+const SHADOW_BIN_PATH_RE = /(?:^|\/)(?:node_modules\/\.bin|\.venv\/bin|venv\/bin)\/.+/;
 export const SHADOW_RUNTIME_BINS = ['node', 'npm', 'python', 'python3', 'pytest', 'go', 'cargo', 'sh', 'bash'];
 const PROD_CODE_EXT_RE = /\.(?:[cm]?[jt]s|[jt]sx|py|go|rs)$/i;
 const JS_BOUNDARY_IMPORT_RE = /(?:from\s+|require\s*\(\s*|import\s*\(\s*)['"`](?:node:)?(?:http|https|http2|net|tls|dgram|child_process)['"`]/;
@@ -376,24 +376,32 @@ export function detectShadowBinaries(root, { touchedFiles = [], baseSha = null }
 
   for (const rel of touchedFiles) {
     if (SHADOW_BIN_PATH_RE.test(rel)) {
-      addHit(rel, 'diff modifies or adds a file under node_modules/.bin/');
+      addHit(rel, 'diff modifies or adds a shadow binary under node_modules/.bin/ or .venv/bin/ or venv/bin/');
     }
   }
   if (root && baseSha) {
-    const diffBin = spawnSync('git', ['diff', '--name-only', '-z', baseSha, '--', 'node_modules/.bin'], {
+    const diffBin = spawnSync('git', ['diff', '--name-only', '-z', baseSha, '--', 'node_modules/.bin', '.venv/bin', 'venv/bin'], {
       cwd: root, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
     });
     if (diffBin.status === 0 && diffBin.stdout) {
       for (const rel of diffBin.stdout.toString('utf8').split('\0').filter(Boolean)) {
-        addHit(rel, 'git diff modifies or adds a file under node_modules/.bin/');
+        addHit(rel, 'git diff modifies or adds a shadow binary under node_modules/.bin/, .venv/bin/, or venv/bin/');
       }
     }
-    const untrackedBin = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z', '--', 'node_modules/.bin'], {
+    const trackedVenvBin = spawnSync('git', ['ls-files', '-z', '--', '.venv/bin', 'venv/bin'], {
+      cwd: root, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (trackedVenvBin.status === 0 && trackedVenvBin.stdout) {
+      for (const rel of trackedVenvBin.stdout.toString('utf8').split('\0').filter(Boolean)) {
+        addHit(rel, 'git-tracked virtualenv binary under .venv/bin/ or venv/bin/');
+      }
+    }
+    const untrackedBin = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z', '--', 'node_modules/.bin', '.venv/bin', 'venv/bin'], {
       cwd: root, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
     });
     if (untrackedBin.status === 0 && untrackedBin.stdout) {
       for (const rel of untrackedBin.stdout.toString('utf8').split('\0').filter(Boolean)) {
-        addHit(rel, 'untracked file under node_modules/.bin/');
+        addHit(rel, 'untracked shadow binary under node_modules/.bin/, .venv/bin/, or venv/bin/');
       }
     }
   }

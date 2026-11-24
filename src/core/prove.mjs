@@ -11,6 +11,7 @@ import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBa
 import { lintRepoProject } from './lint/project-lint.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
 import { detectShadowBinaries, runDiffSpotlight } from './lint/test-inventory.mjs';
+import { runFormalVerification } from './formal-verify.mjs';
 import { detectHostCapabilities, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths } from './verify-paths.mjs';
 
 export const OUTCOME_PROVED = 'Proved';
@@ -232,6 +233,62 @@ function extractReferencedNpmScripts(commands = []) {
   return [...names];
 }
 
+const TEST_TARGET_FILE_RE = /(?:(?:\.(?:test|spec)\.[a-z0-9]+$)|(?:_test\.(?:py|go|rs)$)|(?:(?:^|\/)test_[^/]+\.py$))/i;
+const SCRIPT_TOKEN_EXT_RE = /\.(?:[cm]?js|[cm]?ts|sh|bash|py|rb|pl)$/i;
+
+function extractReferencedRepoScripts(commands = []) {
+  const refs = new Set();
+  for (const cmd of commands) {
+    if (typeof cmd !== 'string' || !cmd.trim()) continue;
+    const tokens = cmd.match(/(?:'[^']*'|"[^"]*"|\S+)/g) ?? [];
+    let expectingImportPath = false;
+    for (const raw of tokens) {
+      const tok = raw.replace(/^['"]|['"]$/g, '');
+      if (!tok || tok === '&&' || tok === '||' || tok === ';' || tok === '|') {
+        expectingImportPath = false;
+        continue;
+      }
+      if (tok === '--import' || tok === '-r' || tok === '--require') {
+        expectingImportPath = true;
+        continue;
+      }
+      const importEq = /^(?:--import|--require)=([^=]+)$/.exec(tok);
+      const candidate = importEq ? importEq[1] : tok;
+      const isImportArg = expectingImportPath || Boolean(importEq);
+      expectingImportPath = false;
+      if (candidate.startsWith('-') || candidate.includes('://') || candidate.includes('*')) continue;
+      if (!isImportArg && !SCRIPT_TOKEN_EXT_RE.test(candidate) && !candidate.startsWith('./') && !candidate.startsWith('scripts/') && !candidate.startsWith('tools/')) continue;
+      const norm = candidate.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+      if (!norm || norm.startsWith('/') || norm.startsWith('..') || norm.includes('/../')) continue;
+      if (!isImportArg && TEST_TARGET_FILE_RE.test(norm)) continue;
+      if (SCRIPT_TOKEN_EXT_RE.test(norm) || isImportArg || /^(?:scripts|tools|bin)\//.test(norm)) {
+        refs.add(norm);
+      }
+    }
+  }
+  return [...refs].sort();
+}
+
+function detectUntrustedReferencedScriptEdits(root, baseSha, commands, touchedFiles = []) {
+  const refs = extractReferencedRepoScripts(commands);
+  if (!refs.length) return [];
+  const touchedSet = new Set((Array.isArray(touchedFiles) ? touchedFiles : []).map(f => String(f).replace(/\\/g, '/').replace(/^(?:\.\/)+/, '')));
+  const changed = new Set();
+  for (const ref of refs) {
+    if (touchedSet.has(ref)) { changed.add(ref); continue; }
+    const diffRes = gitExec(root, ['diff', '--name-only', '-z', baseSha, '--', ref]);
+    if (diffRes.status === 0 && diffRes.stdout && diffRes.stdout.split('\0').some(Boolean)) {
+      changed.add(ref);
+      continue;
+    }
+    const untracked = gitExec(root, ['ls-files', '--others', '--exclude-standard', '-z', '--', ref]);
+    if (untracked.status === 0 && untracked.stdout && untracked.stdout.split('\0').some(Boolean)) {
+      changed.add(ref);
+    }
+  }
+  return [...changed].sort();
+}
+
 function detectUntrustedPackageTestScriptEdits(root, baseSha, commands) {
   const baseRes = gitExec(root, ['show', `${baseSha}:package.json`]);
   const baseRaw = baseRes.status === 0 && typeof baseRes.stdout === 'string' ? baseRes.stdout : null;
@@ -408,7 +465,7 @@ export function runProve(
       baseRef: baseRef ?? null, baseSha: null, headSha, configSource: null, touchedFiles: [], changedSurfaces: [],
       lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
       diff: { ok: false, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
-      test: null, paths: [], notProvedReasons,
+      test: null, formal: null, paths: [], notProvedReasons,
     };
     if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
     else stdout.write(`Not proved:\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
@@ -431,9 +488,19 @@ export function runProve(
   }
 
   const testCommand = baseVerify.test || detectRepoTestCommand(root);
-  const changedPkgScripts = detectUntrustedPackageTestScriptEdits(root, baseSha, [testCommand, ...baseVerify.paths.map(r => r.run)]);
+  const allVerifyCommands = [
+    testCommand,
+    baseVerify.formalCommand,
+    baseVerify.mutationCommand,
+    ...baseVerify.paths.map(r => r.run),
+  ];
+  const changedPkgScripts = detectUntrustedPackageTestScriptEdits(root, baseSha, allVerifyCommands);
   if (changedPkgScripts.length > 0) {
     notProvedReasons.push(`Working-tree/branch edits to package.json test scripts (${changedPkgScripts.join(', ')}) are not yet trusted on merge base; human review required.`);
+  }
+  const changedReferencedScripts = detectUntrustedReferencedScriptEdits(root, baseSha, allVerifyCommands, diff.touchedFiles);
+  if (changedReferencedScripts.length > 0) {
+    notProvedReasons.push(`Working-tree/branch edits to verify-referenced script(s) (${changedReferencedScripts.join(', ')}) are not yet trusted on merge base; human review required.`);
   }
 
   const shadowBins = detectShadowBinaries(root, { touchedFiles: diff.touchedFiles, baseSha });
@@ -463,6 +530,7 @@ export function runProve(
   }
 
   let testResult = null;
+  let formalResult = null;
   const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, diff.touchedFiles);
   const pathResults = [];
   const scrubbedBaseEnv = scrubChildEnv(env);
@@ -471,7 +539,7 @@ export function runProve(
       ? ports.envForStep({ phase, recipeId, command, baseEnv: scrubbedBaseEnv })
       : scrubbedBaseEnv
   );
-  if (shadowBins.length === 0) {
+  if (shadowBins.length === 0 && changedPkgScripts.length === 0 && changedReferencedScripts.length === 0) {
     if (testCommand) {
       const testEnv = resolveStepEnv('test', null, testCommand);
       const r = execShellCommand(testCommand, { cwd: root, env: testEnv, timeoutMs, preScrubbed: true }, ports);
@@ -499,6 +567,21 @@ export function runProve(
         continue;
       }
       pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', timedOut: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
+    }
+
+    const formalEnv = resolveStepEnv('formal', null, baseVerify.formalCommand || '');
+    formalResult = runFormalVerification(
+      {
+        root,
+        touchedFiles: diff.touchedFiles,
+        baseVerify,
+        timeoutMs,
+        env: formalEnv,
+      },
+      ports,
+    );
+    if (formalResult.notProvedReasons?.length) {
+      notProvedReasons.push(...formalResult.notProvedReasons);
     }
   }
   if (unmappedSurfaces.length > 0) notProvedReasons.push(`No verify.paths recipe covers changed production surface(s): ${unmappedSurfaces.join(', ')}.`);
@@ -548,6 +631,7 @@ export function runProve(
     ...extraShadowErrors,
     ...(testResult && !testResult.ok && !testResult.timedOut ? [`Test suite failed (\`${testResult.command}\`, exit ${testResult.exitCode}): ${testResult.summary}`] : []),
     ...pathResults.filter(p => p.status === 'failed').map(p => `Verify path "${p.id}" failed (\`${p.run}\`, exit ${p.exitCode}): ${p.summary}`),
+    ...(formalResult?.errors ?? []),
   ];
 
   const outcome = failedErrors.length > 0 ? OUTCOME_FAILED : (notProvedReasons.length > 0 ? OUTCOME_NOT_PROVED : OUTCOME_PROVED);
@@ -558,15 +642,16 @@ export function runProve(
     configSource: baseVerify.configured ? baseVerify.source : (testCommand ? 'auto-detected' : null), touchedFiles: diff.touchedFiles, changedSurfaces,
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
-    test: testResult, paths: pathResults, notProvedReasons,
+    test: testResult, formal: formalResult, paths: pathResults, notProvedReasons,
   };
 
   const scopeSuffix = statusFailed
     ? ' (unknown checkout cleanliness)'
     : (dirty ? ` (working tree, uncommitted changes: ${dirtyFiles.slice(0, 4).join(', ')})` : '');
+  const formalLine = formalResult?.summary || 'Formal: not-applicable';
   if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
-  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green.\n`);
-  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix}:\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
-  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix}: ${failedErrors.length} check(s) failed.\n`); }
+  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.\n`);
+  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
+  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.\n`); }
   return { exitCode, outcome, receipt };
 }

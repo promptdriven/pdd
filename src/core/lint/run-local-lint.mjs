@@ -195,7 +195,11 @@ export function runLocalLint(
       const trusted = loadBaseTrustedLintCommands(root, { baseRef: resolvedDiffBase });
       cmdsToRun = trusted.commands;
       if (trusted.skippedUntrusted) {
-        commandWarnings.push('Warning: lint config: pdd.json:1 [lint-commands-untrusted] Working-tree changes to "lint.commands" were skipped because only merge-base pdd.json commands are trusted by default.');
+        const changedKeys = [
+          ...(trusted.skippedCommands ? ['"lint.commands"'] : []),
+          ...(trusted.skippedMutationCommand ? ['"lint.mutation_command"'] : []),
+        ].join(' and ') || '"lint.commands"';
+        commandWarnings.push(`Warning: lint config: pdd.json:1 [lint-commands-untrusted] Working-tree changes to ${changedKeys} were skipped because only merge-base pdd.json commands are trusted by default.`);
       }
     }
     if (cmdsToRun.length > 0) {

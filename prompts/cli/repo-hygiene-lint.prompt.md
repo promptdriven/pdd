@@ -25,7 +25,7 @@ Own `src/repo-hygiene-lint.mjs` (thin facade) and `src/core/lint/*.mjs`. Run 100
 ## Extensible project config and ReDoS / glob safety
 
 `loadProjectLintConfig` loads workspace-local `rules/lint/*.json` before `pdd.json` `"lint"`:
-- `disable`, `rules`, `custom_rules` (capped at 100, deduplicated by `id` so later rules override cleanly; `include`/`exclude` globs filter paths before disk reads), and `commands` (up to 16 repo-native linter commands allowed only in merge-base `pdd.json`, never in `rules/lint/*.json`).
+- `disable`, `rules`, `custom_rules` (capped at 100, deduplicated by `id` so later rules override cleanly; `include`/`exclude` globs filter paths before disk reads), `commands` (up to 16 repo-native linter commands allowed only in merge-base `pdd.json`, never in `rules/lint/*.json`), and optional `mutation_command` (nonblank formal mutation-control command string allowed only in merge-base `pdd.json`, never in `rules/lint/*.json`).
 - `loadBaseTrustedLintOverrides` reads merge-base `rules/lint/*.json` and `pdd.json` so `pdd lint --diff` and `pdd prove` ignore untrusted working-tree/branch rule disables or severity weakenings.
 - `parseRegexSafe` rejects backreferences, nested quantifiers, lookarounds with unbounded quantifiers, non-literal escapes (`\x`, `\u`, `\c`, `\0`) in repeated alternations, nested overlapping alternations under enclosing quantifiers, repeated alternations under `/iu` Unicode case folding, and chained/adjacent unbounded quantifiers.
 - `compileGlobMatcher` matches paths with a strictly linear DP matcher (zero regex compilation, max 12 wildcards, max 256 chars).

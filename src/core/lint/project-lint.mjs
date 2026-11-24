@@ -22,7 +22,7 @@ import {
 } from './lint-scope.mjs';
 import { collectNativeOnlyContractFindings } from './native-only-contract.mjs';
 import { collectNativeOnlyPortParityFindings } from './native-port-parity.mjs';
-import { evaluateCustomRulesOnFile, loadBaseTrustedLintOverrides, loadProjectLintConfig, matchesAnyCustomRule } from './project-config.mjs';
+import { evaluateCustomRulesOnFile, loadBaseTrustedLintCommands, loadBaseTrustedLintOverrides, loadProjectLintConfig, matchesAnyCustomRule } from './project-config.mjs';
 import { extractDependencyLinkTargets, isNativeOnlyPrompt } from './prompt-metadata.mjs';
 import { collectPromptCodeBlockFindings, collectPromptDependencyFindings, collectPromptSizeFindings, collectPromptStructureFindings } from './prompt-rules.mjs';
 import { collectStoryUnboundCriteriaFindings } from './story-criteria-parity.mjs';
@@ -111,9 +111,16 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
   const lintConfig = loadProjectLintConfig(config !== undefined ? config : realRoot);
   let effectiveDisabled = lintConfig.disabledRules;
   let effectiveSeverities = lintConfig.ruleSeverities;
+  let effectiveCommands = lintConfig.commands;
+  let effectiveMutationCommand = lintConfig.mutationCommand ?? null;
   const untrustedConfigOverrides = [];
   if (config === undefined && (enforceBaseTrust || trustBaseRef !== undefined)) {
     const baseTrusted = loadBaseTrustedLintOverrides(realRoot, { baseRef: trustBaseRef });
+    const baseCmds = loadBaseTrustedLintCommands(realRoot, { baseRef: trustBaseRef });
+    effectiveCommands = baseCmds.commands;
+    effectiveMutationCommand = baseCmds.mutationCommand ?? null;
+    if (baseCmds.skippedCommands) untrustedConfigOverrides.push('lint.commands');
+    if (baseCmds.skippedMutationCommand) untrustedConfigOverrides.push('lint.mutation_command');
     effectiveDisabled = new Set(baseTrusted.disabledRules);
     effectiveSeverities = new Map(baseTrusted.ruleSeverities);
     for (const id of lintConfig.disabledRules) {
@@ -396,5 +403,5 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
     findings.push({ path: item.filePath, line: item.line, code: item.code, category: item.category, severity, message: item.detail, formatted });
     if (severity === 'error') errors.push(formatted); else warnings.push(formatted);
   }
-  return { ok: errors.length === 0, configured: lintConfig.configured, warnings, errors, findings, commands: lintConfig.commands, untrustedConfigOverrides };
+  return { ok: errors.length === 0, configured: lintConfig.configured, warnings, errors, findings, commands: effectiveCommands, mutationCommand: effectiveMutationCommand, untrustedConfigOverrides };
 }

@@ -5,10 +5,12 @@
 // post-review isolated test-env secret injection, and bound 13-field harness receipts.
 import { execFile as cbExecFile, spawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, posix } from 'node:path';
 import { promisify } from 'node:util';
+import { discoverFormalScope, isProductionCodeFile, runFormalVerification } from '../../core/formal-verify.mjs';
 import { OUTCOME_FAILED, OUTCOME_NOT_PROVED, OUTCOME_PROVED, runProve } from '../../core/prove.mjs';
-import { readSafeUtf8 } from '../../core/lint/diagnostics.mjs';
+import { canonicalRepoPath, readSafeUtf8, scrubChildEnv } from '../../core/lint/diagnostics.mjs';
 import { loadVerifyConfig, matchVerifyPaths } from '../../core/verify-paths.mjs';
 import { isLintableStoryPath } from '../../story-lint.mjs';
 import { computeCanonicalDigest } from '../gates/evidence-contract.mjs';
@@ -20,7 +22,15 @@ import {
   summarizeTestEnvMetadata,
 } from '../gates/test-env.mjs';
 import { diffTestReports, parseStandardTestReport, runBaseOwnedTestOracle } from './report-diff.mjs';
-import { detectTestRunner, extractTestCases } from './test-runners.mjs';
+import {
+  buildRunnerEnv,
+  buildRunnerInvocation,
+  detectTestRunner,
+  extractTestCases,
+  parsePytestVerboseReport,
+  parseVitestVerboseReport,
+  resolvePytestBinary,
+} from './test-runners.mjs';
 
 const execFileAsync = promisify(cbExecFile);
 const TEST_FILE_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
@@ -66,6 +76,52 @@ function readGitTreeSha(cwd, ref = 'HEAD') {
   } catch { return null; }
 }
 
+const SKIP_WALK_DIRS = new Set([
+  '.git', 'node_modules', 'dist', 'build', '.venv', 'venv', 'target', 'vendor', '.pdd', '__pycache__',
+  'test', 'tests', '__tests__', 'spec', 'docs', 'doc', 'fixtures', '__fixtures__', 'examples', 'prompts', 'user_stories',
+]);
+
+function hasAnyProductionCodeFile(root, fs = nativeFs) {
+  if (!nonEmpty(root)) return false;
+  const stack = [''];
+  let visited = 0;
+  while (stack.length > 0 && visited < 50_000) {
+    const relDir = stack.pop();
+    const absDir = relDir ? join(root, relDir) : root;
+    let entries;
+    try { entries = fs.readdirSync(absDir, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!SKIP_WALK_DIRS.has(entry.name.toLowerCase())) stack.push(rel);
+      } else if (entry.isFile()) {
+        visited += 1;
+        if (isProductionCodeFile(rel)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isRegularFileNoSymlink(root, relPath, fs = nativeFs) {
+  if (!nonEmpty(root) || !canonicalRepoPath(relPath)) return false;
+  const parts = relPath.split('/');
+  let cur = root;
+  for (let i = 0; i < parts.length; i += 1) {
+    cur = join(cur, parts[i]);
+    try {
+      const st = fs.lstatSync(cur);
+      if (st.isSymbolicLink()) return false;
+      if (i === parts.length - 1) return st.isFile();
+      if (!st.isDirectory()) return false;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 function defaultToolchainLabel(runnerKind = null) {
   return runnerKind ? `${runnerKind}@node-${process.version}` : `node-${process.version}`;
 }
@@ -85,11 +141,43 @@ function isPolyglotEnvError(text, changedProdFiles = []) {
   return false;
 }
 
+function readOptionalXmlReport(fs, junitPath) {
+  if (!junitPath) return null;
+  try {
+    if (!fs.existsSync(junitPath)) return null;
+    const xml = fs.readFileSync(junitPath, 'utf8');
+    return nonEmpty(xml) ? xml : null;
+  } catch {
+    return null;
+  }
+}
+
+function parsePolyglotBatchReport({ kind, reportFormat, stdout, stderr, junitXml }) {
+  if (nonEmpty(junitXml)) {
+    const parsedXml = parseStandardTestReport(junitXml, 'junit');
+    if (parsedXml.ok) return { parsed: parsedXml, cases: parsedXml.cases, rawReport: junitXml };
+  }
+  const combined = `${stdout ?? ''}\n${stderr ?? ''}`;
+  const parsedStd = parseStandardTestReport(stdout ?? '', reportFormat);
+  if (parsedStd.ok) return { parsed: parsedStd, cases: parsedStd.cases, rawReport: stdout ?? '' };
+  if (kind === 'pytest') {
+    const parsedVerb = parsePytestVerboseReport(combined);
+    if (parsedVerb.ok) return { parsed: parsedVerb, cases: parsedVerb.cases, rawReport: parsedVerb };
+  } else if (kind === 'vitest') {
+    const parsedVerb = parseVitestVerboseReport(combined);
+    if (parsedVerb.ok) return { parsed: parsedVerb, cases: parsedVerb.cases, rawReport: parsedVerb };
+  }
+  const cases = extractTestCases(combined, kind ?? 'auto');
+  return { parsed: { ok: false, cases: [] }, cases, rawReport: null };
+}
+
 /**
- * Polyglot bug-fix base-control runner across JS/node:test, Vitest, Pytest, Go (`go test -json`), and Rust (`cargo test`).
+ * Polyglot bug-fix base-control runner across JS/node:test, Vitest (`--reporter=junit`),
+ * Pytest (`-v --junitxml`, `.venv/bin/pytest`, `PYTHONPATH=src`, per-file formal isolation),
+ * Go (`go test -json`), and Rust (`cargo test`).
  */
 export async function runPolyglotBaseControl({
-  baseDir, changedFiles = [], changedProdFiles = [], env = process.env, execFn = null, timeoutMs = 60_000,
+  baseDir, changedFiles = [], changedProdFiles = [], env = process.env, execFn = null, timeoutMs = 60_000, fs = nativeFs,
 } = {}) {
   if (!nonEmpty(baseDir) || !changedProdFiles.length) {
     return { state: 'not-run', runnerKind: null, command: null, exitCode: null, report: null };
@@ -99,34 +187,23 @@ export async function runPolyglotBaseControl({
   const testFiles = (Array.isArray(changedFiles) ? changedFiles : []).filter(f => nonEmpty(f) && TEST_FILE_RE.test(f));
   if (!testFiles.length) return { state: 'not-run', runnerKind: kind, command: null, exitCode: null, report: null };
 
-  let bin = null, args = [], reportFormat = detected?.reportFormat ?? 'auto';
+  let matched = [];
+  let effectiveKind = kind ?? 'node:test';
   if (kind === 'vitest') {
-    const matched = testFiles.filter(f => JS_TEST_RE.test(f));
-    if (!matched.length) return { state: 'not-run', runnerKind: kind, command: null, exitCode: null, report: null };
-    bin = 'npx'; args = ['vitest', 'run', ...matched];
+    matched = testFiles.filter(f => JS_TEST_RE.test(f));
   } else if (kind === 'pytest') {
-    const matched = testFiles.filter(f => PY_TEST_RE.test(f));
-    if (!matched.length) return { state: 'not-run', runnerKind: kind, command: null, exitCode: null, report: null };
-    bin = 'pytest'; args = ['-q', ...matched];
+    matched = testFiles.filter(f => PY_TEST_RE.test(f));
   } else if (kind === 'go') {
-    const matched = testFiles.filter(f => GO_TEST_RE.test(f));
-    if (!matched.length) return { state: 'not-run', runnerKind: kind, command: null, exitCode: null, report: null };
-    const pkgs = [...new Set(matched.map(f => { const d = dirname(f); return d === '.' ? './.' : `./${d}`; }))];
-    bin = 'go'; args = ['test', '-json', ...pkgs]; reportFormat = 'go-json';
+    matched = testFiles.filter(f => GO_TEST_RE.test(f));
   } else if (kind === 'cargo') {
-    const matched = testFiles.filter(f => RUST_TEST_RE.test(f));
-    if (!matched.length) return { state: 'not-run', runnerKind: kind, command: null, exitCode: null, report: null };
-    const integrationTargets = matched.filter(f => /^tests\/[^/]+\.rs$/i.test(f)).map(f => basename(f, '.rs'));
-    bin = 'cargo';
-    args = integrationTargets.length ? ['test', ...integrationTargets.flatMap(t => ['--test', t])] : ['test'];
-    reportFormat = 'cargo';
+    matched = testFiles.filter(f => RUST_TEST_RE.test(f));
   } else {
-    const matched = testFiles.filter(f => /\.(?:mjs|cjs|js)$/i.test(f));
-    if (!matched.length) return { state: 'not-run', runnerKind: kind, command: null, exitCode: null, report: null };
-    bin = process.execPath; args = ['--test', '--test-reporter=tap', ...matched]; reportFormat = 'tap';
+    effectiveKind = 'node:test';
+    matched = testFiles.filter(f => /\.(?:mjs|cjs|js)$/i.test(f));
   }
+  if (!matched.length) return { state: 'not-run', runnerKind: kind, command: null, exitCode: null, report: null };
 
-  const baseEnv = { ...env, CI: 'true' };
+  const baseEnv = buildRunnerEnv(effectiveKind, baseDir, { ...scrubChildEnv(env), CI: 'true' });
   delete baseEnv.NODE_TEST_CONTEXT;
   delete baseEnv.NODE_OPTIONS;
 
@@ -146,51 +223,343 @@ export async function runPolyglotBaseControl({
     }
   });
 
-  // #3561 / #3634: Run Python formal test files in per-file subprocess isolation to prevent Z3 main_ctx() cross-file deadlocks.
-  const pytestFiles = kind === 'pytest' ? args.slice(1) : [];
-  const isolateFormalPy = kind === 'pytest' && pytestFiles.length > 1 && pytestFiles.some(f => PY_FORMAL_TEST_RE.test(f));
-  if (isolateFormalPy) {
-    const formalFiles = pytestFiles.filter(f => PY_FORMAL_TEST_RE.test(f));
-    const regularFiles = pytestFiles.filter(f => !PY_FORMAL_TEST_RE.test(f));
-    const batches = [
-      ...(regularFiles.length ? [regularFiles] : []),
-      ...formalFiles.map(f => [f]),
-    ];
-    const commands = [];
-    const allCases = [];
-    let failedExit = null;
-    for (const batch of batches) {
-      const batchArgs = ['-q', ...batch];
-      commands.push(`${bin} ${batchArgs.join(' ')}`);
-      const res = await runExec(bin, batchArgs, { cwd: baseDir, env: baseEnv, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
-      const combined = `${res.stdout ?? ''}\n${res.stderr ?? ''}`;
-      const parsed = parseStandardTestReport(res.stdout ?? '', reportFormat);
-      const batchCases = parsed.ok ? parsed.cases : extractTestCases(combined, kind);
-      allCases.push(...batchCases);
-      if (res.killed || res.code === 'ENOENT' || isPolyglotEnvError(`${combined}\n${res.message ?? ''}`, changedProdFiles)) {
-        return { state: 'not-run', runnerKind: kind, command: commands.join(' && '), exitCode: res.exitCode ?? null, report: null, cases: allCases, isolatedFiles: formalFiles };
+  const tempDir = (effectiveKind === 'pytest' || effectiveKind === 'vitest')
+    ? fs.mkdtempSync(join(tmpdir(), 'pdd-polyglot-ctrl-'))
+    : null;
+  try {
+    // #3561 / #3634: Isolate Python formal test files into separate pytest subprocesses (prevents Z3 main_ctx deadlocks).
+    const formalPyFiles = effectiveKind === 'pytest' ? matched.filter(f => PY_FORMAL_TEST_RE.test(f)) : [];
+    const isolateFormalPy = effectiveKind === 'pytest' && formalPyFiles.length > 0 && (matched.length > 1 || formalPyFiles.length > 1);
+    if (isolateFormalPy) {
+      const regularFiles = matched.filter(f => !PY_FORMAL_TEST_RE.test(f));
+      const batches = [
+        ...(regularFiles.length ? [regularFiles] : []),
+        ...formalPyFiles.map(f => [f]),
+      ];
+      const commands = [];
+      const allCases = [];
+      const pytestBin = resolvePytestBinary(baseDir);
+      let failedExit = null;
+      for (let idx = 0; idx < batches.length; idx += 1) {
+        const batch = batches[idx];
+        const junitPath = tempDir ? join(tempDir, `junit-${idx}.xml`) : null;
+        const inv = buildRunnerInvocation('pytest', { root: baseDir, files: batch, junitPath, pytestBin });
+        commands.push(`${inv.bin} ${inv.args.join(' ')}`);
+        const res = await runExec(inv.bin, inv.args, { cwd: baseDir, env: baseEnv, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
+        const combined = `${res.stdout ?? ''}\n${res.stderr ?? ''}`;
+        const junitXml = readOptionalXmlReport(fs, junitPath);
+        const { cases: batchCases } = parsePolyglotBatchReport({
+          kind: 'pytest',
+          reportFormat: inv.reportFormat,
+          stdout: res.stdout,
+          stderr: res.stderr,
+          junitXml,
+        });
+        allCases.push(...batchCases);
+        if (res.killed || res.code === 'ENOENT' || isPolyglotEnvError(`${combined}\n${res.message ?? ''}`, changedProdFiles)) {
+          return { state: 'not-run', runnerKind: 'pytest', command: commands.join(' && '), exitCode: res.exitCode ?? null, report: null, cases: allCases, isolatedFiles: formalPyFiles };
+        }
+        if (res.exitCode !== 0 && failedExit === null) failedExit = res.exitCode ?? 1;
       }
-      if (res.exitCode !== 0 && failedExit === null) failedExit = res.exitCode ?? 1;
+      const cmdDisplay = commands.join(' && ');
+      if (failedExit !== null) {
+        return { state: 'ran-and-failed-on-base', runnerKind: 'pytest', command: cmdDisplay, exitCode: failedExit, report: null, cases: allCases, isolatedFiles: formalPyFiles };
+      }
+      return { state: 'passed-on-base', runnerKind: 'pytest', command: cmdDisplay, exitCode: 0, report: null, cases: allCases, isolatedFiles: formalPyFiles };
     }
-    const cmdDisplay = commands.join(' && ');
-    if (failedExit !== null) {
-      return { state: 'ran-and-failed-on-base', runnerKind: kind, command: cmdDisplay, exitCode: failedExit, report: null, cases: allCases, isolatedFiles: formalFiles };
-    }
-    return { state: 'passed-on-base', runnerKind: kind, command: cmdDisplay, exitCode: 0, report: null, cases: allCases, isolatedFiles: formalFiles };
-  }
 
-  const cmdDisplay = `${bin} ${args.join(' ')}`;
-  const res = await runExec(bin, args, { cwd: baseDir, env: baseEnv, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
-  const combined = `${res.stdout ?? ''}\n${res.stderr ?? ''}`;
-  const parsed = parseStandardTestReport(res.stdout ?? '', reportFormat);
-  const cases = parsed.ok ? parsed.cases : extractTestCases(combined, kind ?? 'auto');
-  if (res.exitCode === 0 && !res.killed) {
-    return { state: 'passed-on-base', runnerKind: kind ?? 'node:test', command: cmdDisplay, exitCode: 0, report: parsed.ok ? parsed : null, cases };
+    const junitPath = tempDir ? join(tempDir, 'junit.xml') : null;
+    const inv = buildRunnerInvocation(effectiveKind, { root: baseDir, files: matched, junitPath });
+    const cmdDisplay = `${inv.bin} ${inv.args.join(' ')}`;
+    const res = await runExec(inv.bin, inv.args, { cwd: baseDir, env: baseEnv, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
+    const combined = `${res.stdout ?? ''}\n${res.stderr ?? ''}`;
+    const junitXml = readOptionalXmlReport(fs, junitPath);
+    const { parsed, cases } = parsePolyglotBatchReport({
+      kind: effectiveKind,
+      reportFormat: inv.reportFormat,
+      stdout: res.stdout,
+      stderr: res.stderr,
+      junitXml,
+    });
+    if (res.exitCode === 0 && !res.killed) {
+      return { state: 'passed-on-base', runnerKind: effectiveKind, command: cmdDisplay, exitCode: 0, report: parsed.ok ? parsed : null, cases };
+    }
+    if (res.killed || res.code === 'ENOENT' || isPolyglotEnvError(`${combined}\n${res.message ?? ''}`, changedProdFiles)) {
+      return { state: 'not-run', runnerKind: effectiveKind, command: cmdDisplay, exitCode: res.exitCode ?? null, report: null, cases };
+    }
+    return { state: 'ran-and-failed-on-base', runnerKind: effectiveKind, command: cmdDisplay, exitCode: res.exitCode ?? 1, report: parsed.ok ? parsed : null, cases };
+  } finally {
+    if (tempDir) {
+      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+    }
   }
-  if (res.killed || res.code === 'ENOENT' || isPolyglotEnvError(`${combined}\n${res.message ?? ''}`, changedProdFiles)) {
-    return { state: 'not-run', runnerKind: kind ?? 'node:test', command: cmdDisplay, exitCode: res.exitCode ?? null, report: null, cases };
+}
+
+function listTreeTestFilesSafe(treeDir, fs = nativeFs) {
+  const found = [];
+  const walk = (absDir, relPrefix, depth) => {
+    if (depth > 8 || found.length >= 2000) return;
+    let entries;
+    try { entries = fs.readdirSync(absDir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (found.length >= 2000) break;
+      if (entry.isSymbolicLink?.()) continue;
+      const name = entry.name;
+      if (name === '.git' || name === 'node_modules' || name === '.venv' || name === 'venv' || name === '__pycache__' || name === 'fixtures' || name === 'helpers' || name === 'target') continue;
+      const rel = relPrefix ? `${relPrefix}/${name}` : name;
+      if (entry.isDirectory?.()) walk(join(absDir, name), rel, depth + 1);
+      else if (entry.isFile?.() && canonicalRepoPath(rel) && TEST_FILE_RE.test(rel)) found.push(rel);
+    }
+  };
+  walk(treeDir, '', 0);
+  return found.sort();
+}
+
+/**
+ * #3561 Path `b` pure-refactor equivalence verifier:
+ * Runs untouched base-owned test/vector suites against BOTH `baseTree` and `headTree` and compares
+ * structured reports via `diffTestReports` so pure structural refactors cannot silently break behavior.
+ */
+export async function runRefactorEquivalenceCheck({
+  baseTree,
+  headTree,
+  changedFiles = [],
+  env = process.env,
+  execFn = null,
+  timeoutMs = 120_000,
+  fs = nativeFs,
+} = {}) {
+  const notApplicable = reason => ({
+    applicable: false,
+    status: 'not-applicable',
+    verdict: 'ALLOW',
+    reason,
+    runnerKind: null,
+    untouchedTests: [],
+    baseResult: null,
+    headResult: null,
+    reportDiff: null,
+  });
+  if (!nonEmpty(baseTree) || !nonEmpty(headTree)) return notApplicable('missing_trees');
+  const changedSet = new Set((Array.isArray(changedFiles) ? changedFiles : []).filter(nonEmpty));
+  const baseTests = listTreeTestFilesSafe(baseTree, fs);
+  const untouched = baseTests.filter(f => !changedSet.has(f) && isRegularFileNoSymlink(headTree, f, fs));
+  if (!untouched.length) return notApplicable('no_untouched_base_tests');
+
+  const detected = detectTestRunner(baseTree) ?? detectTestRunner(headTree);
+  const kind = detected?.kind ?? 'node:test';
+  const matchForKind = f => {
+    if (kind === 'vitest') return JS_TEST_RE.test(f);
+    if (kind === 'pytest') return PY_TEST_RE.test(f);
+    if (kind === 'go') return GO_TEST_RE.test(f);
+    if (kind === 'cargo') return RUST_TEST_RE.test(f);
+    return /\.(?:mjs|cjs|js)$/i.test(f);
+  };
+  const selected = untouched.filter(matchForKind);
+  if (!selected.length) return notApplicable('no_matching_runner_tests');
+
+  const runExec = execFn ?? (async (command, cmdArgs, opts) => {
+    try {
+      const { stdout, stderr } = await execFileAsync(command, cmdArgs, opts);
+      return { exitCode: 0, stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), killed: false, code: null };
+    } catch (err) {
+      return {
+        exitCode: typeof err?.code === 'number' ? err.code : 1,
+        stdout: String(err?.stdout ?? ''),
+        stderr: String(err?.stderr ?? ''),
+        killed: Boolean(err?.killed),
+        code: typeof err?.code === 'string' ? err.code : null,
+        message: String(err?.message ?? ''),
+      };
+    }
+  });
+
+  const escapeXml = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const buildMergedJunitXml = (name, cases) => {
+    const failed = cases.filter(c => c.status === 'fail' || c.status === 'error').length;
+    const skipped = cases.filter(c => c.status === 'skip').length;
+    const body = cases.map(c => {
+      const tag = `<testcase classname="${escapeXml(name)}" name="${escapeXml(c.id)}"`;
+      if (c.status === 'fail' || c.status === 'error') return `${tag}><failure message="failed"/></testcase>`;
+      if (c.status === 'skip') return `${tag}><skipped/></testcase>`;
+      return `${tag}/>`;
+    }).join('');
+    return `<testsuites><testsuite name="${escapeXml(name)}" tests="${cases.length}" failures="${failed}" skipped="${skipped}">${body}</testsuite></testsuites>`;
+  };
+
+  const tempDir = fs.mkdtempSync(join(tmpdir(), 'pdd-refactor-eq-'));
+  try {
+    const runOnTree = async (treeDir, label) => {
+      const runEnv = buildRunnerEnv(kind, treeDir, { ...scrubChildEnv(env), CI: 'true' });
+      delete runEnv.NODE_TEST_CONTEXT;
+      delete runEnv.NODE_OPTIONS;
+
+      // Isolate Python formal test files into separate pytest subprocesses (prevents Z3 main_ctx deadlocks).
+      const formalPyFiles = kind === 'pytest' ? selected.filter(f => PY_FORMAL_TEST_RE.test(f)) : [];
+      if (kind === 'pytest' && formalPyFiles.length > 0 && selected.length > 1) {
+        const regularFiles = selected.filter(f => !PY_FORMAL_TEST_RE.test(f));
+        const batches = [...(regularFiles.length ? [regularFiles] : []), ...formalPyFiles.map(f => [f])];
+        const pytestBin = resolvePytestBinary(treeDir);
+        const commands = [];
+        const allCases = [];
+        let worstExit = 0;
+        let allParsed = true;
+        for (let idx = 0; idx < batches.length; idx += 1) {
+          const junitPath = join(tempDir, `${label}-${idx}.xml`);
+          const inv = buildRunnerInvocation('pytest', { root: treeDir, files: batches[idx], junitPath, pytestBin });
+          commands.push(`${inv.bin} ${inv.args.join(' ')}`);
+          const res = await runExec(inv.bin, inv.args, { cwd: treeDir, env: runEnv, timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
+          if (res.killed || res.code === 'ENOENT') {
+            return { command: commands.join(' && '), exitCode: res.exitCode, killed: Boolean(res.killed), code: res.code ?? null, parsed: { ok: false, counts: null }, cases: allCases, rawReport: null };
+          }
+          if (res.exitCode !== 0 && worstExit === 0) worstExit = res.exitCode;
+          const junitXml = readOptionalXmlReport(fs, junitPath);
+          const batchParsed = parsePolyglotBatchReport({ kind: 'pytest', reportFormat: inv.reportFormat, stdout: res.stdout, stderr: res.stderr, junitXml });
+          if (!batchParsed.parsed?.ok) allParsed = false;
+          allCases.push(...batchParsed.cases);
+        }
+        const passed = allCases.filter(c => c.status === 'pass').length;
+        const failed = allCases.filter(c => c.status === 'fail' || c.status === 'error').length;
+        const skipped = allCases.filter(c => c.status === 'skip').length;
+        return {
+          command: commands.join(' && '),
+          exitCode: worstExit,
+          killed: false,
+          code: null,
+          parsed: allParsed ? { ok: true, complete: true, format: 'junit', cases: allCases, counts: { total: allCases.length, passed, failed, skipped } } : { ok: false, complete: false, cases: allCases, counts: null },
+          cases: allCases,
+          rawReport: allParsed ? buildMergedJunitXml(label, allCases) : null,
+        };
+      }
+
+      const junitPath = (kind === 'pytest' || kind === 'vitest') ? join(tempDir, `${label}.xml`) : null;
+      const inv = buildRunnerInvocation(kind, { root: treeDir, files: selected, junitPath });
+      const res = await runExec(inv.bin, inv.args, { cwd: treeDir, env: runEnv, timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
+      const junitXml = readOptionalXmlReport(fs, junitPath);
+      const { parsed, cases, rawReport } = parsePolyglotBatchReport({
+        kind,
+        reportFormat: inv.reportFormat,
+        stdout: res.stdout,
+        stderr: res.stderr,
+        junitXml,
+      });
+      return {
+        command: `${inv.bin} ${inv.args.join(' ')}`,
+        exitCode: res.exitCode,
+        killed: Boolean(res.killed),
+        code: res.code ?? null,
+        parsed,
+        cases,
+        rawReport,
+      };
+    };
+
+    const baseResult = await runOnTree(baseTree, 'base');
+    const headResult = await runOnTree(headTree, 'head');
+
+    if (baseResult.killed || headResult.killed || baseResult.code === 'ENOENT' || headResult.code === 'ENOENT') {
+      return {
+        applicable: true,
+        status: 'unknown',
+        verdict: 'HOLD',
+        reason: 'refactor_equivalence_runner_unavailable',
+        runnerKind: kind,
+        untouchedTests: selected,
+        baseResult,
+        headResult,
+        reportDiff: null,
+      };
+    }
+
+    if (baseResult.exitCode !== 0) {
+      return {
+        applicable: true,
+        status: 'fail',
+        verdict: 'HOLD',
+        reason: `refactor_base_failed:exit_${baseResult.exitCode}`,
+        runnerKind: kind,
+        untouchedTests: selected,
+        baseResult,
+        headResult,
+        reportDiff: null,
+      };
+    }
+
+    if (!baseResult.parsed?.ok || !headResult.parsed?.ok || !baseResult.rawReport || !headResult.rawReport) {
+      return {
+        applicable: true,
+        status: 'unknown',
+        verdict: 'HOLD',
+        reason: 'refactor_equivalence_unparsed_report',
+        runnerKind: kind,
+        untouchedTests: selected,
+        baseResult,
+        headResult,
+        reportDiff: null,
+      };
+    }
+
+    const baseTotal = baseResult.parsed.counts?.total ?? baseResult.cases.length;
+    const headTotal = headResult.parsed.counts?.total ?? headResult.cases.length;
+    if (baseTotal === 0 || headTotal === 0) {
+      return {
+        applicable: true,
+        status: 'unknown',
+        verdict: 'HOLD',
+        reason: 'refactor_equivalence_zero_tests',
+        runnerKind: kind,
+        untouchedTests: selected,
+        baseResult,
+        headResult,
+        reportDiff: null,
+      };
+    }
+
+    const meta = {
+      baseSha: 'refactor-equiv-base',
+      policyDigest: 'refactor-equiv-policy',
+      recipeDigest: computeCanonicalDigest({ kind, selected }),
+      toolchain: defaultToolchainLabel(kind),
+      platform: process.platform,
+      profile: kind,
+    };
+    const reportDiff = diffTestReports({
+      baseReport: baseResult.rawReport,
+      headReport: headResult.rawReport,
+      baseMeta: { ...meta, exitCode: baseResult.exitCode },
+      headMeta: { ...meta, exitCode: headResult.exitCode },
+    });
+
+    if (headResult.exitCode !== 0 || !reportDiff || reportDiff.verdict !== 'ALLOW' || reportDiff.status !== 'pass') {
+      return {
+        applicable: true,
+        status: 'fail',
+        verdict: 'HOLD',
+        reason: reportDiff && reportDiff.verdict !== 'ALLOW'
+          ? `refactor_regression:${reportDiff.reason}`
+          : `refactor_head_failed:exit_${headResult.exitCode}`,
+        runnerKind: kind,
+        untouchedTests: selected,
+        baseResult,
+        headResult,
+        reportDiff,
+      };
+    }
+
+    return {
+      applicable: true,
+      status: 'pass',
+      verdict: 'ALLOW',
+      reason: 'equivalence_verified',
+      runnerKind: kind,
+      untouchedTests: selected,
+      baseResult,
+      headResult,
+      reportDiff,
+    };
+  } finally {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
   }
-  return { state: 'ran-and-failed-on-base', runnerKind: kind ?? 'node:test', command: cmdDisplay, exitCode: res.exitCode ?? 1, report: parsed.ok ? parsed : null, cases };
 }
 
 function oracleCommandForRunner(detected, suiteCmd) {
@@ -521,6 +890,8 @@ function extractRecipeScriptPaths(baseVerify, { headTree = null, baseTree = null
   const found = new Set();
   const commands = [
     ...(nonEmpty(baseVerify?.test) ? [baseVerify.test] : []),
+    ...(nonEmpty(baseVerify?.formalCommand) ? [baseVerify.formalCommand] : []),
+    ...(nonEmpty(baseVerify?.mutationCommand) ? [baseVerify.mutationCommand] : []),
     ...(Array.isArray(baseVerify?.paths) ? baseVerify.paths.map(p => p?.run).filter(nonEmpty) : []),
   ];
   const hasBaseLookup = Boolean((baseTipValid && (headTree || baseTree)) || (!baseTipValid && baseTree));
@@ -603,6 +974,9 @@ export async function collectLiveEvidenceContract({
   testEnvPath = null,
   runProveFn = runProve,
   runOracleFn = runBaseOwnedTestOracle,
+  runFormalFn = runFormalVerification,
+  runEquivalenceFn = runRefactorEquivalenceCheck,
+  isPathBPureRefactor = false,
   strictWithoutVerifyPaths = false,
 } = {}) {
   const cleanRepo = nonEmpty(repo) ? repo.trim() : 'local/repo';
@@ -723,6 +1097,8 @@ export async function collectLiveEvidenceContract({
       ? {
           test: baseVerify.test,
           report: baseVerify.report,
+          formalCommand: baseVerify.formalCommand ?? null,
+          mutationCommand: baseVerify.mutationCommand ?? null,
           paths: baseVerify.paths.map(p => ({ id: p.id, when: p.when, run: p.run, needs: p.needs })),
         }
       : null,
@@ -1127,6 +1503,100 @@ export async function collectLiveEvidenceContract({
     || hasChangedStoryRequirements
     || (strictMode && !nonEmpty(job?.acNotApplicableReason) && job?.hasAcceptanceCriteria === true);
 
+  // 7. #3151 Live code-bound formal proof wiring: reuse `proveResult.receipt.formal` when present,
+  // else invoke the shared Layer-1 formal verifier whenever formal files, merge-base verify.formal_command,
+  // or positive formal claims apply. Populates real `formalProofs`, `formalTargetModules`, and `requireCodeBoundFormal`.
+  const rawClaimedFormalState = typeof job?.evidence?.formal?.state === 'string'
+    ? job.evidence.formal.state.trim().toLowerCase()
+    : null;
+  const formalClaimUnchecked = Boolean(job?.unchecked?.formal);
+  const claimedFormalState = formalClaimUnchecked ? 'not-run' : rawClaimedFormalState;
+  const claimedSolverCode = claimedFormalState === 'proved_solver_code';
+  const hasRepoProductionCode = cleanFiles.some(isProductionCodeFile)
+    || (headTree ? hasAnyProductionCodeFile(headTree, fs) : false);
+  const claimedCodeBound = claimedSolverCode
+    || (hasRepoProductionCode && (claimedFormalState === 'proved' || claimedFormalState === 'bounded'));
+  // Scrub parent secrets + all configured test-env account keys before running untrusted PR formal/refactor checks.
+  const scrubbedNoAccountEnv = scrubChildEnv(env);
+  if (rawTestEnv?.ok === true && isObj(rawTestEnv.accounts)) {
+    for (const acctVars of Object.values(rawTestEnv.accounts)) {
+      if (isObj(acctVars)) for (const k of Object.keys(acctVars)) delete scrubbedNoAccountEnv[k];
+    }
+  }
+  let formalVerification = proveResult?.receipt?.formal ?? null;
+  if (!formalVerification && headTree && !changedFilesError) {
+    const scope = discoverFormalScope({
+      root: headTree,
+      touchedFiles: cleanFiles,
+      formalCommand: baseVerify.formalCommand ?? null,
+    });
+    if (scope.formalFiles.length > 0 || Boolean(baseVerify.formalCommand) || claimedSolverCode) {
+      formalVerification = runFormalFn({
+        root: headTree,
+        touchedFiles: cleanFiles,
+        baseVerify,
+        claimedTier: claimedCodeBound ? claimedFormalState : null,
+        mutationControl: job?.formalMutationControl ?? null,
+        targetModules: Array.isArray(job?.formalTargetModules) && job.formalTargetModules.length ? job.formalTargetModules : null,
+        env: scrubbedNoAccountEnv,
+      });
+    }
+  }
+  const collectedFormalProofs = Array.isArray(formalVerification?.formalProofs)
+    ? formalVerification.formalProofs.map(p => ({
+        ...p,
+        // Never falsely label a Tier-1 `bounded` property test or test-only fixture as claiming Tier-2 `proved_solver_code`,
+        // while ALWAYS marking an unbound spec model that claimed code verification so checkFormalProofBinding fails closed.
+        ...(p.codeBound === false && claimedCodeBound
+          ? { tier: 'proved_solver_code', satisfiesCode: true, forCodeVerification: true }
+          : ((p.tier === 'bounded' && !claimedSolverCode) || !claimedCodeBound
+              ? { satisfiesCode: false, forCodeVerification: false }
+              : {})),
+      }))
+    : [];
+  const mergedFormalProofs = [
+    ...collectedFormalProofs,
+    ...(Array.isArray(job?.formalProofs) ? job.formalProofs : []),
+  ];
+  const mergedFormalTargetModules = [
+    ...new Set([
+      ...(Array.isArray(formalVerification?.targetModules) ? formalVerification.targetModules : []),
+      ...(Array.isArray(job?.formalTargetModules) ? job.formalTargetModules : []),
+    ]),
+  ].sort();
+  const requireCodeBoundFormal = job?.requireCodeBoundFormal === true
+    || claimedSolverCode
+    || (formalVerification?.tier === 'proved_spec_model' && claimedCodeBound);
+  if (formalVerification && formalVerification.state === 'failed' && formalVerification.errors?.length) {
+    for (const err of formalVerification.errors) {
+      if (!proveReasons.includes(err)) proveReasons.push(err);
+    }
+    reportReadErrors.push('formal:failed');
+    testResults.push({ id: 'formal:failed', status: 'fail', source: 'harness' });
+  } else if (formalVerification && formalVerification.state === 'not-run' && formalVerification.notProvedReasons?.length && !formalClaimUnchecked) {
+    for (const r of formalVerification.notProvedReasons) {
+      if (!proveReasons.includes(r)) proveReasons.push(r);
+    }
+    reportReadErrors.push('formal:not-run');
+    testResults.push({ id: 'formal:not-run', status: 'fail', source: 'harness' });
+  }
+
+  // 8. #3561 Path `b` pure-refactor equivalence: run untouched base-owned tests against base & head.
+  let refactorEquivalence = null;
+  if (isPathBPureRefactor === true && baseTree && headTree && !changedFilesError && cleanFiles.some(isProductionCodeFile)) {
+    refactorEquivalence = await runEquivalenceFn({
+      baseTree,
+      headTree,
+      changedFiles: cleanFiles,
+      env: scrubbedNoAccountEnv,
+      fs,
+    });
+    if (refactorEquivalence?.applicable && refactorEquivalence.verdict !== 'ALLOW') {
+      reportReadErrors.push(`refactor-equivalence:${refactorEquivalence.reason || 'failed'}`);
+      testResults.push({ id: `refactor-equivalence:${refactorEquivalence.reason || 'failed'}`, status: 'fail', source: 'harness' });
+    }
+  }
+
   return {
     source: 'live-production',
     verifyPathsConfigured: hasVerifyPaths,
@@ -1134,6 +1604,8 @@ export async function collectLiveEvidenceContract({
     proveOutcome,
     proveReasons,
     proveReceipt: proveResult?.receipt ?? null,
+    formalVerification,
+    refactorEquivalence,
     reportDiff,
     oracleResult,
     postReviewSandboxUsed: Boolean(postReviewSandbox),
@@ -1161,9 +1633,9 @@ export async function collectLiveEvidenceContract({
       reportReadErrors,
       gapCheck,
       requireGapCheck,
-      formalProofs: Array.isArray(job?.formalProofs) ? job.formalProofs : [],
-      formalTargetModules: Array.isArray(job?.formalTargetModules) ? job.formalTargetModules : [],
-      requireCodeBoundFormal: job?.requireCodeBoundFormal === true,
+      formalProofs: mergedFormalProofs,
+      formalTargetModules: mergedFormalTargetModules,
+      requireCodeBoundFormal,
       stampReceipt,
       postStandaloneReceiptComment: strictMode,
     },
