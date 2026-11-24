@@ -604,39 +604,157 @@ function computePostMergeCounts(mergeRows, entries) {
   return counts;
 }
 
+const DEFAULT_REOPEN_CLUSTER_THRESHOLD = 2;
+const DEFAULT_REOPEN_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export function selectCircuitBreakerRegression(newlyDetected, options = {}) {
-  if (!Array.isArray(newlyDetected) || !newlyDetected.length) return null;
-  const isRevert = item => object(item) && (item.kind === 'revert' || item.kind === 'reverted' || item.code === 'post-merge-revert');
-  const isCi = item => object(item) && (item.kind === 'ci' || item.kind === 'ci_broken' || item.code === 'post-merge-ci');
+  const incoming = Array.isArray(newlyDetected) ? newlyDetected : [];
+  const isRevert = item => object(item) && positive(item.pr) && (item.kind === 'revert' || item.kind === 'reverted' || item.code === 'post-merge-revert');
+  const isCi = item => object(item) && positive(item.pr) && (item.kind === 'ci' || item.kind === 'ci_broken' || item.code === 'post-merge-ci');
+  const isReopen = item => object(item) && positive(item.pr) && (item.kind === 'reopened' || item.kind === 'reopen' || item.code === 'post-merge-reopen');
+  const rawNow = typeof options.now === 'function'
+    ? options.now()
+    : (typeof options.now === 'number' ? options.now : time(options.now));
+  const nowMs = typeof rawNow === 'number' && Number.isFinite(rawNow) ? rawNow : Date.now();
+  const trippedAt = new Date(nowMs).toISOString();
   const clearedAfter = Number.isFinite(options.clearedAfter) ? options.clearedAfter : time(options.clearedAfter);
-  const eligible = clearedAfter === null ? newlyDetected : newlyDetected.filter(item => {
-    if (!object(item)) return false;
+
+  const eligible = incoming.filter(item => {
+    if (!object(item) || !positive(item.pr)) return false;
     const atMs = time(item.at);
     const mergedAtMs = time(item.mergedAt);
-    if (atMs !== null && atMs <= clearedAfter) return false;
-    if (isCi(item) && mergedAtMs !== null && mergedAtMs <= clearedAfter) return false;
-    if (atMs === null && mergedAtMs !== null && mergedAtMs <= clearedAfter) return false;
+    if (atMs !== null && atMs > nowMs) return false;
+    if (clearedAfter !== null) {
+      if (atMs !== null && atMs <= clearedAfter) return false;
+      if (isCi(item) && mergedAtMs !== null && mergedAtMs <= clearedAfter) return false;
+      if (atMs === null && mergedAtMs !== null && mergedAtMs <= clearedAfter) return false;
+    }
     return true;
   });
+
+  // Instant brake for revert and post-merge CI break (revert > ci priority).
   const chosen = eligible.find(isRevert) ?? eligible.find(isCi);
-  if (!chosen || !positive(chosen.pr)) return null;
-  const kind = isRevert(chosen) ? 'reverted' : 'ci_broken';
-  const code = isRevert(chosen) ? 'post-merge-revert' : 'post-merge-ci';
-  const issue = positive(chosen.issue) ? chosen.issue : Array.isArray(chosen.issues) ? chosen.issues.find(positive) ?? null : null;
-  const nowMs = (options.now ?? Date.now)();
-  const trippedAt = new Date(Number.isFinite(nowMs) ? nowMs : Date.now()).toISOString();
-  const detail = typeof chosen.detail === 'string' && chosen.detail.trim()
-    ? safe(chosen.detail).slice(0, 240)
-    : kind === 'reverted' ? 'merged change was reverted on the default branch' : 'default-branch CI failed after merge';
-  const reason = `PR #${chosen.pr}${issue ? ` (issue #${issue})` : ''} ${kind === 'reverted' ? 'reverted' : 'broke default-branch CI'}: ${detail}`;
+  if (chosen) {
+    const kind = isRevert(chosen) ? 'reverted' : 'ci_broken';
+    const code = isRevert(chosen) ? 'post-merge-revert' : 'post-merge-ci';
+    const issue = positive(chosen.issue) ? chosen.issue : Array.isArray(chosen.issues) ? chosen.issues.find(positive) ?? null : null;
+    const detail = typeof chosen.detail === 'string' && chosen.detail.trim()
+      ? safe(chosen.detail).slice(0, 240)
+      : kind === 'reverted' ? 'merged change was reverted on the default branch' : 'default-branch CI failed after merge';
+    const reason = `PR #${chosen.pr}${issue ? ` (issue #${issue})` : ''} ${kind === 'reverted' ? 'reverted' : 'broke default-branch CI'}: ${detail}`;
+    return {
+      active: true,
+      kind,
+      code,
+      pr: chosen.pr,
+      issue,
+      trippedAt,
+      url: link(chosen.url),
+      reason,
+    };
+  }
+
+  // Clustered reopen brake (#3560): >=2 distinct merged issues reopened within a rolling 24h window.
+  const threshold = positive(options.reopenClusterThreshold) ? options.reopenClusterThreshold : DEFAULT_REOPEN_CLUSTER_THRESHOLD;
+  const windowMs = Number.isFinite(options.reopenWindowMs) && options.reopenWindowMs > 0
+    ? options.reopenWindowMs
+    : DEFAULT_REOPEN_WINDOW_MS;
+  const windowStart = nowMs - windowMs;
+  const byDistinctIssue = new Map();
+
+  const mergesObj = object(options.postMergeState?.merges)
+    ? options.postMergeState.merges
+    : (object(options.merges) ? options.merges : null);
+  const prKnownIssue = new Map();
+  if (mergesObj) {
+    for (const entry of Object.values(mergesObj)) {
+      if (!object(entry) || !positive(entry.pr)) continue;
+      const iss = positive(entry.issue)
+        ? entry.issue
+        : (Array.isArray(entry.issues) ? entry.issues.find(positive) ?? null : null);
+      if (iss !== null) prKnownIssue.set(entry.pr, iss);
+    }
+  }
+
+  const considerReopen = (candidate, { fromPersisted = false } = {}) => {
+    if (!object(candidate) || !positive(candidate.pr)) return;
+    const atMs = time(candidate.at);
+    const mergedAtMs = time(candidate.mergedAt);
+    if (fromPersisted) {
+      if (atMs === null) return;
+      if (atMs < windowStart || atMs > nowMs) return;
+      if (clearedAfter !== null && atMs <= clearedAfter) return;
+    } else if (atMs !== null) {
+      if (atMs < windowStart || atMs > nowMs) return;
+      if (clearedAfter !== null && atMs <= clearedAfter) return;
+    } else if (clearedAfter !== null) {
+      if (mergedAtMs === null || mergedAtMs <= clearedAfter || mergedAtMs < windowStart || mergedAtMs > nowMs) return;
+    } else if (mergedAtMs !== null && (mergedAtMs < windowStart || mergedAtMs > nowMs)) {
+      return;
+    }
+    const issue = positive(candidate.issue)
+      ? candidate.issue
+      : (Array.isArray(candidate.issues) ? candidate.issues.find(positive) ?? null : prKnownIssue.get(candidate.pr) ?? null);
+    const key = issue !== null ? `issue:${issue}` : `pr:${candidate.pr}`;
+    const effectiveAt = atMs ?? mergedAtMs ?? nowMs;
+    const prev = byDistinctIssue.get(key);
+    if (!prev || effectiveAt >= prev.atMs) {
+      byDistinctIssue.set(key, {
+        pr: candidate.pr,
+        issue,
+        atMs: effectiveAt,
+        url: link(candidate.url),
+        detail: typeof candidate.detail === 'string' && candidate.detail.trim() ? safe(candidate.detail).slice(0, 180) : null,
+      });
+    }
+  };
+
+  for (const item of incoming) {
+    if (isReopen(item)) considerReopen(item, { fromPersisted: false });
+  }
+
+  if (mergesObj) {
+    for (const entry of Object.values(mergesObj)) {
+      if (!object(entry) || !positive(entry.pr) || !Array.isArray(entry.signals)) continue;
+      for (const sig of entry.signals) {
+        if (!object(sig) || sig.kind !== 'reopened' || sig.level !== 'proven') continue;
+        considerReopen({
+          pr: entry.pr,
+          issue: positive(sig.issue) ? sig.issue : entry.issue,
+          issues: entry.issues,
+          mergedAt: entry.mergedAt,
+          at: sig.at,
+          url: sig.url,
+          detail: sig.detail,
+        }, { fromPersisted: true });
+      }
+    }
+  }
+
+  if (byDistinctIssue.size < threshold) return null;
+
+  const cluster = [...byDistinctIssue.values()].sort((a, b) => b.atMs - a.atMs || b.pr - a.pr);
+  const latest = cluster[0];
+  const issues = [...new Set(cluster.map(c => c.issue).filter(positive))].sort((a, b) => a - b);
+  const prs = [...new Set(cluster.map(c => c.pr).filter(positive))].sort((a, b) => a - b);
+  const windowHours = Math.max(1, Math.round(windowMs / (60 * 60 * 1000)));
+  const refs = cluster.slice(0, 4).map(c => (c.issue ? `#${c.issue} (PR #${c.pr})` : `PR #${c.pr}`)).join(', ');
+  const extraCount = cluster.length > 4 ? ` +${cluster.length - 4} more` : '';
+  const detailText = latest.detail ? `: ${latest.detail}` : '';
+  const reason = safe(`${cluster.length} merged issues reopened within ${windowHours}h (${refs}${extraCount})${detailText}`).slice(0, 240);
+
   return {
     active: true,
-    kind,
-    code,
-    pr: chosen.pr,
-    issue,
+    kind: 'reopened_cluster',
+    code: 'post-merge-reopen',
+    pr: latest.pr,
+    issue: latest.issue,
+    issues,
+    prs,
+    count: cluster.length,
+    windowHours,
     trippedAt,
-    url: link(chosen.url),
+    url: latest.url,
     reason,
   };
 }

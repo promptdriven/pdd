@@ -23,8 +23,10 @@ Own `src/setup/cli-upgrade.mjs`. Export `detectGlobalInstallPrefix(packageRoot, 
   - Resolve `targetPkgRoot` via `resolveInstalledRoot` and delegate post-upgrade skill and stale-MCP sync to the **newly installed binary** by spawning `[nodeBin, resolveInstalledBinEntry(targetPkgRoot, fs), 'setup', '--upgrade']` (with scrubbed Volta env when Volta, clean `env`, `PDD_NO_UPDATE_CHECK: '1'`, and bounded 60-second timeout) — both after a CLI upgrade and when the CLI is already up to date — so post-upgrade skill layouts never clash with pre-upgrade in-RAM `PDD_SKILL_NAMES`.
   - Keep a safe fallback to `skills-install.mjs` (passing `env` to `syncOwnedUserSkills`) only when a unit test explicitly injects `ports.skillsInstall`, when `resolveInstalledBinEntry` returns `null`, or when spawning an older target binary (for example via `--main`) returns exit `2` for unknown `--upgrade`.
   - Forward non-empty sync lines cleanly, report failures to `stderr` with exit `1`, and never print `"PDD skills are current."` when skills were updated, skipped, failed, or retired skills remain.
+- **Proactive dual-install and login-shell check:**
+  - After upgrade and post-upgrade sync, invoke `formatHostInstallWarnings` (from [PATH & host install diagnostics](path-diagnostic.prompt.md), or optional injected `ports.hostInstallWarnings`) fail-open and write any competing-install or login-shell split warnings (with exact cleanup commands) to `stderr` without altering the upgrade exit code.
 
 ## Dependencies
 
 - Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before changing this prompt.
-- Uses [install kind](install-kind.prompt.md), [skills install](skills-install.prompt.md) (fallback only), [cached release notice](release-notice.prompt.md), and Layer-0 `src/shared/{state-dir,package-root}.mjs`.
+- Uses [install kind](install-kind.prompt.md), [skills install](skills-install.prompt.md) (fallback only), [PATH & host install diagnostics](path-diagnostic.prompt.md), [cached release notice](release-notice.prompt.md), and Layer-0 `src/shared/{state-dir,package-root}.mjs`.

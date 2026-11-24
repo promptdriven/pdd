@@ -38,6 +38,7 @@ Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before
 - `jobs` (`jobs`, local `runtime-jobs`): no operands or options. Form `pdd jobs`.
 - `mcp` (`mcp`, local `mcp`): no operands or options. Form `pdd mcp`.
 - `upgrade` (`upgrade`, local `upgrade`): flag `--main`. Form `pdd upgrade [--main]`.
+- `doctor` (`doctor`, local `doctor`): flag `--json`. Form `pdd doctor [--json]`. Read-only host health check for Node, competing `pdd` installs, login-shell `PATH` parity, agent skills, MCP configs, and `gh` sign-in.
 
 ## Cloud accounts routes
 
@@ -53,11 +54,15 @@ Catalog local disposition `accounts` ([Cloud accounts CLI](accounts-cli.prompt.m
 
 ## Autopilot routes
 
-Catalog `autopilot.doctor`, `autopilot.start` (with `--runs`, `--checks`, `--engine`, `--label`, `--issues`, `--issue`, `--mode`, `--report`, `--decisions`, `--intake`, `--share`, `--agent`, hidden `--pool`, `--auto-update`), `autopilot.suite` (`--command`, `--timeout` `0..120`), `autopilot.status` (`--all`, `--json`), `autopilot.logs` (`issue`, `--issue`, `--follow`, `-f`, `--lines` `1..5000`, `--json`), `autopilot.stop`, `autopilot.observe`, `autopilot.auto`, `autopilot.off`, `autopilot.trust`, `autopilot.untrust`, `autopilot.add`, `autopilot.release`, `autopilot.intake`, `autopilot.graph`, `autopilot.report`, `autopilot.regressions`, `autopilot.alerts`, `autopilot.alert`, and `autopilot.check-base`. [Autopilot launcher](autopilot-launcher.prompt.md) and [Autopilot alerts](autopilot-alerts.prompt.md) own execution.
+Catalog `autopilot.doctor`, `autopilot.start` (with `--runs`, `--checks`, `--engine`, `--label`, `--issues`, `--issue`, `--mode`, `--report`, `--decisions`, `--intake`, `--share`, `--agent`, hidden `--pool`, `--auto-update`), `autopilot.suite` (`--command`, `--timeout` `0..120`), `autopilot.status` (`--all`, `--json`), `autopilot.logs` (`issue`, `--issue`, `--follow`, `-f`, `--lines` `1..5000`, `--json`), `autopilot.stop`, `autopilot.observe`, `autopilot.auto`, `autopilot.off`, `autopilot.trust`, `autopilot.untrust`, `autopilot.add`, `autopilot.release`, `autopilot.intake`, `autopilot.graph`, `autopilot.report`, `autopilot.regressions`, `autopilot.investigate`, `autopilot.alerts`, `autopilot.alert`, and `autopilot.check-base`. [Autopilot launcher](autopilot-launcher.prompt.md) and [Autopilot alerts](autopilot-alerts.prompt.md) own execution.
 
 ## Regression scan
 
 Register `autopilot.regressions`, prefix `autopilot regressions`, local `autopilot-regressions`, no operands, Boolean `--json` and text `--file`. Form: `pdd autopilot regressions [--json] [--file PATH]`. Description: Read core merge history and GitHub regression evidence; optionally save a local report, without GitHub writes or reverts.
+
+## Daily investigation
+
+Register `autopilot.investigate`, prefix `autopilot investigate`, local `autopilot-investigate`, no operands, text `--date`, Boolean `--json`, Boolean `--write-issues`, and integer `--max-issues` (`1..20`). Form: `pdd autopilot investigate [--date YYYY-MM-DD] [--json] [--write-issues] [--max-issues N]`. Description: Run the deterministic 4-bucket Autopilot incident investigator against local history, post-merge regressions, flakes, and report drafts (read-only by default; pass --write-issues to auto-file deduplicated strong-evidence GitHub issues up to --max-issues N).
 
 ## Metrics, shell, help, and version routes
 

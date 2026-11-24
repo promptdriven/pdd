@@ -850,10 +850,10 @@ registerHooks({
     'workflow-approve', 'workflow-resend', 'workflow-card', 'workflow-changes', 'workflow-open', 'workflow-view',
     'workflow-cost', 'workflow-prove', 'workflow-suite', 'workflow-evidence', 'workflow-evidence-associate',
     'workflow-park', 'workflow-yield', 'workflow-cancel', 'workflow-tidy',
-    'autopilot-status', 'autopilot-logs', 'autopilot-doctor', 'autopilot-regressions', 'autopilot-alerts', 'autopilot-alert',
+    'autopilot-status', 'autopilot-logs', 'autopilot-doctor', 'autopilot-regressions', 'autopilot-investigate', 'autopilot-alerts', 'autopilot-alert',
     'autopilot-start', 'autopilot-suite', 'autopilot-stop', 'autopilot-add', 'autopilot-release', 'autopilot-report',
     'autopilot-intake', 'autopilot-check-base',
-    'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot-trust', 'autopilot-untrust', 'accounts', 'upgrade',
+    'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot-trust', 'autopilot-untrust', 'accounts', 'upgrade', 'doctor',
   ]);
   for (const route of PUBLIC_COMMAND_ROUTES) {
     assert.ok(coveredLocals.has(route.local), `PUBLIC_COMMAND_ROUTES local ${route.local} (${route.id}) must be covered in SEAM5`);
@@ -867,6 +867,7 @@ registerHooks({
     ['cli:--version', [bin, '--version'], repo],
     ['cli:completion', [bin, 'completion', 'bash'], repo],
     ['cli:setup', [bin, 'setup', '--yes'], repo],
+    ['cli:doctor', [bin, 'doctor', '--json'], nonGit],
     ['cli:init', [bin, 'init'], repo],
     ['cli:status', [bin, 'status', '--json'], repo],
     ['cli:files', [bin, 'files', '--json'], repo],
@@ -889,6 +890,7 @@ registerHooks({
     ['cli:autopilot-logs', [bin, 'autopilot', 'logs'], nonGit],
     ['cli:autopilot-doctor', [bin, 'autopilot', 'doctor'], repo],
     ['cli:autopilot-regressions', [bin, 'autopilot', 'regressions'], nonGit],
+    ['cli:autopilot-investigate', [bin, 'autopilot', 'investigate'], nonGit],
     ['cli:autopilot-alerts', [bin, 'autopilot', 'alerts', 'clear'], nonGit],
     ['cli:autopilot-off', [bin, 'autopilot', 'off'], nonGit],
     ['child:try-doors-launcher', ['--input-type=commonjs', '-e', launcherScript, '--', pathToFileURL(join(root, 'src/try-doors.mjs')).href, join(scratch, 'missing.door.json')], nonGit],
@@ -903,7 +905,7 @@ registerHooks({
   ];
 
   const ACYCLIC_ENTRIES = new Set([
-    'cli:--help', 'cli:owner', 'cli:update', 'cli:files',
+    'cli:--help', 'cli:doctor', 'cli:owner', 'cli:update', 'cli:files',
     'lib:svg-layout.mjs',
     'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
@@ -911,7 +913,7 @@ registerHooks({
     'child:scripts/autopilot-smoke.mjs',
   ]);
   const LIGHT_ENTRIES = new Set([
-    'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion',
+    'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion', 'cli:doctor',
     'cli:files', 'cli:owner', 'cli:update',
     'cli:jobs', 'cli:contracts', 'cli:contracts-sync', 'cli:simulate', 'cli:mcp',
     'child:try-doors-launcher',
