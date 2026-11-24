@@ -14,7 +14,7 @@ const RULE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const VALID_TARGETS = new Set(['prompt', 'story', 'test', 'code', 'all']);
 const VALID_SEVERITIES = new Set(['off', 'warn', 'error']);
 
-function mergeLintConfigSection(rawLint, { sourcePath, allowCommands = true, disabledRules, ruleSeverities, customRuleMap, commandMap, configErrors }) {
+function mergeLintConfigSection(rawLint, { sourcePath, allowCommands = true, disabledRules, ruleSeverities, customRuleMap, commandMap, mutationCommandRef, configErrors }) {
   const addConfigError = detail => configErrors.push({
     filePath: sourcePath,
     line: 1,
@@ -76,6 +76,16 @@ function mergeLintConfigSection(rawLint, { sourcePath, allowCommands = true, dis
         }
         commandMap.set(cmdObj.id, cmdObj);
       }
+    }
+  }
+
+  if (rawLint.mutation_command !== undefined) {
+    if (!allowCommands) {
+      addConfigError(`"lint.mutation_command" is only permitted in merge-base pdd.json, not ${sourcePath}.`);
+    } else if (typeof rawLint.mutation_command !== 'string' || !rawLint.mutation_command.trim()) {
+      addConfigError(`"lint.mutation_command" in ${sourcePath} must be a nonblank command string.`);
+    } else if (mutationCommandRef) {
+      mutationCommandRef.value = rawLint.mutation_command.trim();
     }
   }
 
@@ -234,15 +244,16 @@ function loadWorkspaceLintRuleFiles(realRoot, target) {
 }
 
 export function loadProjectLintConfig(rootOrObject) {
-  const empty = { configured: false, disabledRules: new Set(), ruleSeverities: new Map(), customRules: [], commands: [], configErrors: [] };
+  const empty = { configured: false, disabledRules: new Set(), ruleSeverities: new Map(), customRules: [], commands: [], mutationCommand: null, configErrors: [] };
   if (!rootOrObject) return empty;
-  const target = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), configErrors: [] };
+  const target = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, configErrors: [] };
   const finalize = configured => ({
     configured,
     disabledRules: target.disabledRules,
     ruleSeverities: target.ruleSeverities,
     customRules: [...target.customRuleMap.values()],
     commands: [...target.commandMap.values()],
+    mutationCommand: target.mutationCommandRef.value,
     configErrors: target.configErrors,
   });
 
@@ -294,44 +305,50 @@ function headingMatches(contentText, requiredHeading) {
 
 export function loadBaseTrustedLintCommands(root, { baseRef } = {}) {
   let realRoot;
-  try { realRoot = realpathSync(root); } catch { return { baseSha: null, source: null, commands: [], skippedUntrusted: false }; }
+  try { realRoot = realpathSync(root); } catch { return { baseSha: null, source: null, commands: [], mutationCommand: null, skippedUntrusted: false }; }
   let wtCommands = [];
+  let wtMutationCommand = null;
   const wtRaw = readSafeUtf8(realRoot, 'pdd.json');
   if (wtRaw !== null) {
     try {
       const wtParsed = JSON.parse(wtRaw);
-      const wtTarget = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), configErrors: [] };
-      if (wtParsed?.lint?.commands !== undefined) {
-        mergeLintConfigSection({ commands: wtParsed.lint.commands }, { sourcePath: 'pdd.json', allowCommands: true, ...wtTarget });
+      const wtTarget = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, configErrors: [] };
+      if (wtParsed?.lint?.commands !== undefined || wtParsed?.lint?.mutation_command !== undefined) {
+        mergeLintConfigSection({ commands: wtParsed.lint.commands, mutation_command: wtParsed.lint.mutation_command }, { sourcePath: 'pdd.json', allowCommands: true, ...wtTarget });
       }
       wtCommands = [...wtTarget.commandMap.values()];
+      wtMutationCommand = wtTarget.mutationCommandRef.value;
     } catch {}
   }
 
   const ref = baseRef || resolveDefaultBaseRef(realRoot);
-  if (!ref) return { baseSha: null, source: null, commands: [], skippedUntrusted: wtCommands.length > 0 };
+  if (!ref) return { baseSha: null, source: null, commands: [], mutationCommand: null, skippedUntrusted: wtCommands.length > 0 || wtMutationCommand !== null };
   const resolved = spawnSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   const commit = resolved.status === 0 && resolved.stdout.trim() ? resolved.stdout.trim() : null;
-  if (!commit) return { baseSha: null, source: null, commands: [], skippedUntrusted: wtCommands.length > 0 };
+  if (!commit) return { baseSha: null, source: null, commands: [], mutationCommand: null, skippedUntrusted: wtCommands.length > 0 || wtMutationCommand !== null };
   const mb = spawnSync('git', ['merge-base', 'HEAD', commit], { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  if (mb.status !== 0 || !mb.stdout.trim()) return { baseSha: null, source: null, commands: [], skippedUntrusted: wtCommands.length > 0 };
+  if (mb.status !== 0 || !mb.stdout.trim()) return { baseSha: null, source: null, commands: [], mutationCommand: null, skippedUntrusted: wtCommands.length > 0 || wtMutationCommand !== null };
   const baseSha = mb.stdout.trim();
 
   const show = spawnSync('git', ['show', `${baseSha}:pdd.json`], { cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
   const baseCommands = [];
+  let baseMutationCommand = null;
   if (show.status === 0 && typeof show.stdout === 'string') {
     try {
       const parsed = JSON.parse(show.stdout);
       if (parsed?.lint && typeof parsed.lint === 'object' && !Array.isArray(parsed.lint)) {
-        const t = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), configErrors: [] };
-        mergeLintConfigSection({ commands: parsed.lint.commands }, { sourcePath: `${baseSha}:pdd.json`, allowCommands: true, ...t });
+        const t = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, configErrors: [] };
+        mergeLintConfigSection({ commands: parsed.lint.commands, mutation_command: parsed.lint.mutation_command }, { sourcePath: `${baseSha}:pdd.json`, allowCommands: true, ...t });
         baseCommands.push(...t.commandMap.values());
+        baseMutationCommand = t.mutationCommandRef.value;
       }
     } catch {}
   }
 
-  const skippedUntrusted = wtCommands.length > 0 && JSON.stringify(wtCommands) !== JSON.stringify(baseCommands);
-  return { baseSha, source: `${baseSha}:pdd.json`, commands: baseCommands, skippedUntrusted };
+  const skippedCommands = wtCommands.length > 0 && JSON.stringify(wtCommands) !== JSON.stringify(baseCommands);
+  const skippedMutationCommand = wtMutationCommand !== null && wtMutationCommand !== baseMutationCommand;
+  const skippedUntrusted = skippedCommands || skippedMutationCommand;
+  return { baseSha, source: `${baseSha}:pdd.json`, commands: baseCommands, mutationCommand: baseMutationCommand, skippedCommands, skippedMutationCommand, skippedUntrusted };
 }
 
 export function loadBaseTrustedLintOverrides(root, { baseRef } = {}) {

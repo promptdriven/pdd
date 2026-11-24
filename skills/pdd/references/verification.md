@@ -32,7 +32,7 @@ Maintain the repository **Feature Map** in `pdd.json` under `verify`:
 
 ## 2. Single exit command: `pdd prove`
 
-- **General exit check:** run `pdd prove [--base REF] [--timeout MIN] [--json]`. It runs offline diff lint, the declared repo test command, and merge-base trusted `verify.paths` recipes, reporting **`Proved`** (exit 0), **`Failed`** (exit 1), or **`Not proved`** (exit 3 — missing recipe, missing capability, untrusted config edit, timeout, or test-integrity regression).
+- **General exit check:** run `pdd prove [--base REF] [--timeout MIN] [--json]`. It runs offline diff lint, the declared repo test command, merge-base trusted `verify.paths` recipes, and code-bound formal checks (`*.formal.test.*`, `test_formal_*.py`, `*_formal_test.py`, `formal/test_*.py`, `*_formal_test.go`, `tests/*formal*.rs`, or merge-base `verify.formal_command`), reporting **`Proved`** (exit 0), **`Failed`** (exit 1), or **`Not proved`** (exit 3 — missing recipe, missing capability, untrusted config edit, disconnected `proved_spec_model`, timeout, or test-integrity regression) along with a clear `Formal:` status (`not-applicable` on docs/UI/CRUD PRs).
 - **Bug-contrast proof:** `pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--json]` verifies the regression test fails with the defect symptom on unpatched base code and passes on head code.
 
 ## 3. Native test strategy by work kind
@@ -41,7 +41,7 @@ Maintain the repository **Feature Map** in `pdd.json` under `verify`:
 |---|---|
 | **Feature** | Interface and integration tests in the repo's native runner (`node:test`, Vitest, Jest, pytest, `go test`, `cargo test`, Playwright) translating every approved Story acceptance criterion **1-to-1**, with unchanged-state / `0`-write assertions on negative rules. |
 | **Bug fix** | **Red→Green TDD:** write the failing regression test first against unpatched code → observe the real failure matching the bug's symptom → state `Defect:` and `Not caught because:` → apply root fix → observe pass (and verify with `pdd prove --base ... --test ... --expect ...`). |
-| **Invariant-heavy logic** *(parsers, state machines, sorting/graphs, math/quotas, untrusted inputs)* | Load [formal.md](formal.md) for the 3-tier code-bound stack (strict typing + stateful property-based testing + code-bound solvers, Z3 isolation, and Rule Coverage reporting). |
+| **Rules, invariants & formal-tested modules** *(state transitions, parsers/validators, auth/trust, math/metrics/money, locking/scheduling, `## Rules to check` / `## Domain decisions`, or modules with existing formal tests)* | Load [formal.md](formal.md): use an installed property library or a **zero-install seeded PRNG / finite exhaustive grid** directly against real production code (skip as `not-applicable` on docs/UI/glue/simple CRUD). |
 | **`kind: native-only` / OS-boundary code** | Executable, non-mocked real-host probes covering the actual boundary: live HTTP auth/CSRF/path-traversal/forged-body rejection, strict input coercion, real parsers, live CLI-to-server wiring, nested OS sandbox child execution, real `/dev/tty` permissions, multi-turn Turn 1 → Turn 2 CLI state, and payloads `> 4 KiB`. Mocked-only shells never prove OS or transport boundaries. |
 | **CLI apps** | Native integration tests spawning the real entry binary (plus optional `pdd test --target code` when the prompt declares a CLI runtime interface). |
 

@@ -19,7 +19,7 @@ export const isProductionSurfaceFile = filePath =>
   canonicalRepoPath(filePath) && !isTestOwnedPath(filePath) && !NON_SURFACE_PATH_RE.test(filePath);
 
 export function parseVerifyConfig(raw, { sourcePath = 'pdd.json' } = {}) {
-  const empty = { configured: false, source: sourcePath, test: null, report: null, paths: [], errors: [] };
+  const empty = { configured: false, source: sourcePath, test: null, report: null, formalCommand: null, mutationCommand: null, paths: [], errors: [] };
   if (raw === undefined || raw === null) return empty;
   const section = raw && typeof raw === 'object' && !Array.isArray(raw) && Object.hasOwn(raw, 'verify') ? raw.verify : raw;
   if (section === undefined || section === null) return empty;
@@ -37,6 +37,16 @@ export function parseVerifyConfig(raw, { sourcePath = 'pdd.json' } = {}) {
   if (section.report !== undefined) {
     if (typeof section.report !== 'string' || !canonicalRepoPath(section.report.trim())) errors.push(`${sourcePath}: "verify.report" must be a repository-relative file path.`);
     else report = section.report.trim();
+  }
+  let formalCommand = null;
+  if (section.formal_command !== undefined) {
+    if (typeof section.formal_command !== 'string' || !section.formal_command.trim()) errors.push(`${sourcePath}: "verify.formal_command" must be a nonblank command string.`);
+    else formalCommand = section.formal_command.trim();
+  }
+  let mutationCommand = null;
+  if (section.mutation_command !== undefined) {
+    if (typeof section.mutation_command !== 'string' || !section.mutation_command.trim()) errors.push(`${sourcePath}: "verify.mutation_command" must be a nonblank command string.`);
+    else mutationCommand = section.mutation_command.trim();
   }
 
   const paths = [];
@@ -85,7 +95,7 @@ export function parseVerifyConfig(raw, { sourcePath = 'pdd.json' } = {}) {
       }
     }
   }
-  return { configured: Boolean(test || report || paths.length || errors.length), source: sourcePath, test, report, paths, errors };
+  return { configured: Boolean(test || report || formalCommand || mutationCommand || paths.length || errors.length), source: sourcePath, test, report, formalCommand, mutationCommand, paths, errors };
 }
 
 export function loadVerifyConfig(rootOrObject, { gitRef } = {}) {
@@ -128,7 +138,7 @@ export function loadVerifyConfig(rootOrObject, { gitRef } = {}) {
     const parsed = parseVerifyConfig(JSON.parse(rawText), { sourcePath });
     return { ...parsed, loadStatus: parsed.errors.length > 0 ? 'invalid' : (parsed.configured ? 'ok' : 'absent') };
   } catch {
-    return { configured: true, source: sourcePath, test: null, report: null, paths: [], errors: [`${sourcePath}: invalid JSON.`], loadStatus: 'invalid' };
+    return { configured: true, source: sourcePath, test: null, report: null, formalCommand: null, mutationCommand: null, paths: [], errors: [`${sourcePath}: invalid JSON.`], loadStatus: 'invalid' };
   }
 }
 
