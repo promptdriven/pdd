@@ -1,4 +1,4 @@
-# Register PDD Simulator MCP tools with coding agents
+# Register PDD Prompt Interpreter MCP tools with coding agents
 
 Own `src/agent-mcp-setup.mjs`. Export async `setupAgentMcp({env, packageRoot}, {stdin, stdout, stderr, confirm, interactive, yes})`, returning exit code `0` or `1`.
 
@@ -19,10 +19,10 @@ Own `src/agent-mcp-setup.mjs`. Export async `setupAgentMcp({env, packageRoot}, {
   - A symlink on one agent emits `pdd setup: warning: ...` to stderr and skips only that agent (exit stays `0` if no hard error occurred).
   - A malformed config or conflicting non-PDD entry on one agent emits a clear `pdd setup:` diagnostic to stderr, sets `hadError = true`, and still proceeds for healthy agents.
 - **Consent (`--yes` means YES) and atomic writes:**
-  - Show exact per-agent previews for all planned PDD Simulator MCP tool changes.
+  - Show exact per-agent previews for all planned PDD Prompt Interpreter MCP tool changes.
   - When `yes === true`, apply previewed changes without asking.
   - When `!yes && !interactive`, skip without writing.
-  - When `!yes && interactive`, ask once `Register these PDD Simulator MCP tools? [y/N] `; only trimmed case-insensitive `y` consents.
+  - When `!yes && interactive`, ask once `Register these PDD Prompt Interpreter MCP tools? [y/N] `; only trimmed case-insensitive `y` consents.
   - Re-verify path safety and unchanged original bytes immediately before writing; write atomically (`0o600` for new files, preserving existing mode) into `0o700` parent directories.
 
 ## Dependencies

@@ -1,6 +1,6 @@
 # Test selection by PDD file names and affected dependency graph
 
-Own `src/test-selection.mjs`: the one PDD owner of Story and test pairing by file names, selector-word resolution (`pdd test`, `pdd lint`, `pdd simulate`), affected native test selection from changed files, and the no-tests explanation. Pairings by name open no `*.json` file; affected native test selection reads source imports and scenario links only through repository or injected ports.
+Own `src/test-selection.mjs`: the one PDD owner of Story and test pairing by file names, selector-word resolution (`pdd test`, `pdd lint`, direct `pdd <PROMPT.md|STORY>`), affected native test selection from changed files, and the no-tests explanation. Pairings by name open no `*.json` file; affected native test selection reads source imports and scenario links only through repository or injected ports.
 
 <a id="test-name-rule"></a>
 ## Test name rule
@@ -70,6 +70,6 @@ Node `node:path` (`basename`, `posix`), `node:fs`, and `node:child_process` (`ex
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"approved","prose_sha256":"4f882a895de2d9dc31962a993bb812318c14dbda38e86290726fa5f4516d5176","reason":"Exposes synchronous host-bound callbacks for native Story capture, repository import-graph inspection, and pure path-matching functions consumed across pdd and Runtime ports."}
+{"kind":"native-only","status":"draft","prose_sha256":"124b37b2f6fad91ccf9bf82611ac39451121f7e90bb40cbe3651cdcfbcbc5873","reason":"Exposes synchronous host-bound callbacks for native Story capture, repository import-graph inspection, and pure path-matching functions consumed across pdd and Runtime ports."}
 ```
 </details>

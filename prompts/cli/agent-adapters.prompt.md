@@ -1,6 +1,6 @@
 # Own-agent adapters
 
-Own `src/agent-adapters.mjs`: PDD's local agent CLI discovery, shared credential-status interpretation, and direct subprocess runner (`agents.list` and `agents.run`). Simulator chat turns (`askAgent`, response parsing, fill validation, and temporary read-only overlays) live in `@promptdriven/runtime-client` behind [Runtime seam](runtime-seam.prompt.md).
+Own `src/agent-adapters.mjs`: PDD's local agent CLI discovery, shared credential-status interpretation, and direct subprocess runner (`agents.list` and `agents.run`). Prompt Interpreter chat turns (`askAgent`, response parsing, fill validation, and temporary read-only overlays) live in `@promptdriven/runtime-client` behind [Runtime seam](runtime-seam.prompt.md).
 
 Export asynchronous `discoverAgents({cwd,env,run,definitions,workspace})`, pure `parseAgentAuthStatus({agent,result})`, `runAgentProcess(command,args,{cwd,env,input='',signal,timeoutMs=120000,maxBytes=131072})`, pure `resolveAgentStepLaunch({agent,definition,step,model,reasoningEffort,tiering,env})`, and asynchronous `runStepAgentProcess({agent,definition,step,args,model,reasoningEffort,tiering,cwd,env,input,signal,timeoutMs,maxBytes,run,now})`. `run(command,args,{cwd,env,input,signal,timeoutMs,maxBytes})` is a direct subprocess port without a shell returning `{code,stdout,stderr}`, with `runAgentProcess` as its default implementation; cancellation sends `SIGTERM` to the process group (falling back to the child) followed by `SIGKILL` after 500 ms, and enforces `timeoutMs` (`timeout`) and `maxBytes` (`output limit`).
 
