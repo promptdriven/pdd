@@ -2069,11 +2069,11 @@ export function runtimePreflightSlice() {
     hasAcceptance,
     isStoryPath,
     lintLocalHygiene: (input, ports = {}) => {
-      const { isTestOwnedPath, promptClaims, resolveOwners } = hostFileOwner();
+      const { isTestOwnedPath, resolveOwners } = hostFileOwner();
       const { lintRepoAntiPatterns } = req('./repo-hygiene-lint.mjs');
       const baseWarnings = mod.lintLocalHygiene(
         input,
-        withPortDefaults(seamSelectionPorts(ports), { isTestOwnedPath, promptClaims, resolveOwners }),
+        withPortDefaults(seamSelectionPorts(ports), { isTestOwnedPath, promptClaims: () => [], resolveOwners }),
       );
       return [
         ...new Set([
@@ -2733,7 +2733,7 @@ export async function runCheck(input = {}, ports = {}) {
 
   const [
     ,
-    { headerPrompts, isTestOwnedPath, promptClaims, resolveOwners },
+    { headerPrompts, isTestOwnedPath, resolveOwners },
     lintMods,
     screenMod,
   ] = await Promise.all([
@@ -2767,13 +2767,38 @@ export async function runCheck(input = {}, ports = {}) {
   const { onProjectLintResult, ...forwardPorts } = ports;
   const defaultLintSvgLayouts = lintMods
     ? arg => {
-        const [{ lintSvgLayouts }, { lintRepoProject }] = lintMods;
-        const project = lintRepoProject(arg);
-        if (typeof onProjectLintResult === 'function' && arg?.promptPaths === undefined && arg?.tests === undefined) {
-          onProjectLintResult(project);
+        const [{ lintSvgLayouts }, { lintRepoProject, resolveLintScope }] = lintMods;
+        let project;
+        let svgWarnings;
+        if (words.length > 0 && arg?.root && Array.isArray(arg?.files)) {
+          const scope = resolveLintScope({ root: arg.root, cwd, files: arg.files, words });
+          if (scope.unmatched.length === 0) {
+            if (Array.isArray(arg.promptPaths)) {
+              for (const p of arg.promptPaths) if (typeof p === 'string' && p.endsWith('.prompt.md')) scope.prompts.add(p);
+            }
+            project = lintRepoProject({ root: arg.root, files: scope.effectiveFiles, scope });
+            if (typeof onProjectLintResult === 'function') onProjectLintResult(project);
+            svgWarnings = lintSvgLayouts({
+              root: arg.root,
+              files: scope.effectiveFiles,
+              promptPaths: [...scope.prompts].sort(),
+              appMapPaths: [...scope.appMaps].sort(),
+              scenarioPaths: [...scope.scenarios].sort(),
+            });
+          } else {
+            project = lintRepoProject(arg);
+            if (typeof onProjectLintResult === 'function') onProjectLintResult(project);
+            svgWarnings = lintSvgLayouts(arg);
+          }
+        } else {
+          project = lintRepoProject(arg);
+          if (typeof onProjectLintResult === 'function' && arg?.promptPaths === undefined && arg?.tests === undefined) {
+            onProjectLintResult(project);
+          }
+          svgWarnings = lintSvgLayouts(arg);
         }
         return [
-          ...lintSvgLayouts(arg),
+          ...svgWarnings,
           ...project.warnings,
           ...lintShortScenarioFiles(arg?.root, forwardPorts, {
             checkCriteriaBindings: rawOptions['--local'] === true,
@@ -2789,7 +2814,7 @@ export async function runCheck(input = {}, ports = {}) {
       withPortDefaults(withEligibilityDefault(forwardPorts, lazyEvidenceEligibility), {
         headerPrompts,
         isTestOwnedPath,
-        promptClaims,
+        promptClaims: () => [],
         resolveOwners,
         allRuns: lazyAllRuns,
         workflowBaseSha: ({ root, env: runEnv }) =>

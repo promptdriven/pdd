@@ -11,6 +11,15 @@ import { gitFiles } from '../../shared/git-context.mjs';
 import { causeText, isSecretPath } from '../../shared/safe-read.mjs';
 import { workspace } from '../../shared/workspace-policy.mjs';
 import { HEAD_BYTES, canonicalRepoPath, formatDiagnosticLine, formatTeachingDetail, readSafeHeadUtf8, readSafeUtf8, scrubChildEnv } from './diagnostics.mjs';
+import {
+  EXAMPLE_DIR,
+  FIXTURE_DIR,
+  extractBoundModules,
+  isContractDocPath,
+  isCustomRuleTestFile,
+  isEligibleProductionCodeFile,
+  scenarioPromptRefs,
+} from './lint-scope.mjs';
 import { collectNativeOnlyContractFindings } from './native-only-contract.mjs';
 import { collectNativeOnlyPortParityFindings } from './native-port-parity.mjs';
 import { evaluateCustomRulesOnFile, loadBaseTrustedLintCommands, loadBaseTrustedLintOverrides, loadProjectLintConfig, matchesAnyCustomRule } from './project-config.mjs';
@@ -18,32 +27,9 @@ import { extractDependencyLinkTargets, isNativeOnlyPrompt } from './prompt-metad
 import { collectPromptCodeBlockFindings, collectPromptDependencyFindings, collectPromptSizeFindings, collectPromptStructureFindings } from './prompt-rules.mjs';
 import { collectStoryUnboundCriteriaFindings } from './story-criteria-parity.mjs';
 
-const CODE_FILE_EXT = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift|c|cc|cpp|h|hpp|php|scala|lua|sh)$/i;
-const TEST_CODE_EXT = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift)$/i;
-const FIXTURE_DIR = /(?:^|\/)fixtures(?:\/|$)/i;
-const EXAMPLE_DIR = /(?:^|\/)examples(?:\/|$)/i;
-const NON_CODE_DIR = /^(?:user_stories|docs?|\.github)\//i;
 const PROMPT_SIZE_MIN_CODE_LINES = 25;
-// Corpus-proven Story hard-error rules (0/8 false alarms across all 8 clean corpus repos).
-const STORY_HARD_ERROR_RULES = new Set(['story-code-internals', 'story-missing-criteria']);
+const STORY_HARD_ERROR_RULES = new Set(['story-missing-criteria']);
 const NON_SUPPRESSIBLE_CONFIG_CODES = new Set(['lint-config-invalid', 'lint-config-untrusted']);
-const isContractDocPath = p => /(?:^|\/)contracts\/.+\.md$/i.test(p) && !p.endsWith('.prompt.md');
-
-const isEligibleProductionCodeFile = p => canonicalRepoPath(p) && CODE_FILE_EXT.test(p) && !p.endsWith('.prompt.md') && !isTestOwnedPath(p) && !FIXTURE_DIR.test(p) && !EXAMPLE_DIR.test(p) && !NON_CODE_DIR.test(p);
-const isCustomRuleTestFile = p => canonicalRepoPath(p) && isTestOwnedPath(p) && TEST_CODE_EXT.test(p) && !/(?:^|\/)(?:fixtures|helpers)\//i.test(p);
-
-function scenarioPromptRefs(doc) {
-  if (!doc || typeof doc !== 'object') return [];
-  const refs = [];
-  if (typeof doc.entry_path === 'string') refs.push(doc.entry_path.replace(/^\.\//, ''));
-  for (const p of Array.isArray(doc.entry_paths) ? doc.entry_paths : []) if (typeof p === 'string') refs.push(p.replace(/^\.\//, ''));
-  for (const s of Array.isArray(doc.steps) ? doc.steps : []) if (typeof s?.entry_path === 'string') refs.push(s.entry_path.replace(/^\.\//, ''));
-  for (const c of Array.isArray(doc.context) ? doc.context : []) {
-    if (typeof c === 'string') refs.push(c.replace(/^\.\//, ''));
-    else if (typeof c?.prompt_path === 'string') refs.push(c.prompt_path.replace(/^\.\//, ''));
-  }
-  return refs;
-}
 
 function resolveTargetStories({ realRoot, scopedFiles, scopedSet, promptPaths, tests, targetPrompts }) {
   if (promptPaths === undefined && tests === undefined) return scopedFiles.filter(isLintableStoryPath);
@@ -110,7 +96,7 @@ export function runConfiguredLintCommands({ root, commands = [], timeoutMs = 120
   return { ok: errors.length === 0, results, errors };
 }
 
-export function lintRepoProject({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy, trustBaseRef, enforceBaseTrust = false, requireFullStoryCriteria = false } = {}) {
+export function lintRepoProject({ root, files, promptPaths, tests, scope, config, workspaceRoot, workspacePolicy, trustBaseRef, enforceBaseTrust = false, requireFullStoryCriteria = false } = {}) {
   const empty = { ok: true, configured: false, warnings: [], errors: [], findings: [], commands: [], untrustedConfigOverrides: [] };
   if (!root || typeof root !== 'string') return empty;
   let realRoot, policy;
@@ -120,7 +106,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
   } catch { return empty; }
 
   let rawFiles;
-  try { rawFiles = Array.isArray(files) ? files : gitFiles(realRoot); } catch { return empty; }
+  try { rawFiles = Array.isArray(files) ? files : (Array.isArray(scope?.effectiveFiles) ? scope.effectiveFiles : gitFiles(realRoot)); } catch { return empty; }
 
   const lintConfig = loadProjectLintConfig(config !== undefined ? config : realRoot);
   let effectiveDisabled = lintConfig.disabledRules;
@@ -161,18 +147,25 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
       }
     }
   }
+
+  // Full repository lookup index (always complete so unchanged linked prompts/files resolve cleanly).
+  const hasExplicitScope = Boolean(scope && scope.fullRepo === false);
   const allowedFiles = [...new Set(rawFiles)].filter(p => canonicalRepoPath(p) && !isSecretPath(p) && workspace.allows(policy, p)).sort();
   const allowedSet = new Set(allowedFiles);
   const selectedInputs = [
     ...(Array.isArray(promptPaths) ? promptPaths : []).filter(p => typeof p === 'string').map(p => p.replace(/^\.\//, '')),
     ...(Array.isArray(tests) ? tests : []).map(t => (typeof t === 'string' ? t : t?.path)).filter(p => typeof p === 'string').map(p => p.replace(/^\.\//, '')),
+    ...(hasExplicitScope ? [...scope.directFiles, ...(scope.deletedOrRenamedOldPaths ?? [])] : []),
   ];
   const scopedFiles = selectedInputs.some(p => FIXTURE_DIR.test(p)) ? allowedFiles : allowedFiles.filter(p => !FIXTURE_DIR.test(p));
   const scopedSet = new Set(scopedFiles);
 
   const allPrompts = scopedFiles.filter(p => p.endsWith('.prompt.md'));
+  const allPromptSet = new Set(allPrompts);
   const prodCodePaths = scopedFiles.filter(isEligibleProductionCodeFile);
-  const promptCache = new Map(), headCache = new Map(), fullCache = new Map();
+  const promptCache = scope?.caches?.promptCache ?? new Map();
+  const headCache = scope?.caches?.headCache ?? new Map();
+  const fullCache = scope?.caches?.fullCache ?? new Map();
   const getPrompt = p => (promptCache.has(p) ? promptCache.get(p) : (promptCache.set(p, readSafeUtf8(realRoot, p)), promptCache.get(p)));
   const getHead = p => (headCache.has(p) ? headCache.get(p) : (headCache.set(p, readSafeHeadUtf8(realRoot, p, HEAD_BYTES + 1)), headCache.get(p)));
   const getFull = p => (fullCache.has(p) ? fullCache.get(p) : (fullCache.set(p, readSafeUtf8(realRoot, p)), fullCache.get(p)));
@@ -193,8 +186,16 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
       }),
     });
   }
-  const ownedByPrompt = new Map(), ownersByCode = new Map(), heads = [];
-  const rawBindings = scopedSet.has('pdd-bindings.json') ? readSafeUtf8(realRoot, 'pdd-bindings.json') : null;
+
+  const ownedByPrompt = new Map(), ownersByCode = new Map(), heads = [], brokenHeaderCandidates = [];
+  const rawBindings = scopedSet.has('pdd-bindings.json') ? getFull('pdd-bindings.json') : null;
+  const boundModulePaths = [...new Set(
+    extractBoundModules(rawBindings)
+      .map(e => e.module)
+      .filter(m => scopedSet.has(m) && !isTestOwnedPath(m) && !m.endsWith('.prompt.md')),
+  )];
+  const prodCodeSet = new Set(prodCodePaths);
+  const extraBoundPaths = boundModulePaths.filter(m => !prodCodeSet.has(m));
 
   for (const codePath of prodCodePaths) {
     const head = getHead(codePath);
@@ -203,29 +204,67 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
     for (const entry of headerEntries(head)) {
       if (!allowedSet.has(entry.prompt)) {
         const line = Math.max(1, head.split(/\r?\n/).findIndex(l => l.includes(entry.prompt)) + 1);
-        rawFindings.push({
-          filePath: codePath, line, order: 1, code: 'broken-prompt-header', category: 'prompt ownership', defaultSeverity: 'error',
-          detail: formatTeachingDetail({
-            invariant: `Prompt header in ${codePath} references "${entry.prompt}", which does not exist as a Git-visible file`,
-            fix: `Update the \`// Prompt:\` / \`// Generated from\` header in ${codePath}:${line} to an existing .prompt.md path or remove it`,
-            rerun: 'pdd lint',
-          }),
-        });
+        brokenHeaderCandidates.push({ codePath, line, prompt: entry.prompt });
       }
     }
   }
-  if (allPrompts.length && prodCodePaths.length) {
+  for (const extraPath of extraBoundPaths) {
+    heads.push({ path: extraPath, content: getHead(extraPath) });
+  }
+
+  const ownershipPaths = extraBoundPaths.length ? [...prodCodePaths, ...extraBoundPaths].sort() : prodCodePaths;
+  const duplicateOwnerRows = [];
+  if (allPrompts.length && ownershipPaths.length) {
     const promptRows = allPrompts.map(p => ({ path: p, content: getPrompt(p) })).filter(r => typeof r.content === 'string');
-    for (const row of resolveOwners({ paths: prodCodePaths, allPaths: scopedFiles, bindings: rawBindings, heads, prompts: promptRows }).files) {
+    for (const row of resolveOwners({ paths: ownershipPaths, allPaths: scopedFiles, bindings: rawBindings, heads, prompts: promptRows }).files) {
       if (!row.owners.length) continue;
       ownersByCode.set(row.path, row.owners);
       for (const o of row.owners) { if (!ownedByPrompt.has(o)) ownedByPrompt.set(o, []); ownedByPrompt.get(o).push(row.path); }
+      const validOwners = [...new Set(row.owners.filter(o => allPromptSet.has(o)))].sort();
+      if (validOwners.length >= 2) duplicateOwnerRows.push({ path: row.path, owners: validOwners });
     }
   }
 
-  const targetPrompts = Array.isArray(promptPaths)
-    ? [...new Set(promptPaths.filter(p => typeof p === 'string').map(p => p.replace(/^\.\//, '')).filter(p => scopedSet.has(p) && p.endsWith('.prompt.md')))].sort()
-    : allPrompts;
+  // Determine reporting scope (strictly controls WHICH files are reported, never what exists in lookup index).
+  const isLegacyScoped = !hasExplicitScope && (promptPaths !== undefined || tests !== undefined);
+  const isReportingScoped = hasExplicitScope || isLegacyScoped;
+
+  const targetPrompts = hasExplicitScope
+    ? [...scope.prompts].filter(p => scopedSet.has(p) && p.endsWith('.prompt.md')).sort()
+    : (Array.isArray(promptPaths)
+      ? [...new Set(promptPaths.filter(p => typeof p === 'string').map(p => p.replace(/^\.\//, '')).filter(p => scopedSet.has(p) && p.endsWith('.prompt.md')))].sort()
+      : allPrompts);
+  const targetPromptSet = new Set(targetPrompts);
+
+  const reportCodeSet = hasExplicitScope
+    ? scope.codeFiles
+    : (isLegacyScoped
+      ? new Set(ownershipPaths.filter(p => (ownersByCode.get(p) ?? []).some(o => targetPromptSet.has(o))))
+      : null);
+
+  for (const { codePath, line, prompt } of brokenHeaderCandidates) {
+    if (reportCodeSet && !reportCodeSet.has(codePath)) continue;
+    rawFindings.push({
+      filePath: codePath, line, order: 1, code: 'broken-prompt-header', category: 'prompt ownership', defaultSeverity: 'error',
+      detail: formatTeachingDetail({
+        invariant: `Prompt header in ${codePath} references "${prompt}", which does not exist as a Git-visible file`,
+        fix: `Update the \`// Prompt:\` / \`// Generated from\` header in ${codePath}:${line} to an existing .prompt.md path or remove it`,
+        rerun: 'pdd lint',
+      }),
+    });
+  }
+
+  for (const dup of duplicateOwnerRows) {
+    if (reportCodeSet && !reportCodeSet.has(dup.path) && !dup.owners.some(o => targetPromptSet.has(o))) continue;
+    rawFindings.push({
+      filePath: dup.path, line: 1, order: 2, code: 'duplicate-owner', category: 'prompt ownership', defaultSeverity: 'warn',
+      detail: formatTeachingDetail({
+        invariant: `${dup.path} is explicitly owned by ${dup.owners.length} prompts (${dup.owners.join(', ')}); one prompt should own each file`,
+        fix: `Keep a single owning prompt for ${dup.path} by removing duplicate Prompt headers or pdd-bindings.json entries`,
+        rerun: 'pdd lint',
+      }),
+    });
+  }
 
   if (targetPrompts.length) {
     const check = findTestPromptViolations({ root: realRoot, promptPaths: targetPrompts, checkPaths: [], includeProse: true }, {
@@ -285,9 +324,11 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
     if (lintConfig.customRules.length) rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: promptPath, kind: 'prompt', rawText: content }));
   }
 
-  const targetStories = resolveTargetStories({ realRoot, scopedFiles, scopedSet, promptPaths, tests, targetPrompts });
+  const targetStories = hasExplicitScope
+    ? [...scope.stories].filter(p => scopedSet.has(p) && isLintableStoryPath(p)).sort()
+    : resolveTargetStories({ realRoot, scopedFiles, scopedSet, promptPaths, tests, targetPrompts });
   for (const storyPath of targetStories) {
-    const content = readSafeUtf8(realRoot, storyPath);
+    const content = getFull(storyPath);
     if (typeof content !== 'string') continue;
     for (const problem of lintStory(content, { path: storyPath, criteriaHygiene: true }).problems) {
       rawFindings.push({
@@ -303,16 +344,22 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
     rawFindings.push(...collectStoryUnboundCriteriaFindings({ realRoot, storyPaths: targetStories, scopedFiles, readFile: getFull, allowExplicitSubset: !requireFullStoryCriteria }));
   }
 
-  const promptFilterSet = Array.isArray(promptPaths) ? new Set(targetPrompts) : null;
-  if (!promptFilterSet && lintConfig.customRules.some(r => r.severity !== 'off' && (r.targets.has('test') || r.targets.has('all')))) {
-    for (const testPath of scopedFiles.filter(isCustomRuleTestFile)) {
+  const promptFilterSet = isReportingScoped ? targetPromptSet : null;
+  if (lintConfig.customRules.some(r => r.severity !== 'off' && (r.targets.has('test') || r.targets.has('all')))) {
+    const customTestPaths = hasExplicitScope
+      ? [...scope.testFiles].filter(p => scopedSet.has(p) && isCustomRuleTestFile(p)).sort()
+      : (isLegacyScoped ? [] : scopedFiles.filter(isCustomRuleTestFile));
+    for (const testPath of customTestPaths) {
       if (!matchesAnyCustomRule(lintConfig.customRules, 'test', testPath)) continue;
       const content = getFull(testPath);
       if (typeof content === 'string') rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: testPath, kind: 'test', rawText: content }));
     }
   }
   if (lintConfig.customRules.some(r => r.severity !== 'off' && (r.targets.has('code') || r.targets.has('all')))) {
-    for (const codePath of promptFilterSet ? prodCodePaths.filter(p => (ownersByCode.get(p) ?? []).some(o => promptFilterSet.has(o))) : prodCodePaths) {
+    const customCodePaths = reportCodeSet
+      ? prodCodePaths.filter(p => reportCodeSet.has(p))
+      : prodCodePaths;
+    for (const codePath of customCodePaths) {
       if (!matchesAnyCustomRule(lintConfig.customRules, 'code', codePath)) continue;
       const content = getFull(codePath);
       if (typeof content === 'string') rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: codePath, kind: 'code', rawText: content }));
@@ -320,14 +367,24 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
   }
 
   // 19L Multi-app product plan audit hook (0ms when product/plan.md does not exist).
-  if (tests === undefined && scopedSet.has('product/plan.md')) {
+  const deletedPrompts = hasExplicitScope
+    ? [...(scope.deletedOrRenamedOldPaths ?? [])].filter(p => p.endsWith('.prompt.md'))
+    : [];
+  const productPromptMatchSet = deletedPrompts.length
+    ? new Set([...targetPromptSet, ...deletedPrompts])
+    : targetPromptSet;
+  const runProductAudit = hasExplicitScope
+    ? (scope.productPlan || targetPrompts.length > 0 || deletedPrompts.length > 0)
+    : (tests === undefined);
+  if (runProductAudit && scopedSet.has('product/plan.md')) {
     const planText = readSafeUtf8(realRoot, 'product/plan.md');
     if (typeof planText === 'string' && planText.trim()) {
       const mapText = scopedSet.has('product/map.md') ? (readSafeUtf8(realRoot, 'product/map.md') ?? '') : '';
       const mentionsExamples = /\bexamples\b/i.test(mapText) || /\bexamples\b/i.test(planText);
       const promptFiles = allPrompts.filter(p => mentionsExamples || !EXAMPLE_DIR.test(p)).map(p => ({ path: p, content: getPrompt(p) })).filter(r => typeof r.content === 'string');
+      const filterProductByPrompt = hasExplicitScope ? !scope.productPlan : Boolean(promptFilterSet);
       for (const item of auditProductPlan({ mapText, planText, promptFiles }).findings) {
-        if (!promptFilterSet || (Array.isArray(item.relatedPrompts) && item.relatedPrompts.some(p => promptFilterSet.has(p)))) rawFindings.push({ ...item, defaultSeverity: 'warn' });
+        if (!filterProductByPrompt || (Array.isArray(item.relatedPrompts) && item.relatedPrompts.some(p => productPromptMatchSet.has(p)))) rawFindings.push({ ...item, defaultSeverity: 'warn' });
       }
     }
   }

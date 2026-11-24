@@ -121,14 +121,14 @@ test('prompt-larger-than-code skips tiny shims under the 25-line floor and flags
   );
 });
 
-test('corpus-proven Story hard errors (story-code-internals and story-missing-criteria) fail closed in lintRepoProject', t => {
+test('structural Story hard error (story-missing-criteria) fails closed while domain specs pass cleanly in lintRepoProject', t => {
   const repo = initGitRepo(t, 'pdd-core-story-err-');
   mkdirSync(join(repo, 'user_stories'), { recursive: true });
   mkdirSync(join(repo, 'pdd', 'stories'), { recursive: true });
 
   writeFileSync(
-    join(repo, 'user_stories', 'internals.md'),
-    '# Bad internals\n\nAs a shopper, I want `Uint8Array` and `0xff` bit-flips.\n\n## Acceptance criteria\n\n1. Shows "OK" and exits 0.\n',
+    join(repo, 'user_stories', 'domain-rich.md'),
+    '# Inspect opcode on macOS (Apple Silicon)\n\nAs a hardware engineer, I want `draft => published` status and opcode `0x38` AST bitmask shown for `0123456789abcdef0123456789abcdef01234567`.\n\n## Acceptance criteria\n\n1. Shows "0x38" and exits with code 0.\n',
   );
   writeFileSync(
     join(repo, 'pdd', 'stories', 'no-criteria.md'),
@@ -138,7 +138,7 @@ test('corpus-proven Story hard errors (story-code-internals and story-missing-cr
 
   const report = lintRepoProject({ root: repo });
   assert.equal(report.ok, false);
-  assert.ok(report.errors.some(e => e.includes('user_stories/internals.md') && e.includes('[story-code-internals]') && e.includes('Fix:')));
+  assert.equal(report.findings.some(f => f.path === 'user_stories/domain-rich.md'), false, `domain-rich Story must produce 0 findings: ${JSON.stringify(report.findings)}`);
   assert.ok(report.errors.some(e => e.includes('pdd/stories/no-criteria.md') && e.includes('[story-missing-criteria]') && e.includes('Fix:')));
 });
 

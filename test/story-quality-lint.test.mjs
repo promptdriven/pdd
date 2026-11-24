@@ -99,44 +99,49 @@ test('3362 lintStory accepts clean user-observable Stories, Rules to check, comm
   assert.equal(nuancedRes.ok, true, formatStoryLint(nuancedRes));
 });
 
-test('3362 lintStory flags implementation paths, code internals, raw hashes/UUIDs, generic roles and vague criteria', () => {
-  const plumbingStory = [
-    '# Validate AST bit-flips in src/validator.mjs',
+test('3362/3642 lintStory keeps structural/clarity rules and allows legitimate domain syntax without brittle regex false positives', () => {
+  const domainStory = [
+    '# Pin Apple Silicon model release and transition draft => published',
     '',
-    'As a user, I want `resolveOwners(input, ports)` to validate `prompts/cli/validator.prompt.md`, so that it works.',
+    'As a release engineer on macOS (Apple Silicon), I want to verify commit `0123456789abcdef0123456789abcdef01234567` and opcode `0x38` AST bitmask output, so that model releases stay reproducible.',
     '',
     '## Acceptance criteria',
     '',
-    '1. `lib/check.ts` masks flags with `0x1f` into a `Uint8Array` and handles errors gracefully.',
-    '2. Commit `0123456789abcdef0123456789abcdef01234567` and digest `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad` match.',
-    '3. Session `123e4567-e89b-12d3-a456-426614174000` calls `export async function run()` => `process.exit(0)` as expected.',
+    '1. Running `release promote` transitions status `draft => published` and prints header byte `0x38` on macOS (Apple Silicon).',
+    '2. Output displays pinned revision `0123456789abcdef0123456789abcdef01234567` and exits with code 0.',
     '',
-    '## What must not change',
-    '',
-    '- `components/Card.tsx` keeps rendering.',
+    '```text',
+    'status: draft => published',
+    'rev: 0123456789abcdef0123456789abcdef01234567',
+    '```',
   ].join('\n');
 
-  const res = lintStory(plumbingStory, { path: 'user_stories/plumbing.md' });
+  const cleanRes = lintStory(domainStory, { path: 'user_stories/release-promote.md' });
+  assert.equal(cleanRes.ok, true, formatStoryLint(cleanRes));
+  assert.deepEqual(cleanRes.problems, []);
+
+  const vagueRoleStory = [
+    '# Update profile',
+    '',
+    'As a user, I want profile saves, so that settings persist.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '1. Saving settings handles errors gracefully.',
+    '2. Profile loads as expected.',
+  ].join('\n');
+
+  const res = lintStory(vagueRoleStory, { path: 'user_stories/vague.md' });
   assert.equal(res.ok, false);
   const codes = new Set(res.problems.map(item => item.code));
-  for (const expected of [
-    'story-implementation-path',
-    'story-code-internals',
-    'story-raw-digest',
-    'story-generic-role',
-    'story-vague-criterion',
-  ]) {
-    assert.ok(codes.has(expected), `missing diagnostic code ${expected} in ${JSON.stringify(res.problems)}`);
-  }
-  assert.ok(res.problems.some(p => p.line === 1 && p.code === 'story-implementation-path'));
+  assert.deepEqual([...codes].sort(), ['story-generic-role', 'story-vague-criterion']);
   assert.ok(res.problems.some(p => p.line === 3 && p.code === 'story-generic-role'));
   assert.ok(res.problems.some(p => p.line === 7 && p.code === 'story-vague-criterion'));
-  assert.ok(res.problems.some(p => p.line === 8 && p.code === 'story-raw-digest'));
-  assert.ok(res.problems.some(p => p.line === 13 && p.code === 'story-implementation-path'));
+  assert.ok(res.problems.some(p => p.line === 8 && p.code === 'story-vague-criterion'));
 
   const formatted = formatStoryLint(res);
   assert.match(formatted, /^Story quality check failed:/);
-  assert.match(formatted, /user_stories\/plumbing\.md:7 \[story-vague-criterion\]/);
+  assert.match(formatted, /user_stories\/vague\.md:7 \[story-vague-criterion\]/);
   assert.match(formatted, /Rewrite the Story in user-observable terms/);
 });
 
