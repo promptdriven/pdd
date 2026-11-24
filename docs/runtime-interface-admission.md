@@ -7,8 +7,7 @@ executed behavior check. Use `pdd test STORY` for that check and inspect its rec
 
 ## Give each entry its own resources
 
-Without `resource_operations`, every entry sees every resource in its interface.
-If one entry needs a process port and another is pure, declare their scopes:
+Plain Markdown prompts synthesize per-entry resource scopes from prose. When authoring an optional explicit Runtime interface block, every entry sees every declared resource unless `resource_operations` is specified. If one entry needs a process port and another is pure, declare their scopes:
 
 ```json
 {
@@ -57,7 +56,5 @@ remain separate requirements. Admission cannot supply missing evidence for them.
 If the owning prompt deliberately leaves an operation out of its Runtime interface,
 adding fixture replies does not make that operation executable. Keep its native
 scenario vectors outside Runtime JSON test discovery and run their normal native
-tests. For example, saved-workspace evidence uses
-`node --test test/import-authorized-workspace-evidence.vectors.test.mjs` for its
-19 original cases. Those native results do not claim an AI Runtime pass or fill
+tests. Those native results do not claim an AI Runtime pass or fill
 missing resource bindings.

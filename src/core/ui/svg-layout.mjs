@@ -211,11 +211,12 @@ function promptTargets(text, fromPrompt, visibleSet) {
   return [...new Set(out)];
 }
 
-export function lintSvgLayouts({ root, files, promptPaths, appMapPaths, scenarioPaths }) {
+export function lintSvgLayouts({ root, files, promptPaths, appMapPaths, scenarioPaths, tests, includeShortDiagnostics = false }) {
   if (
     Array.isArray(promptPaths) && promptPaths.length === 0
     && Array.isArray(appMapPaths) && appMapPaths.length === 0
     && Array.isArray(scenarioPaths) && scenarioPaths.length === 0
+    && (!Array.isArray(tests) || tests.length === 0)
   ) {
     return [];
   }
@@ -303,6 +304,7 @@ export function lintSvgLayouts({ root, files, promptPaths, appMapPaths, scenario
   const promptFilter = promptPaths ? new Set(promptPaths) : null;
   const appMapFilter = appMapPaths !== undefined ? new Set(appMapPaths) : null;
   const scenarioFilter = scenarioPaths !== undefined ? new Set(scenarioPaths) : null;
+  const testFilter = tests ? new Set(tests) : null;
   const promptExists = promptPath => {
     if (typeof promptPath !== 'string' || !promptPath.endsWith('.prompt.md')) return false;
     if (visiblePromptSet.size > 0) return visiblePromptSet.has(promptPath);
@@ -343,6 +345,8 @@ export function lintSvgLayouts({ root, files, promptPaths, appMapPaths, scenario
     policy,
     promptFilter,
     scenarioFilter,
+    testFilter,
+    includeShortDiagnostics,
     visiblePromptSet,
     testJsonPaths,
     parsedTests,

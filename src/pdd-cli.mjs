@@ -112,11 +112,42 @@ async function autopilotGithub(module, name, input, ports, fallback = '') {
 }
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
+const formatRetiredNames = folders => {
+  const names = folders.map(folder => basename(folder));
+  if (names.length <= 3) return names.join(', ');
+  return `${names.slice(0, 2).join(', ')}, +${names.length - 2} more (${names.length} total)`;
+};
+const displayPath = (filePath, home) => {
+  if (!home || !filePath) return filePath;
+  const normHome = resolve(home).replace(/[\\/]+$/, '');
+  if (!normHome) return filePath;
+  const normFile = resolve(filePath);
+  if (normFile === normHome) return '~';
+  if (normFile.startsWith(`${normHome}/`) || normFile.startsWith(`${normHome}\\`)) {
+    return `~${normFile.slice(normHome.length)}`;
+  }
+  return filePath;
+};
+const canonicalFolder = folder => { try { return realpathSync(folder); } catch { return folder; } };
+const isProjectFolder = (folder, scope, cwd, home) => {
+  if (scope === 'project') return true;
+  if (scope === 'user') return false;
+  if (home && canonicalFolder(cwd) === canonicalFolder(home)) return false;
+  return [join(cwd, '.agents/skills'), join(cwd, '.codex/skills'), join(cwd, '.claude/skills')].includes(folder);
+};
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
-const staleLine = ({ found, stale, staleSkills = [] }, version, cwd) => {
+const staleLine = ({ found, scope, stale, staleSkills = [] }, version, cwd, home) => {
   const details = staleSkills.map(({ name, version, state }) => state === 'older'
     ? `${name} is ${version ?? 'unknown'}` : `${name} differs (version ${version ?? 'unknown'})`).join(', ');
-  return `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}.${details ? ` ${details}.` : ''} For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.codex/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
+  return `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}.${details ? ` ${details}.` : ''} For copies installed by pdd in user folders, run: pdd setup. For other copies, run: npx skills add promptdriven/pdd${isProjectFolder(found, scope, cwd, home) ? '' : ' -g'} -a codex -a claude-code -y`;
+};
+const retiredLine = ({ root, found, scope, retiredSkills = [] }, version, cwd, home) => {
+  const folder = found ?? root;
+  const names = retiredSkills.map(({ name, version: v }) => (v ? `${name} (${v})` : name)).join(', ');
+  const action = isProjectFolder(folder, scope, cwd, home)
+    ? `Remove these retired PDD skill folders from ${folder} and run: npx skills add promptdriven/pdd -a codex -a claude-code -y`
+    : 'Run: pdd setup';
+  return `Retired PDD skills remain in ${folder} (pdd ${version} ships only pdd): ${names}. ${action}`;
 };
 const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));
 const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '', ...PUBLIC_HELP_TEXT.promptingLines, '', ...packageLines(packageRoot).slice(1)].join('\n');
@@ -350,7 +381,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
-  if (['setup', 'version'].includes(plan.local)) {
+  if ((plan.local === 'version') || (plan.local === 'setup' && plan.options['--upgrade'] !== true)) {
     try {
       const diagFn = pathDiagnostic ?? (await import('./path-diagnostic.mjs')).pathDiagnostic;
       for (const message of diagFn({ packageRoot, cwd, env, mode: plan.local })) line(stderr, message);
@@ -495,8 +526,11 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       line(stdout, metadata.version);
       try {
         const findFn = findSkills ?? (await import('./skills-install.mjs')).findSkills;
-        for (const result of findFn({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) }))
-          if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd));
+        const versionHome = env.HOME || homedir();
+        for (const result of findFn({ packageRoot, cwd, home: versionHome, claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) })) {
+          if (result.found && (result.stale === 'older' || result.staleSkills?.some(({ state }) => state === 'older'))) line(stderr, staleLine(result, metadata.version, cwd, versionHome));
+          if (result.retiredSkills?.length) line(stderr, retiredLine(result, metadata.version, cwd, versionHome));
+        }
       } catch { /* The skills check never changes --version. */ }
       try {
         const notice = await maybeCheckReleaseNotice(releaseNotice, { currentVersion: metadata.version, isVersionCommand: true, interactive: Boolean(stderr?.isTTY), env }, releaseNoticePorts);
@@ -557,43 +591,73 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       // Laptop-wide setup: non-blocking PDD account hint, global skills sync, optional Simulator MCP registration.
       // Never probes coding-agent logins, never edits repositories, and never prompts for Autopilot settings.
       const yes = plan.options['--yes'] === true;
+      const upgrade = plan.options['--upgrade'] === true;
       const interactive = Boolean(confirm) || Boolean(stdin?.isTTY && stdout?.isTTY);
       let code = 0;
-      const account = checkPddAccountNonBlocking(env);
-      if (account.connected) line(stdout, 'GitHub CLI (gh) sign-in detected (for promptdriven.ai).');
-      else line(stdout, 'GitHub CLI (gh) is not signed in — run `gh auth login` or visit https://promptdriven.ai/login (continuing setup).');
+      if (!upgrade) {
+        const account = checkPddAccountNonBlocking(env);
+        if (account.connected) line(stdout, 'GitHub CLI (gh) sign-in detected (for promptdriven.ai).');
+        else line(stdout, 'GitHub CLI (gh) is not signed in — run `gh auth login` or visit https://promptdriven.ai/login (continuing setup).');
+      }
+      const setupHome = env.HOME || homedir();
+      const reportedStaleRoots = new Set();
       try {
-        const skillsFn = setupSkills ?? (await import('./skills-install.mjs')).setupSkills;
+        const skillsMod = setupSkills ? null : await import('./skills-install.mjs');
+        const skillsFn = setupSkills ?? skillsMod.setupSkills;
         const skillOpts = {
           packageRoot,
           cwd,
-          home: env.HOME || homedir(),
+          home: setupHome,
           claudeConfigDir: env.CLAUDE_CONFIG_DIR,
           env,
           ...(!setupSkills && env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
           ...(plan.options['--skills-dir'] !== undefined ? { skillsDir: plan.options['--skills-dir'] } : {}),
         };
+        const showPath = folder => displayPath(folder, setupHome);
         for (const result of skillsFn(skillOpts)) {
+          if (result.removed?.length) line(stdout, `Removed retired PDD skills from ${showPath(result.root)}: ${formatRetiredNames(result.removed)}`);
           if (result.pluginManaged) {
-            if (result.removed?.length) line(stdout, `Removed retired PDD skills from ${result.root}: ${skillNames(result.removed)}`);
-            line(stdout, `PDD skills for ${result.agent} are managed by an installed plugin (${result.found}). Skipping duplicate copy.`);
+            if (!upgrade) line(stdout, `PDD skills for ${result.agent} are managed by an installed plugin (${showPath(result.found)}). Skipping duplicate copy.`);
             if (result.error) { line(stderr, `pdd setup: the PDD skills could not be cleaned in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
             continue;
           }
-          if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
+          if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${showPath(result.root)}: ${skillNames(result.updated)}`);
           if (result.found && result.stale) {
+            reportedStaleRoots.add(canonicalFolder(result.found));
             const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
-            line(stdout, staleLine(result, version, cwd));
-          } else if (result.found) line(stdout, `PDD skills found in ${result.found}`);
-          else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${result.root}: ${skillNames(result.installed)}`);
+            line(stdout, staleLine(result, version, cwd, setupHome));
+          } else if (result.found && !upgrade) line(stdout, `PDD skills found in ${showPath(result.found)}`);
+          else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${showPath(result.root)}: ${skillNames(result.installed)}`);
           if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
+        }
+        if (upgrade && !setupSkills && plan.options['--skills-dir'] === undefined) {
+          const findFn = findSkills ?? skillsMod?.findSkills;
+          if (typeof findFn === 'function') {
+            try {
+              const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
+              const seenExtra = new Set();
+              for (const row of findFn({ packageRoot, cwd, home: setupHome, claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) })) {
+                const folder = row.found ?? row.root;
+                if (!folder) continue;
+                const key = canonicalFolder(folder);
+                if (row.found && (row.stale === 'older' || row.staleSkills?.some(({ state }) => state === 'older')) && !reportedStaleRoots.has(key) && !seenExtra.has(`stale:${key}`)) {
+                  seenExtra.add(`stale:${key}`);
+                  line(stdout, staleLine(row, version, cwd, setupHome));
+                }
+                if (row.retiredSkills?.length && !seenExtra.has(`retired:${key}`)) {
+                  seenExtra.add(`retired:${key}`);
+                  line(stdout, retiredLine(row, version, cwd, setupHome));
+                }
+              }
+            } catch { /* Read-only post-upgrade discovery never fails setup --upgrade. */ }
+          }
         }
       } catch (error) { line(stderr, `pdd setup: skills sync failed.${reason(error)}`); code = 1; }
       try {
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
-        if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm: interactive ? confirm : undefined, interactive, yes })) code = 1;
+        if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm: interactive ? confirm : undefined, interactive, yes, upgradeOnly: upgrade })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
-      if (code === 0) line(stdout, 'Done! Use /pdd in Claude Code or $pdd in Codex. Run `pdd init` inside a repo to add the 4-line PDD block.');
+      if (code === 0 && !upgrade) line(stdout, 'Done! Use /pdd in Claude Code or $pdd in Codex. Run `pdd init` inside a repo to add the 4-line PDD block.');
       return code;
     }
     case 'init': {

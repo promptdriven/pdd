@@ -204,7 +204,7 @@ export function lintAppMaps({
     if (appMapFilter && !appMapFilter.has(mapPath)) continue;
     if (appMapParseErrors.has(mapPath)) {
       if (appMapFilter || !promptFilter) {
-        const text = `Warning: ${mapPath}: app-map.json is not valid JSON; fix syntax and set "schema_version": "prompt-runtime.app-map.v1".`;
+        const text = `Warning: ${mapPath}: app-map.json is not valid JSON; fix syntax (omit "schema_version" for compact app-map.json or set "schema_version": "prompt-runtime.app-map.v1").`;
         warnings.push({ key: `${mapPath}\0mapjson`, text });
       }
       continue;
