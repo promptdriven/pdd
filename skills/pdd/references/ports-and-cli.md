@@ -12,11 +12,11 @@ Inject outside-world boundaries (databases, filesystem, HTTP, clocks, randomness
 
 | Outside resource | Binding `action` | Key config fields |
 |---|---|---|
-| Key-value store | `key-value.get` / `key-value.put` | `world_pointer`, `key_argument_pointer`, `value_argument_pointer`, `result_template`, `result_value_pointer` |
+| Key-value store | `key-value.get` / `key-value.put` | `world_pointer`, `key_argument_pointer`, `value_argument_pointer`, `item_key_pointer` (`null`), `item_value_pointer` (`null`), `result_template`, `result_value_pointer` |
 | Record list | `collection.get` / `collection.get-or-null` / `collection.merge` | `world_pointer`, `key_argument_pointer`, `value_argument_pointer`, `item_key_pointer`, `item_value_pointer`, `result_template`, `result_value_pointer` |
 | SQL / table store | `sql.execute` | `world_pointer`, `statement`, `result_mode` (`"rows"`), `result_template`, `result_value_pointer` |
 | Blob / UTF-8 files | `blob.read` / `blob.write` / `blob.stat` | `world_pointer`, `path_argument_pointer`, `content_argument_pointer`, `result_template`, `result_value_pointer` |
-| Deterministic SHA-256 | `compute` (`compute.hash_utf8`, `compute.hash_json`) | `result_template: {"value": null}`, `result_value_pointer: "/value"` |
+| Deterministic SHA-256 | `compute` (keys `compute.hash_utf8`, `compute.hash_json`) | `result_template: {"value": null}`, `result_value_pointer: "/value"` |
 | Fixed / varying service | `fixture.lookup` | `world_pointer`, `cases: [{args, call_index, result}]`, `result_template: null`, `result_value_pointer: ""` |
 | Write-only / error fake | `port.write` | `world_pointer`, `result_template` |
 
@@ -51,7 +51,7 @@ Inject outside-world boundaries (databases, filesystem, HTTP, clocks, randomness
 
 ### Peer calls and per-step failure overrides
 
-- Link peer `.prompt.md` files under `## Dependencies` with relative Markdown links; assert peer call counts with `["calls", "internal:<peer>", "=", 1]`.
+- Link peer `.prompt.md` files under `## Dependencies` with relative Markdown links; assert peer call counts with `["calls", "internal:<peer>", "=", 1]` where `<peer>` is the prompt filename stem without `.prompt.md`.
 - To inject a failure on one step while other steps call the real peer prompt, use step-level `"simulation_overrides"` (`[{"operation": "peer.op", "criterion_id": "1", "failure_quote": "<un-negated phrase from criterion>", "reason": "...", "binding": {"action": "port.write"|"fixture.lookup", ...}}]`).
 
 ## 3. CLI programs and `pdd mcp` Prompt Interpreter tools

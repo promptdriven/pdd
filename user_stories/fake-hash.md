@@ -1,7 +1,7 @@
 # hash
 
-I can check hash with a deterministic outside world.
+As a developer testing a fingerprinting module, I want to hash exact UTF-8 input deterministically, so that the digest matches standard SHA-256 output.
 
 ## Acceptance criteria
 
-1. The fingerprint of abc is ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.
+1. The fingerprint of "abc" returns its lowercase hexadecimal SHA-256 digest without modifying the input bytes.
