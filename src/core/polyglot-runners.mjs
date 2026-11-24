@@ -66,19 +66,22 @@ export function resolvePytestBinary(root) {
  */
 export function buildRunnerEnv(kind, root, baseEnv = process.env) {
   const env = { ...(baseEnv ?? {}) };
-  if (normalizeRunnerKind(kind) === 'pytest' && typeof root === 'string' && root.trim()) {
-    const srcDir = join(root, 'src');
-    try {
-      const st = lstatSync(srcDir);
-      if (st.isDirectory() && !st.isSymbolicLink()) {
-        const cur = typeof env.PYTHONPATH === 'string' && env.PYTHONPATH.trim() ? env.PYTHONPATH.trim() : '';
-        const parts = cur ? cur.split(delimiter).filter(Boolean) : [];
-        if (!parts.includes('src') && !parts.includes(srcDir)) {
-          env.PYTHONPATH = cur ? `src${delimiter}${cur}` : 'src';
+  if (normalizeRunnerKind(kind) === 'pytest') {
+    env.PYTHONDONTWRITEBYTECODE = '1';
+    if (typeof root === 'string' && root.trim()) {
+      const srcDir = join(root, 'src');
+      try {
+        const st = lstatSync(srcDir);
+        if (st.isDirectory() && !st.isSymbolicLink()) {
+          const cur = typeof env.PYTHONPATH === 'string' && env.PYTHONPATH.trim() ? env.PYTHONPATH.trim() : '';
+          const parts = cur ? cur.split(delimiter).filter(Boolean) : [];
+          if (!parts.includes('src') && !parts.includes(srcDir)) {
+            env.PYTHONPATH = cur ? `src${delimiter}${cur}` : 'src';
+          }
         }
+      } catch {
+        // no src/ dir
       }
-    } catch {
-      // no src/ dir
     }
   }
   return env;

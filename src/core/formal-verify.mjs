@@ -973,6 +973,9 @@ export function verifyFormalMutationControl(
         if (rel === '.git' || rel.startsWith('.git/')) return false;
         if (rel === 'node_modules' || rel.startsWith('node_modules/')) return false;
         if (rel === '.venv' || rel.startsWith('.venv/') || rel === 'venv' || rel.startsWith('venv/')) return false;
+        const segments = rel.split('/');
+        if (segments.some(seg => seg === '__pycache__' || seg === '.pytest_cache' || seg === '.mypy_cache' || seg === '.ruff_cache')) return false;
+        if (/\.py[co]$/i.test(rel)) return false;
         return true;
       },
     });

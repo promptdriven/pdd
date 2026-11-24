@@ -322,7 +322,13 @@ test('Test B (Python live): real zero-dep Python formal test passes pdd prove wi
   assert.equal(proved.receipt.formal.files[0].passed, 1);
   assert.deepEqual(proved.receipt.formal.files[0].importedProductionModules, ['src/calc.py']);
 
-  // Real Python mutation control!
+  // Real Python mutation control (even when stale __pycache__/*.pyc exists from the exact same second with identical file length)!
+  if (HAS_PYTEST) {
+    const startSec = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === startSec) { /* align to fresh second boundary */ }
+    writeFileSync(join(repo, 'src', 'calc.py'), 'def add(a: int, b: int) -> int:\n    return int(a) + int(b)\n\ndef clamp(v: int, lo: int, hi: int) -> int:\n    return min(hi, max(lo, v))\n');
+    execFileSync('pytest', ['-q', 'tests/test_formal_calc.py'], { cwd: repo, env: { ...process.env, PYTHONPATH: 'src' } });
+  }
   const killed = verifyFormalMutationControl({
     root: repo,
     targetFile: 'src/calc.py',
@@ -330,7 +336,7 @@ test('Test B (Python live): real zero-dep Python formal test passes pdd prove wi
     formalFiles: ['tests/test_formal_calc.py'],
   });
   assert.equal(killed.executed, true);
-  assert.equal(killed.failedOnMutation, true);
+  assert.equal(killed.failedOnMutation, true, killed.summary);
   assert.equal(killed.syntaxOnlyCrash, false);
 
   // Fake standalone Python spec model (commented-out import + docstring) MUST classify as proved_spec_model!
