@@ -24,15 +24,7 @@ The AI cannot compute a hash. Declare a compute resource with hash_json or hash_
 See [selected interface admission](runtime-interface-admission.md) for partial
 scope, entry-specific resources, process ports and refusal locations.
 
-Factories, constructors and objects of methods can bind through Runtime interface v2:
-set `schema_version` to `prompt-runtime.interface.v2`. Declare `instance_types` rows with
-`name` and `resource`, where the resource is a declared write-access `collection`.
-A factory or method entry declares `instance` with `kind` (`factory` or `method`), `type`
-and `path`. The factory path selects its result handle; the method path selects its input
-handle. The interpreter issues opaque string handles and keeps the instance state in the
-bound collection. Preserve the public factory and method contracts when declaring these
-transports. A `copy_out` list of `path` and `post_schema` rows declares observable updates
-to selected logical input values when the contract requires them.
+Factories, constructors and objects of methods can bind through opaque string handles and a write-access `collection` resource (for example `instances.store` and `instances.load` in `examples/fakes/factory.prompt.md`). Describe the factory and method contracts in plain Markdown so the interpreter synthesizes the bindings on demand; explicit `prompt-runtime.interface.v2` blocks (`instance_types`, `instance`, and optional `copy_out`) remain supported when declared. Preserve the public factory and method contracts when declaring these transports.
 
 Put injected I/O and callbacks behind declared `port` operations. A `port.write` simulation
 records arguments in the scenario world and returns the scenario-declared result. Bind
@@ -64,5 +56,3 @@ For a submitted run, keep the server's accounting result. If it reports unknown 
 incomplete accounting, a raw `provider_calls: 0` does not prove zero cost. Keep the run's call
 ceiling reserved until complete evidence resolves it; do not resubmit the same run to obtain a
 number. Share its report with the PDD team.
-
-The runtime-slots snapshot interface binds the actual files.listRecords port. Supplied records can establish listing order and preserved fields. Local exclusive-create races, process death, crash cleanup, private file permissions and CLI dispatch require native tests; no snapshot replay establishes those effects. See [selected interface admission](runtime-interface-admission.md).

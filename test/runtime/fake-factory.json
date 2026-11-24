@@ -1,12 +1,5 @@
 {
-  "schema_version": "prompt-runtime.program-scenario.v1",
-  "story_path": "user_stories/fake-factory.md",
-  "criteria": [
-    {
-      "id": "AC1",
-      "text": "A greeter made with Hello followed by a space remembers it and greets Ada as Hello Ada."
-    }
-  ],
+  "entry_path": "examples/fakes/factory.prompt.md",
   "initial_world": {
     "instances": []
   },
@@ -36,51 +29,33 @@
       "result_value_pointer": "/config"
     }
   },
-  "context": [],
   "steps": [
     {
-      "step_id": "create",
-      "entry_path": "examples/fakes/factory.prompt.md",
-      "operation": "createGreeter",
+      "id": "create",
+      "op": "createGreeter",
       "input": {
         "prefix": "Hello "
       },
-      "checks": [
-        {
-          "criterion_id": "AC1",
-          "target": "world",
-          "path": "/instances/0/config",
-          "op": "equals",
-          "value": {
-            "prefix": "Hello "
-          }
-        }
-      ],
-      "model": "gpt-6.1-sol"
+      "checks": {
+        "1": [
+          ["world", "/instances/0/config", "=", {"prefix": "Hello "}]
+        ]
+      }
     },
     {
-      "step_id": "greet",
-      "entry_path": "examples/fakes/factory.prompt.md",
-      "operation": "greet",
+      "id": "greet",
+      "op": "greet",
       "input": {
         "handle": {
-          "$step_result": {
-            "step_id": "create",
-            "path": "/handle"
-          }
+          "$step": "create#/handle"
         },
         "name": "Ada"
       },
-      "checks": [
-        {
-          "criterion_id": "AC1",
-          "target": "result",
-          "path": "/text",
-          "op": "equals",
-          "value": "Hello Ada"
-        }
-      ],
-      "model": "gpt-6.1-sol"
+      "checks": {
+        "1": [
+          ["result", "/text", "=", "Hello Ada"]
+        ]
+      }
     }
   ]
 }
