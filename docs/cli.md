@@ -147,25 +147,32 @@ Choose one scope:
   working tree.
 - Pass `--all` to inspect all prompt-mapped files in the repository.
 - Omit all scope flags to inspect staged, unstaged, and untracked non-ignored
-  changes in the current working tree (automatically widening to `--branch` or
-  `--all` on clean committed trees when `--check` runs).
+  changes in the current working tree (automatically widening to `--branch` on
+  clean committed feature branches, or to `--all` during `--check` whenever no
+  owned modules or prompts are in scope).
 
 `pdd update` is strictly read-only and writes zero sidecar files or prompt
 edits. It maps each touched file through `pdd owner` (`pdd-bindings.json` and
 `Prompt:` / `Generated from` headers), groups owned modules by owning
 `.prompt.md` with `+added/-removed` diff stats and changed exported/top-level
-symbols, and lists touched unowned files separately without fabricating
+symbols, and lists genuine unowned product source files separately (excluding
+tests, docs, user stories, prompts, dotfiles/dot-directories, configs,
+manifests, lockfiles, and configured workspace ignores) without fabricating
 ownership.
 
-- Default: print each affected prompt's status (`current`, `prompt-stale`,
-  `changed`, or `deleted`), diff stats, and changed symbols without writing
-  files; exits 0. Use `pdd status --changed` for the same overview alongside the
-  Feature Map.
-- `--check`: read-only verification that exits 0 when every touched owned
-  module is `current` and exits 1 when any touched owned module has changes or a
-  stale prompt header.
+- Default: print each affected prompt's status (`current`, `reconciled`,
+  `changed`, `prompt-stale`, or `deleted`), diff stats, changed symbols, and
+  advisory reminders for code-only edits without writing files; exits 0. Use
+  `pdd status --changed` for the same overview alongside the Feature Map.
+- `--check`: read-only structural check that exits 1 only on broken ownership
+  links (a missing or unreadable owning prompt, invalid prompt path, misplaced
+  test prompt, dangling deleted binding, or a legacy `(sha256: ...)` header
+  whose hash disagrees with its prompt). Path-only `Prompt:` headers,
+  `pdd-bindings.json` bindings, co-changed code and prompt pairs (`reconciled`),
+  and code-only edits (`changed`, printed with an advisory reminder to verify
+  the owning prompt) exit 0.
 - `--json`: emit machine-readable `pdd.update-sync.v1` JSON (`scope`,
-  `prompts`, `modules`, `unowned`, `ok`).
+  `prompts`, `modules`, `unowned`, `drifted`, `reminders`, `updated`, `ok`).
 
 Path traversal (`..`), leading-`-` options/ranges, symlinks, secret-looking
 paths (`.env`, credentials), malformed `pdd-bindings.json`, and binary owned or
