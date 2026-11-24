@@ -259,7 +259,10 @@ process.exit(res.status ?? 1);
   );
   assert.equal(hopRes.status, 0, `stdout:\n${hopRes.stdout}\nstderr:\n${hopRes.stderr}`);
   assert.doesNotMatch(hopRes.stderr, /ENOENT/);
-  assert.match(hopRes.stdout, new RegExp(`Upgraded pdd ${CANDIDATE_VERSION.replace(/\./g, '\\.')} -> 9\\.9\\.9 \\(v9\\.9\\.9\\)\\.`));
+  assert.ok(
+    hopRes.stdout.includes(`Upgraded pdd ${CANDIDATE_VERSION} -> 9.9.9 (v9.9.9).`),
+    `unexpected upgrade stdout:\n${hopRes.stdout}`,
+  );
   assert.match(hopRes.stdout, /Installed 1 PDD skill to .*\.agents\/skills: pdd-next/);
   assert.match(hopRes.stdout, /Removed retired PDD skills from .*\.agents\/skills: pdd/);
   assert.equal(existsSync(join(home, '.agents/skills/pdd-next/SKILL.md')), true, '9.9.9 pdd-next installed by newly installed binary');
