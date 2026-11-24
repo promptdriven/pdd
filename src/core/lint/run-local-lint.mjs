@@ -122,11 +122,24 @@ export function runLocalLint(
   if (includeSvg && repoFiles.length > 0) {
     try {
       const lintSvg = ports.lintSvgLayouts ?? defaultLintSvgLayouts;
-      const rawSvg = lintSvg({ root, files: repoFiles, ...(promptPaths !== undefined ? { promptPaths } : {}) });
+      const rawSvg = lintSvg({
+        root,
+        files: repoFiles,
+        ...(promptPaths !== undefined ? { promptPaths } : {}),
+        ...(tests !== undefined ? { tests } : {}),
+        includeShortDiagnostics: true,
+      });
       if (Array.isArray(rawSvg)) {
         for (const entry of rawSvg) {
           if (typeof entry === 'string' && entry.includes('compact scenario compile failed [')) {
-            scenarioErrors.push(entry.replace(/^Warning:\s*/, 'Error: scenario: '));
+            const m = entry.match(/^Warning:\s*([^\s:(]+)(?:\s*\(([^)]+)\))?:\s*(compact scenario compile failed \[[^\]]+\]:\s*[\s\S]*)$/);
+            if (m) {
+              const [, filePath, section, detail] = m;
+              const locDetail = section ? `(${section}) ${detail}` : detail;
+              scenarioErrors.push(`Error: scenario: ${filePath}:1 [compact-scenario-compile] ${locDetail}\n  Fix: Fix the compact scenario structure or operator in ${filePath} (see stories.md in the pdd skill or run \`pdd help prompting\`).\n  Rerun: pdd lint`);
+            } else {
+              scenarioErrors.push(entry.replace(/^Warning:\s*/, 'Error: scenario: '));
+            }
           } else {
             svgWarnings.push(entry);
           }

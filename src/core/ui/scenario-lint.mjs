@@ -1,7 +1,7 @@
 // Generated from prompts/cli/svg-layout.prompt.md.
 // Scenario schema_version, simulation/override alignment, and native-only dependency preflight.
 import { dirname, relative, resolve, sep } from 'node:path';
-import { compileScenario, isShortScenarioDoc, needsScenarioCompile, V1_SCENARIO_SCHEMA } from '../../scenario-compile.mjs';
+import { compileScenario, isShortScenarioDoc, needsScenarioCompile, SHORT_SCENARIO_SCHEMA, V1_SCENARIO_SCHEMA } from '../../scenario-compile.mjs';
 import { workspace } from '../../shared/workspace-policy.mjs';
 import { hasPointer, isFixturePath, setPointer } from './app-map-lint.mjs';
 import { escaped } from './svg-controls.mjs';
@@ -83,6 +83,8 @@ export function lintScenarioFiles({
   files,
   policy,
   promptFilter,
+  testFilter = null,
+  includeShortDiagnostics = false,
   visiblePromptSet,
   testJsonPaths,
   parsedTests,
@@ -155,15 +157,23 @@ export function lintScenarioFiles({
     }
     let doc = cached.doc;
     const isNativeCaseDoc = isCasesJson || Array.isArray(doc?.cases) || /^pdd\.native-cases\./.test(String(doc?.schema_version ?? ''));
+    const isCandidateShortScenario = !isFixtureJson && !isNativeCaseDoc && doc && typeof doc === 'object' && !Array.isArray(doc) && (
+      pairedWithStory
+      || typeof doc.story_path === 'string'
+      || doc.schema_version === SHORT_SCENARIO_SCHEMA
+      || typeof doc.entry_path === 'string'
+      || typeof doc.entry_paths === 'string'
+      || (Array.isArray(doc.entry_paths) && doc.entry_paths.some(ep => typeof ep === 'string' && ep.length > 0))
+      || (Array.isArray(doc.steps) && doc.steps.some(s => s && typeof s === 'object' && (
+        typeof s.entry_path === 'string'
+        || typeof s.op === 'string'
+        || typeof s.operation === 'string'
+        || typeof s.call === 'string'
+        || (s.checks !== undefined && s.checks !== null)
+      )))
+    );
     let shortCompileHandled = false;
-    if (
-      !isFixtureJson &&
-      !isNativeCaseDoc &&
-      doc &&
-      typeof doc === 'object' &&
-      !Array.isArray(doc) &&
-      needsScenarioCompile(doc)
-    ) {
+    if (isCandidateShortScenario && needsScenarioCompile(doc)) {
       shortCompileHandled = isShortScenarioDoc(doc);
       const targetStoryPath = typeof doc.story_path === 'string' && doc.story_path ? doc.story_path : pairedStoryPath;
       let storySource = null;
@@ -172,18 +182,35 @@ export function lintScenarioFiles({
       }
       const compiled = compileScenario(doc, { path: testFile, storyPath: pairedStoryPath, storySource });
       const candidateSteps = Array.isArray(doc.steps) ? doc.steps : [];
-      const matchesShortFilter = !promptFilter
-        || (typeof doc.entry_path === 'string' && promptFilter.has(doc.entry_path))
-        || candidateSteps.some(s => typeof s?.entry_path === 'string' && promptFilter.has(s.entry_path));
+      const shortPromptMatch = promptFilter && promptFilter.size > 0 && (
+        (typeof doc.entry_path === 'string' && promptFilter.has(doc.entry_path))
+        || (typeof doc.entry_paths === 'string' && promptFilter.has(doc.entry_paths))
+        || (Array.isArray(doc.entry_paths) && doc.entry_paths.some(ep => typeof ep === 'string' && promptFilter.has(ep)))
+        || candidateSteps.some(s => {
+          if (typeof s?.entry_path === 'string' && promptFilter.has(s.entry_path)) return true;
+          if (typeof s?.call === 'string') {
+            const idx = s.call.indexOf(':');
+            if (idx > 0 && promptFilter.has(s.call.slice(0, idx))) return true;
+          }
+          return false;
+        })
+      );
+      const shortTestMatch = testFilter && testFilter.size > 0 && (
+        testFilter.has(testFile)
+        || (pairedStoryPath !== null && testFilter.has(pairedStoryPath))
+        || (typeof doc.story_path === 'string' && testFilter.has(doc.story_path))
+      );
+      const hasAnyFilter = Boolean(promptFilter || testFilter);
+      const matchesShortFilter = !hasAnyFilter || Boolean(shortTestMatch) || Boolean(shortPromptMatch);
       if (compiled.refusal) {
-        if (matchesShortFilter) {
+        if (includeShortDiagnostics && matchesShortFilter) {
           const r = compiled.refusal;
           const loc = r.section ? ` (${r.section})` : '';
           const text = `Warning: ${testFile}${loc}: compact scenario compile failed [${r.code}]: ${r.message}`;
           warnings.push({ key: `${testFile}\0shortrefusal\0${r.code}`, text });
         }
       } else {
-        if (matchesShortFilter) {
+        if (includeShortDiagnostics && matchesShortFilter) {
           for (const w of Array.isArray(compiled.warnings) ? compiled.warnings : []) {
             const msg = typeof w?.message === 'string' && w.message.trim() ? w.message.trim() : null;
             if (msg) warnings.push({ key: `${testFile}\0shortwarn\0${msg}`, text: msg });
