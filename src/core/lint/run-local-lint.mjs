@@ -3,10 +3,9 @@
 // 100% offline (<1s) CLI handler for `local: 'lint'` (0 AI, 0 network, 0 batch-state writes, PDD files only + --diff).
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { posix } from 'node:path';
-import { isLintableStoryPath } from '../../story-lint.mjs';
 import { lintSvgLayouts as defaultLintSvgLayouts } from '../../svg-layout.mjs';
 import { gitFiles } from '../../shared/git-context.mjs';
+import { resolveLintScope } from './lint-scope.mjs';
 import { loadBaseTrustedLintCommands } from './project-config.mjs';
 import { lintRepoProject, runConfiguredLintCommands } from './project-lint.mjs';
 import { runDiffSpotlight } from './test-inventory.mjs';
@@ -25,41 +24,9 @@ function resolveGitRoot(cwd) {
   }
 }
 
-function resolveScopedTargets(allFiles, words = []) {
-  if (!Array.isArray(words) || !words.length) return { promptPaths: undefined, tests: undefined, unmatched: [] };
-  const fileSet = new Set(allFiles);
-  const prompts = new Set();
-  const tests = new Set();
-  const unmatched = [];
-
-  for (const raw of words) {
-    const word = String(raw ?? '').trim().replace(/^\.\//, '');
-    if (!word) continue;
-    let matchedAny = false;
-    if (fileSet.has(word)) {
-      if (word.endsWith('.prompt.md')) { prompts.add(word); matchedAny = true; }
-      else if (isLintableStoryPath(word) || word.endsWith('.json')) { tests.add(word); matchedAny = true; }
-    }
-    if (!matchedAny) {
-      const slug = word.replace(/\.md$/i, '').replace(/\.json$/i, '');
-      for (const f of allFiles) {
-        if (isLintableStoryPath(f) && posix.basename(f, '.md') === slug) { tests.add(f); matchedAny = true; }
-        if (/^(?:tests?|__tests__)\/.*\.json$/i.test(f) && posix.basename(f, '.json') === slug) { tests.add(f); matchedAny = true; }
-        if (f.endsWith('.prompt.md') && posix.basename(f, '.prompt.md') === slug) { prompts.add(f); matchedAny = true; }
-      }
-    }
-    if (!matchedAny) unmatched.push(word);
-  }
-  return {
-    promptPaths: prompts.size ? [...prompts].sort() : (tests.size ? [] : undefined),
-    tests: tests.size ? [...tests].sort() : undefined,
-    unmatched,
-  };
-}
-
 /**
  * Run deterministic offline PDD lint with 0 network calls, 0 AI calls, and 0 batch-state writes.
- * Clean repos print `Local lint: 0 errors, 0 warnings. (0 AI/network calls)` to stdout with empty stderr.
+ * Clean repos print `Local lint: 0 errors, 0 warnings. (0 AI calls, 0 network calls)` to stdout with empty stderr.
  */
 export function runLocalLint(
   {
@@ -92,24 +59,87 @@ export function runLocalLint(
     return 2;
   }
 
-  const { promptPaths, tests, unmatched } = resolveScopedTargets(repoFiles, words);
-  if (unmatched.length > 0) {
-    const problems = unmatched.map(w => `No prompt, Story, or test matched "${w}". Run \`pdd files\` to list available Stories and prompts.`);
-    const summaryLine = `Local lint: ${problems.length} unmatched target${problems.length === 1 ? '' : 's'}. (0 AI calls, 0 network calls)`;
-    if (json) stdout.write(`${JSON.stringify({ schema_version: 'pdd.local-lint.v1', ok: false, exit_code: 2, local_only: true, summary_line: summaryLine, problems, unmatched, warnings: [], findings: [] }, null, 2)}\n`);
-    else { for (const p of problems) stderr.write(`${p}\n`); }
-    return 2;
-  }
+  const isDiffRequested = diff !== undefined && diff !== false;
   const resolvedDiffBase = typeof diff === 'string' && diff.trim()
     ? diff.trim()
     : (typeof baseRef === 'string' && baseRef.trim() ? baseRef.trim() : undefined);
-  const enforceBaseTrust = Boolean(diff !== undefined && diff !== false && !trustWorkingTree);
+  const enforceBaseTrust = Boolean(isDiffRequested && !trustWorkingTree);
+  const targetWords = Array.isArray(words) ? words : [];
 
+  // 1. In --diff mode, compute the Git diff FIRST so base-unavailable fails closed and working-tree deletions are stripped.
+  let diffResult = null;
+  if (isDiffRequested) {
+    diffResult = (ports.runDiffSpotlight ?? runDiffSpotlight)({ cwd: root, baseRef: resolvedDiffBase });
+    if (diffResult && diffResult.baseAvailable === false) {
+      const problems = diffResult.errors.map(e => e.formatted);
+      const warnings = diffResult.advisories.map(a => `Warning: ${a}`);
+      const errLabel = `${problems.length} ${problems.length === 1 ? 'error' : 'errors'}`;
+      const warnLabel = `${warnings.length} ${warnings.length === 1 ? 'warning' : 'warnings'}`;
+      const summaryLine = `Local lint: ${errLabel}, ${warnLabel}. (0 AI calls, 0 network calls)`;
+      const payload = {
+        schema_version: 'pdd.local-lint.v1',
+        ok: false,
+        exit_code: 1,
+        local_only: true,
+        summary_line: summaryLine,
+        problems,
+        warnings,
+        findings: [],
+        diff: diffResult,
+      };
+      if (json) {
+        stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+        return 1;
+      }
+      for (const warn of warnings) stdout.write(`${warn}\n`);
+      for (const err of problems) stderr.write(`${err}\n`);
+      stdout.write(`${summaryLine}\n`);
+      return 1;
+    }
+  }
+
+  // 2. Build ONE upfront LintScope separating full-repo lookup index from reporting scope.
+  const scope = resolveLintScope({
+    root,
+    cwd,
+    files: repoFiles,
+    words: targetWords,
+    diffEntries: targetWords.length === 0 && diffResult && Array.isArray(diffResult.changedEntries) ? diffResult.changedEntries : null,
+    touchedFiles: targetWords.length === 0 && diffResult && !Array.isArray(diffResult.changedEntries) && Array.isArray(diffResult.touchedFiles) ? diffResult.touchedFiles : null,
+    extraDeletedPaths: targetWords.length > 0 && diffResult && Array.isArray(diffResult.deletedPaths) ? diffResult.deletedPaths : null,
+    workspaceRoot,
+    workspacePolicy,
+  });
+
+  if (scope.unmatched.length > 0) {
+    const problems = scope.unmatched.map(w => `No prompt, Story, or test matched "${w}". Run \`pdd files\` to list available Stories and prompts.`);
+    const summaryLine = `Local lint: ${problems.length} unmatched target${problems.length === 1 ? '' : 's'}. (0 AI calls, 0 network calls)`;
+    if (json) stdout.write(`${JSON.stringify({ schema_version: 'pdd.local-lint.v1', ok: false, exit_code: 2, local_only: true, summary_line: summaryLine, problems, unmatched: scope.unmatched, warnings: [], findings: [] }, null, 2)}\n`);
+    else { for (const p of problems) stderr.write(`${p}\n`); }
+    return 2;
+  }
+
+  // Combined `--diff` + explicit targets: re-run diff spotlight strictly scoped to the resolved target closure.
+  if (isDiffRequested && targetWords.length > 0) {
+    const scopePaths = new Set([
+      ...scope.directFiles,
+      ...scope.prompts,
+      ...scope.stories,
+      ...scope.scenarios,
+      ...scope.codeFiles,
+      ...scope.testFiles,
+      ...scope.appMaps,
+    ]);
+    diffResult = (ports.runDiffSpotlight ?? runDiffSpotlight)({ cwd: root, baseRef: resolvedDiffBase, filterPaths: scopePaths });
+  }
+
+  const effectiveFiles = scope.effectiveFiles;
+
+  // 3. Run deterministic project lint strictly scoped while keeping full-repo lookup index intact.
   const project = lintRepoProject({
     root,
-    files: repoFiles,
-    promptPaths,
-    tests,
+    files: effectiveFiles,
+    scope,
     config,
     workspaceRoot,
     workspacePolicy,
@@ -117,20 +147,25 @@ export function runLocalLint(
     trustBaseRef: resolvedDiffBase,
   });
 
+  // 4. Run SVG/app-map/scenario layout checks strictly scoped while keeping full-repo lookup index intact.
   const svgWarnings = [];
-  if (includeSvg && repoFiles.length > 0) {
+  if (includeSvg && effectiveFiles.length > 0) {
     try {
       const lintSvg = ports.lintSvgLayouts ?? defaultLintSvgLayouts;
-      const rawSvg = lintSvg({ root, files: repoFiles, ...(promptPaths !== undefined ? { promptPaths } : {}) });
+      const svgArgs = scope.fullRepo
+        ? { root, files: effectiveFiles }
+        : {
+            root,
+            files: effectiveFiles,
+            promptPaths: [...scope.prompts].sort(),
+            appMapPaths: [...scope.appMaps].sort(),
+            scenarioPaths: [...scope.scenarios].sort(),
+          };
+      const rawSvg = lintSvg(svgArgs);
       if (Array.isArray(rawSvg)) svgWarnings.push(...rawSvg);
     } catch {
       // Missing or unconfigured SVG layouts never block offline PDD lint.
     }
-  }
-
-  let diffResult = null;
-  if (diff !== undefined && diff !== false) {
-    diffResult = (ports.runDiffSpotlight ?? runDiffSpotlight)({ cwd: root, baseRef: resolvedDiffBase });
   }
 
   let commandResult = null;

@@ -1,8 +1,8 @@
 // Prompt: prompts/cli/pdd-cli.prompt.md
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, isAbsolute, join } from 'node:path';
+import { basename, delimiter, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { gitContext as defaultGitContext, gitFiles } from './shared/git-context.mjs';
@@ -214,7 +214,25 @@ const LINT_FORBIDDEN_TEST_FLAGS = [
   '--reconcile', '--explain-bindings', '--files', '--screen', '--drawing', '--look',
   '--target', '--max-total-calls', '--no-restart-replacement', '--app-map', '--request',
 ];
-const SCENARIO_JSON_RE = /(?:^|\/)(?:tests?|__tests__)\/(?:runtime\/)?[^/]+\.json$/i;
+const NON_SCENARIO_TEST_DIRS = new Set([
+  'fixtures', '__fixtures__', 'mocks', '__mocks__', 'snapshots', '__snapshots__',
+  'data', 'testdata', 'golden', 'cassettes',
+]);
+const NON_SCENARIO_JSON_NAME_RE =
+  /^(?:\..+|cases|.*-cases|tsconfig(?:\.[^/]+)?|jsconfig|package(?:-lock)?|npm-shrinkwrap|composer|biome|deno|jsr|eslint|prettier|vitest|jest|babel|firebase|firestore\.indexes|vercel|netlify|wrangler)\.json$/i;
+function isRuntimeScenarioJsonPath(rel) {
+  if (!rel.endsWith('.json')) return false;
+  const parts = rel.split('/');
+  const file = parts.at(-1);
+  const dirs = parts.slice(0, -1);
+  let lastTestDir = -1;
+  for (let i = dirs.length - 1; i >= 0; i -= 1) {
+    if (dirs[i] === 'test' || dirs[i] === 'tests') { lastTestDir = i; break; }
+  }
+  if (lastTestDir < 0) return false;
+  if (dirs.slice(lastTestDir + 1).some(part => NON_SCENARIO_TEST_DIRS.has(part.toLowerCase()))) return false;
+  return !NON_SCENARIO_JSON_NAME_RE.test(file);
+}
 const NATIVE_STORY_MARKER_RE = /^(?:##\s+Native\s+validation\b|kind:\s*native\b)/im;
 const SKIP_SKILL_SYNC_ROUTES = new Set([
   'help', 'version', 'version-detailed', 'completion',
@@ -231,10 +249,28 @@ function resolveLintRoot(cwd) {
   return cwd;
 }
 
-async function collectProjectLintErrors(runtime, root, words, options) {
+async function collectProjectLintErrors(runtime, root, cwd, words, options) {
   try {
-    const { lintRepoProject } = await import('./repo-hygiene-lint.mjs');
+    const { lintRepoProject, resolveLintScope } = await import('./repo-hygiene-lint.mjs');
     if (!words.length) return lintRepoProject({ root }).errors;
+    const files = gitFiles(root);
+    const scope = resolveLintScope({ root, cwd, files, words });
+    if (scope.unmatched.length === 0) {
+      if (scope.scenarios.size > 0) {
+        try {
+          const found = runtime.findTests({ root });
+          const { selected, unknown } = runtime.selectTests(found, [...scope.scenarios], options);
+          if (!unknown?.length && selected?.length) {
+            const { rows } = runtime.preflight({ root, found, selected, allowMissingInterfaces: true });
+            for (const row of rows) {
+              for (const step of row.steps ?? []) if (typeof step?.entry_path === 'string') scope.prompts.add(step.entry_path);
+              for (const p of row.prompts ?? []) if (typeof p === 'string') scope.prompts.add(p);
+            }
+          }
+        } catch {}
+      }
+      return lintRepoProject({ root, files: scope.effectiveFiles, scope }).errors;
+    }
     const found = runtime.findTests({ root });
     const { selected, unknown } = runtime.selectTests(found, words, options);
     if (unknown?.length || !selected?.length) return [];
@@ -255,7 +291,7 @@ function inspectLocalLintRepoFeatures(cwd) {
   let files = [];
   try { files = gitFiles(root); } catch { files = []; }
   for (const rel of files) {
-    if (!hasScenarioJson && SCENARIO_JSON_RE.test(rel)) hasScenarioJson = true;
+    if (!hasScenarioJson && isRuntimeScenarioJsonPath(rel)) hasScenarioJson = true;
     if (!hasNativeStory && /^(?:user_stories|stories)\/.*\.md$/i.test(rel)) {
       try {
         const text = readFileSync(join(root, rel), 'utf8');
@@ -264,7 +300,42 @@ function inspectLocalLintRepoFeatures(cwd) {
     }
     if (hasNativeStory && hasScenarioJson) break;
   }
-  return { hasNativeStory, hasScenarioJson };
+  return { hasNativeStory, hasScenarioJson, root, files };
+}
+
+async function shouldUseRuntimeLocalLint(repoFeatures, cwd, operands) {
+  if (!repoFeatures.hasScenarioJson) return false;
+  if (!operands.length) return true;
+  const hasEmptyOrDirOperand = operands.some(raw => {
+    const t = String(raw ?? '').trim();
+    if (!t) return true;
+    if (t === '.' || t === './' || t.endsWith('/')) return true;
+    try { return statSync(resolve(cwd, t)).isDirectory(); } catch { return false; }
+  });
+  if (hasEmptyOrDirOperand) return false;
+  try {
+    let realRoot = repoFeatures.root;
+    let realCwd = cwd;
+    try { realRoot = realpathSync(repoFeatures.root); } catch {}
+    try { realCwd = realpathSync(cwd); } catch {}
+    const visibleSet = new Set(repoFeatures.files);
+    const normalized = operands.map(raw => {
+      const word = String(raw ?? '').trim();
+      const cand = relative(realRoot, resolve(realCwd, word)).split(sep).join('/');
+      return visibleSet.has(cand) ? cand : word;
+    });
+    if (normalized.every(word => word.endsWith('.prompt.md') && visibleSet.has(word))) {
+      return true;
+    }
+    const runtime = await import('./runtime-seam.mjs');
+    const found = runtime.findTests({ root: repoFeatures.root, files: repoFeatures.files, excludeFixtureProjects: false });
+    const selection = runtime.selectTests(found, normalized, { native: true });
+    return !selection?.unknown?.length
+      && !selection?.untested?.length
+      && ((selection?.selected?.length ?? 0) > 0 || (selection?.nativeSelections?.length ?? 0) > 0);
+  } catch {
+    return false;
+  }
 }
 
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
@@ -638,8 +709,9 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       );
       const repoFeatures = (!needsRemoteOrCompiler && !localLint && plan.options['--diff'] === undefined && plan.options['--base'] === undefined)
         ? inspectLocalLintRepoFeatures(cwd)
-        : { hasNativeStory: false, hasScenarioJson: false };
-      const needsRuntimeLocalAssessment = plan.options['--local'] === true && repoFeatures.hasScenarioJson;
+        : { hasNativeStory: false, hasScenarioJson: false, root: cwd, files: [] };
+      const needsRuntimeLocalAssessment = plan.options['--local'] === true
+        && await shouldUseRuntimeLocalLint(repoFeatures, cwd, [...plan.operands]);
       if (needsRemoteOrCompiler || needsRuntimeLocalAssessment) {
         try {
           const runtime = await import('./runtime-seam.mjs');
@@ -650,7 +722,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           const isLintCheckMode = !['--emit-v1', '--write', '--bind-criteria'].some(flag => opts[flag]);
           const lintRoot = isLintCheckMode ? resolveLintRoot(cwd) : null;
           let seamProjectErrors = null;
-          const onProjectLintResult = lintRoot && !plan.operands.length && opts['--local'] === true
+          const onProjectLintResult = lintRoot && opts['--local'] === true
             ? result => {
                 if (!result || !Array.isArray(result.errors)) return;
                 if (!seamProjectErrors) seamProjectErrors = [];
@@ -662,7 +734,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
             const bufferedStdout = { write: chunk => { captured += String(chunk); return true; } };
             const runtimeCode = await runtime.lint({ words: [...plan.operands], options: opts, cwd }, { stdout: bufferedStdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
             if (runtimeCode === 0 || runtimeCode === 1) {
-              const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], opts);
+              const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, cwd, [...plan.operands], opts);
               if (projectErrors.length > 0 || opts['--local'] === true) {
                 try {
                   const parsed = JSON.parse(captured.trim());
@@ -684,7 +756,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           }
           const runtimeCode = await runtime.lint({ words: [...plan.operands], options: opts, cwd }, { stdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
           if (lintRoot && (runtimeCode === 0 || runtimeCode === 1)) {
-            const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], opts);
+            const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, cwd, [...plan.operands], opts);
             if (projectErrors.length > 0) {
               for (const errLine of projectErrors) line(stderr, errLine);
               return 1;

@@ -525,13 +525,13 @@ export function analyzeDiffEntries(entries = []) {
 function baseUnavailableResult(baseRef, reason) {
   const detail = formatTeachingDetail({ invariant: reason, fix: 'Pass a valid local git ref via --diff <REF> or commit an initial base commit', rerun: 'pdd lint --diff' });
   return {
-    ok: false, baseAvailable: false, baseRef: baseRef ?? null, baseSha: null, baseError: reason, touchedFiles: [],
+    ok: false, baseAvailable: false, baseRef: baseRef ?? null, baseSha: null, baseError: reason, touchedFiles: [], changedEntries: [], deletedPaths: [],
     errors: [{ path: '.', line: 1, code: 'diff-base-unavailable', formatted: `Error: diff gate: .:1 [diff-base-unavailable] ${detail}` }],
     advisories: [], removedTests: [], movedTests: [], addedTests: [], newSkips: [], assertionDrops: [], tableDrops: [], snapshotEdits: [], harnessEdits: [], mockOnlyBoundaryTests: [],
   };
 }
 
-export function runDiffSpotlight({ cwd, baseRef } = {}) {
+export function runDiffSpotlight({ cwd, baseRef, filterPaths = null } = {}) {
   const realRoot = realpathSync(cwd);
   const resolvedBase = baseRef || resolveDefaultBaseRef(realRoot);
   if (!resolvedBase) return baseUnavailableResult(baseRef, 'Could not resolve a default base commit locally.');
@@ -550,7 +550,7 @@ export function runDiffSpotlight({ cwd, baseRef } = {}) {
   if (diffRes.status !== 0) {
     return baseUnavailableResult(resolvedBase, `git diff against base "${resolvedBase}" failed: ${causeText(diffRes.stderr?.toString('utf8') || 'unknown git diff error')}`);
   }
-  const entries = [], seenPaths = new Set();
+  const entries = [], seenPaths = new Set(), seenNewPaths = new Set();
   const fields = diffRes.stdout.toString('utf8').replace(/\0$/, '').split('\0').filter(Boolean);
   for (let i = 0; i < fields.length;) {
     const st = fields[i++], first = fields[i++], second = st.startsWith('R') || st.startsWith('C') ? fields[i++] : first;
@@ -558,18 +558,32 @@ export function runDiffSpotlight({ cwd, baseRef } = {}) {
     const before = oldPath ? (spawnSync('git', ['show', `${baseSha}:${oldPath}`], { cwd: realRoot, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).stdout ?? '') : '';
     const after = newPath ? (readSafeUtf8(realRoot, newPath) ?? '') : '';
     entries.push({ status: st, oldPath, newPath, before, after });
-    if (newPath) seenPaths.add(newPath); if (oldPath) seenPaths.add(oldPath);
+    if (newPath) { seenPaths.add(newPath); seenNewPaths.add(newPath); }
+    if (oldPath) seenPaths.add(oldPath);
   }
   const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: realRoot, maxBuffer: 16 * 1024 * 1024 });
   if (untracked.status !== 0) {
     return baseUnavailableResult(resolvedBase, `git ls-files failed while collecting untracked files: ${causeText(untracked.stderr?.toString('utf8') || 'unknown error')}`);
   }
   for (const rel of untracked.stdout.toString('utf8').split('\0').filter(Boolean)) {
-    if (seenPaths.has(rel)) continue;
+    if (seenNewPaths.has(rel)) continue;
+    seenNewPaths.add(rel);
     seenPaths.add(rel);
     entries.push({ status: 'A', oldPath: '', newPath: rel, before: '', after: readSafeUtf8(realRoot, rel) ?? '' });
   }
-  const analysis = analyzeDiffEntries(entries);
+  const filterSet = filterPaths ? new Set(filterPaths) : null;
+  const scopedEntries = filterSet
+    ? entries.filter(e => (e.newPath && filterSet.has(e.newPath)) || (e.oldPath && filterSet.has(e.oldPath)))
+    : entries;
+  const presentNewPaths = new Set(entries.map(e => e.newPath).filter(Boolean));
+  const deletedPaths = [...new Set(
+    entries
+      .filter(e => e.oldPath && (e.status === 'D' || (e.status.startsWith('R') && e.oldPath !== e.newPath)) && !presentNewPaths.has(e.oldPath))
+      .map(e => e.oldPath),
+  )].sort();
+  const changedEntries = entries.map(({ status, oldPath, newPath }) => ({ status, oldPath, newPath }));
+
+  const analysis = analyzeDiffEntries(scopedEntries);
   for (const hit of detectShadowBinaries(realRoot, { touchedFiles: [...seenPaths], baseSha })) {
     if (!analysis.errors.some(e => e.code === 'diff-shadow-bin' && e.path === hit.path)) {
       const detail = formatTeachingDetail({
@@ -587,6 +601,7 @@ export function runDiffSpotlight({ cwd, baseRef } = {}) {
       const cm = /^([^:]+):(\d+):\s*leftover conflict marker/i.exec(line);
       if (!cm || DOC_OR_FIXTURE_PATH.test(cm[1])) continue;
       const file = cm[1], lineNo = Number(cm[2]) || 1;
+      if (filterSet && !filterSet.has(file)) continue;
       if (!analysis.errors.some(e => e.code === 'diff-conflict-marker' && e.path === file && e.line === lineNo)) {
         const detail = formatTeachingDetail({ invariant: `Leftover conflict marker reported by git diff --check at ${file}:${lineNo}`, fix: `Resolve the conflict marker at ${file}:${lineNo}`, rerun: 'pdd lint --diff' });
         analysis.errors.push({ path: file, line: lineNo, code: 'diff-conflict-marker', formatted: `Error: diff gate: ${file}:${lineNo} [diff-conflict-marker] ${detail}` });
@@ -594,5 +609,5 @@ export function runDiffSpotlight({ cwd, baseRef } = {}) {
       }
     }
   }
-  return { ...analysis, baseAvailable: true, baseRef: resolvedBase, baseSha, touchedFiles: [...seenPaths].sort() };
+  return { ...analysis, baseAvailable: true, baseRef: resolvedBase, baseSha, touchedFiles: [...seenPaths].sort(), changedEntries, deletedPaths };
 }

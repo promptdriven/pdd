@@ -43,6 +43,9 @@ export {
   runLocalLint,
 } from './core/lint/run-local-lint.mjs';
 export {
+  resolveLintScope,
+} from './core/lint/lint-scope.mjs';
+export {
   runDiffSpotlight,
   analyzeDiffEntries,
   findExecutableOnlyMarkers,

@@ -51,6 +51,7 @@ Do not self-spawn a Fresh Verifier subagent during build or repair: Autopilot ru
 ## For the Blind Read-Only Reviewer
 
 - Inspect strictly the diff, owning prompts/Stories, and harness evidence (never trust PR prose; never edit files). Run `git diff --stat` and inspect the changed files, then end your summary with `Read: FILE, FILE, ...`.
+- Inspect every changed Story in full, including fenced code blocks: flag pasted implementation code or internal plumbing as must-fix before approval (move implementation details to the owning `.prompt.md` and large sample fixtures to `tests/` or `fixtures/`; exact values and short examples are fine when they define what the user actually sees).
 - Verify every touched user-facing surface is backed by real unmocked execution (`pdd prove`, `verify.paths` Feature Map, real CLI/HTTP/DB/browser/host probes — not mocked-only stubs) and verify assertions actually bind the changed logic (could an empty stub or weakened test still pass?).
 - Flag adding a prompt or Story for a non-product file, missing Runtime/native coverage on changed Stories, or bypassing a fixable refusal.
 - Audit `Choices Autopilot made:` for unsettled choices and approved-rule updates; contradicting a recorded human answer or altering merge blockers is a P1 must-fix (undo or return `"kind":"blocker"`).

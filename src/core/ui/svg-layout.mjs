@@ -211,7 +211,14 @@ function promptTargets(text, fromPrompt, visibleSet) {
   return [...new Set(out)];
 }
 
-export function lintSvgLayouts({ root, files, promptPaths }) {
+export function lintSvgLayouts({ root, files, promptPaths, appMapPaths, scenarioPaths }) {
+  if (
+    Array.isArray(promptPaths) && promptPaths.length === 0
+    && Array.isArray(appMapPaths) && appMapPaths.length === 0
+    && Array.isArray(scenarioPaths) && scenarioPaths.length === 0
+  ) {
+    return [];
+  }
   const policy = workspace.policy({ root });
   const allowedFiles = files.filter(path => workspace.allows(policy, path));
   const readRepoFile = (r, p) => safeRead(r, p, policy);
@@ -294,6 +301,8 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     return visited;
   };
   const promptFilter = promptPaths ? new Set(promptPaths) : null;
+  const appMapFilter = appMapPaths !== undefined ? new Set(appMapPaths) : null;
+  const scenarioFilter = scenarioPaths !== undefined ? new Set(scenarioPaths) : null;
   const promptExists = promptPath => {
     if (typeof promptPath !== 'string' || !promptPath.endsWith('.prompt.md')) return false;
     if (visiblePromptSet.size > 0) return visiblePromptSet.has(promptPath);
@@ -318,6 +327,7 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     root,
     promptRecords,
     promptFilter,
+    appMapFilter,
     parsedAppMaps,
     appMapParseErrors,
     mapPaths,
@@ -332,6 +342,7 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     files: allowedFiles,
     policy,
     promptFilter,
+    scenarioFilter,
     visiblePromptSet,
     testJsonPaths,
     parsedTests,
