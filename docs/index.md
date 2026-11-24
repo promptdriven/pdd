@@ -7,10 +7,10 @@ Start with the [README](../README.md).
   - [Story guide](../skills/pdd/references/stories.md): Stories, compact scenario JSON, targets, operators, and schemas.
   - [Product roadmaps](../skills/pdd/references/product.md): multi-part maps, plans, contracts, and `--through prompt-pr`.
   - [Ports and CLI](../skills/pdd/references/ports-and-cli.md): external fakes, 3-Port Adoption Rule, CLI programs, and `pdd mcp`.
-  - [UI and screens](../skills/pdd/references/ui-and-screens.md): single-file plain-prose UI, optional `app-map.json`, `.ui.svg`, and `pdd sim`.
+  - [UI and screens](../skills/pdd/references/ui-and-screens.md): single-file plain-prose UI, optional `app-map.json`, `.ui.svg`, and running UI prompts directly with `pdd`.
   - [Verification](../skills/pdd/references/verification.md): real-path tests, Feature Maps (`verify.paths`), Deliberate-Break Probe, and `pdd prove`.
   - [Formal verification](../skills/pdd/references/formal.md): 3-tier code-bound stack, Z3 isolation, mutation control, and Rule Coverage reporting.
-- [Usage guide](USAGE.md): install, `pdd setup`, `pdd init`, `pdd status`, interactive `/pdd`, Autopilot, interpreter checks, Simulator, and fixes.
+- [Usage guide](USAGE.md): install, `pdd setup`, `pdd init`, `pdd status`, interactive `/pdd`, Autopilot, interpreter checks, the Prompt Interpreter, and fixes.
 - [Workflows in depth](workflows.md): interactive `/pdd` modes, headless `pdd autopilot`, product plans, and skill locations.
 - [Build a whole product](build-a-whole-product.md): map a multi-part product, contracts, waves, and planned runs.
 - [CLI reference](cli.md): every command form, option, and running from a source checkout.

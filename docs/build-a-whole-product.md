@@ -42,7 +42,7 @@ show unmet needs as advice without blocking you.
 Review the plan PR's parts and contracts. The coffee plan has `server-1`,
 `phone-1`, `barista-1`, then `journeys`. The phone never talks directly to the
 barista screen. Single-part runs test other parts as fakes from their contracts
-and do not change `contracts/`. The final `all` / journey run composes every part's maps and prompts in `pdd sim --product` for prompt-space exploration and proves real unmocked implementation wiring across parts with a cross-part `verify.paths` recipe executed by `pdd prove`.
+and do not change `contracts/`. The final `all` / journey run composes every part's maps and prompts in `pdd --product` for prompt-space exploration and proves real unmocked implementation wiring across parts with a cross-part `verify.paths` recipe executed by `pdd prove`.
 
 ## Check the plan
 
@@ -108,5 +108,5 @@ unavailable locally, status warns and leaves those results unverified. Needs
 cycles show their closed path in `status` and `next` as advice without hiding
 unrelated ready runs.
 
-Journey J1 is the final run after the three parts. Run cross-part Story checks, explore the composed product in `pdd sim --product`, and run an unmocked cross-part integration `verify.paths` recipe via `pdd prove` to verify the real implementation path across parts.
+Journey J1 is the final run after the three parts. Run cross-part Story checks, explore the composed product in `pdd --product`, and run an unmocked cross-part integration `verify.paths` recipe via `pdd prove` to verify the real implementation path across parts.
 Status tracks journeys separately from each part's Stories.

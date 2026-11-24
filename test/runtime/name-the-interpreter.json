@@ -5,7 +5,7 @@
     {"id": "AC1", "text": "`pdd --help` calls the hosted service the \"PDD interpreter\", never says \"PDD runtime\" or \"runtime call\", prints nothing to stderr and exits with code 0."},
     {"id": "AC2", "text": "`pdd test --help` says that it checks Stories on the PDD interpreter with my gh login, never says \"PDD runtime\" and exits with code 0."},
     {"id": "AC3", "text": "`pdd lint --help` says that it runs the PDD interpreter lint with 0 AI calls, never says \"PDD runtime\" and exits with code 0."},
-    {"id": "AC4", "text": "`pdd simulate --help` says that it opens the PDD Simulator on the PDD interpreter, never says \"PDD runtime\" and exits with code 0."},
+    {"id": "AC4", "text": "`pdd . --help` says that it opens the Prompt Interpreter on the PDD interpreter, never says \"PDD runtime\" or \"Simulator\", and exits with code 0."},
     {"id": "AC5", "text": "`pdd product --help` says that the product commands make no interpreter calls, never says \"runtime\" and exits with code 0."}
   ],
   "initial_world": {},
@@ -50,14 +50,15 @@
       ]
     },
     {
-      "step_id": "simulate-help-names-the-interpreter",
+      "step_id": "direct-help-names-the-interpreter",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
-      "input": {"argv": ["simulate", "--help"]},
+      "input": {"argv": [".", "--help"]},
       "checks": [
         {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD interpreter"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD Simulator"},
+        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "Prompt Interpreter"},
         {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD runtime"},
+        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "not_contains", "value": "Simulator"},
         {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },

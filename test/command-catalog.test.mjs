@@ -31,7 +31,7 @@ test('3444 check route exposes --max-total-calls and --no-restart-replacement in
   );
 });
 
-test('C1/S1 catalog exposes setup --skills-dir, --upgrade, init, status, and sim quiet alias', () => {
+test('C1/S1 catalog exposes setup --skills-dir, --upgrade, init, status, direct prompt execution, and refuses sim/simulate', () => {
   assert.deepEqual(parseArgv(['setup', '--yes', '--skills-dir', '/tmp/skills', '--upgrade']), {
     commandId: 'setup', local: 'setup', operands: [], options: { '--yes': true, '--skills-dir': '/tmp/skills', '--upgrade': true },
   });
@@ -41,7 +41,15 @@ test('C1/S1 catalog exposes setup --skills-dir, --upgrade, init, status, and sim
   assert.deepEqual(parseArgv(['status', 'src/a.mjs', '--changed', '--json']), {
     commandId: 'status', local: 'status', operands: ['src/a.mjs'], options: { '--changed': true, '--json': true },
   });
-  assert.deepEqual(parseArgv(['sim', 'my-story']), {
-    commandId: 'try', local: 'runtime-try', operands: ['my-story'], options: {},
+  assert.deepEqual(parseArgv(['prompts/app.prompt.md']), {
+    commandId: 'try', local: 'runtime-try', operands: ['prompts/app.prompt.md'], options: {},
   });
+  assert.deepEqual(parseArgv(['.']), {
+    commandId: 'try', local: 'runtime-try', operands: [], options: {},
+  });
+  assert.deepEqual(parseArgv(['--stop', 'my-story']), {
+    commandId: 'try', local: 'runtime-try', operands: ['my-story'], options: { '--stop': true },
+  });
+  assert.throws(() => parseArgv(['sim', 'my-story']), /pdd sim was removed\. Run pdd <PROMPT\.md\|STORY> instead\./);
+  assert.throws(() => parseArgv(['simulate', 'my-story']), /pdd simulate was removed\. Run pdd <PROMPT\.md\|STORY> instead\./);
 });

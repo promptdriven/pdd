@@ -7,7 +7,7 @@ metadata:
 
 # PDD
 
-In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned modules, **Stories** (`user_stories/*.md`) state observable user behavior, and deterministic harness tools (`pdd lint`, `pdd test`, `pdd sim`, `pdd prove`) own the facts while you own the method.
+In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned modules, **Stories** (`user_stories/*.md`) state observable user behavior, and deterministic harness tools (`pdd lint`, `pdd test`, direct `pdd <PROMPT.md|STORY>`, `pdd prove`) own the facts while you own the method.
 
 ## Step 0 — Orient first and pick mode
 
@@ -36,7 +36,7 @@ In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned mo
 
 ## Step 3 — Pre-code check, prompt approval, and 1 PR
 
-- Before writing implementation code, pause with a 1-screen plain-English Story/cases check unless the person said *"all the way"* (pure code bugs and `small-change` skip this pause). For UI work, recommend `pdd sim` so the person can try the live screen first.
+- Before writing implementation code, pause with a 1-screen plain-English Story/cases check unless the person said *"all the way"* (pure code bugs and `small-change` skip this pause). For UI work, recommend `pdd <PROMPT.md|STORY>` so the person can try the live screen first.
 - Prompt approvals happen directly in chat or GitHub PR review — never invent a person's decision or auto-merge without explicit permission (see [references/prompting.md §5](references/prompting.md#5-expected-values-approvals-and-merges)).
 - Deliver **1 PR** when authorized to open a PR (never 2 stacked PRs; the only exception is a multi-part product run using `Through: prompt-pr` / `pdd product start RUN --through prompt-pr`, which explicitly stages a prompt PR first). Never merge unless explicitly requested by the person.
 
@@ -62,6 +62,6 @@ Load [references/verification.md](references/verification.md) before finalizing 
 | Stories, compact scenario JSON, targets, operators, schemas & budgets | [references/stories.md](references/stories.md) |
 | Multi-part product maps, plans, contracts & `--through prompt-pr` | [references/product.md](references/product.md) |
 | External fakes, DB/HTTP/CLI, 3-Port Rule, telemetry & `pdd mcp` | [references/ports-and-cli.md](references/ports-and-cli.md) |
-| Single-file plain-prose UI, optional `app-map.json`, `.ui.svg` & `pdd sim` | [references/ui-and-screens.md](references/ui-and-screens.md) |
+| Single-file plain-prose UI, optional `app-map.json`, `.ui.svg` & direct `pdd` | [references/ui-and-screens.md](references/ui-and-screens.md) |
 | Native tests, Feature Map (`verify.paths`), `pdd prove` & Deliberate-Break Probe | [references/verification.md](references/verification.md) |
 | Code-bound formal verification (zero-install PRNG/grid default, 3-tier stack & mutation control) | [references/formal.md](references/formal.md) |

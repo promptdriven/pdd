@@ -1,7 +1,7 @@
 # Waiting for interpreter capacity
 
 When the interpreter is busy and confirms that remote lint did not start, `pdd test`,
-`pdd lint --remote` and `pdd simulate` wait and try again. You see:
+`pdd lint --remote` and direct `pdd <PROMPT.md|STORY|.>` runs wait and try again. You see:
 
 > The server is busy. Waiting for a lint slot…
 
@@ -9,7 +9,7 @@ pdd follows the server's requested delay and keeps trying until your wait ends.
 There is no fixed number of attempts. It keeps the same selected files and saves
 every request ID. Check and saved-batch reads have no default wait limit in any shell; `--timeout`
 sets an explicit limit. Standalone remote lint (`pdd lint --remote`) retains its 90-second agent default
-and unlimited interactive wait, with `--timeout` override. `pdd simulate` uses the
+and unlimited interactive wait, with `--timeout` override. Direct `pdd <PROMPT.md|STORY|.>` sessions use the
 interpreter's Try lint deadline policy (see [Interpreter boundaries](runtime-boundaries.md)).
 For a new Check with `--timeout MIN`, preliminary lint has its own MIN-minute
 wait, capped at 90 seconds in an agent shell. The paid Check clock starts after
@@ -18,8 +18,8 @@ Waiting, retries and lint stay within their applicable deadline.
 
 If the server stays busy, pdd says that no checks ran and asks you to run the same
 command again later. Check and lint exit with code 5; the `--cli` and `--serve`
-wrappers of `pdd simulate` exit with code 125.
-No AI check or simulation starts before lint passes. Lint uses no AI calls.
+wrappers of direct `pdd` runs exit with code 125.
+No AI check or interactive session starts before lint passes. Lint uses no AI calls.
 
 If a reply is lost, pdd reads the original request instead of sending it again.
 It retries only when the interpreter confirms that capacity prevented the job from
@@ -28,7 +28,7 @@ Ctrl-C stops further submissions. After "Stopped before sending.", the claimed r
 stays unknown and cannot be retried; start a fresh check.
 
 If lint is still queued or running when your wait ends, pdd says so and exits
-with code 3. No checks or simulations were sent. Check and explicit lint print a saved
+with code 3. No checks or sessions were sent. Check and explicit lint print a saved
 batch that you can read with `pdd test --read BATCH`, without repeating lint.
 The read shows the latest result and any prompt problems the interpreter found.
 
@@ -40,7 +40,7 @@ or it is interrupted; explicit retry retains its finite default. Reading standal
 leaves checks alone if they were already sent or their history is uncertain.
 A missing or mismatched reply never counts as a pass.
 
-The optional profile cap for checks, remote lint and new simulation setup has no
+The optional profile cap for checks, remote lint and new Prompt Interpreter session setup has no
 default limit. Set `PDD_MAX_JOBS` to a
 positive safe decimal integer to share that cap across repositories and
 worktrees among local pdd processes that set it. Use digits without a sign, whitespace or leading
@@ -78,5 +78,5 @@ place and slot counts supplied by the interpreter.
 If the interpreter confirms that a check ended because the service restarted, pdd
 tries that Story row once more. It saves both request IDs, receipts and usage,
 and prevents a second replacement across later or overlapping reads and retries.
-Other uncertain outcomes and paid simulation actions are never sent again automatically.
+Other uncertain outcomes and paid Prompt Interpreter actions are never sent again automatically.
 `@promptdriven/runtime-client` (bound through `src/runtime-seam.mjs`) defines the exact retry and slot rules; see [Interpreter boundaries](runtime-boundaries.md).

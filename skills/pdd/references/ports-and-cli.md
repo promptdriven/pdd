@@ -54,8 +54,8 @@ Inject outside-world boundaries (databases, filesystem, HTTP, clocks, randomness
 - Link peer `.prompt.md` files under `## Dependencies` with relative Markdown links; assert peer call counts with `["calls", "internal:<peer>", "=", 1]` where `<peer>` is the prompt filename stem without `.prompt.md`.
 - To inject a failure on one step while other steps call the real peer prompt, use step-level `"simulation_overrides"` (`[{"operation": "peer.op", "criterion_id": "1", "failure_quote": "<un-negated phrase from criterion>", "reason": "...", "binding": {"action": "port.write"|"fixture.lookup", ...}}]`).
 
-## 3. CLI programs and `pdd mcp` Simulator tools
+## 3. CLI programs and `pdd mcp` Prompt Interpreter tools
 
 - A CLI program has one program prompt (`# <cmd>`, avoiding `pdd`, `node`, `gh`, `git`) exposing `main({ argv, stdin? }) -> { exit_code, stdout, stderr }` (never exit `125`; end output lines with `\n`).
-- Use `pdd sim [STORY] --cli [--shell]` to test a simulated CLI in a terminal, `pdd sim [STORY] --serve [PORT]` for local HTTP routes (`curl`/`fetch`), and `pdd sim --save-last` to append the last observed run for review.
-- With `pdd setup`, your coding agent can drive simulations directly through `pdd mcp` (`try_open`, `try_state`, `try_run`, `try_check`, and `try_save_case` only when the person asks).
+- Run CLI prompts directly (`pdd prompts/<app>.prompt.md <args...>`), use `pdd <STORY|.> --cli [--shell]` to test a CLI in a terminal, `pdd <STORY|.> --serve [PORT]` for local HTTP routes (`curl`/`fetch`), and `pdd --save-last` to append the last observed run for review.
+- With `pdd setup`, your coding agent can drive Prompt Interpreter sessions directly through `pdd mcp` (`try_open`, `try_state`, `try_run`, `try_check`, and `try_save_case` only when the person asks).

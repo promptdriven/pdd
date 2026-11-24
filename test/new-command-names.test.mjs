@@ -11,22 +11,28 @@ import { fakeRuntime, harbor, root, sink } from './helpers/runtime-fake.mjs';
 
 // Rules of user_stories/new-command-names.md that the runPdd vectors cannot see: a removed name runs
 // nothing, quiet forms give the same result with no extra line, completion, and the words of printed lines.
-const { test: TEST, lint: LINT, simulate: SIMULATE } = NAMES;
+const { test: TEST, lint: LINT } = NAMES;
+const DIRECT = '<PROMPT.md|STORY>';
 const names = (line, before, after) => line.includes(`pdd ${before}`) && line.includes(`pdd ${after}`);
 const effect = plan => ({ local: plan.local, operands: plan.operands, options: plan.options, helpPrefix: plan.helpPrefix });
 const forbidden = new Proxy({}, { get(_, name) { return typeof name === 'string' ? () => assert.fail(`A removed name must not run ${name}`) : undefined; } });
 
-// [removed words, the new command that the line names, argument tails]
+// [removed words, the replacement that the line names, argument tails]
 const REMOVED = [
   [['check'], TEST, [[], ['place-order'], ['place-order', '--json', '--details', '--timeout', '4', '--max-calls', '20'], ['--read', 'b1', '--json'],
     ['--retry', 'b1'], ['--fill-hash'], ['--files', 'place-order'], ['--screen', 'http://127.0.0.1:1/', '--drawing', 'a.ui.svg'],
     ['--help'], ['-h'], ['-help'], ['--bogus'], ['--max-calls', '0'], ['a', '--help', 'b']]],
   [['check'], LINT, [['--lint'], ['--lint', '--help'], ['place-order', '--lint'], ['--json', '--lint', '--local'], ['--lint', '--bogus'], ['--', '--lint']]],
-  [['try'], SIMULATE, [[], ['place-order'], ['place-order', '--new', '--no-open', '--no-wait'], ['--cli', '--shell'], ['--serve', '8123'],
+  [['try'], DIRECT, [[], ['place-order'], ['place-order', '--new', '--no-open', '--no-wait'], ['--cli', '--shell'], ['--serve', '8123'],
     ['--save-last'], ['--stop', 'place-order'], ['--help'], ['-h'], ['--bogus'], ['--tab', 'phone']]],
+  [['simulate'], DIRECT, [[], ['place-order'], ['prompts/app.prompt.md'], ['place-order', '--new', '--no-open', '--no-wait'], ['--cli', '--shell'],
+    ['--serve', '8123'], ['--save-last'], ['--stop', 'place-order'], ['--help'], ['-h'], ['--bogus'], ['--tab', 'phone']]],
+  [['sim'], DIRECT, [[], ['place-order'], ['prompts/app.prompt.md'], ['--product'], ['--stop', 'place-order'], ['--help'], ['-h'], ['--bogus']]],
   [['help', 'check'], TEST, [[], ['x'], ['--json']]],
   [['help', 'check'], LINT, [['--lint']]],
-  [['help', 'try'], SIMULATE, [[], ['--help']]],
+  [['help', 'try'], DIRECT, [[], ['--help']]],
+  [['help', 'simulate'], DIRECT, [[], ['--help']]],
+  [['help', 'sim'], DIRECT, [[], ['--help']]],
 ];
 
 test('a removed name exits 2 with one line that names the new command, and runs nothing', async t => {
@@ -61,24 +67,22 @@ test('a removed name exits 2 with one line that names the new command, and runs 
 });
 
 test('a removed name is refused by the parser before any other rule', () => {
-  for (const argv of [['check', 'a\0b'], ['try', '--serve', '70000'], ['check', '--request', 'nope'], ['help', 'try', 'x', 'y']]) {
-    assert.throws(() => parseArgv(argv), error => error.exitCode === 2 && / was removed\. Use pdd /.test(error.message), argv.join(' '));
+  for (const argv of [['check', 'a\0b'], ['try', '--serve', '70000'], ['simulate', '--serve', '70000'], ['sim', 'a\0b'], ['check', '--request', 'nope'], ['help', 'try', 'x', 'y'], ['help', 'sim', 'x'], ['help', 'simulate', 'x']]) {
+    assert.throws(() => parseArgv(argv), error => error.exitCode === 2 && / was removed\. (?:Use|Run) pdd /.test(error.message), argv.join(' '));
   }
-  // `check`, `try` and `sim` as Story words are Story words, not command words.
-  assert.deepEqual(parseArgv([SIMULATE, 'try']).operands, ['try']);
-  assert.deepEqual(parseArgv([TEST, 'check', 'sim']).operands, ['check', 'sim']);
+  // `check`, `try`, `sim`, and `simulate` as Story words are Story words, not command words.
+  assert.deepEqual(parseArgv(['--stop', 'try']).operands, ['try']);
+  assert.deepEqual(parseArgv([TEST, 'check', 'sim', 'simulate']).operands, ['check', 'sim', 'simulate']);
 });
 
 test('quiet forms give the plan, help and usage error of the main name, and no plan has a notice', async () => {
   const outcome = async argv => {
     let plan; try { plan = parseArgv(argv); } catch (error) { plan = { error: error.message }; }
-    // Help and usage errors stay local, so run them; any other plan would open a simulation or a chat, so compare only the plan.
     const stdout = sink(), stderr = sink(), code = plan.error || plan.local === 'help' ? await runPdd(argv, { stdout, stderr, workflowRunner: forbidden }) : null;
     assert.equal(Object.hasOwn(plan, 'notice'), false, argv.join(' '));
     return { plan: plan.error ? plan : effect(plan), code, stdout: stdout.text, stderr: stderr.text };
   };
-  const pairs = [[['sim'], [SIMULATE], [[], ['place-order', '--max-calls', '5', '--tab', 'world', '--new', '--no-open', '--no-wait', '--agent', 'Codex (work5)'],
-      ['place-order', '--cli', '--shell'], ['--serve', '8123'], ['--save-last'], ['--stop', 'place-order'], ['--help'], ['-h'], ['--tab', 'phone'], ['a', 'b'], ['--serve', '70000']]]];
+  const pairs = [[['-V'], ['--version'], [[], ['--help'], ['extra']]]];
   for (const [quiet, main, tails] of pairs) for (const tail of tails) {
     for (const head of [[], ['help']]) {
       if (head.length && tail.length) continue;
@@ -102,7 +106,7 @@ async function sameRun(argvs, options) {
   return runs;
 }
 
-test('sim runs like simulate and test --lint like lint, in local modes', async t => {
+test('test --lint runs like lint in local modes, and direct stop refuses unknown open sessions cleanly', async t => {
   const setup = harbor(t);
   const options = () => ({ cwd: setup.repo, env: { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PATH: '/usr/bin:/bin' } });
   const offline = await sameRun([[LINT, '--json'], [TEST, '--lint', '--json']], options);
@@ -126,8 +130,8 @@ test('sim runs like simulate and test --lint like lint, in local modes', async t
   });
   const stable = summaries.map(({ batch, ...fields }) => fields);
   assert.deepEqual(stable[0], stable[1]);
-  const story = await sameRun([[SIMULATE, 'no-such-story'], ['sim', 'no-such-story']], options);
-  assert.equal(story[0].code, 2); assert.deepEqual(story[0], story[1]);
+  const directStop = await sameRun([['--stop', 'no-such-story']], options);
+  assert.equal(directStop[0].code, 2);
 });
 
 test('pdd mcp stdout carries only MCP messages', t => {
@@ -156,15 +160,15 @@ test('shell completion offers only the main names', t => {
   for (const shell of ['bash', 'zsh']) {
     for (const words of [[], ['help']]) {
       const first = choices(shell, words);
-      for (const word of [TEST, LINT, SIMULATE]) assert.ok(first.includes(word), `${shell} ${words} ${word}`);
-      for (const word of ['check', 'try', 'sim', 'workflow']) assert.ok(!first.includes(word), `${shell} ${words} ${word}`);
+      for (const word of [TEST, LINT]) assert.ok(first.includes(word), `${shell} ${words} ${word}`);
+      for (const word of ['check', 'try', 'sim', 'simulate', 'workflow']) assert.ok(!first.includes(word), `${shell} ${words} ${word}`);
     }
     const testOptions = choices(shell, [TEST]);
     assert.ok(testOptions.includes('--read') && testOptions.includes('--files'));
     for (const hidden of ['--lint', '--local', '--request', '--fill-hash', '--compact']) assert.ok(!testOptions.includes(hidden), `${shell} ${TEST} ${hidden}`);
     assert.ok(choices(shell, [LINT]).includes('--local'));
-    assert.ok(choices(shell, [SIMULATE]).includes('--stop'));
-    assert.deepEqual(choices(shell, [SIMULATE, '--tab']).sort(), ['call', 'screen', 'terminal', 'world']);
+    assert.deepEqual(choices(shell, ['prompts/app.prompt.md', '--tab']).sort(), ['call', 'screen', 'terminal', 'world']);
+    assert.deepEqual(choices(shell, ['.', '--tab']).sort(), ['call', 'screen', 'terminal', 'world']);
     assert.deepEqual(choices(shell, ['product', 'start', 'r1', '--agent']).sort(), ['agy', 'claude', 'codex', 'gemini']);
   }
 });
@@ -180,9 +184,9 @@ function listSourceModules(dir, rel = 'src') {
   return out.sort();
 }
 
-// The lines that pdd writes name only the new commands. The removal line is built from the catalog words, so
-// no source file needs the text `pdd check` or `pdd try`. A server text passes through as data, never as source.
-test('no source line names pdd check or pdd try', () => {
+// The lines that pdd writes name only the current commands. The removal line is built from the catalog words, so
+// no source file needs literal `pdd check`, `pdd try`, `pdd sim`, or `pdd simulate`.
+test('no source line names pdd check, pdd try, pdd sim, or pdd simulate', () => {
   const files = listSourceModules(join(root, 'src'));
   assert.ok(files.length > 0, 'expected non-empty recursive src/**/*.mjs scan');
   assert.ok(files.some(file => file.endsWith('pdd-cli.mjs')), `expected valid src/ modules, got ${files.length}`);
@@ -190,7 +194,7 @@ test('no source line names pdd check or pdd try', () => {
   for (const file of files) {
     readFileSync(join(root, file), 'utf8').split('\n').forEach((text, index) => {
       // A whole-line comment is never printed.
-      if (!text.trim().startsWith('//') && /\bpdd (?:check|try)\b/.test(text)) found.push(`${file}:${index + 1}: ${text.trim().slice(0, 120)}`);
+      if (!text.trim().startsWith('//') && /\bpdd (?:check|try|sim|simulate)\b/.test(text)) found.push(`${file}:${index + 1}: ${text.trim().slice(0, 120)}`);
     });
   }
   assert.deepEqual(found, []);

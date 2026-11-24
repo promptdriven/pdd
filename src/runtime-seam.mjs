@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: c21f2aa1c7c74040e153f53509529f0a4a8d35b0c3d30036f30f68d3a8ea1b30).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 18aa708d0828991e58eb46e429cf2cfa4945d7028b9eab5d1ff05562a785c5ed).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -505,18 +505,50 @@ function refusalView(item, secrets) {
   return view;
 }
 
-function normalizeRuntimeHints(text) {
+const TRY_STDOUT_LEGACY_RE = /^(?:It (?:ends in 24 hours, or with|keeps its original 24-hour expiry; stop it with): pdd\s+simulate\s+--stop |The Try page asks to approve |Stopped waiting\. The Try link stays open\. Run pdd\s+simulate\s+again)/m;
+
+function normalizeLegacySimulateText(text) {
+  let out = text;
+  if (/\bpdd\s+simulate\b/i.test(out)) {
+    out = out
+      .replace(/\bpdd\s+simulate\s+--help\b/g, 'pdd . --help')
+      .replace(/\bRun pdd\s+simulate\s+again\b/g, 'Run the command again')
+      .replace(/\bReconnect with pdd\s+simulate\b/g, 'Reconnect with pdd <PROMPT.md|STORY>')
+      .replace(/\bconnected pdd\s+simulate\b/g, 'connected Prompt Interpreter session')
+      .replace(/\bpdd\s+simulate\s+takes one STORY\b/g, 'pdd takes one STORY or prompt file')
+      .replace(/\bpdd\s+simulate\s+needs one story\b/gi, 'pdd needs one Story or prompt file')
+      .replace(/\bpdd test and pdd\s+simulate\s+work\b/g, 'pdd test and direct pdd runs work')
+      .replace(/\bpdd\s+simulate\s+(--[a-z][a-z0-9-]*)/g, 'pdd $1')
+      .replace(/\bpdd\s+simulate\s+(?!(?:again|was|is|takes|work|works|cannot|needs|with)\b)([A-Za-z0-9_./'"-]+)/g, 'pdd $1');
+  }
+  if (/\b(?:PDD|Product|ordinary|whole-product|standalone)\s+Simulator\b/i.test(out)) {
+    out = out
+      .replace(/\bPDD Simulator\b/g, 'PDD Prompt Interpreter')
+      .replace(/\bProduct Simulator\b/g, 'Product Prompt Interpreter')
+      .replace(/\bordinary simulator\b/g, 'ordinary Prompt Interpreter')
+      .replace(/\bwhole-product Simulator\b/g, 'whole-product Prompt Interpreter')
+      .replace(/\bstandalone Simulator\b/g, 'standalone Prompt Interpreter');
+  }
+  return out;
+}
+
+function normalizeRuntimeHints(text, { stream = 'stderr' } = {}) {
   if (typeof text !== 'string') return text;
   let out = text.includes('--fill-hash')
     ? text.replace(/pdd\s+test\s+--fill-hash\b/g, 'pdd test').replace(/(?<!\s)\s+--fill-hash\b/g, '')
     : text;
+  if (stream !== 'stdout') {
+    out = normalizeLegacySimulateText(out);
+  } else if (TRY_STDOUT_LEGACY_RE.test(out)) {
+    out = normalizeLegacySimulateText(out);
+  }
   if (out.includes('impossible-result-value-pointer') && !out.includes('result_value_pointer to ""')) {
     out = out.replace(/impossible-result-value-pointer(?![^\n]*result_value_pointer to "")/g, `impossible-result-value-pointer (${IMPOSSIBLE_RVP_HINT})`);
   }
   return out;
 }
 
-function normalizeHintStream(stream) {
+function normalizeHintStream(stream, streamName = 'stderr') {
   if (!stream || typeof stream.write !== 'function' || stream.__pddHintNormalized) return stream;
   return Object.assign(Object.create(stream), {
     __pddHintNormalized: true,
@@ -528,7 +560,7 @@ function normalizeHintStream(stream) {
           : Buffer.isBuffer(chunk) || chunk instanceof Uint8Array
             ? Buffer.from(chunk).toString('utf8')
             : String(chunk);
-      return stream.write(normalizeRuntimeHints(text), ...rest);
+      return stream.write(normalizeRuntimeHints(text, { stream: streamName }), ...rest);
     },
   });
 }
@@ -816,8 +848,8 @@ function seamRuntimePorts(ports = {}, { cwd = null, wrapStdout = true } = {}) {
   if (typeof baseFetch === 'function') {
     merged.fetch = wrapFetchForLegacyCriteriaDiagnostic(baseFetch, cwd, merged);
   }
-  if (wrapStdout && merged.stdout) merged.stdout = normalizeHintStream(merged.stdout);
-  if (merged.stderr) merged.stderr = normalizeHintStream(merged.stderr);
+  if (wrapStdout && merged.stdout) merged.stdout = normalizeHintStream(merged.stdout, 'stdout');
+  if (merged.stderr) merged.stderr = normalizeHintStream(merged.stderr, 'stderr');
   return merged;
 }
 
@@ -2259,7 +2291,7 @@ export function runContracts(input, ports = {}) {
 
 export async function runJobs(input = {}, ports = {}) {
   const { NAMES } = await import('./shared/command-names.mjs');
-  const commands = input?.client?.commands ?? { test: NAMES.test, lint: NAMES.lint, simulate: NAMES.simulate };
+  const commands = input?.client?.commands ?? [NAMES.test, NAMES.lint, NAMES.run];
   const client = { ...(input?.client ?? {}), commands };
   return runtimeRunJobs({ ...input, client }, ports);
 }
@@ -3105,7 +3137,7 @@ export async function runTry(input = {}, ports = {}) {
       return 2;
     }
     if (opts['--stop']) {
-      stderr.write('pdd simulate --stop takes only a STORY. Run pdd simulate --help.\n');
+      stderr.write('pdd --stop takes only a STORY or PROMPT.md target. Run pdd --stop --help.\n');
       return 2;
     }
     if (opts['--save-last']) {
@@ -3121,13 +3153,98 @@ export async function runTry(input = {}, ports = {}) {
           ...(typeof opts['--journey'] === 'string' && opts['--journey'] ? ['--journey', opts['--journey']] : []),
         ].join(' ');
         const targetCmd = existing.product
-          ? `pdd simulate ${productArgs} --fresh --new`
-          : `pdd simulate${existing.story ? ` ${existing.story}` : ''} --fresh --new`;
+          ? `pdd ${productArgs} --fresh --new`
+          : `pdd ${existing.story || '.'} --fresh --new`;
         stderr.write(
           `A Try for "${existing.title}" is already open. --fresh applies only to a new Try: run ${targetCmd} (it stops the open Try first).\n`,
         );
         return 2;
       }
+    }
+  }
+  let runInput = input;
+  if (typeof rawTryOverride !== 'function' && isDirectProgramTarget) {
+    const stderr = forwardPorts.stderr ?? process.stderr;
+    if (opts['--stop']) {
+      const stopDisallowed = [
+        '--tab', '--new', '--fresh', '--no-open', '--no-wait', '--app-map', '--product',
+        '--parts', '--journey', '--max-calls', '--cli', '--shell', '--serve', '--page',
+        '--save-last', '--agent', '--data', '--show-data', '--quiet', '-q',
+      ];
+      if (words.length > 1 || stopDisallowed.some(flag => opts[flag] !== undefined)) {
+        stderr.write('pdd --stop takes only a STORY or PROMPT.md target. Run pdd --stop --help.\n');
+        return 2;
+      }
+      const env = forwardPorts.env ?? process.env;
+      const root = repoTopRoot(cwd);
+      let realRoot = null;
+      if (root) {
+        try { realRoot = realpathSync(root); } catch {}
+      }
+      let realCwd = resolve(cwd);
+      try { realCwd = realpathSync(cwd); } catch {}
+      const stateDir = resolve(env?.PDD_STATE_DIR || join(env?.HOME || homedir(), '.pdd', 'runtime'));
+      const relTarget = realRoot ? relative(realRoot, resolve(realCwd, words[0])).split(sep).join('/') : words[0].replace(/^\.\//, '');
+      const matchingStoryTries = [];
+      if (realRoot) {
+        try {
+          const repoKey = createHash('sha256').update(realRoot).digest('hex').slice(0, 16);
+          const repoFile = join(stateDir, 'repos', `${repoKey}.json`);
+          const st = initialLstatSync(repoFile);
+          if (!st.isSymbolicLink() && st.isFile()) {
+            const tries = JSON.parse(initialReadFileSync(repoFile, 'utf8'))?.tries;
+            if (tries && typeof tries === 'object' && !Array.isArray(tries)) {
+              for (const record of Object.values(tries)) {
+                if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !record.id) continue;
+                const promptKeys = Object.keys(record.prompt_hashes ?? {});
+                if (record.prompt === relTarget || record.entry === relTarget || promptKeys.includes(relTarget)) {
+                  matchingStoryTries.push({ id: record.id, label: record.story || record.id });
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+      if (matchingStoryTries.length === 1) {
+        runInput = { ...input, words: [matchingStoryTries[0].id], options: { '--stop': true } };
+      } else if (matchingStoryTries.length > 1) {
+        const labels = matchingStoryTries.map(item => item.label).join(', ');
+        stderr.write(`Multiple open Try sessions use "${words[0]}" (${labels}). Stop one with pdd --stop <STORY|ID>.\n`);
+        return 2;
+      } else {
+        let programSessionId = null;
+        if (realRoot && relTarget && !relTarget.startsWith('../')) {
+          const rootsToCheck = [...new Set([realRoot, root].filter(Boolean))];
+          for (const candidateRoot of rootsToCheck) {
+            const metaPath = join(stateDir, 'programs', `${createHash('sha256').update(`${candidateRoot}\0${relTarget}`).digest('hex')}.json`);
+            try {
+              const st = initialLstatSync(metaPath);
+              if (!st.isSymbolicLink() && st.isFile()) {
+                const parsed = JSON.parse(initialReadFileSync(metaPath, 'utf8'));
+                if (typeof parsed?.id === 'string' && parsed.id) {
+                  programSessionId = parsed.id;
+                  break;
+                }
+              }
+            } catch {}
+          }
+        }
+        if (programSessionId) {
+          stderr.write(`Stopping standalone program sessions requires @promptdriven/runtime-client >= 1.1.2 (session ID: ${programSessionId}).\n`);
+        } else {
+          stderr.write(`No open Try for "${words[0]}".\n`);
+        }
+        return 2;
+      }
+    } else if (opts['--save-last']) {
+      stderr.write('pdd --save-last takes an optional STORY, not a standalone prompt file. Run pdd --save-last --help.\n');
+      return 2;
+    } else if (opts['--product']) {
+      stderr.write('pdd --product composes the repository product maps; omit standalone prompt files. Run pdd --product --help.\n');
+      return 2;
+    } else if (opts['--cli'] || opts['--shell']) {
+      stderr.write(`Run pdd ${words[0]} [args...] directly for CLI prompts, or use pdd <STORY> --cli for a Story shell.\n`);
+      return 2;
     }
   }
   const [
@@ -3196,16 +3313,16 @@ export async function runTry(input = {}, ports = {}) {
   const skipSeamAutoScreenTab = typeof rawTryOverride !== 'function' && runtimeClientSupportsPlainProseUi();
   const screenTabMode = skipSeamAutoScreenTab
     ? 'none'
-    : classifyPlainProseScreenTab(input, cwd, forwardPorts, lazyOverlay);
+    : classifyPlainProseScreenTab(runInput, cwd, forwardPorts, lazyOverlay);
   if (screenTabMode === 'reopen') {
     const baseStderr = forwardPorts.stderr ?? process.stderr;
     const reopenStderr = wrapFilteredStream(baseStderr, text => text.includes(FORM_TAB_NOTICE));
-    return invoke(input, { ...forwardPorts, stderr: reopenStderr });
+    return invoke(runInput, { ...forwardPorts, stderr: reopenStderr });
   }
   const effectiveInput =
     screenTabMode === 'inject'
-      ? { ...input, options: { ...opts, '--tab': 'screen' } }
-      : input;
+      ? { ...runInput, options: { ...opts, '--tab': 'screen' } }
+      : runInput;
   if (screenTabMode === 'inject' && !opts['--new']) {
     let reopenAutoTabConflict = false;
     let startupSucceeded = false;

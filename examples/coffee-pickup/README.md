@@ -10,6 +10,6 @@ The composed Screen journey uses explicit navigation: Order on the phone opens t
 
 
 After copying the example into its own Git project as described above, open the
-three-part product with `pdd simulate --product --journey J1 --max-calls 30`.
+three-part product with `pdd --product --journey J1 --max-calls 30`.
 Use `pdd test --journeys J1 --max-calls 20` to check the authored six-step journey.
 Whole-product mode requires a service advertising product-parts-v1.

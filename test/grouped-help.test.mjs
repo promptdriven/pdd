@@ -32,9 +32,11 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
 
   // Leads with description, usage, and concise numbered Quick start
   assert.equal(allLines[0], 'PDD: prompt-driven development for your coding agent.');
-  assert.equal(allLines[2], 'Usage: pdd <command> [options]');
+  assert.equal(allLines[2], 'Usage: pdd <PROMPT.md|STORY|.> [args...]  |  pdd <command> [options]');
   assert.equal(allLines[4], 'Quick start:');
   assert.match(baseline, /Quick start:\n  1\. pdd setup\b[\s\S]*?\n  2\. pdd init\b[\s\S]*?\n  3\. \/pdd <task>[\s\S]*?\n  4\. pdd prove\b/);
+  assert.ok(baseline.includes('  pdd <PROMPT.md|STORY|.>'), 'Core workflow leads with direct prompt execution');
+  assert.doesNotMatch(baseline, /\b(?:sim|simulate|simulator)\b/i, 'root help has zero sim/simulate/Simulator wording');
 
   // Human-first group ordering: Core PDD workflow before Product & graph, Autopilot, Cloud accounts, Metrics
   const coreIdx = baseline.indexOf('Core PDD workflow:');
@@ -77,13 +79,16 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
 });
 
 test('3496: focused family and command help exposes complete options, defaults, and constraints within 80 columns', async () => {
-  const families = ['test', 'lint', 'prove', 'simulate', 'accounts', 'product', 'autopilot', 'metrics'];
+  const families = ['test', 'lint', 'prove', '.', 'accounts', 'product', 'autopilot', 'metrics'];
   for (const family of families) {
     const res = await runHelp([family, '--help']);
     assert.equal(res.exit, 0, `${family} --help`);
     assert.equal(res.stderr, '', `${family} --help`);
+    assert.doesNotMatch(res.stdout, /\b(?:sim|simulate|simulator)\b/i, `${family} --help has zero sim/simulate/Simulator wording`);
     const unwrapped = res.stdout.replace(/\|\n      /g, '|').replace(/\n      /g, ' ');
-    const expectedForms = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.slice(4).split(/\s+/)[0] === family);
+    const expectedForms = family === '.'
+      ? PUBLIC_COMMAND_ROUTES.find(r => r.id === 'try').forms
+      : PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.slice(4).split(/\s+/)[0] === family);
     assert.ok(expectedForms.length > 0, `manifest has forms for ${family}`);
     for (const entry of expectedForms) {
       assert.ok(unwrapped.includes(`  ${entry.form}\n`), `${family} --help includes ${entry.form}`);
@@ -108,7 +113,7 @@ test('3496: focused family and command help exposes complete options, defaults, 
 
   // Every top-level command family in PUBLIC_COMMAND_ROUTES is discoverable from root --help
   const rootText = renderHelp([], '/opt/pdd');
-  const topWords = new Set(PUBLIC_COMMAND_ROUTES.map(r => r.prefix[0]).filter(w => w !== 'help'));
+  const topWords = new Set(PUBLIC_COMMAND_ROUTES.map(r => r.prefix[0]).filter(w => w && w !== 'help'));
   for (const word of topWords) {
     assert.ok(word.startsWith('-') ? rootText.includes(word) : rootText.includes(`pdd ${word}`), `root help mentions top-level command "${word}"`);
   }

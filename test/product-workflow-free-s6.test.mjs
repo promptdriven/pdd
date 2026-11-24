@@ -115,7 +115,7 @@ test('S6 workflow-free productStart prints crisp /pdd handoff with wave and SHA-
   assert.match(textNext.message, /Wave 2: journeys\./);
 });
 
-test('#3328 mechanical fix: single-part runs mock other parts while all/journey runs require real unmocked cross-part integration + pdd sim --product', async t => {
+test('#3328 mechanical fix: single-part runs mock other parts while all/journey runs require real unmocked cross-part integration + pdd --product', async t => {
   const f = makeFixture(t);
   const single = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
   assert.equal(single.exitCode, 0);
@@ -127,7 +127,8 @@ test('#3328 mechanical fix: single-part runs mock other parts while all/journey 
   const journeyBody = f.state.creates[1].body;
   assert.doesNotMatch(journeyBody, /Other parts are fakes from their contracts/);
   assert.match(journeyBody, /real unmocked cross-part journeys/i);
-  assert.match(journeyBody, /pdd sim --product/);
+  assert.match(journeyBody, /pdd --product/);
+  assert.doesNotMatch(journeyBody, /\bpdd sim\b/i);
   assert.match(journeyBody, /Do not change contracts\/ in this run\./);
 });
 

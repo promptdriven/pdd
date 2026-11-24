@@ -49,7 +49,7 @@ Group summaries appear in the existing issue-list disclosure, before issue rows.
 
 ## Explore the same facts
 
-For the Simulator and browser, search is form `search` with named field `query`;
+For the Prompt Interpreter and browser, search is form `search` with named field `query`;
 filter button values are `filter-all`, `filter-waiting`, `filter-ready`,
 `filter-running`, `filter-unknown`. Node button values are their canonical issue
 keys. IDs include repository and issue number so linked repos cannot collide.

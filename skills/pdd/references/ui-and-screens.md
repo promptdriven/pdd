@@ -1,4 +1,4 @@
-# UI screens, `.ui.svg` mockups, and `pdd sim`
+# UI screens, `.ui.svg` mockups, and running UI prompts directly
 
 Start every single-screen interactive UI with **one plain-prose `.prompt.md` and zero `app-map.json`**. Add `app-map.json` or `.ui.svg` mockups only when the app genuinely needs them. Backend servers, routers, CLIs, and daemons stay screenless.
 
@@ -6,11 +6,11 @@ Start every single-screen interactive UI with **one plain-prose `.prompt.md` and
 
 Write one plain-Markdown prompt with:
 
-- **`render({ state }) -> { state, html }`**: initializes default state when `state` is missing, `null`, or `{}` (the zero-`app-map.json` Simulator opens with `{"state": {}}`). Returns compact semantic HTML (`<button id="..." value="...">`, `<a>`, `<form>`, `data-event-kind="key"`, optional `data-pdd-op="<op>"`) with HTML-escaped dynamic text and inline sanitizer-safe `<style>`.
+- **`render({ state }) -> { state, html }`**: initializes default state when `state` is missing, `null`, or `{}` (the zero-`app-map.json` Prompt Interpreter opens with `{"state": {}}`). Returns compact semantic HTML (`<button id="..." value="...">`, `<a>`, `<form>`, `data-event-kind="key"`, optional `data-pdd-op="<op>"`) with HTML-escaped dynamic text and inline sanitizer-safe `<style>`.
 - **`handle_event({ state, event }) -> { state, html }`**: handles clicks, form submits, keyboard shortcuts, and declarative `data-pdd-op` actions in one call. For large screens, may return an HTML delta patch `{ state, mode: "patch", base_sha256, edits }`.
 - **Optional `apply({ state, event }) -> { state }`**: pure JSON state-transition op for fast logic-only checks in `pdd test` without HTML tokens.
 
-A person can try it right away with `pdd sim prompts/<app>.prompt.md` (no Story, test file, or `app-map.json` required); the Simulator synthesizes a wildcard map and opens on the **Screen** tab. Agents recommend this command during the pre-code check and launch it only when asked.
+A person can try it right away with `pdd prompts/<app>.prompt.md` (no Story, test file, or `app-map.json` required); the Prompt Interpreter synthesizes a wildcard map and opens on the **Screen** tab. Agents recommend this command during the pre-code check and launch it only when asked.
 
 ### HTML sanitizer & CSS rules
 
@@ -32,7 +32,7 @@ Add `app-map.json` (or `app/app-map.json`) **only** when the UI needs host `time
 
 - **Host timers (`timers`):** optional root array (`<= 16` timers, `<= 1` per screen, `interval_ms` integer `1000..3600000`) with `id`, `screen`, `interval_ms`, `enabled_pointer` (Boolean), `generation_pointer` (integer), `handler`, `input`, `state`, `next` (and optional `after`). Omit `timers` unless automatic ticks are requested; prefer `handle_event` over separate `apply`+`render` handlers in `app-map.json` (avoids 2× calls per click), and keep grid HTML compact (avoid verbose per-cell attributes).
 - **Follow-up `after` handlers:** chain a secondary operation after a handler and bind its result into state via `"bind": "/path"`.
-- Run `pdd sim <story> --new` after changing prompts or `app-map.json` so the Simulator uploads the new version.
+- Run `pdd <story> --new` (or `pdd prompts/<app>.prompt.md --new`) after changing prompts or `app-map.json` so the Prompt Interpreter uploads the new version.
 
 ## 3. Optional `.ui.svg` mockups
 
@@ -44,9 +44,9 @@ Draw `.ui.svg` mockups (`views/<state>[--<variant>]__<layout-mode>.ui.svg`) only
 - Declare **illustrative** vs **comparison reference** and fidelity (**Relational**, **Measured**, or **Exact**).
 - Verify layout alignment offline with `pdd lint` (`<150ms`, 0 AI calls); compare a live browser render with `pdd test --screen URL --drawing PATH [--look]`.
 
-## 4. HTML checks and Simulator rules
+## 4. HTML checks and Prompt Interpreter rules
 
 - **HTML checks** (always include a tag name in selectors, e.g. `span#score`, never `#score`): `["html_exists", "button#start"]`, `["html_text", "span#score", "=", "42"]`, `["html_attr", "button#start", "value", "=", "start"]`, `["html", "button", "labels_include", ["Start", "Pause"]]`.
-- **Link privacy:** show Simulator URLs only to the person — **never** paste them into files, PRs, issues, or shared channels.
-- **Save as test:** only the person saves cases in the Simulator. Pull saved cases back with `pdd sim <story>`, verify every criterion has an exact check, and review expected values with the person.
-- Never launch an interactive Simulator session unless the person asks; recommend `pdd sim <story>` during the pre-code check.
+- **Link privacy:** show Prompt Interpreter URLs only to the person — **never** paste them into files, PRs, issues, or shared channels.
+- **Save as test:** only the person saves cases in the Prompt Interpreter. Pull saved cases back with `pdd <story>`, verify every criterion has an exact check, and review expected values with the person.
+- Never launch an interactive Prompt Interpreter session unless the person asks; recommend `pdd <story>` (or `pdd prompts/<app>.prompt.md`) during the pre-code check.

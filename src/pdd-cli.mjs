@@ -1,10 +1,10 @@
 // Prompt: prompts/cli/pdd-cli.prompt.md
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
-import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
+import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { gitContext as defaultGitContext, gitFiles } from './shared/git-context.mjs';
 import { PACKAGE_ROOT } from './shared/package-root.mjs';
 import { causeText } from './shared/safe-read.mjs';
@@ -221,8 +221,10 @@ function wrapHelpDescription(text, width = 76, indent = '    ') {
 }
 export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
   if (prefix.length > 0) {
-    const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) =>
-      prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
+    const rows = prefix.length === 1 && prefix[0] === '.'
+      ? (PUBLIC_COMMAND_ROUTES.find(route => route.id === 'try')?.forms ?? [])
+      : PUBLIC_COMMAND_MANIFEST.filter(({ form }) =>
+          prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
     const blocks = rows.flatMap(({ form, description }, index) => [
       ...(index ? [''] : []),
       ...wrapHelpForm(form, 80),
@@ -369,6 +371,103 @@ async function shouldUseRuntimeLocalLint(repoFeatures, cwd, operands) {
   }
 }
 
+const SKIP_DIRECT_WALK_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.cache', 'vendor', '.pdd']);
+
+function findLocalProjectRoot(cwd) {
+  if (typeof cwd !== 'string' || !cwd) return null;
+  let dir = resolve(cwd);
+  for (let depth = 0; depth < 32; depth += 1) {
+    try { if (existsSync(join(dir, '.git'))) return dir; } catch { break; }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  const base = resolve(cwd);
+  try {
+    if (['user_stories', 'tests', 'test', 'prompts'].some(sub => existsSync(join(base, sub)))) return base;
+  } catch {}
+  return null;
+}
+
+function walkProjectRelFiles(root, startDir, { maxDepth = 6, maxEntries = 2000, skipTestFixtureDirs = false, suffix = '' } = {}) {
+  const absStart = join(root, startDir);
+  try { if (!lstatSync(absStart).isDirectory()) return []; } catch { return []; }
+  const out = [];
+  const visit = (relDir, depth) => {
+    if (depth > maxDepth || out.length >= maxEntries) return;
+    let entries;
+    try { entries = readdirSync(join(root, relDir), { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      if (out.length >= maxEntries) break;
+      if (entry.isSymbolicLink()) continue;
+      const rel = `${relDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRECT_WALK_DIRS.has(entry.name) && (!skipTestFixtureDirs || !NON_SCENARIO_TEST_DIRS.has(entry.name.toLowerCase()))) {
+          visit(rel, depth + 1);
+        }
+      } else if (entry.isFile() && (!suffix || entry.name.endsWith(suffix))) {
+        out.push(rel);
+      }
+    }
+  };
+  visit(startDir, 0);
+  return out;
+}
+
+function resolveLocalDirectTarget(word, cwd) {
+  if (typeof word !== 'string' || !word || !word.trim() || word.startsWith('-') || /[\x00-\x1f\x7f]/.test(word)) return null;
+  const root = findLocalProjectRoot(cwd);
+  if (!root) return null;
+  const clean = word.replaceAll('\\', '/').replace(/^\.\//, '');
+  if (clean.includes('/') || clean.endsWith('.md') || clean.endsWith('.json')) {
+    const candidates = [resolve(cwd, word)];
+    const fromRoot = resolve(root, clean);
+    if (fromRoot !== candidates[0]) candidates.push(fromRoot);
+    let realRoot;
+    try { realRoot = realpathSync(root); } catch { return null; }
+    for (const candidate of candidates) {
+      const rel = relative(root, candidate).split(sep).join('/');
+      if (!rel || rel === '..' || rel.startsWith('../')) continue;
+      let realCandidate;
+      try {
+        realCandidate = realpathSync(candidate);
+        const realRel = relative(realRoot, realCandidate).split(sep).join('/');
+        if (!realRel || realRel === '..' || realRel.startsWith('../') || !statSync(realCandidate).isFile()) continue;
+      } catch { continue; }
+      const parts = rel.split('/');
+      const base = parts.at(-1);
+      const operand = candidate === candidates[0] ? word : rel;
+      if (rel.endsWith('.md') && parts.slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(base)) {
+        return { kind: 'story', operand };
+      }
+      const testDirIdx = parts.slice(0, -1).findIndex(p => p === 'test' || p === 'tests');
+      if (rel.endsWith('.json') && testDirIdx >= 0 && !NON_SCENARIO_JSON_NAME_RE.test(base)
+        && !parts.slice(testDirIdx + 1, -1).some(p => NON_SCENARIO_TEST_DIRS.has(p.toLowerCase()))) {
+        return { kind: 'story', operand };
+      }
+    }
+    return null;
+  }
+  const storyFiles = walkProjectRelFiles(root, 'user_stories', { suffix: '.md' });
+  if (storyFiles.some(rel => !/^(?:plan|readme)\.md$/i.test(basename(rel)) && basename(rel, '.md') === clean)) {
+    return { kind: 'story', operand: word };
+  }
+  for (const testDir of ['tests', 'test']) {
+    const testFiles = walkProjectRelFiles(root, testDir, { skipTestFixtureDirs: true, suffix: '.json' });
+    if (testFiles.some(rel => !NON_SCENARIO_JSON_NAME_RE.test(basename(rel)) && basename(rel, '.json') === clean)) {
+      return { kind: 'story', operand: word };
+    }
+  }
+  const promptFiles = walkProjectRelFiles(root, 'prompts', { suffix: '.prompt.md' });
+  const matchingPrompts = promptFiles.filter(rel => basename(rel, '.prompt.md') === clean);
+  if (matchingPrompts.length === 1) {
+    const operand = relative(resolve(cwd), join(root, matchingPrompts[0])).split(sep).join('/');
+    return { kind: 'prompt', operand };
+  }
+  return null;
+}
+
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
@@ -376,7 +475,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   setupProject, initProject, projectStatus, localLint, localLintPorts = {}, proveRunner, proveRunnerPorts = {}, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic,
   readPackageVersion = defaultReadPackageVersion, findSkills, syncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, doctor, doctorPorts = {}, hostInstallWarnings, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
   let plan;
-  try { plan = parseArgv(argv); }
+  try { plan = parseArgv(argv, { resolveTarget: word => resolveLocalDirectTarget(word, cwd) }); }
   catch (error) {
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
@@ -603,7 +702,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd mcp could not start.${reason(error)}`); return 1; }
     }
     case 'setup': {
-      // Laptop-wide setup: non-blocking PDD account hint, global skills sync, optional Simulator MCP registration.
+      // Laptop-wide setup: non-blocking PDD account hint, global skills sync, optional Prompt Interpreter MCP registration.
       // Never probes coding-agent logins, never edits repositories, and never prompts for Autopilot settings.
       const yes = plan.options['--yes'] === true;
       const upgrade = plan.options['--upgrade'] === true;
@@ -943,7 +1042,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           const inverted = findInvertedNativeOnlyStory(runtime, cwd, [...plan.operands], { ...plan.options });
           if (inverted) line(stderr, `Advisory [inverted-native-only-dependency]: Story test ${inverted.test} enters checkable prompt ${inverted.entry_path}, which links kind: native-only prompt ${inverted.native_only_path} under ## Dependencies. Invert the dependency so ${inverted.native_only_path} depends on ${inverted.entry_path} and inject a <port>.<op> port.`);
         }
-        const action = plan.local === 'runtime-try' ? 'simulate' : 'check';
+        const action = plan.local === 'runtime-try' ? 'runTry' : 'check';
         return await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
@@ -980,10 +1079,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
+  const quietDirect = plan.local === 'runtime-try' && (plan.options['--quiet'] === true || plan.options['-q'] === true);
   const hasSafeHome = env.HOME === undefined || (typeof env.HOME === 'string' && env.HOME.trim().length > 0 && isAbsolute(env.HOME));
   if (code === 0
     && hasSafeHome
     && !SKIP_SKILL_SYNC_ROUTES.has(plan.local)
+    && !quietDirect
     && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
     && plan.options['--json'] !== true
     && !argv.includes('--json')) {
@@ -1004,7 +1105,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
     } catch { /* Post-upgrade skill sync never blocks or fails a CLI command. */ }
   }
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'doctor', 'init', 'status', 'lint', 'prove'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'doctor', 'init', 'status', 'lint', 'prove'].includes(plan.local) && !quietDirect && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

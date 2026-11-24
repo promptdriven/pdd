@@ -773,7 +773,7 @@ registerHooks({
   }
 
   const ASYNC_SEAM_BRIDGE_PROBES = new Set([
-    'cli:test', 'cli:lint', 'cli:simulate', 'cli:contracts', 'cli:contracts-sync',
+    'cli:test', 'cli:lint', 'cli:direct-try', 'cli:contracts', 'cli:contracts-sync',
     'cli:jobs', 'cli:mcp', 'child:try-doors-launcher',
   ]);
 
@@ -876,7 +876,7 @@ registerHooks({
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
     ['cli:prove', [bin, 'prove', '--json'], repo],
-    ['cli:simulate', [bin, 'simulate', '--stop', 'a'], repo],
+    ['cli:direct-try', [bin, '--stop', 'a'], repo],
     ['cli:contracts', [bin, 'contracts'], repo],
     ['cli:contracts-sync', [bin, 'contracts', 'sync'], repo],
     ['cli:jobs', [bin, 'jobs'], repo],
@@ -915,7 +915,7 @@ registerHooks({
   const LIGHT_ENTRIES = new Set([
     'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion', 'cli:doctor',
     'cli:files', 'cli:owner', 'cli:update',
-    'cli:jobs', 'cli:contracts', 'cli:contracts-sync', 'cli:simulate', 'cli:mcp',
+    'cli:jobs', 'cli:contracts', 'cli:contracts-sync', 'cli:direct-try', 'cli:mcp',
     'child:try-doors-launcher',
     'lib:svg-layout.mjs', 'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
@@ -970,7 +970,7 @@ registerHooks({
 
   for (const [cmdArgs, suffix] of [
     [['test', 'a'], '/file-owner.mjs'],
-    [['simulate', '--stop', 'a'], '/agent-config.mjs'],
+    [['--stop', 'a'], '/agent-config.mjs'],
   ]) {
     const checkOrTryFail = runWithRejectedModule(suffix, [bin, ...cmdArgs], repo);
     assert.equal(checkOrTryFail.status, 3);
@@ -4276,7 +4276,6 @@ test('SEAM26 (#3444): every CLI option accepted by @promptdriven/runtime-client 
   ]);
   const NON_PUBLIC_RUNTIME_TRY_OPTIONS = new Set([
     '--live-local', '--command-manifest', '--allow-live-writes',
-    '--data', '--show-data', '--quiet',
   ]);
 
   const missingCheck = checkRuntimeOptions.filter(flag => !checkCatalogSet.has(flag) && !NON_PUBLIC_RUNTIME_CHECK_OPTIONS.has(flag));
@@ -4343,12 +4342,12 @@ test('SEAM26 (#3444): every CLI option accepted by @promptdriven/runtime-client 
   const missingLint = lintAcceptedAtRuntime.filter(flag => !lintCatalogSet.has(flag));
   assert.deepEqual(missingLint, [], `src/command-catalog.mjs lint route is missing runtime-client lint options: ${missingLint.join(', ')}`);
 
-  // Verify argument-parser accepts every declared option across test, lint and simulate.
-  for (const [route, commandWord] of [[checkRoute, 'test'], [lintRoute, 'lint'], [tryRoute, 'simulate']]) {
+  // Verify argument-parser accepts every declared option across test, lint, and direct Prompt Interpreter execution.
+  for (const [route, commandPrefix] of [[checkRoute, ['test']], [lintRoute, ['lint']], [tryRoute, []]]) {
     for (const option of route.options) {
       const { argv } = sampleArgForOption(option);
-      const plan = parseArgv([commandWord, ...argv]);
-      assert.ok(Object.hasOwn(plan.options, option.name), `parseArgv must accept ${commandWord} ${option.name}`);
+      const plan = parseArgv([...commandPrefix, ...argv]);
+      assert.ok(Object.hasOwn(plan.options, option.name), `parseArgv must accept ${[...commandPrefix, option.name].join(' ')}`);
     }
   }
 

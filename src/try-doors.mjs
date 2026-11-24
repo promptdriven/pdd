@@ -1,2 +1,2 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: b961af0352e1c1035dae4f20a5362a74a02e213826429b9dc5148de7e1e7cb4a).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 18aa708d0828991e58eb46e429cf2cfa4945d7028b9eab5d1ff05562a785c5ed).
 export { runShim } from './runtime-seam.mjs';

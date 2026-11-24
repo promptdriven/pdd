@@ -10,16 +10,16 @@ Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before
 
 ## Names
 
-`NAMES` is the one place for the words of core commands: `{test: 'test', lint: 'lint', simulate: 'simulate', run: 'run'}`. Help forms and completion derive `test`, `lint`, and `simulate` from `NAMES`.
+`NAMES` is the one place for the words of core commands: `{test: 'test', lint: 'lint', run: 'run'}`. Help forms and completion derive `test` and `lint` from `NAMES`, and `runJobs` derives the Try job label from `NAMES.run`.
 
 | Route id | Prefix | Local | Quiet words | Removed words |
 |---|---|---|---|---|
 | `check` | `test` | `runtime-check` | | `check` (new command `pdd test`) |
 | `lint` | `lint` | `lint` | | `check` with `--lint` (new command `pdd lint`) |
-| `try` | `simulate` | `runtime-try` | `sim` | `try` (new command `pdd simulate`) |
+| `try` | *(empty — direct execution)* | `runtime-try` | | `simulate`, `sim`, `try` (in `REMOVED_COMMANDS`: `Run pdd <PROMPT.md|STORY> instead.`) |
 
-- A quiet word (`sim`, `-V`) parses like the prefix of its route, with nothing added. Completion never offers it. Help names `sim` once, in the description of the first `simulate` form.
-- A removed word runs nothing. The [argument parser](argument-parser.prompt.md#removed-names) refuses route-owned removed words (`check`, `check --lint`, `try`) and standalone `REMOVED_COMMANDS` (`workflow` → actionable pointer to `/pdd`, `pdd prove`, and `pdd autopilot`; `approve` → actionable pointer to review and approve prompt changes in chat or GitHub PR review) with exit 2 and zero side effects.
+- A quiet word (`-V`) parses like the prefix of its route, with nothing added. Completion never offers it.
+- A removed word runs nothing. The [argument parser](argument-parser.prompt.md#removed-names) refuses route-owned removed words (`check`, `check --lint`) and standalone `REMOVED_COMMANDS` (`simulate`, `sim`, `try` → `Run pdd <PROMPT.md|STORY> instead.`, `workflow` → actionable pointer to `/pdd`, `pdd prove`, and `pdd autopilot`, and `approve` → actionable pointer to review and approve prompt changes in chat or GitHub PR review) with exit 2 and zero side effects.
 
 ## Core PDD workflow routes
 
@@ -30,7 +30,7 @@ Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before
   - Forms include `pdd test --target code [STORY...] [--json]`, `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]`, `pdd test --journeys [JOURNEY] [--max-calls N]`, `pdd test [PATH|STORY...] [--lf] [--cache-clear] [--fresh] [--json] [--details] [--timeout MIN] [--max-calls N]`, `pdd test [PATH|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]`, `pdd test --read [BATCH|CALL_ID] [--json] [--details] [--timeout MIN]`, `pdd test --retry BATCH [--json] [--details] [--timeout MIN]`, `pdd test --reconcile REQUEST_ID [--json]`, `pdd test --explain-bindings [STORY...] [--json]`, `pdd test --files [STORY...] [--app-map PATH] [--json]`, and `pdd test --screen URL --drawing PATH [--look] [--json]`.
 - `lint` (`lint`, local `lint`, implies `--lint`): optional repeated text `story`, options `--json`, `--local`, `--remote`, `--diff` (`optional-text`), `--base`, `--timeout` (`1..120`), `--max-calls` (`1..1000`), `--codex`, `--issue`, `--emit-v1`, `--write`, `--bind-criteria`. Offline-first by default (`0` AI, `0` network, `0` batch-state writes); `--remote` runs hosted interpreter lint.
 - `prove` (`prove`, local `prove`): no operands, options `--base`, `--test`, `--expect`, `--overlay`, `--setup`, `--timeout` (`1..120`), `--json`. Forms cover zero-flag merge-base proof (`pdd prove [--base REF] [--timeout MIN] [--json]`) and isolated base-vs-head bug-contrast proof (`pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]`).
-- `try` (`simulate`, quiet `sim`, local `runtime-try`): optional text `story`, options `--product`, `--parts`, `--journey`, `--agent`, `--tab` (`call|screen|terminal|world`), `--new`, `--fresh`, `--page`, `--cli`, `--shell`, `--save-last`, `--serve` (`optional-integer` `1..65535`, default `8080`), `--max-calls` (`1..1000`), `--no-open`, `--stop`, `--app-map`, `--no-wait`.
+- `try` (empty prefix — direct Prompt Interpreter execution, local `runtime-try`): optional text `target` (`.prompt.md` / `app-map.json` with optional verbatim program args, a Story selector, or `.` for whole-project mode), options `--product`, `--parts`, `--journey`, `--agent`, `--tab` (`call|screen|terminal|world`), `--new`, `--fresh`, `--page`, `--cli`, `--shell`, `--save-last`, `--serve` (`optional-integer` `1..65535`, default `8080`), `--max-calls` (`1..1000`), `--no-open`, `--stop`, `--app-map`, `--no-wait`, `--data`, `--show-data`, `--quiet`, `-q`. Forms cover direct execution (`pdd [OPTIONS] <PROMPT.md|STORY|.> [ARGS...]`), explicit `--page`, `--cli [--shell]`, `--serve [PORT]`, `--product`, `--save-last [STORY]`, and `--stop [STORY|PROMPT.md]`.
 - `files` (`files`, local `project-files`, [files view](files.prompt.md)): flag `--json`. Form `pdd files [--json]`.
 - `owner` (`owner`, local `file-owner`, [file owner lookup](file-owner.prompt.md)): required repeated text `path`, flag `--json`. Form `pdd owner PATH... [--json]`.
 - `update` (`update`, local `update-sync`, [Changed-map wrapper](update-sync.prompt.md)): optional repeated text `file`, options `--from` (text), `--branch` (flag), `--all` (flag), `--check` (flag), hidden `--write` (flag, refused read-only by handler without advertising in help or completion), and `--json` (flag). Form: `pdd update [FILE...] [--from RANGE] [--branch] [--all] [--check] [--json]`.
@@ -73,7 +73,7 @@ Register `autopilot.investigate`, prefix `autopilot investigate`, local `autopil
 
 ## Help text
 
-Export the frozen `PUBLIC_HELP_TEXT` object with `heading`, `usageLine`, `quickStartLines`, `groups`, `focusedHelpLines`, `closingLines`, `learnLines`, and `promptingLines`. Keep every rendered non-installation-path line of root help and `promptingLines` within 80 columns (`Skill:` and `Prompting guide:` print full local package paths). Quick start highlights the 4-step workflow (`pdd setup`, `pdd init`, `/pdd`, `pdd prove`), and groups have zero duplicate entries across groups. Groups order human-first: `Core PDD workflow`, `Product & graph (pdd product --help)`, `Autopilot (pdd autopilot --help)`, `Cloud accounts (pdd accounts --help)`, and `Metrics, shell & help`.
+Export the frozen `PUBLIC_HELP_TEXT` object with `heading`, `usageLine`, `quickStartLines`, `groups`, `focusedHelpLines`, `closingLines`, `learnLines`, and `promptingLines`. Keep every rendered non-installation-path line of root help and `promptingLines` within 80 columns (`Skill:` and `Prompting guide:` print full local package paths). `usageLine` shows both direct execution (`pdd <PROMPT.md|STORY|.> [args...]`) and subcommands (`pdd <command> [options]`). Quick start highlights the 4-step workflow (`pdd setup`, `pdd init`, `/pdd`, `pdd prove`), and `Core PDD workflow` leads with `pdd <PROMPT.md|STORY|.>` on the Prompt Interpreter. Groups have zero duplicate entries across groups and zero user-facing `sim`/`simulate`/`Simulator` wording. Groups order human-first: `Core PDD workflow`, `Product & graph (pdd product --help)`, `Autopilot (pdd autopilot --help)`, `Cloud accounts (pdd accounts --help)`, and `Metrics, shell & help`.
 
 ## Learn PDD
 

@@ -21,12 +21,12 @@ Contents:
 12. [Known limits](#12-known-limits)
 13. [Troubleshooting](#13-troubleshooting)
 14. [Report a problem](#14-report-a-problem)
-15. [Use your program for real with `pdd simulate`](#15-use-your-program-for-real-with-pdd-simulate)
-16. [Ask your agent in the PDD Simulator](#16-ask-your-agent-in-the-pdd-simulator)
+15. [Use your program for real with `pdd`](#15-use-your-program-for-real-with-pdd)
+16. [Ask your agent in the PDD Prompt Interpreter](#16-ask-your-agent-in-the-pdd-prompt-interpreter)
 
 ## 1. Before you start
 
-PDD runs on your own machine, with your own agent account and your own GitHub account. Remote `pdd test`, `pdd lint --remote`, `pdd simulate` and the Try tools in `pdd mcp` use the PDD interpreter with your GitHub login, which needs PDD Cloud approval.
+PDD runs on your own machine, with your own agent account and your own GitHub account. Remote `pdd test`, `pdd lint --remote`, direct `pdd <PROMPT.md|STORY|.>` runs and the Try tools in `pdd mcp` use the PDD interpreter with your GitHub login, which needs PDD Cloud approval.
 
 Check your tools:
 
@@ -57,12 +57,12 @@ Do these steps in this order:
 | Step | Command | When |
 |---|---|---|
 | 1. Install the pdd command | `npm install -g @promptdriven/pdd` | Once on your machine |
-| 2. Set up your machine | `pdd setup` | Once on your machine: installs `/pdd` globally and previews PDD Simulator MCP registration |
+| 2. Set up your machine | `pdd setup` | Once on your machine: installs `/pdd` globally and previews PDD Prompt Interpreter MCP registration |
 | 3. Set up a repo | `pdd init` | Once in the top folder of each repository |
 
 ### 2.1 Install the pdd command
 
-You need the pdd command for offline repo tools (`pdd init`, `pdd status`, `pdd lint`, `pdd prove`, `pdd update`, `pdd owner`, `pdd files`), interpreter commands (`pdd test`, `pdd simulate`), and headless Autopilot (`pdd autopilot`).
+You need the pdd command for offline repo tools (`pdd init`, `pdd status`, `pdd lint`, `pdd prove`, `pdd update`, `pdd owner`, `pdd files`), interpreter commands (`pdd <PROMPT.md|STORY|.>`, `pdd test`), and headless Autopilot (`pdd autopilot`).
 
 ```sh
 npm install -g @promptdriven/pdd
@@ -85,7 +85,7 @@ Important:
 pdd setup
 ```
 
-`pdd setup` installs the global `/pdd` skill into user folders (marked with `.pdd-skill.json`), removes retired PDD split skills and their agent-folder/dangling symlinks, and previews PDD Simulator MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to apply previewed MCP registration without prompting, `--skills-dir PATH` for a custom folder, or `--upgrade` to sync skills and silently refresh only already-registered stale PDD MCP entries.
+`pdd setup` installs the global `/pdd` skill into user folders (marked with `.pdd-skill.json`), removes retired PDD split skills and their agent-folder/dangling symlinks, and previews PDD Prompt Interpreter MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to apply previewed MCP registration without prompting, `--skills-dir PATH` for a custom folder, or `--upgrade` to sync skills and silently refresh only already-registered stale PDD MCP entries.
 
 **Alternative (skill-only installer, without MCP registration):**
 
@@ -168,7 +168,7 @@ PDD exposes one skill: [`pdd`](../skills/pdd/SKILL.md), with co-located referenc
 | [`references/stories.md`](../skills/pdd/references/stories.md) | How to write Stories (`user_stories/*.md`) and scenario test files (`tests/*.json`) |
 | [`references/product.md`](../skills/pdd/references/product.md) | How to plan multi-part products with shared contracts |
 | [`references/ports-and-cli.md`](../skills/pdd/references/ports-and-cli.md) | Ports, interfaces, CLI programs, HTTP routes, and persistence |
-| [`references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md) | Screens, HTML rendering, app maps, and interactive simulation |
+| [`references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md) | Screens, HTML rendering, app maps, and interactive Prompt Interpreter runs |
 | [`references/verification.md`](../skills/pdd/references/verification.md) | Real-path verification, `pdd.json` `verify.paths` Feature Map, `pdd prove`, and Deliberate-Break Probe |
 | [`references/formal.md`](../skills/pdd/references/formal.md) | Code-bound formal verification (3-tier stack, Z3 isolation, mutation control; loaded only for invariant-heavy work) |
 
@@ -192,7 +192,7 @@ Do not edit the installed skill folders: an update replaces your edits. The skil
 
 ## 5. Set up a repo and use `/pdd`
 
-Run `pdd setup` once on your machine to install the `/pdd` skill globally and preview PDD Simulator MCP tool registration (`--yes` applies MCP registration without prompting; non-interactive runs without `--yes` skip MCP safely). `pdd setup` edits no repository files.
+Run `pdd setup` once on your machine to install the `/pdd` skill globally and preview PDD Prompt Interpreter MCP tool registration (`--yes` applies MCP registration without prompting; non-interactive runs without `--yes` skip MCP safely). `pdd setup` edits no repository files.
 
 Set up each repo once from its top folder:
 
@@ -271,13 +271,13 @@ pdd autopilot logs 42 -f               # follow live worker progress (Ctrl-C det
 
 ## 7. Check prompts on the PDD interpreter
 
-The PDD interpreter runs a prompt as a program: an AI model on the PDD server reads the `*.prompt.md` file and acts as the program. `pdd test` sends your prompts, Stories and tests there and checks each answer against its test. `pdd simulate` opens the PDD Simulator, where a person can use the prompt by hand.
+The PDD interpreter runs a prompt as a program: an AI model on the PDD server reads the `*.prompt.md` file and acts as the program. `pdd test` sends your prompts, Stories and tests there and checks each answer against its test. `pdd <PROMPT.md|STORY|.>` opens the PDD Prompt Interpreter, where a person can run a prompt or Story directly.
 
-Both commands sign in with your GitHub login (`gh auth status`). They send the selected Stories, their authored tests and the prompts and context those tests need. Every sent file must be Git-visible (tracked or new, not ignored). The selected payload must fit 10 MB and 10,000 files; safe in-repository links send their final Git-visible regular target bytes under the authored path. Secret names, outside or broken links, loops and non-regular targets are refused. Unrelated source files are not sent. pdd keeps runtime state in `~/.pdd/runtime`; the repo also holds the test cache in `.pdd/cache/test/` and CLI simulation files in `.pdd/try/`.
+Both commands sign in with your GitHub login (`gh auth status`). They send the selected Stories, their authored tests and the prompts and context those tests need. Every sent file must be Git-visible (tracked or new, not ignored). The selected payload must fit 10 MB and 10,000 files; safe in-repository links send their final Git-visible regular target bytes under the authored path. Secret names, outside or broken links, loops and non-regular targets are refused. Unrelated source files are not sent. pdd keeps runtime state in `~/.pdd/runtime`; the repo also holds the test cache in `.pdd/cache/test/` and CLI Prompt Interpreter files in `.pdd/try/`.
 
 The upload follows each test's entry prompts and their `calls` targets, test `context` files, and local links in each prompt's `## Dependencies`. A dependency list item may instead begin with a backticked file path, such as ``- `data/menu.json`: required runtime context``. Local image links, including SVG mockups, go with their prompt. Ordinary navigation links outside Dependencies and remote URLs do not supply context. A missing declared file stops the upload and names its referrer.
 
-A simulation includes a valid default `app-map.json` (else `app/app-map.json`), including screen, router, handler and after-operation prompts and stylesheets. Check and lint use no app map. To preview a simulation with a custom map, run `pdd test --files place-order --app-map app/custom-map.json` before `pdd simulate place-order --app-map app/custom-map.json`.
+An interactive Prompt Interpreter run includes a valid default `app-map.json` (else `app/app-map.json`), including screen, router, handler and after-operation prompts and stylesheets. Check and lint use no app map. To preview a run with a custom map, run `pdd test --files place-order --app-map app/custom-map.json` before `pdd place-order --app-map app/custom-map.json`.
 
 For extra files, add `pdd-source.json` at the repository root:
 
@@ -298,11 +298,11 @@ pdd test place-order          # check one story
 pdd test --lf                 # check the last failures
 pdd test --cache-clear        # clear cached results
 pdd test --read               # read saved results; may continue original lint-held checks after lint passes
-pdd simulate place-order      # open a Simulator link in your browser; it ends in 24 hours
-pdd simulate --stop place-order
+pdd place-order               # run on the Prompt Interpreter in your browser; it ends in 24 hours
+pdd --stop place-order
 ```
 
-The AI-call budget is a ceiling; you are charged only for calls that run. Check defaults to 12 calls per step, with a minimum of 18 and maximum of 1000 per test. `pdd test STORY --max-calls N` overrides that ceiling. A new `pdd simulate STORY` requests 400 calls; use `pdd simulate STORY --max-calls 600` when starting a new simulation. Both `pdd test` and `pdd simulate` accept `--max-calls` from 1 through 1000, the interpreter maximum. Choose at least 3 times your worst-case estimate, including child calls and planned interactions (see [`skills/pdd/references/stories.md`](../skills/pdd/references/stories.md)).
+The AI-call budget is a ceiling; you are charged only for calls that run. Check defaults to 12 calls per step, with a minimum of 18 and maximum of 1000 per test. `pdd test STORY --max-calls N` overrides that ceiling. A new `pdd STORY` session requests 400 calls; use `pdd STORY --max-calls 600` when starting a new session. Both `pdd test` and direct `pdd <PROMPT.md|STORY|.>` accept `--max-calls` from 1 through 1000, the interpreter maximum. Choose at least 3 times your worst-case estimate, including child calls and planned interactions (see [`skills/pdd/references/stories.md`](../skills/pdd/references/stories.md)).
 
 `pdd test` and saved-batch `pdd test --read BATCH` wait until every Story ends in every shell. `--timeout MIN` (1 to 120 minutes) sets an explicit caller limit. While checks run, pdd prints one stderr line every 30 s, for example `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. If stopped, run the printed recovery read once to keep waiting. Never poll every minute.
 
@@ -331,15 +331,15 @@ Factories and method-bearing instances can bind through opaque handles and colle
 
 In interactive work, review the prompt and Story changes your agent shows in chat or on a GitHub pull request and reply in your own words. Questions and change requests keep the prompt in review. Agents never invent a person's decision or auto-merge without explicit permission.
 
-### 7.2 Simulate a Story
+### 7.2 Run a prompt or Story interactively
 
-`pdd simulate STORY` automatically opens a shell for a command-line program, localhost with an example request for HTTP routes, the PDD Simulator page for screens, or its Form tab for typed operations. Omit STORY to open the whole project: all mapped screens, the unique main command-line program, or all HTTP routes. Use `--page` to choose the Simulator page. On the page, it makes a Simulator link and opens it in your browser. In the Simulator, you use the prompt by hand. The link ends after 24 hours, or with `pdd simulate --stop STORY`.
+`pdd STORY` (or `pdd prompts/<app>.prompt.md`) automatically opens a shell for a command-line program, localhost with an example request for HTTP routes, the PDD Prompt Interpreter page for screens, or its Form tab for typed operations. Run `pdd .` to open the whole project: all mapped screens, the unique main command-line program, or all HTTP routes. Use `--page` to choose the Prompt Interpreter page. On the page, it makes a Prompt Interpreter link and opens it in your browser, where you can use the prompt by hand. The link ends after 24 hours, or with `pdd --stop STORY`.
 
-In your terminal, `pdd simulate` keeps waiting while the page is open:
+In your terminal, `pdd` keeps waiting while the page is open:
 
-- When you save a case in the Simulator, pdd adds it as a new step to the Story's test file.
+- When you save a case in the Prompt Interpreter, pdd adds it as a new step to the Story's test file.
 
-Use `--no-open` to get the link without opening a browser. Use `--no-wait` to return at once. When an agent runs `pdd simulate`, it reads the saved cases once and returns. Anyone with a Simulator link can use it, so the link never goes into a file, a PR or an issue.
+Use `--no-open` to get the link without opening a browser. Use `--no-wait` to return at once. When an agent runs `pdd STORY`, it reads the saved cases once and returns. Anyone with a Prompt Interpreter link can use it, so the link never goes into a file, a PR or an issue.
 
 ### 7.3 When a check does not run
 
@@ -445,7 +445,7 @@ If setup added MCP registration, remove only its `pdd` entry from `$CODEX_HOME/c
 | The agent does not know the `/pdd` skill | Run `pdd setup` (or `npx skills add promptdriven/pdd -g`), then start a new chat. |
 | `pdd test` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
 | `pdd test` says that your GitHub account does not have PDD interpreter access | Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses, and wait for the approval. See [section 7.3](#73-when-a-check-does-not-run). |
-| `pdd test` or `pdd simulate` says `Please update pdd` | Run `pdd upgrade` (or `npm install -g @promptdriven/pdd && pdd setup`). |
+| `pdd test` or `pdd <PROMPT.md\|STORY>` says `Please update pdd` | Run `pdd upgrade` (or `npm install -g @promptdriven/pdd && pdd setup`). |
 | `pdd test` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
 | `npm error code EEXIST` on `<prefix>/bin/pdd` | An unscoped `pdd` npm package owns `bin/pdd`. Run `npm uninstall -g pdd && npm install -g @promptdriven/pdd` (do not use `--force`). |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
@@ -454,33 +454,33 @@ If setup added MCP registration, remove only its `pdd` entry from `$CODEX_HOME/c
 
 Follow [Report a problem](ISSUES.md). It is for you and for your agent. It tells how to check the version, search the open issues and write one clear issue. Fill the [issue form](https://github.com/promptdriven/pdd/issues/new?template=bug.yml), or ask your agent to file the issue with `gh`.
 
-Do not paste tokens, passwords, Simulator links or private code.
+Do not paste tokens, passwords, Prompt Interpreter links or private code.
 
-## 15. Use your program for real with `pdd simulate`
+## 15. Use your program for real with `pdd`
 
-Run `pdd simulate <story>` to open a shell with your program ready. Use `--cli` to print the PATH line instead, then type your program's commands in your
+Run `pdd <story>` or `pdd prompts/<app>.prompt.md [args...]` to run your prompt program directly or open a shell with it ready. Use `--cli` to print the PATH line instead, then type your program's commands in your
 own terminal, or run the printed absolute path. For example: `tipjar split 100 --people 3 --tip 18 --round-up`.
-Each command runs the prompt on the interpreter with your gh login; saved data stays in the same simulation.
-`--help` also runs the prompt. `--shell` opens a shell with the PATH ready. Piped UTF-8 input is forwarded when
+Each command runs the prompt on the interpreter with your gh login; saved data stays in the same session.
+`--help` after a `.prompt.md` file also runs the prompt. `--shell` opens a shell with the PATH ready. Piped UTF-8 input is forwarded when
 the prompt declares `stdin`. Program output and exit codes pass through; wrapper errors begin `pdd:`
 and use reserved code 125. Calls can take a while because they run AI.
 
-Run `pdd simulate --save-last` to append the last command and its observed answer to the original test file.
-Review that recording before treating it as an expected answer. Stop the session with `pdd simulate --stop <story>`.
+Run `pdd --save-last` to append the last command and its observed answer to the original test file.
+Review that recording before treating it as an expected answer. Stop the session with `pdd --stop <story>`.
 
 For HTTP, declare the route in the prompt (for example `HTTP GET /api/books`), then run
-`pdd simulate <story> --serve 8080`. Call `curl 'http://127.0.0.1:8080/api/books?read=false'`. The prompt returns the
+`pdd <story> --serve 8080`. Call `curl 'http://127.0.0.1:8080/api/books?read=false'`. The prompt returns the
 HTTP status, headers and body. Unknown routes return 404. The listener stays on loopback; Ctrl-C closes it.
 When the Story has an app map, open `http://127.0.0.1:8080/` to use its real Screen. Click **Open the app**
-if needed; opening and taps use the same simulation budget and saved data. See [`skills/pdd/references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md) for details.
+if needed; opening and taps use the same session budget and saved data. See [`skills/pdd/references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md) for details.
 
-## 16. Ask your agent in the PDD Simulator
+## 16. Ask your agent in the PDD Prompt Interpreter
 
-Run `pdd simulate STORY` in your own terminal and keep pdd running. Without terminal stdout, plain `pdd simulate STORY` reads saved cases once and returns without discovering or connecting a local agent. An explicit `--agent NAME` connects even in the background; `--no-wait` skips the connection. The Simulator's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the interpreter. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. Suggested inputs are checked against the entry's schema. The agent fills directly on a supported page and runs only when it understands that you want the action to happen; otherwise you press **Run**. Actions use the simulation budget. Older pages keep manual **Fill fields** and **Run**.
+Run `pdd STORY` in your own terminal and keep pdd running. Without terminal stdout, plain `pdd STORY` reads saved cases once and returns without discovering or connecting a local agent. An explicit `--agent NAME` connects even in the background; `--no-wait` skips the connection. The Prompt Interpreter's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the interpreter. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. Suggested inputs are checked against the entry's schema. The agent fills directly on a supported page and runs only when it understands that you want the action to happen; otherwise you press **Run**. Actions use the session budget. Older pages keep manual **Fill fields** and **Run**.
 
 ```sh
-pdd simulate my-story
-pdd simulate my-story --agent claude
+pdd my-story
+pdd my-story --agent claude
 ```
 
 <a id="many-accounts"></a>
@@ -496,7 +496,7 @@ Many accounts? List your agents in `~/.config/pdd/agents.json`:
 }
 ```
 
-Use `pdd simulate my-story --agent "Codex (account-b)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. Only your user file supplies custom launchers; repository `.pdd/agents.json` files are ignored. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
+Use `pdd my-story --agent "Codex (account-b)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. Only your user file supplies custom launchers; repository `.pdd/agents.json` files are ignored. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
 
 The same names also work with `pdd product start`:
 
@@ -518,6 +518,6 @@ The picker shows installation and sign-in state. You can switch agents; pdd reme
 
 If an agent cannot start, the chat shows its first error line with recognized secrets removed. Full sanitized diagnostics stay on your computer in `~/.pdd/runtime/agent-chat.log`; the chat shows that path when the log was saved.
 
-Chat uses your agent account's allowance. The interpreter relays messages and invokes no model for chat. Context includes the Story, criteria, entry schemas, current fields/data and last answer; recognized credential fields and token patterns are removed. Keep secrets out of project text and chat. The agent can request a Simulator action when you ask it to run one; it cannot edit the project.
+Chat uses your agent account's allowance. The interpreter relays messages and invokes no model for chat. Context includes the Story, criteria, entry schemas, current fields/data and last answer; recognized credential fields and token patterns are removed. Keep secrets out of project text and chat. The agent can request a Prompt Interpreter action when you ask it to run one; it cannot edit the project.
 
-Closing pdd or pressing Ctrl-C disconnects chat and leaves the simulation open. `pdd simulate STORY --no-wait` opens an ordinary Simulator link without a chat bridge. Agent selection does not combine with `--no-wait`, `--cli`, `--serve`, `--stop` or `--save-last`. Shared Simulator links do not grant access to owner chat. If a browser cannot open automatically, pdd prints a separate private owner-chat link; do not share it. Reconnecting replaces the chat connection and clears its temporary history.
+Closing pdd or pressing Ctrl-C disconnects chat and leaves the session open. `pdd STORY --no-wait` opens an ordinary Prompt Interpreter link without a chat bridge. Agent selection does not combine with `--no-wait`, `--cli`, `--serve`, `--stop` or `--save-last`. Shared Prompt Interpreter links do not grant access to owner chat. If a browser cannot open automatically, pdd prints a separate private owner-chat link; do not share it. Reconnecting replaces the chat connection and clears its temporary history.
