@@ -153,7 +153,7 @@ export function formatDiagnosticLine(item, severity) {
       : (item.category === 'prompt' || item.category === 'native-only port parity' ? 'prompting.md' : 'verification.md');
     const fallbackFix = item.category === 'custom rule'
       ? `Update ${item.filePath}:${item.line} to satisfy custom rule "${item.code}"`
-      : `Update ${item.filePath}:${item.line} to fix ${item.category} rule "${item.code}" (see skills/pdd/references/${guideHint})`;
+      : `Update ${item.filePath}:${item.line} to fix ${item.category} rule "${item.code}" (see the pdd skill reference ${guideHint}, or run pdd help prompting)`;
     detail = formatTeachingDetail({ invariant: detail, fix: fallbackFix, rerun: item.rerun ?? 'pdd lint' });
   }
   return `${prefix}: ${item.category}: ${item.filePath}:${item.line} [${item.code}] ${detail}`;

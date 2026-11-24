@@ -93,8 +93,8 @@ PDD_SAID
 Choose a delimiter absent as a whole line from the words and keep it quoted (--said - reads UTF-8 stdin including newlines and trims only trailing newlines; simple replies may use --said WORDS). Root pdd.json "strict_approvals": true requires a person terminal.`;
 const routes = [
   // Core PDD workflow
-  { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }, { name: '--skills-dir', kind: 'text' }],
-    forms: [form('pdd setup [--yes] [--skills-dir PATH]', 'Install or refresh global PDD skills (~/.agents/skills, ~/.claude/skills, ~/.gemini/config/skills; plugin-aware for Claude Code; or custom PATH with --skills-dir) and offer Simulator MCP registration for detected Codex, Claude Code, Gemini and Antigravity configs. Never edits repositories or Autopilot settings. Pass --yes to register previewed MCP tools without prompting.')] },
+  { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }, { name: '--skills-dir', kind: 'text' }, { name: '--upgrade', kind: 'flag' }],
+    forms: [form('pdd setup [--yes] [--skills-dir PATH] [--upgrade]', 'Install or refresh global PDD skills (~/.agents/skills, ~/.claude/skills, ~/.gemini/config/skills; plugin-aware for Claude Code; or custom PATH with --skills-dir), remove retired PDD skills, and offer Simulator MCP registration for detected Codex, Claude Code, Gemini and Antigravity configs. Never edits repositories or Autopilot settings. Pass --yes to register previewed MCP tools without prompting, or --upgrade to sync skills and refresh only already-registered stale MCP entries silently.')] },
   { id: 'init', prefix: ['init'], local: 'init', operands: [], options: [],
     forms: [form('pdd init', "Add or refresh the 4-line PDD block in this repository's CLAUDE.md (else AGENTS.md) and report detected language and test command; never edits root .gitignore.")] },
   { id: 'status', prefix: ['status'], local: 'status', operands: [{ name: 'path', type: 'text', optional: true, repeat: true }], options: [{ name: '--changed', kind: 'flag' }, { name: '--json', kind: 'flag' }],

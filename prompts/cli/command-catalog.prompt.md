@@ -23,7 +23,7 @@ Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before
 
 ## Core PDD workflow routes
 
-- `setup` (`setup`, local `setup`): optional flag `--yes` and text `--skills-dir`. Form: `pdd setup [--yes] [--skills-dir PATH]`.
+- `setup` (`setup`, local `setup`): optional flags `--yes` and `--upgrade`, and text `--skills-dir`. Form: `pdd setup [--yes] [--skills-dir PATH] [--upgrade]`.
 - `init` (`init`, local `init`): no operands or options. Form: `pdd init`.
 - `status` (`status`, local `status`): optional repeated text `path`, flags `--changed` and `--json`. Form: `pdd status [PATH...] [--changed] [--json]`.
 - `check` (`test`, local `runtime-check`): optional repeated text `story`, options `--target` (`code`), `--affected`, `--journeys`, `--lf`, `--cache-clear`, `--fresh`, `--json`, `--details`, `--timeout` (`1..120`), `--max-calls` (`1..1000`), `--max-total-calls` (`1..999999`), `--no-restart-replacement`, `--read`, `--retry`, `--reconcile` (`uuid`), `--explain-bindings`, `--files`, `--app-map`, `--screen`, `--drawing`, `--look`, and hidden options `--lint`, `--local`, `--remote`, `--diff`, `--base`, `--codex`, `--issue`, `--emit-v1`, `--write`, `--bind-criteria`, `--request`.

@@ -8,14 +8,12 @@ import {
   classifyInstallKind,
   detectGlobalInstallPrefix,
   hasLegacyUnscopedPdd,
+  resolveInstalledBinEntry,
   resolveVoltaNpmBin,
   scrubVoltaEnv,
 } from '../src/shared/install-kind.mjs';
 import { runCliUpgrade as runSetupCliUpgrade } from '../src/setup/cli-upgrade.mjs';
-import {
-  maybeAutoUpdateAutopilot,
-  runCliUpgrade as runAutopilotCliUpgrade,
-} from '../src/autopilot-update.mjs';
+import { maybeAutoUpdateAutopilot } from '../src/autopilot-update.mjs';
 
 function tempDir(t, prefix) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -247,14 +245,13 @@ test('#3628 src/setup/cli-upgrade.mjs migrates legacy unscoped pdd -> @promptdri
   assert.match(failErr, /npm install -g --ignore-scripts @promptdriven\/pdd@0\.3\.0 && pdd setup/);
 });
 
-test('#3628 src/autopilot-update.mjs (maybeAutoUpdateAutopilot & runCliUpgrade) upgrades Volta installs without --prefix, scrubs env, and migrates legacy unscoped pdd', async t => {
-  // 1. maybeAutoUpdateAutopilot: legacy unscoped pdd -> @promptdriven/pdd under Volta.
+test('#3628/#3645 maybeAutoUpdateAutopilot & runCliUpgrade upgrade Volta installs without --prefix, scrub env, and delegate setup --upgrade to newly installed binary', async t => {
+  // 1. maybeAutoUpdateAutopilot: legacy unscoped pdd -> @promptdriven/pdd under Volta (npm-first + delegated setup --upgrade).
   const { voltaHome, home, stateDir, pkgRoot } = makeVoltaFixture(t, { packageName: 'pdd', version: '0.1.40' });
   const scopedRoot = join(voltaHome, 'tools/image/packages/@promptdriven/pdd/lib/node_modules/@promptdriven/pdd');
   const coreRoot = join(stateDir, 'repo-core');
   mkdirSync(coreRoot, { recursive: true });
   const execCalls = [];
-  let skillsRoot = null;
   const autoRes = await maybeAutoUpdateAutopilot(
     {
       state: { autoUpdate: 'release' },
@@ -278,22 +275,26 @@ test('#3628 src/autopilot-update.mjs (maybeAutoUpdateAutopilot & runCliUpgrade) 
           rmSync(join(voltaHome, 'tools/image/packages/pdd'), { recursive: true, force: true });
           return { code: 0, stdout: '', stderr: '' };
         }
-        mkdirSync(join(scopedRoot, 'bin'), { recursive: true });
-        writeFileSync(join(scopedRoot, 'bin/pdd.mjs'), '#!/usr/bin/env node\n');
-        writeFileSync(join(scopedRoot, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version: '0.2.0', bin: { pdd: 'bin/pdd.mjs' } }));
+        if (args[0] === 'install') {
+          mkdirSync(join(scopedRoot, 'bin'), { recursive: true });
+          writeFileSync(join(scopedRoot, 'bin/pdd.mjs'), '#!/usr/bin/env node\n');
+          writeFileSync(join(scopedRoot, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version: '0.2.0', bin: { pdd: 'bin/pdd.mjs' } }));
+          return { code: 0, stdout: '', stderr: '' };
+        }
         return { code: 0, stdout: '', stderr: '' };
       },
-      setupSkills: ({ packageRoot }) => { skillsRoot = packageRoot; },
     },
   );
   assert.equal(autoRes.action, 'updated', JSON.stringify(autoRes));
   assert.equal(autoRes.fromVersion, '0.1.40');
   assert.equal(autoRes.toVersion, '0.2.0');
-  assert.equal(execCalls.length, 2);
+  assert.equal(execCalls.length, 3);
   assert.equal(execCalls[0].cmd, join(voltaHome, 'bin', 'npm'));
   assert.deepEqual(execCalls[0].args, ['uninstall', '-g', '--ignore-scripts', '--no-audit', '--no-fund', 'pdd']);
   assert.equal(execCalls[1].cmd, join(voltaHome, 'bin', 'npm'));
-  assert.deepEqual(execCalls[1].args, ['install', '-g', '--ignore-scripts', '--no-audit', '--no-fund', 'github:promptdriven/pdd#v0.2.0']);
+  assert.deepEqual(execCalls[1].args, ['install', '-g', '--ignore-scripts', '--no-audit', '--no-fund', '@promptdriven/pdd@0.2.0']);
+  assert.equal(execCalls[2].cmd, process.execPath);
+  assert.deepEqual(execCalls[2].args, [join(scopedRoot, 'bin/pdd.mjs'), 'setup', '--upgrade']);
   for (const call of execCalls) {
     assert.equal(call.args.includes('--prefix'), false);
     assert.equal('_VOLTA_TOOL_RECURSION' in call.opts.env, false);
@@ -301,32 +302,81 @@ test('#3628 src/autopilot-update.mjs (maybeAutoUpdateAutopilot & runCliUpgrade) 
     assert.equal('npm_config_prefix' in call.opts.env, false);
     assert.equal(call.opts.env.VOLTA_HOME, voltaHome);
   }
-  assert.equal(skillsRoot, scopedRoot);
 
-  // 2. autopilot-update runCliUpgrade on scoped Volta install + Volta-safe failure text.
+  // 2. runSetupCliUpgrade on scoped Volta install delegates `setup --upgrade` with scrubbed Volta env + Volta-safe failure text.
   const cliCalls = [];
-  let cliErr = '';
-  const cliFail = await runAutopilotCliUpgrade(
+  let cliOut = '', cliErr = '';
+  const cliOk = await runSetupCliUpgrade(
     {
       packageRoot: scopedRoot,
-      env: { HOME: home, _VOLTA_TOOL_RECURSION: '1', VOLTA_UNSAFE_GLOBAL: '1', npm_config_prefix: '/bad' },
-      stdout: { write() {} },
+      env: { HOME: home, PDD_STATE_DIR: stateDir, _VOLTA_TOOL_RECURSION: '1', VOLTA_UNSAFE_GLOBAL: '1', npm_config_prefix: '/bad' },
+      stdout: { write: s => { cliOut += s; } },
       stderr: { write: s => { cliErr += s; } },
       fetchImpl: async () => ({ ok: true, json: async () => [{ tag_name: 'v0.3.0', draft: false, prerelease: false }] }),
       spawnSyncImpl: (cmd, args, opts) => {
         cliCalls.push({ cmd, args, env: opts?.env });
-        return { status: 1, stdout: '', stderr: 'network timeout' };
+        if (args[0] === 'install') {
+          writeFileSync(join(scopedRoot, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version: '0.3.0', bin: { pdd: 'bin/pdd.mjs' } }));
+        }
+        return { status: 0, stdout: '', stderr: '' };
       },
     },
-    { skillsInstall: { syncOwnedUserSkills: () => ({ updated: [] }), findSkills: () => [] } },
+  );
+  assert.equal(cliOk.exitCode, 0, cliErr);
+  assert.equal(cliCalls.length, 2);
+  assert.equal(cliCalls[0].cmd, join(voltaHome, 'bin', 'npm'));
+  assert.equal(cliCalls[1].cmd, process.execPath);
+  assert.deepEqual(cliCalls[1].args, [join(scopedRoot, 'bin/pdd.mjs'), 'setup', '--upgrade']);
+  for (const call of cliCalls) {
+    assert.equal(call.args.includes('--prefix'), false);
+    assert.equal('_VOLTA_TOOL_RECURSION' in call.env, false);
+    assert.equal('VOLTA_UNSAFE_GLOBAL' in call.env, false);
+    assert.equal('npm_config_prefix' in call.env, false);
+    assert.equal(call.env.VOLTA_HOME, voltaHome);
+  }
+
+  // Failure recovery under Volta falls back npm -> github tag and NEVER prints `--prefix`.
+  let failErr = '';
+  const cliFail = await runSetupCliUpgrade(
+    {
+      packageRoot: scopedRoot,
+      env: { HOME: home, PDD_STATE_DIR: stateDir, _VOLTA_TOOL_RECURSION: '1', VOLTA_UNSAFE_GLOBAL: '1', npm_config_prefix: '/bad' },
+      stdout: { write() {} },
+      stderr: { write: s => { failErr += s; } },
+      fetchImpl: async () => ({ ok: true, json: async () => [{ tag_name: 'v0.4.0', draft: false, prerelease: false }] }),
+      spawnSyncImpl: () => ({ status: 1, stdout: '', stderr: 'network timeout' }),
+    },
   );
   assert.equal(cliFail.exitCode, 1);
-  assert.equal(cliCalls.length, 1);
-  assert.equal(cliCalls[0].cmd, join(voltaHome, 'bin', 'npm'));
-  assert.equal(cliCalls[0].args.includes('--prefix'), false);
-  assert.equal('_VOLTA_TOOL_RECURSION' in cliCalls[0].env, false);
-  assert.equal('VOLTA_UNSAFE_GLOBAL' in cliCalls[0].env, false);
-  assert.equal('npm_config_prefix' in cliCalls[0].env, false);
-  assert.doesNotMatch(cliErr, /--prefix/);
-  assert.match(cliErr, /npm install -g --ignore-scripts github:promptdriven\/pdd#v0\.3\.0 && pdd setup/);
+  assert.doesNotMatch(failErr, /--prefix/);
+  assert.match(failErr, /npm install -g --ignore-scripts github:promptdriven\/pdd#v0\.4\.0 && pdd setup/);
+
+  // Security & reliability guards:
+  // 1. resolveInstalledBinEntry rejects `..` traversal, absolute paths, and escaping symlinks.
+  const { symlinkSync } = await import('node:fs');
+  const secDir = tempDir(t, 'pdd-bin-sec-');
+  const evilFile = join(secDir, 'evil.mjs');
+  writeFileSync(evilFile, '#!/usr/bin/env node\n');
+  const travPkg = join(secDir, 'pkg');
+  mkdirSync(join(travPkg, 'bin'), { recursive: true });
+  writeFileSync(join(travPkg, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version: '0.1.50', bin: { pdd: '../evil.mjs' } }));
+  assert.equal(resolveInstalledBinEntry(travPkg), null, 'must reject ../ traversal in package.json bin');
+  writeFileSync(join(travPkg, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version: '0.1.50', bin: { pdd: evilFile } }));
+  assert.equal(resolveInstalledBinEntry(travPkg), null, 'must reject absolute path in package.json bin');
+  writeFileSync(join(travPkg, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version: '0.1.50', bin: { pdd: 'bin/pdd.mjs' } }));
+  symlinkSync(evilFile, join(travPkg, 'bin/pdd.mjs'));
+  assert.equal(resolveInstalledBinEntry(travPkg), null, 'must reject symlink escaping pkgRoot');
+
+  // 2. Signal-killed child (`status: null, signal: 'SIGKILL'`) fails with exitCode 1 (never treated as 0).
+  let sigErr = '';
+  const sigRes = await runSetupCliUpgrade({
+    packageRoot: scopedRoot,
+    env: { HOME: home, PDD_STATE_DIR: stateDir },
+    stdout: { write() {} },
+    stderr: { write: s => { sigErr += s; } },
+    fetchImpl: async () => ({ ok: true, json: async () => [{ tag_name: 'v0.3.0', draft: false, prerelease: false }] }),
+    spawnSyncImpl: () => ({ status: null, signal: 'SIGKILL', stdout: '', stderr: '' }),
+  });
+  assert.equal(sigRes.exitCode, 1);
+  assert.match(sigErr, /killed by SIGKILL/);
 });

@@ -12,7 +12,7 @@ export function doctorFixture({cwd='/project',home='/home/fake',packageRoot='/in
     calls.push({file,args,options});
     if(file==='/tools/pdd')return answer(args[0]==='--version'?'0.1.27':'pdd autopilot start');
     if(file==='git'&&args[0]==='config'){const value=f.identity[args[1]];return answer(value??'',value?0:1);}
-    if(file==='git')return answer(args[0]==='--version'?'git version 2.48':args[0]==='remote'?(f.origin??'https://github.com/example/project.git'):args[0]==='ls-files'?(f.tracked??''):cwd);
+    if(file==='git')return answer(args[0]==='--version'?'git version 2.48':args[0]==='remote'?(f.origin??'https://github.com/example/project.git'):args[0]==='ls-files'?(f.tracked??''):args[0]==='rev-parse'&&args.includes('--git-common-dir')?(f.commonDir??join(cwd,'.git')):cwd);
     if(file==='gh') {
       if(args[0]==='--version')return answer('gh version 2.60');
       if(args[0]==='auth')return answer(args[1]==='token'?'FAKE_TOKEN':'');

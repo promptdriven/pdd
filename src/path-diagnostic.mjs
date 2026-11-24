@@ -290,25 +290,29 @@ function resolvePnpmWrapperTarget(binPath, realPath, fs, platform = process.plat
   const text = readSmallText(realPath, MAX_WRAPPER_BYTES, fs);
   if (!text) return looksPnpmPath ? { realPath, packageRoot: null, wrapperKind: 'pnpm' } : null;
 
-  // Match POSIX pnpm wrappers (`$basedir/...`), Windows cmd-shim (`%dp0%\...`, `%~dp0\...`), and quoted absolute paths.
-  const baseDir = dirname(realPath);
+  // Match POSIX pnpm wrappers (`$basedir/...` / `${basedir}/...`), Windows cmd-shim (`%dp0%\...`, `%~dp0\...`), and quoted absolute paths.
+  const baseDirs = [...new Set([dirname(realPath), dirname(binPath)])];
   const patterns = [
-    { re: /["']\$basedir[\\/]([^"'\r\n`]+?[\\/]bin[\\/]pdd\.mjs)["']/i, rel: true },
-    { re: /\$basedir[\\/]([^"'\s`]+?[\\/]bin[\\/]pdd\.mjs)/i, rel: true },
+    { re: /["']\$\{?basedir\}?[\\/]([^"'\r\n`]+?[\\/]bin[\\/]pdd\.mjs)["']/i, rel: true },
+    { re: /\$\{?basedir\}?[\\/]([^"'\s`]+?[\\/]bin[\\/]pdd\.mjs)/i, rel: true },
     { re: /%(?:~dp0|dp0%)[\\/]([^"'\r\n]+?[\\/]bin[\\/]pdd\.mjs)/i, rel: true },
     { re: /["']((?:\/|[A-Za-z]:[\\/])[^"'\r\n]+?[\\/]bin[\\/]pdd\.mjs)["']/i, rel: false },
   ];
   for (const { re, rel } of patterns) {
     const match = re.exec(text);
     if (!match?.[1]) continue;
-    const candidate = rel ? resolve(baseDir, match[1].replace(/\\/g, '/')) : match[1];
-    try {
-      if (fs.statSync(candidate).isFile()) {
-        const canon = safeRealpath(candidate, fs) ?? candidate;
-        const isPnpm = looksPnpmPath || /(?:^|\/)(?:\.pnpm|pnpm\/global)(?:\/|$)/i.test(normPath(canon, platform));
-        return { realPath: canon, packageRoot: null, wrapperKind: isPnpm ? 'pnpm' : null };
-      }
-    } catch { /* Unresolved target falls back to wrapper itself. */ }
+    const candidatesToTry = rel
+      ? baseDirs.map(baseDir => resolve(baseDir, match[1].replace(/\\/g, '/')))
+      : [match[1]];
+    for (const candidate of candidatesToTry) {
+      try {
+        if (fs.statSync(candidate).isFile()) {
+          const canon = safeRealpath(candidate, fs) ?? candidate;
+          const isPnpm = looksPnpmPath || /(?:^|\/)(?:\.pnpm|pnpm\/global)(?:\/|$)/i.test(normPath(canon, platform));
+          return { realPath: canon, packageRoot: null, wrapperKind: isPnpm ? 'pnpm' : null };
+        }
+      } catch { /* Unresolved target falls back to wrapper itself. */ }
+    }
   }
   return looksPnpmPath ? { realPath, packageRoot: null, wrapperKind: 'pnpm' } : null;
 }

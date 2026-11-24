@@ -1,6 +1,6 @@
 # decision
 
-I can check decision with a deterministic outside world.
+As a developer testing a lookup decision module, I want to verify pure reply handling and service-backed lookups deterministically, so that no live network call is needed.
 
 ## Acceptance criteria
 

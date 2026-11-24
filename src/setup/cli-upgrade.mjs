@@ -12,11 +12,12 @@ import {
   formatNpmUninstallCommand,
   hasLegacyUnscopedPdd,
   npmCommandForInstall,
+  resolveInstalledBinEntry,
   resolveInstalledRoot,
+  scrubVoltaEnv,
 } from '../shared/install-kind.mjs';
 import { PACKAGE_ROOT } from '../shared/package-root.mjs';
 import { resolvePddStateBase } from '../shared/state-dir.mjs';
-import * as defaultSkillsInstall from '../skills-install.mjs';
 
 export { classifyInstallKind, detectGlobalInstallPrefix, hasLegacyUnscopedPdd };
 
@@ -61,7 +62,7 @@ async function queryGitHubJson(endpoint, { fetchImpl, spawnSyncImpl, env = proce
   }
   if (effectiveSpawn) {
     const reply = effectiveSpawn('gh', ['api', endpoint], { encoding: 'utf8', timeout: 10000, env });
-    if ((reply?.status ?? reply?.code ?? (reply?.error ? 1 : 0)) !== 0) {
+    if (reply?.signal || (reply?.status ?? reply?.code ?? (reply?.error ? 1 : 0)) !== 0) {
       throw new Error((reply?.stderr || reply?.stdout || reply?.error?.message || fetchError?.message || `gh api ${endpoint} failed`).trim().split('\n')[0]);
     }
     return JSON.parse(reply.stdout || 'null');
@@ -89,10 +90,95 @@ export async function resolveMainCommitTarget(options = {}) {
 function runNpmAction(spawnImpl, install, action, spec, env, timeout = 120000) {
   const invocation = npmCommandForInstall(install, action, spec, env);
   const res = spawnImpl(invocation.command, invocation.args, { encoding: 'utf8', timeout, env: invocation.env });
-  const ok = (res?.status ?? res?.code ?? (res?.error ? 1 : 0)) === 0;
-  const raw = `${res?.stderr || ''}\n${res?.stdout || ''}\n${res?.error?.message || ''}`;
-  const detail = (res?.stderr || res?.stdout || res?.error?.message || `npm ${action} failed`).trim().split('\n')[0];
+  const ok = (res?.status ?? res?.code ?? ((res?.error || res?.signal) ? 1 : 0)) === 0;
+  const sigNote = res?.signal ? `killed by ${res.signal}` : '';
+  const raw = `${res?.stderr || ''}\n${res?.stdout || ''}\n${res?.error?.message || sigNote}`;
+  const detail = (res?.stderr || res?.stdout || res?.error?.message || sigNote || `npm ${action} failed`).trim().split('\n')[0];
   return { ok, raw, detail };
+}
+
+function parseSetupUpgradeOutput(rawStdout) {
+  const lines = String(rawStdout ?? '').split(/\r?\n/).map(line => line.trimEnd()).filter(Boolean);
+  const updatedSet = new Set();
+  const skippedSkills = [];
+  const updatedMcp = [];
+  for (const line of lines) {
+    let match = /^(?:Installed|Updated) \d+ PDD skills? (?:to|in) (.+): /.exec(line);
+    if (match?.[1]) { updatedSet.add(match[1]); continue; }
+    match = /^Removed retired PDD skills from (.+): /.exec(line);
+    if (match?.[1]) { updatedSet.add(match[1]); continue; }
+    match = /^PDD skills in (.+?) (are older than|differ from) /.exec(line);
+    if (match?.[1]) {
+      skippedSkills.push({
+        folder: match[1],
+        stale: match[2] === 'differ from' ? 'differs' : 'older',
+        details: line,
+        recovery: 'pdd setup',
+      });
+      continue;
+    }
+    match = /^Retired PDD skills remain in (.+?) \(pdd /.exec(line);
+    if (match?.[1]) {
+      skippedSkills.push({
+        folder: match[1],
+        stale: 'older',
+        details: line,
+        recovery: 'pdd setup',
+      });
+      continue;
+    }
+    if (/^Updated PDD (?:Simulator )?MCP tools /.test(line)) {
+      updatedMcp.push(line);
+    }
+  }
+  return { lines, updatedSkills: [...updatedSet], skippedSkills, updatedMcp };
+}
+
+function runFallbackSkillsSync(skillsModule, {
+  targetPkgRoot, resolvedHome, env, stateRoot, cwd, fs,
+}) {
+  const failedSkills = [], updatedSkills = [], skippedSkills = [];
+  try {
+    const { updated } = skillsModule.syncOwnedUserSkills({
+      packageRoot: targetPkgRoot,
+      home: resolvedHome,
+      claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+      codexHome: env.CODEX_HOME,
+      stateRoot,
+      env,
+      force: true,
+      onError: (folder, error) => failedSkills.push({ folder, reason: error?.code ?? error?.message ?? 'skill write failed', recovery: 'pdd setup' }),
+    });
+    updatedSkills.push(...updated);
+  } catch (error) {
+    failedSkills.push({ folder: resolvedHome || targetPkgRoot, reason: error?.code ?? error?.message ?? 'skill sync failed', recovery: 'pdd setup' });
+  }
+
+  if (typeof skillsModule.findSkills === 'function') {
+    const failedCanon = new Set(failedSkills.map(item => canonicalDir(item.folder, fs)));
+    const seenSkip = new Set();
+    try {
+      for (const row of skillsModule.findSkills({ packageRoot: targetPkgRoot, cwd, home: resolvedHome, claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) })) {
+        const folder = row.found ?? row.root;
+        const hasStale = Boolean(row.found && row.stale);
+        const hasRetired = Array.isArray(row.retiredSkills) && row.retiredSkills.length > 0;
+        if (!folder || (!hasStale && !hasRetired)) continue;
+        const key = canonicalDir(folder, fs);
+        if (failedCanon.has(key) || seenSkip.has(key)) continue;
+        seenSkip.add(key);
+        const staleDetails = (row.staleSkills ?? []).map(({ name, state, version }) => state === 'older' ? `${name} is ${version ?? 'unknown'}` : `${name} differs (version ${version ?? 'unknown'})`);
+        const retiredDetails = (row.retiredSkills ?? []).map(({ name, version }) => `retired ${name}${version ? ` (${version})` : ''}`);
+        const details = [...staleDetails, ...retiredDetails].join(', ');
+        skippedSkills.push({
+          folder,
+          stale: row.stale ?? 'older',
+          details,
+          recovery: row.scope === 'project' ? "npx skills add promptdriven/pdd --skill '*'" : (hasRetired && !hasStale ? 'pdd setup' : "npx skills add promptdriven/pdd -g --skill '*'"),
+        });
+      }
+    } catch {}
+  }
+  return { updatedSkills, skippedSkills, failedSkills };
 }
 
 export async function runCliUpgrade({
@@ -155,41 +241,82 @@ export async function runCliUpgrade({
   const targetPkgRoot = resolveInstalledRoot(install, install.realPackageRoot, fs);
   const toVersion = readJson(join(targetPkgRoot, 'package.json'), fs)?.version ?? (cliUpdated && target.version ? target.version : currentVersion);
   const stateRoot = ports.stateHome ? join(ports.stateHome, 'pdd') : resolvePddStateBase(env);
-  try { fs.rmSync(join(stateRoot, 'release-check.json'), { force: true }); } catch {}
-
-  const failedSkills = [], updatedSkills = [], skippedSkills = [];
-  const skillsModule = ports.skillsInstall ?? defaultSkillsInstall;
-  try {
-    const { updated } = skillsModule.syncOwnedUserSkills({
-      packageRoot: targetPkgRoot, home: resolvedHome, claudeConfigDir: env.CLAUDE_CONFIG_DIR, codexHome: env.CODEX_HOME, stateRoot, force: true,
-      onError: (folder, error) => failedSkills.push({ folder, reason: error?.code ?? error?.message ?? 'skill write failed', recovery: 'pdd setup' }),
-    });
-    updatedSkills.push(...updated);
-  } catch (error) {
-    failedSkills.push({ folder: resolvedHome || targetPkgRoot, reason: error?.code ?? error?.message ?? 'skill sync failed', recovery: 'pdd setup' });
+  for (const cachePath of new Set([join(stateRoot, 'release-check.json'), join(resolvePddStateBase(env), 'release-check.json')])) {
+    try { fs.rmSync(cachePath, { force: true }); } catch {}
   }
 
-  if (typeof skillsModule.findSkills === 'function') {
-    const failedCanon = new Set(failedSkills.map(item => canonicalDir(item.folder, fs)));
-    const seenSkip = new Set();
-    try {
-      for (const row of skillsModule.findSkills({ packageRoot: targetPkgRoot, cwd, home: resolvedHome, claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) })) {
-        if (!row.found || !row.stale) continue;
-        const key = canonicalDir(row.found, fs);
-        if (failedCanon.has(key) || seenSkip.has(key)) continue;
-        seenSkip.add(key);
-        const details = (row.staleSkills ?? []).map(({ name, state, version }) => state === 'older' ? `${name} is ${version ?? 'unknown'}` : `${name} differs (version ${version ?? 'unknown'})`).join(', ');
-        skippedSkills.push({ folder: row.found, stale: row.stale, details, recovery: row.scope === 'project' ? "npx skills add promptdriven/pdd --skill '*'" : "npx skills add promptdriven/pdd -g --skill '*'" });
+  // Delegate post-upgrade skill & stale-MCP sync to the newly installed binary (`pdd setup --upgrade`)
+  // so post-upgrade skill layouts never clash with pre-upgrade in-RAM PDD_SKILL_NAMES (#3645).
+  const binEntry = ports.skillsInstall ? null : resolveInstalledBinEntry(targetPkgRoot, fs);
+  let usedDelegatedSetup = false;
+  let updatedSkills = [], skippedSkills = [], failedSkills = [], updatedMcp = [], delegatedLines = [];
+  let delegatedErr = '';
+
+  if (binEntry) {
+    const baseChildEnv = isVolta ? scrubVoltaEnv(env, install.voltaHome) : { ...env };
+    const childEnv = {
+      ...baseChildEnv,
+      ...(resolvedHome ? { HOME: resolvedHome } : {}),
+      ...(ports.stateHome && !baseChildEnv.PDD_STATE_DIR ? { PDD_STATE_DIR: stateRoot } : {}),
+      PDD_NO_UPDATE_CHECK: '1',
+    };
+    const nodeBin = ports.nodePath ?? process.execPath;
+    const setupRes = spawnImpl(nodeBin, [binEntry, 'setup', '--upgrade'], {
+      cwd,
+      env: childEnv,
+      encoding: 'utf8',
+      timeout: 60000,
+    });
+    const setupCode = setupRes?.status ?? setupRes?.code ?? ((setupRes?.error || setupRes?.signal) ? 1 : 0);
+    const setupOut = String(setupRes?.stdout ?? '');
+    const setupErr = String(setupRes?.stderr ?? '');
+    const unknownUpgradeFlag = setupCode === 2 && /--upgrade/.test(setupErr);
+    if (!unknownUpgradeFlag) {
+      usedDelegatedSetup = true;
+      const parsed = parseSetupUpgradeOutput(setupOut);
+      delegatedLines = parsed.lines;
+      updatedSkills = parsed.updatedSkills;
+      skippedSkills = parsed.skippedSkills;
+      updatedMcp = parsed.updatedMcp;
+      delegatedErr = setupErr.trim();
+      if (setupCode !== 0) {
+        const sigNote = setupRes?.signal ? `killed by ${setupRes.signal}` : '';
+        const detail = (delegatedErr || setupRes?.error?.message || sigNote || `pdd setup --upgrade exited ${setupCode}`).split(/\r?\n/)[0];
+        failedSkills.push({ folder: resolvedHome || targetPkgRoot, reason: detail, recovery: 'pdd setup' });
       }
-    } catch {}
+    }
+  }
+
+  if (!usedDelegatedSetup) {
+    const skillsModule = ports.skillsInstall ?? await import('../skills-install.mjs');
+    const fallback = runFallbackSkillsSync(skillsModule, {
+      targetPkgRoot, resolvedHome, env, stateRoot, cwd, fs,
+    });
+    updatedSkills = fallback.updatedSkills;
+    skippedSkills = fallback.skippedSkills;
+    failedSkills = fallback.failedSkills;
   }
 
   if (cliUpdated) writeLine(stdout, `Upgraded pdd ${currentVersion} -> ${toVersion} (${main ? 'main' : target.ref}).`);
-  else if (!updatedSkills.length && !skippedSkills.length && !failedSkills.length) writeLine(stdout, `pdd ${toVersion} is already up to date. PDD skills are current.`);
-  else writeLine(stdout, `pdd ${toVersion} is already up to date.`);
-  if (updatedSkills.length) writeLine(stdout, `Updated PDD skills to ${toVersion} in: ${updatedSkills.join(', ')}.`);
-  for (const item of skippedSkills) writeLine(stdout, `Skipped ${item.stale === 'differs' ? 'customized' : 'unmarked'} PDD skills in ${item.folder}${item.details ? ` (${item.details})` : ''} (preserved without overwriting). To update unmarked skills, run: ${item.recovery}`);
-  for (const item of failedSkills) writeLine(stderr, `Failed to update PDD skills in ${item.folder} (${item.reason}). To recover, run: ${item.recovery}`);
+  else if (!updatedSkills.length && !updatedMcp.length && !skippedSkills.length && !failedSkills.length && !delegatedLines.length) {
+    writeLine(stdout, `pdd ${toVersion} is already up to date. PDD skills are current.`);
+  } else {
+    writeLine(stdout, `pdd ${toVersion} is already up to date.`);
+  }
+
+  if (usedDelegatedSetup) {
+    for (const outLine of delegatedLines) writeLine(stdout, outLine);
+    if (delegatedErr) {
+      for (const errLine of delegatedErr.split(/\r?\n/).filter(Boolean)) writeLine(stderr, errLine);
+    } else if (failedSkills.length) {
+      for (const item of failedSkills) writeLine(stderr, `Failed to update PDD skills in ${item.folder} (${item.reason}). To recover, run: ${item.recovery}`);
+    }
+  } else {
+    if (updatedSkills.length) writeLine(stdout, `Updated PDD skills to ${toVersion} in: ${updatedSkills.join(', ')}.`);
+    for (const item of skippedSkills) writeLine(stdout, `Skipped ${item.stale === 'differs' ? 'customized' : 'unmarked'} PDD skills in ${item.folder}${item.details ? ` (${item.details})` : ''} (preserved without overwriting). To update unmarked skills, run: ${item.recovery}`);
+    for (const item of failedSkills) writeLine(stderr, `Failed to update PDD skills in ${item.folder} (${item.reason}). To recover, run: ${item.recovery}`);
+  }
+
   if (ports.hostInstallWarnings !== null) {
     try {
       const warnFn = ports.hostInstallWarnings ?? formatHostInstallWarnings;

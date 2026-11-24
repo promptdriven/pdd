@@ -430,3 +430,60 @@ test('PATH14: noisy .zprofile stdout and alias pdd=... never create phantom rm -
   assert.equal(winDiag.pathSelected?.isCurrent, true);
   assert.deepEqual(winDiag.loginShells, []);
 });
+
+test('PATH15: pathDiagnostic recognizes matching Volta shims and pnpm shell wrappers without false conflict warnings, while still flagging shadowed ones', t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-path-shims-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  // 1. Matching Volta shim: <voltaHome>/bin/pdd -> volta-shim while packageRoot lives under <voltaHome>/tools/image/packages/@promptdriven/pdd/...
+  const voltaHome = join(root, '.volta');
+  const voltaBin = join(voltaHome, 'bin');
+  const voltaPkg = join(voltaHome, 'tools/image/packages/@promptdriven/pdd/lib/node_modules/@promptdriven/pdd');
+  mkdirSync(voltaBin, { recursive: true });
+  mkdirSync(join(voltaPkg, 'bin'), { recursive: true });
+  writeFileSync(join(voltaPkg, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version }));
+  writeFileSync(join(voltaPkg, 'bin/pdd.mjs'), '#!/usr/bin/env node\n', { mode: 0o755 });
+  writeFileSync(join(voltaBin, 'volta-shim'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  symlinkSync(join(voltaBin, 'volta-shim'), join(voltaBin, 'pdd'));
+  assert.deepEqual(
+    pathDiagnostic({ packageRoot: voltaPkg, cwd: root, env: { PATH: `${voltaBin}:/usr/bin:/bin` }, mode: 'version' }),
+    [],
+    'matching Volta shim must not trigger false PATH conflict',
+  );
+  // Shadowing from an unrelated Volta home IS still caught.
+  const otherVoltaBin = join(root, 'other-volta/bin');
+  mkdirSync(otherVoltaBin, { recursive: true });
+  writeFileSync(join(otherVoltaBin, 'volta-shim'), '#!/bin/sh\nprintf "0.0.1\\n"\n', { mode: 0o755 });
+  symlinkSync(join(otherVoltaBin, 'volta-shim'), join(otherVoltaBin, 'pdd'));
+  const voltaShadow = pathDiagnostic({ packageRoot: voltaPkg, cwd: root, env: { PATH: `${otherVoltaBin}:${voltaBin}:/usr/bin:/bin` }, mode: 'version' });
+  assert.ok(voltaShadow.some(line => /PATH selects:.*0\.0\.1/.test(line)), voltaShadow.join('\n'));
+
+  // 2. Matching pnpm global shell wrapper: $PNPM_HOME/pdd invokes "$basedir/.../bin/pdd.mjs".
+  const pnpmRoot = join(root, 'pnpm');
+  const pnpmBin = join(pnpmRoot, 'bin');
+  const pnpmPkg = join(pnpmRoot, 'global/5/node_modules/@promptdriven/pdd');
+  mkdirSync(pnpmBin, { recursive: true });
+  mkdirSync(join(pnpmPkg, 'bin'), { recursive: true });
+  writeFileSync(join(pnpmPkg, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version }));
+  writeFileSync(join(pnpmPkg, 'bin/pdd.mjs'), '#!/usr/bin/env node\n', { mode: 0o755 });
+  writeFileSync(
+    join(pnpmBin, 'pdd'),
+    '#!/bin/sh\nbasedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")\nexec node  "$basedir/../global/5/node_modules/@promptdriven/pdd/bin/pdd.mjs" "$@"\n',
+    { mode: 0o755 },
+  );
+  assert.deepEqual(
+    pathDiagnostic({ packageRoot: pnpmPkg, cwd: root, env: { PATH: `${pnpmBin}:/usr/bin:/bin` }, mode: 'version' }),
+    [],
+    'matching pnpm shell wrapper must not trigger false PATH conflict',
+  );
+  // Wrapper pointing to a DIFFERENT package IS still caught as shadowed.
+  const otherPnpmBin = join(root, 'other-pnpm-bin');
+  mkdirSync(otherPnpmBin, { recursive: true });
+  writeFileSync(
+    join(otherPnpmBin, 'pdd'),
+    '#!/bin/sh\nprintf "0.0.2\\n"\n',
+    { mode: 0o755 },
+  );
+  const pnpmShadow = pathDiagnostic({ packageRoot: pnpmPkg, cwd: root, env: { PATH: `${otherPnpmBin}:${pnpmBin}:/usr/bin:/bin` }, mode: 'version' });
+  assert.ok(pnpmShadow.some(line => /PATH selects:.*0\.0\.2/.test(line)), pnpmShadow.join('\n'));
+});

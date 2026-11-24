@@ -31,9 +31,9 @@ test('3444 check route exposes --max-total-calls and --no-restart-replacement in
   );
 });
 
-test('C1/S1 catalog exposes setup --skills-dir, init, status, and sim quiet alias', () => {
-  assert.deepEqual(parseArgv(['setup', '--yes', '--skills-dir', '/tmp/skills']), {
-    commandId: 'setup', local: 'setup', operands: [], options: { '--yes': true, '--skills-dir': '/tmp/skills' },
+test('C1/S1 catalog exposes setup --skills-dir, --upgrade, init, status, and sim quiet alias', () => {
+  assert.deepEqual(parseArgv(['setup', '--yes', '--skills-dir', '/tmp/skills', '--upgrade']), {
+    commandId: 'setup', local: 'setup', operands: [], options: { '--yes': true, '--skills-dir': '/tmp/skills', '--upgrade': true },
   });
   assert.deepEqual(parseArgv(['init']), {
     commandId: 'init', local: 'init', operands: [], options: {},
