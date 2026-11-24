@@ -1,6 +1,6 @@
 # service
 
-I can check service with a deterministic outside world.
+As a developer testing a service client wrapper, I want lookups to forward exact IDs to an injected callback deterministically, so that forwarding is verified without live network access.
 
 ## Acceptance criteria
 

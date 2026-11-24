@@ -1,12 +1,5 @@
 {
-  "schema_version": "prompt-runtime.program-scenario.v1",
-  "story_path": "user_stories/fake-database.md",
-  "criteria": [
-    {
-      "id": "AC1",
-      "text": "Looking up book 1 returns Dune and leaves its stored row unchanged."
-    }
-  ],
+  "entry_path": "examples/fakes/database.prompt.md",
   "initial_world": {
     "database": {
       "schema": [
@@ -34,41 +27,19 @@
       "result_value_pointer": "/rows"
     }
   },
-  "context": [],
   "steps": [
     {
-      "step_id": "seeded-book",
-      "entry_path": "examples/fakes/database.prompt.md",
-      "operation": "findBook",
+      "id": "seeded-book",
+      "op": "findBook",
       "input": {
         "id": 1
       },
-      "checks": [
-        {
-          "criterion_id": "AC1",
-          "target": "result",
-          "path": "/rows",
-          "op": "equals",
-          "value": [
-            {
-              "title": "Dune"
-            }
-          ]
-        },
-        {
-          "criterion_id": "AC1",
-          "target": "world",
-          "path": "/database/rows/books",
-          "op": "equals",
-          "value": [
-            {
-              "id": 1,
-              "title": "Dune"
-            }
-          ]
-        }
-      ],
-      "model": "gpt-6.1-sol"
+      "checks": {
+        "1": [
+          ["result", "/rows", "=", [{"title": "Dune"}]],
+          ["world", "/database/rows/books", "=", [{"id": 1, "title": "Dune"}]]
+        ]
+      }
     }
   ]
 }

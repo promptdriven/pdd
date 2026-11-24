@@ -1,6 +1,6 @@
 // Prompt: prompts/cli/install-kind.prompt.md
 import * as nativeFs from 'node:fs';
-import { join, win32 as win32Path } from 'node:path';
+import { isAbsolute, join, relative, resolve, win32 as win32Path } from 'node:path';
 
 export const quoteShellArg = text => `'${String(text).replace(/'/g, "'\\''")}'`;
 
@@ -206,6 +206,34 @@ export function resolveInstalledRoot(installOrPrefix, fallbackRoot, fs = nativeF
     try { if (fs.statSync(join(candidate, 'package.json')).isFile()) return candidate; } catch { /* Try next layout. */ }
   }
   return fallbackRoot;
+}
+
+export function resolveInstalledBinEntry(pkgRoot, fs = nativeFs) {
+  if (typeof pkgRoot !== 'string' || !pkgRoot) return null;
+  const pkg = readJson(join(pkgRoot, 'package.json'), fs);
+  const rawBin = typeof pkg?.bin === 'string' ? pkg.bin : pkg?.bin?.pdd;
+  const rel = typeof rawBin === 'string' && rawBin.trim() ? rawBin.trim().replace(/^\.\//, '') : join('bin', 'pdd.mjs');
+  if (isAbsolute(rel)) return null;
+  const realRoot = canonicalDir(pkgRoot, fs);
+  const candidate = resolve(pkgRoot, rel);
+  const lexicalRel = relative(resolve(pkgRoot), candidate);
+  if (!lexicalRel || lexicalRel.startsWith('..') || isAbsolute(lexicalRel)) return null;
+  try {
+    const lstat = fs.lstatSync ?? fs.statSync;
+    const linfo = lstat(candidate);
+    if (linfo.isSymbolicLink?.()) {
+      const realCand = canonicalDir(candidate, fs);
+      const realRel = relative(realRoot, realCand);
+      if (!realRel || realRel.startsWith('..') || isAbsolute(realRel)) return null;
+    }
+    if (fs.statSync(candidate).isFile()) {
+      const realCand = canonicalDir(candidate, fs);
+      const realRel = relative(realRoot, realCand);
+      if (!realRel || realRel.startsWith('..') || isAbsolute(realRel)) return null;
+      return candidate;
+    }
+  } catch { /* Missing or unreadable bin entry. */ }
+  return null;
 }
 
 export function npmCommandForInstall(install, action, spec, env = process.env) {
