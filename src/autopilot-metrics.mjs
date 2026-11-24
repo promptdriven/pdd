@@ -234,7 +234,7 @@ function indexLatestEvidenceByIssue(fs, logsDir) {
   return byIssue;
 }
 
-const NON_EXECUTED_GATE_STATES = new Set(['not-run', 'not_run', 'na', 'n/a', 'skipped', 'pending', 'running', 'none']);
+const NON_EXECUTED_GATE_STATES = new Set(['not-run', 'not_run', 'na', 'n/a', 'skipped', 'pending', 'running', 'none', 'proved_spec_model']);
 
 function extractPairCount(obj) {
   if (!isPlainObject(obj)) return null;
@@ -266,9 +266,16 @@ function deriveGates({ evidence, evDoc, outcome, text }) {
     }
   }
   let vectors = ev.vectors?.state ?? evDoc?.vectors?.kinds?.vectors?.state ?? null;
-  let formal = ev.formal?.state ?? evDoc?.vectors?.kinds?.formal?.state ?? null;
+  const formalKind = evDoc?.vectors?.kinds?.formal ?? null;
+  const formalIsSpecModelOnly = String(ev.formal?.state ?? '').trim().toLowerCase() === 'proved_spec_model'
+    || String(formalKind?.tier ?? '').trim().toLowerCase() === 'proved_spec_model';
+  let formal = formalIsSpecModelOnly
+    ? 'proved_spec_model'
+    : (ev.formal?.state ?? (formalKind?.tier && formalKind.tier !== 'failed' ? formalKind.tier : formalKind?.state) ?? null);
   const vectorsCount = extractPairCount(ev.vectors) ?? extractPairCount(evDoc?.vectors?.kinds?.vectors);
-  const formalCount = extractPairCount(ev.formal) ?? extractPairCount(evDoc?.vectors?.kinds?.formal);
+  const formalCount = formalIsSpecModelOnly
+    ? null
+    : (extractPairCount(ev.formal) ?? extractPairCount(formalKind));
   let suite = evDoc?.suite?.state ?? null;
   let review = evDoc?.review?.state ?? evDoc?.review?.verdict ?? null;
   let ci = evDoc?.ci?.state ?? null;
@@ -370,7 +377,7 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
     const regressionIssues = [...regIssueSet].sort((a, b) => a - b);
     const hasPromptCheck = ['runtime', 'vectors', 'formal'].some(k => {
       const v = typeof gates[k] === 'string' ? gates[k].trim().toLowerCase() : '';
-      return v === 'pass' || v === 'fail' || v === 'proved' || v === 'bounded' || v === 'failed';
+      return v === 'pass' || v === 'fail' || v === 'proved' || v === 'bounded' || v === 'proved_solver_code' || v === 'failed';
     });
     const promptChanged = typeof row.promptChanged === 'boolean'
       ? row.promptChanged

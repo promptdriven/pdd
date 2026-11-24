@@ -856,21 +856,19 @@ the evidence record.
   in the PR body and the same text as the result's `evidence` (below). No review
   verdict or review claim (for example "Review: no must-fix") in the PR body or a
   comment: only the core's fresh reviewer gives one. Push the job
-  branch and either let `openPullRequest(ctx, job, options)` open/update the PR from the result's `head`, `title` and `summary` or open one PR against BASE with `Fixes #N`; `openPullRequest` (using a temporary scratch root cleaned up on exit without overwriting saved job files or polluting `job.worktree` when called standalone) deterministically stamps missing closing keywords (`Fixes #N` / `Closes #N`), `Path:` lines (from the Git diff and base/head `ownerRead`, grouping `Path: a` under the changed owner prompt even on multi-owner modules and placing modified existing `.prompt.md` files on `Path: a`), `Runtime:` lines (from verified saved `pdd test` checks at `head` or honest `not run` / `FAIL` state, never inventing a pass, treating plain-Markdown prompts without an embedded Runtime interface block as first-class checkable prompts that report `no Story reaches <prompts>` or the caller's cause when uncovered, and reporting `native-only prompt` only when every changed prompt has valid `kind: native-only`), and the `Evidence:` line in code (failing closed on malformed explicit `tests`/`vectors`/`formal` inputs or omitted `tests` without a valid existing `Evidence:` `tests=` claim, preserving contradictory test counts so `evidenceReds` catches them, and syncing `vectors=`/`formal=` counts in `mergeCheck` once engine replays finish on stamped heads) so the agent does not have to hand-type machine metadata strings. Never merge, push to BASE,
+  branch and either let `openPullRequest(ctx, job, options)` open/update the PR from the result's `head`, `title` and `summary` or open one PR against BASE with `Fixes #N`; `openPullRequest` (using a temporary scratch root cleaned up on exit without overwriting saved job files or polluting `job.worktree` when called standalone) deterministically stamps missing closing keywords (`Fixes #N` / `Closes #N`), `Path:` lines (from the Git diff and base/head `ownerRead`, grouping `Path: a` under the changed owner prompt even on multi-owner modules and placing modified existing `.prompt.md` files on `Path: a`), `Runtime:` lines (from verified saved `pdd test` checks at `head` or honest `not run` / `FAIL` state, never inventing a pass, treating plain-Markdown prompts without an embedded Runtime interface block as first-class checkable prompts that report `no Story reaches <prompts>` or the caller's cause when uncovered, and reporting `native-only prompt` only when every changed prompt has valid `kind: native-only`), and the `Evidence:` line in code (failing closed on malformed explicit `tests`/`vectors`/`formal` inputs or omitted `tests` without a valid existing `Evidence:` `tests=` claim, preserving contradictory test counts so `evidenceReds` catches them, preserving the mechanically classified `formal` tier (`proved_solver_code`, `bounded`, or `proved_spec_model`) without stomping `proved_solver_code` to `bounded` or upgrading disconnected `proved_spec_model` to `bounded`, and syncing `vectors=`/`formal=` counts in `mergeCheck` once engine replays finish on stamped heads while always respecting honest `proved_spec_model`) so the agent does not have to hand-type machine metadata strings. Never merge, push to BASE,
   force-push or close the issue, and never assign it or change its labels. The result
-  file is JSON: `outcome` `pr` with `head`, optional `pr`, `title`, `summary`, optional `skill` (`small-change`, `bug` or `feature`), `tests`, `choices`, `promptChanged` (Boolean),
+  file is JSON: `outcome` `pr` with `head`, optional `pr`, `title`, `summary`, optional `skill` (`small-change`, `bug` or `feature`), `tests`, optional `formal {state}`, `choices`, `promptChanged` (Boolean),
   `evidence` and optional `runtime {state, cause, kind, component, code, detail}`, or
   `outcome` `failed` with `kind` (`pdd` or `job`), `component`, `code`, `cause`
   and a short `detail` without repository code, or `outcome` `needs-person` with one
   clear `question`, only when the job cannot go on without a person's decision. A Runtime check that could not run is
   never a failure.
 - **Evidence** (for metrics): one fixed line, `Evidence: runtime=<pass|fail|not-run>
-  (<n>/<m>); vectors=<pass|fail|not-run> (<n>/<m>); formal=<proved|bounded|failed|not-run|not-applicable>;
+  (<n>/<m>); vectors=<pass|fail|not-run> (<n>/<m>); formal=<proved|bounded|proved_solver_code|proved_spec_model|failed|not-run|not-applicable>;
   tests=<pass|fail> (<n>/<m>)` (runtime = `pdd test` on the changed Stories, vectors =
-  the replay tests that the change touches: each changed `*.vectors.test.*` file and each
-  vector test file that names a changed scenario file, run with `node --test` (the merge
-  check runs the same files and compares the counts), formal = the changed formal
-  tests, tests = the focused tests; a count may be left out). The job prompt says this. The tick parses it with an allowlist: the first PR body line
+  the replay tests that the change touches across JS/TS, Python, Go, and Rust via shared polyglot runners, formal = the changed formal
+  tests with `proved_solver_code` strictly reserved for code-bound solver proofs with mutation control and `proved_spec_model` for standalone spec models without production imports, tests = the focused tests; a count may be left out). The job prompt (`workRules` and `RESULT_RULES`) instructs workers to write code-bound formal/property checks (using installed property libraries or zero-install deterministic seeded PRNG / finite exhaustive grids against real production code, skipping as `not-applicable` on docs/UI/glue/CRUD) and report `"formal":{"state":...,"reason":...}` in the JSON result. `POSITIVE.formal` includes `proved_solver_code` so unchecked `proved_solver_code` claims downgrade to `not-run` in `honestEvidence`. Claiming `formal=proved_solver_code` or `formal=proved` with zero verified formal files fails closed, and claiming a positive code-bound formal tier when formal files import zero production modules (`proved_spec_model`) fails closed; honest `formal=proved_spec_model` is respected without forcing upgrades to `bounded`. For Path `b` pure structural refactors (exempt from failing-base bug control), `runValidatorV2Gate` runs untouched base-owned tests via `runRefactorEquivalenceCheck` (`diffTestReports`) so silent behavioral regressions hold the merge. When changed files include a CLI-implemented prompt or declared `pdd.json` `code.commands`, Autopilot automatically invokes `pdd test --target code --json` via CLI subprocess (0 AI calls, bounded timeout) and surfaces any CLI scenario failures as a merge blocker. The tick parses `Evidence:` with an allowlist: the first PR body line
   that starts with `Evidence:` after the Runtime-line marks go, else the result's
   `evidence`; each `key=value` part with a known key and value is kept once, with its
   count when it is `n/m` with n ≤ m (never for formal); anything else is dropped. The
@@ -1456,35 +1454,38 @@ runs until its end):
    use the headless job runner's cleanup. Replace it only after that cleanup confirms
    every saved process is gone. If the snapshot or cleanup cannot confirm ownership,
    keep the old `vectors` record and retry it on a later tick. The set is complete: each changed
-   `*.vectors.test.*` and `*.formal.test.*` file, and each `*.vectors.test.*` file that
+   polyglot vector or formal file (`*.vectors.test.*`, `test_vectors_*.py`, `*_vectors_test.py`,
+   `*_vectors_test.go`, `tests/*vectors*.rs`, `*.formal.test.*`, `test_formal_*.py`, `*_formal_test.py`,
+   `formal/test_*.py`, `*_formal_test.go`, `tests/*formal*.rs`), and each vector file that
    names any changed scenario file (a changed `.json` under a `test`, `tests`, `runtime`
    or `vectors` folder, by its base name: `git grep -z -l -F` at the head, 100 names per
-   call). Discovery is in NUL mode (`-z`), so every name stays exact. Only node:test
-   files run: a `.js`, `.mjs` or `.cjs` file whose text at the head holds `node:test`, or
-   that imports by a relative path (two levels at most, inside the checkout) a file that
-   holds it (pdd's replay helpers), and whose absolute path in the checkout has no
-   backslash (Node refuses such a module path). Each other file is "Not run by Autopilot (REASON)" in the note. It
-   still counts for its kind: a kind with such a file cannot substantiate a positive
-   claim (below), for a mixed set too. More than 400 files, or a command over 100,000 bytes, runs
-   nothing: "not run (too many replay and formal files: N; the limit is 400)", never a
-   part of the set. The run is one bash command through the machine's suite queue in a
+   call). Discovery is in NUL mode (`-z`), so every name stays exact. Polyglot runners dispatch
+   by repository toolchain (`node:test`, `vitest --no-install`, `jest --no-install`, `pytest -v`
+   with untracked `.venv/bin/pytest` and `PYTHONPATH=src` prepended, `go test -json`, `cargo test`,
+   or merge-base-trusted `verify.formal_command` with `PDD_FORMAL_FILE` exported); JS/TS files without
+   `node:test`/Vitest/Jest or polyglot files lacking their toolchain manifest are reported as
+   "Not run by Autopilot (REASON)" in the note (and still count for their kind). Each file runs in its
+   own isolated subprocess (preventing Python Z3 `main_ctx()` deadlocks), bounded by the 4 MB + 1 MB
+   `REPLAY_FILTER` (preserving TAP, pytest, vitest `Test Files`/`Tests`/`Duration`, cargo `running`/`test result:`,
+   and `go test -json` summary lines), and `replayLog` keeps a bounded 64 KiB head + 192 KiB rolling tail
+   per file segment so polyglot summaries past 256 KiB are never dropped. More than 400 files, or a
+   command over 100,000 bytes, runs nothing: "not run (too many replay and formal files: N; the limit
+   is 400)", never a part of the set. The run is one bash command through the machine's suite queue in a
    clean checkout (`worktrees/N-vectors`, the suite's dependency install, `CI=true`),
    watched by the process rule (role `vectors`, like the suite). **Per-file accounting
-   (Codex round 4):** each file runs alone, directly as a script with the TAP reporter
+   (Codex round 4 + #3561):** each `node:test` file runs alone, directly as a script with the TAP reporter
    (`node --test-reporter=tap -- 'ABSOLUTE-FILE' 2>&1`; no glob reads the path, so
    brackets, braces such as `{a,b}`, stars, a leading `-` and such characters in the
-   checkout path all work, checked on Node 22.23.2), then the marker line `# pdd-autopilot-
-   NONCE: KIND I exit CODE` (NONCE a random hex per run, KIND `vectors`, `formal`,
-   `linked`, `tests`, `control-vectors`, `control-formal` or `control-tests` (below), I the file's index in its
-   kind). All files of the run go through one awk filter, so the
-   bound is for the whole log: after 4 MB of output it passes the marker lines, TAP
-   result, location and anchored top-level module-load import-error lines cut to 300 characters for 1 MB more, and once `# pdd-
-   autopilot: output cut after 4194304 bytes`; it prints no other line, and keeps only
-   the last top-level TAP summary line of each key and the last plan line of the current
-   file, which it prints just before that file's marker. So the log stays near 5 MB, also
-   with many summary-shaped lines, and each file's counts stay true. The engine reads the
-   log in 1 MB parts, line by line (bounded memory), and keeps for each file the last TAP
-   summary before its marker (`tests`, `pass`, `fail`, `skipped`, `todo`), the exit code,
+   checkout path all work), then prints the marker line `# pdd-autopilot-NONCE: KIND I exit CODE`
+   (NONCE a random hex per run, KIND `vectors`, `formal`, `linked`, `tests`, `control-vectors`,
+   `control-formal` or `control-tests`, I the file's index in its kind). For passing `formal` files,
+   `vectorsState` inspects static code binding (`inspectFormalFileBinding`) to classify `tier`
+   (`bounded` vs `proved_spec_model`) and `codeBound`, preserving `tier` and `codeBound` in `evidenceRecord`.
+   `isSuiteConfigFile` includes `.venv/**`/`venv/**`, and `resolveBaseSuiteContext` includes scripts referenced
+   by merge-base `verify.formal_command` so PR edits to formal scripts defer execution until blind review passes.
+   `shouldRunCompiledCodeTest` and `runCompiledCodeTestCheck` auto-invoke `pdd test --target code --json` via
+   CLI subprocess (0 AI calls, scrubbed env without `NODE_OPTIONS`, symlink-safe manifest reads) when CLI-implemented
+   prompts or `pdd.json` `code.commands` apply, failing closed in `runValidatorV2Gate` on any non-pass or non-zero exit.
    whether a file-level load failure (with 0 subtests executed and 0 TAP summary tests,
    either before TAP begins or inside a file-level TAP YAML diagnostic block — never from a
    test title or arbitrary stdout line) matched an anchored missing module/export error
@@ -1512,11 +1513,16 @@ runs until its end):
      head H: F of N failed: TEST (FILE). The Evidence line says KIND=CLAIM."
    - A pass with no file of the kind left out and no skipped or todo test: a `vectors`
      claim must be `pass`, with the same counts when it gives counts; a `formal` claim
-     must be `proved` or `bounded`. Else red (the claim is not true), with the true value
-     to write.
+     must be `proved`, `proved_solver_code`, `bounded`, or honest `proved_spec_model` (if a
+     formal file in a repo with production code imports zero production modules, positive
+     claims are RED and `syncStampedReplayEvidence` never launders false positive claims or
+     upgrades `proved_spec_model` to `bounded`). Claiming `formal=proved` or
+     `formal=proved_solver_code` with 0 verified formal files at the current head is RED.
+     Else red (the claim is not true), with the true value to write.
    - Not run, a file of the kind that the engine does not run, or a skipped or todo test
      (a skipped obligation never supports a pass or a proof; an all-skipped formal run is
-     not proved): a positive claim (`vectors=pass`, `formal=proved` or `bounded`) is red:
+     not proved): a positive claim (`vectors=pass`, `formal=proved`, `formal=proved_solver_code`,
+     or `formal=bounded`) is red:
      "… Autopilot could not check it: REASON. Fix the cause, or write KIND=not-run." A
      non-positive claim is fine. The engine's runner is not the issue: this red alone
      never ends a healthy job. It is red at most once per job and kind (`notRunReds`),
@@ -1542,7 +1548,8 @@ runs until its end):
    and no Evidence claim counts them (the agent's `vectors=` counts the changed files and
    the files that read a changed scenario). The note has `- Replay tests that import a
    changed module (Autopilot's run at H): …`. A code file is a changed file with a code
-   extension (`.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.jsx`, `.tsx`, `.py`) that is
+   extension (`.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.jsx`, `.tsx`, `.py`, `.go`, `.rs`,
+   `.java`, `.kt`, `.rb`, `.c`, `.cpp`, `.cc`, `.h`, `.hpp`, `.cs`, `.swift`, `.ex`, `.exs`) that is
    not in a `test`, `tests`, `__tests__`, `spec` or `fixtures` folder and not named
    `*.test.*` or `*.spec.*`. **Bug-fix classification (authoritative precedence & monotonic bug skill):** a job
    persists any non-empty GitHub issue `labels` (and companion `labels`) at intake, and once
@@ -2136,6 +2143,8 @@ with the native defaults named above.
 ## Dependencies
 
 - [Autopilot universal validator](autopilot-validator.prompt.md): required for `MAX_VALIDATION_REPAIRS`, `canonicalTargetPath`, `detectChangedSurfaces`, `detectNativeOnlyModules`, `detectRealE2eKindsInTest`, `detectRealHostProbesInTest`, `evaluateValidationOutcome`, `formatHumanVerificationCard`, `inspectTestBoundaryTargets`, `shouldClaimWithCooldowns`, and `planValidationResume`.
+- [Formal verification](formal-verify.prompt.md): required for `inspectFormalFileBinding`, `detectTestRunner`, `resolvePytestBinary`, `buildRunnerEnv`, `parseTestSummaryOutput`, and `extractTestCases`.
+- [Unified stateless proof and feature map verification](prove.prompt.md): required for merge-base `loadVerifyConfig` (`verify.formal_command`).
 - [Repo hygiene and extensible project lint](repo-hygiene-lint.prompt.md): required for `lintRepoProject` and `loadProjectLintConfig` (pre-review changed-file hygiene gate, `silent-validation-skip`, `boundary-mock-only-test`, and workspace-local `rules/lint/*.json` loading).
 - Workflow test inventory: required for `collectTestInventory` (static base-vs-head test inventory summary, new-skip detection, and dynamic-inventory disclosure).
 - [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.

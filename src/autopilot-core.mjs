@@ -71,7 +71,11 @@ import {
   registerTestEnvSecrets,
   summarizeTestEnvMetadata,
 } from './autopilot/gates/test-env.mjs';
-import { collectLiveEvidenceContract, runPolyglotBaseControl } from './autopilot/core/live-evidence.mjs';
+import { collectLiveEvidenceContract, runPolyglotBaseControl, runRefactorEquivalenceCheck } from './autopilot/core/live-evidence.mjs';
+import { inspectFormalFileBinding } from './core/formal-verify.mjs';
+import { scrubChildEnv } from './core/lint/diagnostics.mjs';
+import { buildRunnerEnv, detectTestRunner, extractTestCases, parseTestSummaryOutput, resolvePytestBinary } from './core/polyglot-runners.mjs';
+import { loadVerifyConfig } from './core/verify-paths.mjs';
 import {
   collectCoreLocalIncidents,
   diagnoseStuckCause,
@@ -289,9 +293,10 @@ const sentence = text => `${String(text ?? '').trim().replace(/[.\s]+$/, '')}.`;
 // Only known fields and values are kept (an allowlist); a count is kept when it is "n/m" with n <= m.
 const EVIDENCE = { runtime: ['pass', 'fail', 'not-run'], vectors: ['pass', 'fail', 'not-run'], formal: ['proved', 'bounded', 'proved_solver_code', 'proved_spec_model', 'failed', 'not-run', 'not-applicable'], tests: ['pass', 'fail'] };
 const POSITIVE_FORMAL_STATES = ['proved', 'bounded', 'proved_solver_code'];
+const normalEvidenceLine = line => line.replace(/[*`|]/g, ' ').replace(/(?<![a-z0-9])_+|_+(?![a-z0-9])/gi, ' ').replace(/^\s*(?:(?:#+|[-+>]|\d+[.)])\s*)*/, '').replace(/\s+/g, ' ').trim();
 function parseEvidence(text) {
   for (const raw of String(text ?? '').split(/\r?\n/)) {
-    const line = normalLine(raw);
+    const line = normalEvidenceLine(raw);
     if (!/^evidence\s*:/i.test(line)) continue;
     const found = {};
     for (const part of line.replace(/^evidence\s*:/i, '').split(';')) {
@@ -322,7 +327,7 @@ function evidenceReds(e, runtimeLine) {
 const evidenceText = e => e ? `Evidence: ${Object.keys(EVIDENCE).filter(key => e[key]).map(key => `${key}=${e[key].state}${e[key].note ? ` (${e[key].note})` : e[key].total !== undefined ? ` (${e[key].passed}/${e[key].total})` : ''}`).join('; ')}` : 'Evidence: none';
 // R3-3: the engine never repeats a positive vectors or formal claim that it could not check: it writes that kind itself
 // as not run, in the merge note and in the history line (metrics count it as not run).
-const POSITIVE = { vectors: ['pass'], formal: ['proved', 'bounded'] };
+const POSITIVE = { vectors: ['pass'], formal: POSITIVE_FORMAL_STATES };
 const uncheckedOf = job => object(job.unchecked) ? job.unchecked : {};
 function honestEvidence(job) {
   const e = job.evidence;
@@ -564,6 +569,7 @@ export function isSuiteConfigFile(filePath) {
   const normalized = String(filePath).trim().replace(/\\/g, '/').replace(/^(?:\.\/)+/, '').toLowerCase();
   if (!normalized) return false;
   if (normalized.startsWith('.github/workflows/')) return true;
+  if (normalized === '.venv' || normalized.startsWith('.venv/') || normalized === 'venv' || normalized.startsWith('venv/')) return true;
   if (/(?:^|\/)scripts\/.+/.test(normalized)) return true;
   const base = basename(normalized);
   if (SUITE_CONFIG_BASENAMES.has(base)) return true;
@@ -625,23 +631,25 @@ async function detectBaseTestCommandFromGit(ctx) {
       try { pkg = JSON.parse(rawPkg); } catch { pkg = null; }
     }
   }
+  let baseFormalCommand = null;
   if (rootSet.has('pdd.json')) {
     const rawPdd = await readGitFile('pdd.json');
     if (rawPdd !== null) {
       try {
         const cfg = JSON.parse(rawPdd);
-        if (named(cfg?.autopilot?.testCommand)) return { ok: true, command: cfg.autopilot.testCommand.trim(), packageJson: pkg };
+        if (named(cfg?.verify?.formal_command)) baseFormalCommand = cfg.verify.formal_command.trim();
+        if (named(cfg?.autopilot?.testCommand)) return { ok: true, command: cfg.autopilot.testCommand.trim(), packageJson: pkg, formalCommand: baseFormalCommand };
       } catch { /* Malformed base pdd.json falls through to base manifest detection. */ }
     }
   }
-  if (rootSet.has('pnpm-lock.yaml')) return { ok: true, command: 'pnpm test', packageJson: pkg };
-  if (rootSet.has('yarn.lock')) return { ok: true, command: 'yarn test', packageJson: pkg };
-  if (rootSet.has('bun.lockb') || rootSet.has('bun.lock')) return { ok: true, command: 'bun test', packageJson: pkg };
-  if (pkg?.scripts?.test) return { ok: true, command: 'npm test', packageJson: pkg };
-  if (rootSet.has('pyproject.toml') || rootSet.has('pytest.ini')) return { ok: true, command: 'pytest', packageJson: pkg };
-  if (rootSet.has('Cargo.toml')) return { ok: true, command: 'cargo test', packageJson: pkg };
-  if (rootSet.has('go.mod')) return { ok: true, command: 'go test ./...', packageJson: pkg };
-  if (pkg !== null || rootSet.has('package.json')) return { ok: true, command: 'npm test', packageJson: pkg };
+  if (rootSet.has('pnpm-lock.yaml')) return { ok: true, command: 'pnpm test', packageJson: pkg, formalCommand: baseFormalCommand };
+  if (rootSet.has('yarn.lock')) return { ok: true, command: 'yarn test', packageJson: pkg, formalCommand: baseFormalCommand };
+  if (rootSet.has('bun.lockb') || rootSet.has('bun.lock')) return { ok: true, command: 'bun test', packageJson: pkg, formalCommand: baseFormalCommand };
+  if (pkg?.scripts?.test) return { ok: true, command: 'npm test', packageJson: pkg, formalCommand: baseFormalCommand };
+  if (rootSet.has('pyproject.toml') || rootSet.has('pytest.ini')) return { ok: true, command: 'pytest', packageJson: pkg, formalCommand: baseFormalCommand };
+  if (rootSet.has('Cargo.toml')) return { ok: true, command: 'cargo test', packageJson: pkg, formalCommand: baseFormalCommand };
+  if (rootSet.has('go.mod')) return { ok: true, command: 'go test ./...', packageJson: pkg, formalCommand: baseFormalCommand };
+  if (pkg !== null || rootSet.has('package.json')) return { ok: true, command: 'npm test', packageJson: pkg, formalCommand: baseFormalCommand };
   const testRoots = ['test', 'tests'].filter(d => rootSet.has(d));
   if (testRoots.length) {
     const subFiles = await listTree(['-r', '--name-only', ref, '--', ...testRoots]);
@@ -653,13 +661,13 @@ async function detectBaseTestCommandFromGit(ctx) {
         if (parts.length > 5) continue;
         if (parts.some((seg, idx) => idx > 0 && (seg.startsWith('.') || seg === 'node_modules' || seg === 'fixtures' || seg === '__pycache__'))) continue;
         const name = parts.at(-1) ?? '';
-        if (/\.(?:test|spec)\.(?:mjs|cjs|js)$/i.test(name)) return { ok: true, command: 'node --test', packageJson: pkg };
+        if (/\.(?:test|spec)\.(?:mjs|cjs|js)$/i.test(name)) return { ok: true, command: 'node --test', packageJson: pkg, formalCommand: baseFormalCommand };
         if (/^(?:test_.*\.py|.*_test\.py)$/i.test(name)) hasPy = true;
       }
-      if (hasPy) return { ok: true, command: 'pytest', packageJson: pkg };
+      if (hasPy) return { ok: true, command: 'pytest', packageJson: pkg, formalCommand: baseFormalCommand };
     }
   }
-  return { ok: true, command: null, packageJson: pkg };
+  return { ok: true, command: null, packageJson: pkg, formalCommand: baseFormalCommand };
 }
 async function resolveBaseSuiteContext(ctx) {
   if (ctx?._baseSuiteResolved?.done) return ctx._baseSuiteResolved;
@@ -673,8 +681,14 @@ async function resolveBaseSuiteContext(ctx) {
   const basePkg = fromGit.ok
     ? fromGit.packageJson
     : (named(ctx?.state?.cwd) ? readJson(ctx.fs, join(ctx.state.cwd, 'package.json'), null) : null);
-  const referencedScripts = extractReferencedSuiteScripts(command, basePkg);
-  const resolved = { done: true, command, baseAvailable: fromGit.ok, referencedScripts };
+  const baseFormalCommand = fromGit.ok
+    ? (fromGit.formalCommand ?? null)
+    : (named(ctx?.state?.cwd) ? (readJson(ctx.fs, join(ctx.state.cwd, 'pdd.json'), {})?.verify?.formal_command ?? null) : null);
+  const referencedScripts = [...new Set([
+    ...extractReferencedSuiteScripts(command, basePkg),
+    ...(named(baseFormalCommand) ? extractReferencedSuiteScripts(baseFormalCommand, basePkg) : []),
+  ])];
+  const resolved = { done: true, command, formalCommand: baseFormalCommand, baseAvailable: fromGit.ok, referencedScripts };
   if (ctx) ctx._baseSuiteResolved = resolved;
   return resolved;
 }
@@ -1349,7 +1363,7 @@ function formatQuestion(question, options, recommended) {
   return [text, ...list.map((option, i) => `${letters[i]}) ${option}${i === chosen ? ' (recommended)' : ''}`), `Reply with one letter, for example: ${letters[Math.max(chosen, 0)]}`].join('\n');
 }
 const RESULT_RULES = (result, ctx = null, allowNotReproduced = false) => `Before you exit, write this JSON file: ${result}
-- Success: {"outcome":"pr","head":"<40-character SHA you pushed>","pr":<PR number if open, or omit so Autopilot opens it>,"title":"<concise PR title>","summary":"<concise PR summary; Autopilot's harness stamps verification receipts and machine metadata in code>","skill":"small-change|bug|feature","promptChanged":true|false,"tests":{"state":"pass|fail","passed":<n>,"total":<m>},"adopt":[],"runtime":{"state":"pass|fail|not-run","cause":"<exact reason>","kind":"runtime","component":"<tool, for example pdd lint>","code":"<short-error-code>","detail":"<at most 20 lines of the tool's error output, with no code from this repository>"}}. Give kind, component, code and detail when Runtime could not check.${allowNotReproduced ? `
+- Success: {"outcome":"pr","head":"<40-character SHA you pushed>","pr":<PR number if open, or omit so Autopilot opens it>,"title":"<concise PR title>","summary":"<concise PR summary; Autopilot's harness stamps verification receipts and machine metadata in code>","skill":"small-change|bug|feature","promptChanged":true|false,"tests":{"state":"pass|fail","passed":<n>,"total":<m>},"formal":{"state":"proved_solver_code|bounded|proved_spec_model|not-applicable","reason":"<short reason when not-applicable>"},"adopt":[],"runtime":{"state":"pass|fail|not-run","cause":"<exact reason>","kind":"runtime","component":"<tool, for example pdd lint>","code":"<short-error-code>","detail":"<at most 20 lines of the tool's error output, with no code from this repository>"}}. Give kind, component, code and detail when Runtime could not check.${allowNotReproduced ? `
 - Not reproduced (only when the red CI or full-suite failure did not reproduce and you changed no files): {"outcome":"not reproduced","command":"<exact reproduction command you ran>","detail":"<at most 20 lines of passing output>"}` : ''}
 - Failure: {"outcome":"failed","kind":"pdd|job","component":"<tool, for example pdd test>","code":"<short-error-code>","cause":"<one sentence>","detail":"<at most 20 lines of the failing tool's error output, with no code from this repository>"}
 - Needs a person: {"outcome":"needs-person","kind":"blocker|choice","question":"<one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"}, only when you cannot go on without a person's decision: "kind":"blocker" for a blocker or one of the two cases that always go to a person (rule 1)${ctx && !asking(ctx) ? ', and never for a choice: decide it (rule 1)' : ', "kind":"choice" only for a choice that rule 1 lets you ask'}. Ask exactly one question with 2 or 3 options; Autopilot posts it on the issue and a later job gets the answer.
@@ -1365,11 +1379,12 @@ function workRules(ctx, job) {
    c. New PDD-owned product module: write its \`.prompt.md\` first with \`// Prompt: <path>\` in the first 4 KiB (followed by a blank line) or a \`pdd-bindings.json\` entry, then tests and code.
    d. Non-product files (config, CI, package metadata, lock files, docs, tests): edit directly; never create a \`.prompt.md\` for non-product files.
    e. Hybrid Brownfield PRs (existing unowned product/app code): never force whole-repo prompt rewrites. Either extract/adopt a clean module with a 100%-truth \`.prompt.md\` + \`// Prompt: <path>\` header, OR make a surgical brownfield fix verified natively with failing-first regression tests, \`"$PDD_CLI" lint --diff\`, and \`"$PDD_CLI" prove\`.
-3. Verification & \`pdd prove\`. Write real end-to-end tests upfront for every changed runtime surface (real subprocess/CLI invocation, real local HTTP/WS server and DB round-trip, real browser flow via Playwright for Web UI, or live tool/auth binding where available) instead of mock-only unit tests alone. Never rewrite real end-to-end checks into mocks when an external tool or login is unavailable. Run \`"$PDD_CLI" prove\` (or for a bug fix, \`"$PDD_CLI" prove --test "<cmd>" --expect "<symptom>"\` to prove the regression test fails on base and passes on head). Docs-only changes need only the issue's done check.
+3. Verification, formal checks & \`pdd prove\`. Write real end-to-end tests upfront for every changed runtime surface (real subprocess/CLI invocation, real local HTTP/WS server and DB round-trip, real browser flow via Playwright for Web UI, or live tool/auth binding where available) instead of mock-only unit tests alone. Never rewrite real end-to-end checks into mocks when an external tool or login is unavailable. Run \`"$PDD_CLI" prove\` (or for a bug fix, \`"$PDD_CLI" prove --test "<cmd>" --expect "<symptom>"\` to prove the regression test fails on base and passes on head). Docs-only changes need only the issue's done check.
+   - Formal/property verification: whenever touching rules/state transitions, parsers/validators, auth/trust, math/metrics/money, locking/scheduling, \`## Rules to check\` / \`## Domain decisions\`, or any module with an existing formal test, load \`$PDD_SKILLS/pdd/references/formal.md\` and write/update a code-bound formal test using an installed property library OR a zero-install deterministic seeded PRNG / finite exhaustive grid directly against real production code. Skip cleanly as \`not-applicable\` on docs, UI/copy/styling, pure glue/config, or simple CRUD with no invariants; never claim \`proved_solver_code\` or \`bounded\` for disconnected spec models.
 4. Harness-owned receipts: Autopilot's harness stamps machine verification receipts, \`Path:\`, \`Runtime:\`, and \`Evidence:\` deterministically from real tool checks and git state, so do not hand-type or police machine metadata prose in the PR body. The prompt and code may be in one commit; never rewrite history.
 5. Run focused tests for the changed behavior. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish (the full test command of this repository is \`${fullTestCommand ?? 'not set'}\`). When you run tests or builds, pass \`$PDD_CHECK_CPUS\` as the worker count (for example \`node --test --test-concurrency=$PDD_CHECK_CPUS\`, \`pytest -n $PDD_CHECK_CPUS\`, \`cargo test -j $PDD_CHECK_CPUS\`): it is this machine's share for Autopilot.
 6. Runtime & \`pdd prove\`. Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. Run pdd as "$PDD_CLI" (for example \`"$PDD_CLI" prove\` or \`"$PDD_CLI" test STORY\`), never as a bare pdd: your shell can find an older pdd first on PATH. $PDD_CLI is the pdd of this Autopilot. For prompt-owned Stories affected by your changes, commit your changes and run \`"$PDD_CLI" test STORY ...\`. A FAIL line blocks the merge: fix until it passes. Never treat a failed check or \`real-binding-unavailable\` as a silent skip or pass. When pdd prints a fixable refusal, apply the Number spelling that pdd prints and rerun. When pdd prints that the interpreter is in maintenance, stop pdd then and report \`maintenance until HH:MM UTC\` in \`runtime.cause\`; Autopilot retries when maintenance ends. When Runtime could not check for an unfixable cause (a \`kind: native-only\` prompt, maintenance, or a refusal that pdd gives no fix for), do not stop and do not invent an interface: cover the case with native tests, ship the PR, and record the cause in the result's \`runtime\` field; Autopilot records the harness receipt automatically.
-7. Report your focused test counts in the result's \`"tests"\` field (and \`"runtime"\` when Runtime could not check); Autopilot's harness stamps verified evidence and receipts deterministically.
+7. Report your focused test counts in the result's \`"tests"\` field, your formal verification status in \`"formal"\` (\`bounded\`, \`proved_solver_code\`, \`proved_spec_model\`, or \`not-applicable\` with a short reason), and \`"runtime"\` when Runtime could not check; Autopilot's harness stamps verified evidence and receipts deterministically.
 8. Do not write a review verdict or any review claim (for example "Review: no must-fix") in the PR body or a comment. Only Autopilot's fresh reviewer gives a review verdict.
 9. Commit, push branch ${job.branch} to origin, and use ONE PR against ${state.baseBranch} with "${jobIssues(job).length > 1 ? jobIssues(job).map(n => `Closes #${n}`).join(', ') : `Fixes #${job.issue}`}" (either omit \`"pr"\` and provide \`"title"\` + \`"summary"\` in the result so Autopilot opens the PR in code, or run \`gh pr create --base ${state.baseBranch} --head ${job.branch}\`). Never merge, never push to ${state.baseBranch}, never force-push, never close the issue. Do not assign the issue to anyone and do not change its labels: Autopilot owns them.`;
 }
@@ -5938,17 +5953,18 @@ const KIND_FILE = {
   vectors: /\.vectors\.test\.[^/]+$|(?:^|\/)(?:test_vectors(?:_[^/]+)?|[^/]+_vectors_test)\.py$|_vectors_test\.go$|(?:^|\/)tests\/[^/]*vectors[^/]*\.rs$/i,
   formal: /\.formal\.test\.[^/]+$|(?:^|\/)(?:test_formal_[^/]+|[^/]+_formal_test)\.py$|(?:^|\/)formal\/test_[^/]+\.py$|_formal_test\.go$|(?:^|\/)tests\/[^/]*formal[^/]*\.rs$/i,
 };
-const ORDINARY_TEST_FILE = /\.(?:test|spec)\.[cm]?js$/i, FIXTURE_PLACE = /(?:^|\/)fixtures\//i;
-// #3227 fix 2 + #3556: the run kinds. `linked` are replay files that import a changed code module (no claim counts them);
-// `tests` are changed ordinary JS node:test regression tests on bug-fix PRs; the control kinds run vectors, formal and
+const ORDINARY_TEST_FILE = /(?:\.(?:test|spec)\.(?:[cm]?[jt]s|[jt]sx)$|(?:^|\/)test_[^/]+\.py$|_test\.(?:py|go|rs)$|(?:^|\/)tests\/[^/]+\.rs$)/i, FIXTURE_PLACE = /(?:^|\/)fixtures\//i;
+// #3227 fix 2 + #3556 + #3561: the run kinds. `linked` are replay files that import a changed code module (no claim counts them);
+// `tests` are changed ordinary polyglot regression tests on bug-fix PRs; the control kinds run vectors, formal and
 // tests again on the merge-base code of the changed code files.
 const HEAD_KINDS = [...KINDS, 'linked', 'tests'], CONTROL_KINDS = { 'control-vectors': 'vectors', 'control-formal': 'formal', 'control-tests': 'tests' }, RUN_KINDS = [...HEAD_KINDS, ...Object.keys(CONTROL_KINDS)];
 const KIND_WORDS = { vectors: 'replay', formal: 'formal', linked: 'replay', tests: 'regression' };
 const KIND_TOUCH = { linked: 'that import a changed module' };
-const CODE_FILE = /\.(?:[cm]?js|[cm]?ts|jsx|tsx|py)$/, TEST_PLACE = /(?:^|\/)(?:tests?|__tests__|spec|fixtures)\/|\.(?:test|spec)\.[^/]+$/;
+const CODE_FILE = /\.(?:[cm]?js|[cm]?ts|jsx|tsx|py|go|rs|java|kt|rb|c|cc|cpp|h|hpp|cs|swift)$/;
+const TEST_PLACE = /(?:^|\/)(?:tests?|__tests__|spec|fixtures)\/|\.(?:test|spec)\.[^/]+$|_test\.(?:py|go|rs)$|(?:^|\/)test_[^/]+\.py$/i;
 const codeFiles = changed => changed.filter(file => CODE_FILE.test(file) && !TEST_PLACE.test(file));
 const MAX_REPLAY_FILES = 400, MAX_REPLAY_COMMAND = 100_000, REPLAY_OUTPUT = 4 * 1024 * 1024, VECTORS_SCHEMA = 5;
-const IMPORT_ERROR_LINE = /^(?:Error \[ERR_MODULE_NOT_FOUND\]: Cannot find (?:module|package)\s+['"]|Error: Cannot find (?:module|package)\s+['"]|SyntaxError:\s+The requested module\s+['"][^'"]+['"]\s+does not provide an export named\s+['"]|code:\s*['"](?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND)['"],?$)/;
+const IMPORT_ERROR_LINE = /^(?:Error \[ERR_MODULE_NOT_FOUND\]: Cannot find (?:module|package)\s+['"]|Error: Cannot find (?:module|package)\s+['"]|SyntaxError:\s+The requested module\s+['"][^'"]+['"]\s+does not provide an export named\s+['"]|code:\s*['"](?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND)['"],?$|ModuleNotFoundError:|ImportError:|cannot find package\b|error\[E0432\]:\s*unresolved import\b)/;
 // #3556: distinguish Path b code-only bug fixes from behavior-preserving pure structural refactors.
 const CLOSING_REF = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?::[ \t]*|[ \t]+)(?:[\w.-]+\/[\w.-]+#\d+|https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+|#\d+)\b/gi;
 const WHOLE_PR_REFACTOR = /\b(?:pure\s+(?:structural\s+)?refactor(?:ing)?|structural\s+refactor(?:ing)?(?:\s+only)?|behaviou?r[- ]preserving(?:\s+\w+){0,2}\s+refactor(?:ing)?|refactor(?:ing)?[- ]only|internal\s+refactor(?:ing)?(?:\s+only)?|log[- ]line\s+only|logging[- ]only)\b/gi;
@@ -6023,23 +6039,39 @@ function isBugFixPr(job, body = '') {
     return BUG_TITLE.test(cleanTitle) || BUG_ISSUE_BODY.test(cleanBody);
   });
 }
+const VECTOR_PATHSPECS = ['*.vectors.test.*', '*vectors*.py', '*_vectors_test.go', 'tests/*vectors*.rs'];
 async function evidenceFiles(ctx, job, body = '') {
   const changed = await changedFiles(ctx, job, job.head);
   const files = { vectors: new Set(changed.filter(file => KIND_FILE.vectors.test(file))), formal: new Set(changed.filter(file => KIND_FILE.formal.test(file))), tests: new Set() };
   const scenarios = [...new Set(changed.filter(file => /\.json$/.test(file) && /(^|\/)(tests?|runtime|vectors?)\//.test(file)).map(file => basename(file)))];
   for (let i = 0; i < scenarios.length; i += 100)
-    for (const name of await gitNames(ctx, ['grep', '-z', '-l', '-F', ...scenarios.slice(i, i + 100).flatMap(word => ['-e', word]), job.head, '--', '*.vectors.test.*'], job.worktree))
-      files.vectors.add(name.startsWith(`${job.head}:`) ? name.slice(job.head.length + 1) : name);
-  // #3227 fix 2: each replay file of the head that imports a changed code module by a relative path (at most 100).
-  const code = codeFiles(changed), names = [...new Set(code.map(file => basename(file)))], linked = new Set();
-  for (let i = 0; i < names.length && linked.size < 100; i += 100)
-    for (const name of await gitNames(ctx, ['grep', '-z', '-l', '-F', ...names.slice(i, i + 100).flatMap(word => ['-e', word]), job.head, '--', '*.vectors.test.*'], job.worktree)) {
-      const file = name.startsWith(`${job.head}:`) ? name.slice(job.head.length + 1) : name;
-      if (files.vectors.has(file) || linked.size >= 100) continue;
-      const text = await ctx.git(['show', `${job.head}:${file}`], job.worktree).catch(() => '');
-      if ([...String(text).matchAll(RELATIVE_IMPORT)].some(m => code.includes(join(dirname(file), m[1]).replace(/\\/g, '/')))) linked.add(file);
+    for (const name of await gitNames(ctx, ['grep', '-z', '-l', '-F', ...scenarios.slice(i, i + 100).flatMap(word => ['-e', word]), job.head, '--', ...VECTOR_PATHSPECS], job.worktree)) {
+      const rel = name.startsWith(`${job.head}:`) ? name.slice(job.head.length + 1) : name;
+      if (KIND_FILE.vectors.test(rel)) files.vectors.add(rel);
     }
-  // #3556: on bug-fix PRs that change code files (Path a/b/c/e or no Path line), also include changed ordinary JS test files.
+  // #3227 fix 2 + #3561: each replay file of the head that imports a changed code module (at most 100).
+  const code = codeFiles(changed);
+  const stems = [...new Set(code.flatMap(file => {
+    const base = basename(file);
+    const stem = base.replace(/\.[^.]+$/, '');
+    return stem && stem !== base ? [base, stem] : [base];
+  }))];
+  const linked = new Set();
+  for (let i = 0; i < stems.length && linked.size < 100; i += 100)
+    for (const name of await gitNames(ctx, ['grep', '-z', '-l', '-F', ...stems.slice(i, i + 100).flatMap(word => ['-e', word]), job.head, '--', ...VECTOR_PATHSPECS], job.worktree)) {
+      const file = name.startsWith(`${job.head}:`) ? name.slice(job.head.length + 1) : name;
+      if (!KIND_FILE.vectors.test(file) || files.vectors.has(file) || linked.size >= 100) continue;
+      const text = await ctx.git(['show', `${job.head}:${file}`], job.worktree).catch(() => '');
+      const jsLinked = [...String(text).matchAll(RELATIVE_IMPORT)].some(m => code.includes(join(dirname(file), m[1]).replace(/\\/g, '/')));
+      const pyLinked = /\.py$/i.test(file) && code.some(c => {
+        if (!/\.py$/i.test(c)) return false;
+        const mod = c.replace(/^src\//, '').replace(/\.py$/i, '').replace(/\/__init__$/, '').replace(/\//g, '.');
+        const leaf = mod.split('.').at(-1);
+        return Boolean(leaf && new RegExp(`(?:^|\\n)\\s*(?:from|import)\\s+[\\w.]*\\b${escape(leaf)}\\b`).test(String(text)));
+      });
+      if (jsLinked || pyLinked) linked.add(file);
+    }
+  // #3556 + #3561: on bug-fix PRs that change code files (Path a/b/c/e or no Path line), also include changed ordinary polyglot test files.
   const bodyText = String(body ?? '');
   const hasCodePath = !/^[\s>*-]*Path:/m.test(bodyText) || /^[\s>*-]*Path:\s*[abceABCE]\b/m.test(bodyText);
   if (code.length && hasCodePath && isBugFixPr(job, bodyText)) {
@@ -6083,46 +6115,152 @@ function usesNodeTest(fs, cwd, file, depth = 2, seen = new Set()) {
   }
   return false;
 }
-function replayPlan(ctx, cwd, files) {
-  const run = Object.fromEntries(RUN_KINDS.map(kind => [kind, []])), skipped = [];
-  for (const kind of HEAD_KINDS) for (const file of files[kind] ?? []) {
-    const why = join(cwd, file).includes('\\') ? 'a backslash in its path' : !/\.[cm]?js$/.test(file) ? 'runner: not a JavaScript file'
-      : !usesNodeTest(ctx.fs, cwd, file) ? 'runner: not a node:test file' : null;
-    if (why) { if (kind !== 'tests') skipped.push({ kind, file, why }); } else run[kind].push(file);
+const PYTEST_COLLECTIBLE_RE = /(?:^|\/)(?:test_[^/]+\.py|[^/]+_test\.py)$/i;
+function detectReplayFileRunner(fs, cwd, kind, file, { formalCommand = null, repoPkg = null, detected = null } = {}) {
+  if (join(cwd, file).includes('\\')) return { runner: null, why: 'a backslash in its path' };
+  if (kind === 'formal' && named(formalCommand)) return { runner: 'formal-command', why: null };
+  if (/\.[cm]?js$/i.test(file)) {
+    if (usesNodeTest(fs, cwd, file)) return { runner: 'node:test', why: null };
+    const allDeps = { ...(repoPkg?.dependencies ?? {}), ...(repoPkg?.devDependencies ?? {}) };
+    if (detected?.kind === 'vitest' || Object.hasOwn(allDeps, 'vitest')) return { runner: 'vitest', why: null };
+    if (Object.hasOwn(allDeps, 'jest') || /\bjest\b/i.test(String(repoPkg?.scripts?.test ?? ''))) return { runner: 'jest', why: null };
+    return { runner: null, why: 'runner: not a node:test file' };
   }
-  return { run, skipped };
+  if (/\.(?:[cm]?ts|[jt]sx)$/i.test(file)) {
+    const allDeps = { ...(repoPkg?.dependencies ?? {}), ...(repoPkg?.devDependencies ?? {}) };
+    if (detected?.kind === 'vitest' || Object.hasOwn(allDeps, 'vitest')) return { runner: 'vitest', why: null };
+    if (Object.hasOwn(allDeps, 'jest') || /\bjest\b/i.test(String(repoPkg?.scripts?.test ?? ''))) return { runner: 'jest', why: null };
+    return { runner: null, why: 'runner: not a node:test file' };
+  }
+  if (/\.py$/i.test(file)) {
+    const hasPyProject = ['pyproject.toml', 'pytest.ini', 'conftest.py', 'setup.cfg', '.venv/bin/pytest', 'venv/bin/pytest']
+      .some(rel => { try { return Boolean(fs.existsSync?.(join(cwd, rel))); } catch { return false; } });
+    if (PYTEST_COLLECTIBLE_RE.test(file) || hasPyProject) return { runner: 'pytest', why: null };
+    return { runner: null, why: 'runner: not a JavaScript file' };
+  }
+  if (/_test\.go$/i.test(file)) {
+    const hasGo = (() => { try { return Boolean(fs.existsSync?.(join(cwd, 'go.mod'))); } catch { return false; } })();
+    if (hasGo || detected?.kind === 'go') return { runner: 'go', why: null };
+    return { runner: null, why: 'runner: no go.mod found' };
+  }
+  if (/(?:^|\/)tests\/[^/]+\.rs$|_test\.rs$/i.test(file)) {
+    const hasCargo = (() => { try { return Boolean(fs.existsSync?.(join(cwd, 'Cargo.toml'))); } catch { return false; } })();
+    if (hasCargo || detected?.kind === 'cargo') return { runner: 'cargo', why: null };
+    return { runner: null, why: 'runner: no Cargo.toml found' };
+  }
+  return { runner: null, why: 'runner: not a JavaScript file' };
+}
+function replayPlan(ctx, cwd, files, { formalCommand = null } = {}) {
+  const run = Object.fromEntries(RUN_KINDS.map(kind => [kind, []]));
+  const runners = Object.fromEntries(RUN_KINDS.map(kind => [kind, []]));
+  const skipped = [];
+  const repoPkg = readJson(ctx.fs, join(cwd, 'package.json'), null);
+  const detected = detectTestRunner(cwd, repoPkg ? { packageJson: repoPkg } : null);
+  for (const kind of HEAD_KINDS) for (const file of files[kind] ?? []) {
+    const pick = detectReplayFileRunner(ctx.fs, cwd, kind, file, { formalCommand, repoPkg, detected });
+    if (!pick.runner) { if (kind !== 'tests') skipped.push({ kind, file, why: pick.why }); }
+    else { run[kind].push(file); runners[kind].push(pick.runner); }
+  }
+  return { run, runners, skipped };
 }
 const quoteArg = file => `'${String(file).replaceAll("'", `'\\''`)}'`;
-// Per-file accounting (Codex round 4): each file runs alone, directly as a script with the TAP reporter, so no glob reads
-// its path (brackets, braces such as {a,b}, stars, a leading "-" and such characters in the checkout path all work),
-// then its marker line "# pdd-autopilot-NONCE: KIND I exit CODE". All files go through one filter: a bounded log. After
-// REPLAY_OUTPUT bytes it passes the marker lines, TAP result, location and module-load import-error lines cut to 300
-// characters for 1 MB more, and nothing else; it keeps only the last top-level summary line of each key and the last
-// plan line of the current file and prints them just before that file's marker, so each file's counts stay true.
-const REPLAY_FILTER = `BEGIN { split("tests suites pass fail cancelled skipped todo duration_ms", k, " ") } index($0, mark) == 1 { if (cut) { if (plan != "") print plan; for (i = 1; i <= 8; i++) if (k[i] in last) print last[k[i]] } split("", last); plan = ""; print; fflush(); next } { n += length($0) + 1 } n <= cap { print; fflush(); next } !cut { cut = 1; print "# pdd-autopilot: output cut after " cap " bytes"; fflush() } /^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+$/ { split($0, f, " "); last[f[2]] = $0; next } /^1\\.\\.[0-9]/ { plan = $0; next } (/^[ \\t]*(not ok|ok) [0-9]/ || /^[ \\t]*location: / || /^[ \\t]*(Error \\[ERR_MODULE_NOT_FOUND\\]: Cannot find (module|package)|Error: Cannot find (module|package)|SyntaxError: The requested module |code: .(ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND).)/) && m < extra { t = substr($0, 1, 300); m += length(t) + 1; print t; fflush(); next }`;
+// Per-file accounting (Codex round 4 + #3561 polyglot): each file runs alone in its own isolated subprocess,
+// then prints its marker line "# pdd-autopilot-NONCE: KIND I exit CODE". All files go through one bounded awk filter
+// preserving TAP, pytest, vitest, go-json, and cargo summary lines even when output exceeds cap.
+const REPLAY_FILTER = `BEGIN { split("tests suites pass fail cancelled skipped todo duration_ms", k, " ") } index($0, mark) == 1 { if (cut) { if (plan != "") print plan; for (i = 1; i <= 8; i++) if (k[i] in last) print last[k[i]] } split("", last); plan = ""; print; fflush(); next } { n += length($0) + 1 } n <= cap { print; fflush(); next } !cut { cut = 1; print "# pdd-autopilot: output cut after " cap " bytes"; fflush() } /^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+$/ { split($0, f, " "); last[f[2]] = $0; next } /^1\\.\\.[0-9]/ { plan = $0; next } (/^[ \\t]*(not ok|ok) [0-9]/ || /^[ \\t]*location: / || /^={2,}.* in [0-9.]+s/ || /^running [0-9]+ test/ || /^test result:/ || /^[ \\t]*(Test Files|Tests|Duration)[ \\t]+/ || /^\\{"Action":/ || /^[ \\t]*(Error \\[ERR_MODULE_NOT_FOUND\\]: Cannot find (module|package)|Error: Cannot find (module|package)|SyntaxError: The requested module |code: .(ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND).|ModuleNotFoundError:|ImportError:)/) && m < extra { t = substr($0, 1, 300); m += length(t) + 1; print t; fflush(); next }`;
 const replayMark = nonce => `# pdd-autopilot-${nonce}: `;
-function replayCommand(run, cwd, nonce, control = null) {
-  const step = (kind, root) => (run[kind] ?? []).map((file, i) => `node --test-reporter=tap -- ${quoteArg(join(root, file))} 2>&1; echo "${replayMark(nonce)}${kind} ${i} exit $?"`);
+function replayFileStepCommand(runnerKind, root, file, { formalCommand = null, runnerRoot = null } = {}) {
+  if (runnerKind === 'formal-command' && named(formalCommand)) {
+    return `(cd ${quoteArg(root)} && export PDD_FORMAL_FILE=${quoteArg(file)} && (${formalCommand})) 2>&1`;
+  }
+  if (runnerKind === 'pytest') {
+    const pytestBin = resolvePytestBinary(runnerRoot ?? root);
+    const pyEnv = buildRunnerEnv('pytest', root, {});
+    const prefix = pyEnv.PYTHONPATH ? `PYTHONPATH=${quoteArg(pyEnv.PYTHONPATH)}\${PYTHONPATH:+:$PYTHONPATH} ` : '';
+    return `(cd ${quoteArg(root)} && ${prefix}${quoteArg(pytestBin)} -v -- ${quoteArg(file)}) 2>&1`;
+  }
+  if (runnerKind === 'vitest') {
+    return `(cd ${quoteArg(root)} && npx --no-install vitest run --reporter=verbose -- ${quoteArg(file)}) 2>&1`;
+  }
+  if (runnerKind === 'jest') {
+    return `(cd ${quoteArg(root)} && npx --no-install jest --verbose -- ${quoteArg(file)}) 2>&1`;
+  }
+  if (runnerKind === 'go') {
+    const d = dirname(file);
+    const pkg = d === '.' ? './.' : `./${d}`;
+    return `(cd ${quoteArg(root)} && go test -json ${quoteArg(pkg)}) 2>&1`;
+  }
+  if (runnerKind === 'cargo') {
+    const integration = /(?:^|\/)tests\/[^/]+\.rs$/i.test(file) ? basename(file, '.rs') : null;
+    const targetArgs = integration ? ` --test ${quoteArg(integration)}` : '';
+    return `(cd ${quoteArg(root)} && cargo test${targetArgs}) 2>&1`;
+  }
+  return `node --test-reporter=tap -- ${quoteArg(join(root, file))} 2>&1`;
+}
+function replayCommand(run, cwd, nonce, control = null, { runners = null, formalCommand = null } = {}) {
+  const step = (kind, root) => (run[kind] ?? []).map((file, i) => {
+    const baseKind = CONTROL_KINDS[kind] ?? kind;
+    const rKind = runners?.[kind]?.[i] ?? runners?.[baseKind]?.[i] ?? 'node:test';
+    return `${replayFileStepCommand(rKind, root, file, { formalCommand, runnerRoot: cwd })}; echo "${replayMark(nonce)}${kind} ${i} exit $?"`;
+  });
   const heads = HEAD_KINDS.flatMap(kind => step(kind, cwd)), controls = control ? Object.keys(CONTROL_KINDS).flatMap(kind => step(kind, control)) : [];
   // The control checkout uses the dependencies that the queue installed in the run's checkout (the same package files).
   const link = controls.length ? [`{ [ -d ${quoteArg(join(cwd, 'node_modules'))} ] && [ ! -e ${quoteArg(join(control, 'node_modules'))} ] && ln -s ${quoteArg(join(cwd, 'node_modules'))} ${quoteArg(join(control, 'node_modules'))}; } >/dev/null 2>&1`] : [];
   const steps = [...heads, ...link, ...controls];
   return `{ ${steps.join('; ')}; } | LC_ALL=C awk -v cap=${REPLAY_OUTPUT} -v extra=1048576 -v mark=${quoteArg(replayMark(nonce))} '${REPLAY_FILTER}'`;
 }
-// The log of a replay run, read in 1 MB parts line by line (bounded memory): for each file its last TAP summary before its
-// marker, its exit code, whether a file-level load failure hit an anchored module/export import error (with 0 subtests
-// executed — never matching test titles or arbitrary stdout), and for each kind at most 20 failing tests.
-function replayLog(fs, file, nonce) {
+// The log of a replay run, read in 1 MB parts line by line (bounded memory): for each file its TAP or polyglot summary
+// before its marker, its exit code, whether a file-level load failure hit an anchored module/export import error (with 0
+// subtests executed — never matching test titles or arbitrary stdout), and for each kind at most 20 failing tests.
+function replayLog(fs, file, nonce, runners = null) {
   const found = { files: Object.fromEntries(RUN_KINDS.map(kind => [kind, {}])), failed: Object.fromEntries(RUN_KINDS.map(kind => [kind, []])), runner: false, cut: false }, decoder = new StringDecoder('utf8');
   const marker = new RegExp(`^${escape(replayMark(nonce))}(${RUN_KINDS.join('|')}) (\\d+) exit (\\d+)$`);
   let counts = {}, failed = [], look = 0, importError = false, sawTap = false, inYaml = false, subtests = 0, carry = '', skipping = false, fd;
+  let headLines = [], headBytes = 0, tailLines = [], tailBytes = 0;
+  const MAX_HEAD_BYTES = 65_536;
+  const MAX_TAIL_BYTES = 196_608;
   const line = text => {
     let m;
     if ((m = marker.exec(text))) {
-      const fileLoadImportError = importError && subtests === 0 && !counts.tests;
-      found.files[m[1]][Number(m[2])] = { code: Number(m[3]), tests: counts.tests ?? null, pass: counts.pass ?? null, fail: counts.fail ?? null, skipped: (counts.skipped ?? 0) + (counts.todo ?? 0), ...(fileLoadImportError ? { importError: true } : {}) };
+      let testsCount = counts.tests ?? null;
+      let passCount = counts.pass ?? null;
+      let failCount = counts.fail ?? null;
+      let skipCount = (counts.skipped ?? 0) + (counts.todo ?? 0);
+      if (testsCount === null && (headLines.length > 0 || tailLines.length > 0)) {
+        const rawSegment = [...headLines, ...tailLines].join('\n');
+        const idx = Number(m[2]);
+        const baseKind = CONTROL_KINDS[m[1]] ?? m[1];
+        const knownRunner = runners?.[m[1]]?.[idx] ?? runners?.[baseKind]?.[idx] ?? null;
+        const polyRunner = knownRunner && knownRunner !== 'formal-command' ? knownRunner : null;
+        const polyCounts = parseTestSummaryOutput(rawSegment, polyRunner) ?? (polyRunner ? parseTestSummaryOutput(rawSegment) : null);
+        if (polyCounts) {
+          testsCount = polyCounts.total;
+          passCount = polyCounts.passed;
+          failCount = polyCounts.failed;
+          skipCount = polyCounts.skipped;
+          const polyCases = extractTestCases(rawSegment, polyRunner ?? polyCounts.format ?? 'auto');
+          for (const c of polyCases) {
+            if ((c.status === 'fail' || c.status === 'error') && failed.length < 21) {
+              failed.push({ name: oneLine(c.id, 200), file: null });
+            }
+          }
+        }
+      }
+      const fileLoadImportError = importError && subtests === 0 && !testsCount;
+      found.files[m[1]][Number(m[2])] = { code: Number(m[3]), tests: testsCount, pass: passCount, fail: failCount, skipped: skipCount, ...(fileLoadImportError ? { importError: true } : {}) };
       for (const f of failed) if (found.failed[m[1]].length < 20) found.failed[m[1]].push(f);
-      counts = {}; failed = []; look = 0; importError = false; sawTap = false; inYaml = false; subtests = 0; return;
+      counts = {}; failed = []; look = 0; importError = false; sawTap = false; inYaml = false; subtests = 0; headLines = []; headBytes = 0; tailLines = []; tailBytes = 0; return;
+    }
+    const len = text.length + 1;
+    if (headBytes + len <= MAX_HEAD_BYTES) {
+      headLines.push(text);
+      headBytes += len;
+    } else {
+      tailLines.push(text);
+      tailBytes += len;
+      while (tailBytes > MAX_TAIL_BYTES && tailLines.length > 1) {
+        tailBytes -= tailLines.shift().length + 1;
+      }
     }
     if ((m = /^# (tests|pass|fail|skipped|todo) (\d+)$/.exec(text))) { counts[m[1]] = Number(m[2]); sawTap = true; inYaml = false; return; }
     if (/^TAP version \d+/.test(text)) { sawTap = true; inYaml = false; return; }
@@ -6163,8 +6301,17 @@ async function vectorsState(ctx, job, body = '') {
     if (job.vectors?.agent && !await cleanupPart(ctx, job, job.vectors.agent, 'vectors')) return job.vectors;
     const files = await evidenceFiles(ctx, job, body);
     if (!HEAD_KINDS.some(kind => files[kind].length)) return save({ head: job.head, files, skipped: [], state: 'none' });
-    const cwd = await checkout(ctx, job, 'vectors'), { run, skipped } = replayPlan(ctx, cwd, files), count = HEAD_KINDS.reduce((n, kind) => n + run[kind].length, 0);
-    const base = { head: job.head, files: run, skipped, cwd };
+    const cwd = await checkout(ctx, job, 'vectors');
+    let trustedFormalCommand = null;
+    try {
+      const mergeBase = await ctx.git(['merge-base', `origin/${ctx.state.baseBranch}`, job.head], job.worktree);
+      if (mergeBase) {
+        const baseVerify = loadVerifyConfig(cwd, { gitRef: mergeBase.trim() });
+        if (baseVerify.loadStatus === 'ok' && named(baseVerify.formalCommand)) trustedFormalCommand = baseVerify.formalCommand;
+      }
+    } catch { /* merge-base verify.formal_command unavailable */ }
+    const { run, runners, skipped } = replayPlan(ctx, cwd, files, { formalCommand: trustedFormalCommand }), count = HEAD_KINDS.reduce((n, kind) => n + run[kind].length, 0);
+    const base = { head: job.head, files: run, runners, skipped, cwd, ...(trustedFormalCommand ? { formalCommand: trustedFormalCommand } : {}) };
     if (!count) return save({ ...base, state: 'none' });
     // The whole set or nothing: a part of the set is never shown as the evidence of the change.
     if (count > MAX_REPLAY_FILES) return save({ ...base, state: 'not-run', reason: `too many replay and formal files: ${count}; the limit is ${MAX_REPLAY_FILES}` });
@@ -6181,7 +6328,7 @@ async function vectorsState(ctx, job, body = '') {
         base.control = { code: code.slice(0, 50), fork, cwd: tree, added };
       } catch (error) { base.control = { code: code.slice(0, 50), fork: null, cwd: null, error: oneLine(error.message, 300) }; }
     }
-    const nonce = randomUUID().replaceAll('-', '').slice(0, 16), command = replayCommand(run, cwd, nonce, base.control?.cwd ?? null);
+    const nonce = randomUUID().replaceAll('-', '').slice(0, 16), command = replayCommand(run, cwd, nonce, base.control?.cwd ?? null, { runners, formalCommand: trustedFormalCommand });
     if (command.length > MAX_REPLAY_COMMAND) return save({ ...base, state: 'not-run', reason: `the replay and formal file list is too long (${command.length} bytes; the limit is ${MAX_REPLAY_COMMAND})` });
     return start({ ...base, command, nonce }, 0);
   }
@@ -6194,7 +6341,7 @@ async function vectorsState(ctx, job, body = '') {
     if (watch.state !== 'quiet') return job.vectors;
     stopped = true;
   }
-  const log = replayLog(ctx.fs, job.vectors.agent.log, job.vectors.nonce), kinds = RUN_KINDS.filter(kind => job.vectors.files[kind]?.length);
+  const log = replayLog(ctx.fs, job.vectors.agent.log, job.vectors.nonce, job.vectors.runners ?? null), kinds = RUN_KINDS.filter(kind => job.vectors.files[kind]?.length);
   // Each file shows its own result; a file with no marker is a runner failure (the run did not reach or finish it).
   const lost = kinds.flatMap(kind => job.vectors.files[kind].filter((file, i) => !log.files[kind][i]));
   const why = stopped ? `nothing new for ${ctx.settings.quietMinutes} minutes` : seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : [86, 127].includes(seen.exit?.code) ? `exit ${seen.exit.code}`
@@ -6207,13 +6354,35 @@ async function vectorsState(ctx, job, body = '') {
     return save({ ...job.vectors, state: 'not-run', reason: `the run gave no result (${why}, 3 tries); log ${basename(job.vectors.agent.log)} on this machine` });
   }
   recordSuccess(ctx, job, job.vectors.agent, 'vectors', seen);
+  let repoHasProductionCode = Boolean(job.vectors.control?.code?.length);
+  if (!repoHasProductionCode && kinds.includes('formal') && job.vectors.cwd) {
+    try {
+      const tracked = await gitNames(ctx, ['ls-files', '-z'], job.vectors.cwd);
+      repoHasProductionCode = codeFiles(tracked).length > 0;
+    } catch { repoHasProductionCode = false; }
+  }
   // A kind is the sum of its files: a failed file fails it; a file with no result keeps it from substantiating a claim.
   const result = Object.fromEntries(kinds.map(kind => {
     const isControl = Object.hasOwn(CONTROL_KINDS, kind);
     const files = job.vectors.files[kind].map((file, i) => ({ file, ...log.files[kind][i], state: fileState(log.files[kind][i], isControl) }));
     const sum = key => files.reduce((total, f) => total + (Number(f[key]) || 0), 0);
-    return [kind, { state: files.some(f => f.state === 'fail') ? 'fail' : files.some(f => f.state === 'import-error') ? 'import-error' : 'pass', tests: sum('tests'), pass: sum('pass'), fail: sum('fail'), skipped: sum('skipped'),
-      code: files.find(f => f.code !== 0)?.code ?? 0, failed: log.failed[kind] ?? [], files, empty: files.filter(f => f.state === 'empty').map(f => f.file) }];
+    const entry = { state: files.some(f => f.state === 'fail') ? 'fail' : files.some(f => f.state === 'import-error') ? 'import-error' : 'pass', tests: sum('tests'), pass: sum('pass'), fail: sum('fail'), skipped: sum('skipped'),
+      code: files.find(f => f.code !== 0)?.code ?? 0, failed: log.failed[kind] ?? [], files, empty: files.filter(f => f.state === 'empty').map(f => f.file) };
+    if (kind === 'formal' && entry.state === 'pass' && job.vectors.cwd) {
+      const bindings = files.map(f => inspectFormalFileBinding({ root: job.vectors.cwd, filePath: f.file }));
+      const imported = [...new Set(bindings.flatMap(b => b.importedProductionModules))].sort();
+      const anyUnbound = bindings.some(b => !b.codeBound);
+      const allCodeBound = bindings.length > 0 && bindings.every(b => b.codeBound);
+      entry.codeBound = allCodeBound;
+      entry.hasProductionCode = repoHasProductionCode;
+      entry.importedProductionModules = imported;
+      if (anyUnbound) {
+        entry.tier = 'proved_spec_model';
+      } else if (allCodeBound) {
+        entry.tier = 'bounded';
+      }
+    }
+    return [kind, entry];
   }));
   return save({ ...job.vectors, state: 'done', cut: log.cut, result });
 }
@@ -6281,6 +6450,10 @@ function engineEvidenceReds(ctx, job, body = '') {
   for (const kind of HEAD_KINDS) {
     const files = v.files?.[kind] ?? [], skipped = (v.skipped ?? []).filter(row => row.kind === kind), where = someFiles(files), r = v.result?.[kind];
     if (!files.length && !skipped.length) {
+      const hasCurrentHeadSolver = job.liveEvidence?.head === job.head && job.liveEvidence?.formalTier === 'proved_solver_code';
+      if (kind === 'formal' && ['proved', 'proved_solver_code'].includes(e.formal?.state) && !hasCurrentHeadSolver) {
+        reds.push(`The Evidence line says formal=${e.formal.state}, but zero formal test files were changed or verified at head ${short(job.head)}. Add a code-bound formal test importing production code, or write formal=not-applicable.`);
+      }
       if (kind === 'vectors' || kind === 'formal') { const { [kind]: gone, ...rest } = uncheckedOf(job); job.unchecked = rest; }
       continue;
     }
@@ -6311,8 +6484,14 @@ function engineEvidenceReds(ctx, job, body = '') {
       reds.push(`The Evidence line says ${claimOf(e, kind)}, but Autopilot ran the changed replay files (${where}) at head ${short(v.head)}: ${counts} passed. Write vectors=pass (${counts}).`);
     else if (kind === 'vectors' && e.vectors?.total !== undefined && !r.skipped && (e.vectors.passed !== r.pass || e.vectors.total !== r.tests))
       reds.push(`The Evidence line says ${claimOf(e, kind)}, but Autopilot ran the replay tests that this change touches (${where}) at head ${short(v.head)}: ${counts} passed. Write vectors=pass (${counts}).`);
-    if (kind === 'formal' && e.formal?.state && !POSITIVE_FORMAL_STATES.includes(e.formal.state))
-      reds.push(`The Evidence line says formal=${e.formal.state}, but Autopilot ran the changed formal tests (${where}) at head ${short(v.head)}: they pass. Write formal=proved, formal=proved_solver_code, or formal=bounded.`);
+    const enforceSpecModelRed = r.tier === 'proved_spec_model'
+      && (e.formal?.state === 'proved_solver_code' || (r.hasProductionCode !== false && POSITIVE_FORMAL_STATES.includes(e.formal?.state)));
+    if (kind === 'formal' && enforceSpecModelRed)
+      reds.push(`The Evidence line says formal=${e.formal.state}, but formal file(s) (${where}) do not import production code (classified as proved_spec_model). Import real production code or write formal=proved_spec_model.`);
+    else if (kind === 'formal' && e.formal?.state && !POSITIVE_FORMAL_STATES.includes(e.formal.state) && e.formal.state !== 'proved_spec_model')
+      reds.push(r.tier === 'proved_spec_model' && r.hasProductionCode !== false
+        ? `The Evidence line says formal=${e.formal.state}, but Autopilot ran the changed formal tests (${where}) at head ${short(v.head)}: they pass without importing production code. Write formal=proved_spec_model (or import production code and write formal=bounded).`
+        : `The Evidence line says formal=${e.formal.state}, but Autopilot ran the changed formal tests (${where}) at head ${short(v.head)}: they pass. Write formal=proved, formal=proved_solver_code, or formal=bounded.`);
   }
   // #3227 fix 2 + #3556: per-head old-code failure proof for Path a/c/e behavior changes and Path b bug fixes
   // (pure structural refactors and non-bug Path b PRs stay exempt). Never bypassed by a one-shot latch or exhausted repairs.
@@ -6373,7 +6552,7 @@ function evidenceRecord(ctx, job, { lines = [], claims = [], ci = null, review =
     runtime: { lines: lines.map(l => ({ line: l.line, story: l.story, verdict: l.verdict })), claims, coverage: job.coverage ? { head: job.coverage.head, ok: job.coverage.ok === true, text: job.coverage.text ?? null, stories: job.coverage.stories ?? [], rows: job.coverage.rows ?? [], base: job.coverage.base ?? null, consumers: job.coverage.consumers ?? null } : null },
     vectors: v ? { head: v.head, state: v.state, reason: v.reason ?? null, cut: v.cut ?? false, skipped: v.skipped ?? [],
       control: v.control ? { code: v.control.code ?? [], fork: v.control.fork ?? null, ...(Array.isArray(v.control.added) ? { added: v.control.added } : {}), error: v.control.error ?? null, state: ctrl?.state ?? null, ...(ctrl?.addedPassed?.length ? { addedPassed: ctrl.addedPassed } : {}), ...(ctrl?.addedEmpty?.length ? { addedEmpty: ctrl.addedEmpty } : {}), ...(ctrl?.importErrors?.length ? { importErrors: ctrl.importErrors } : {}) } : null,
-      kinds: Object.fromEntries(RUN_KINDS.filter(kind => (v.files?.[kind] ?? []).length).map(kind => [kind, v.result?.[kind] ? { state: v.result[kind].state, tests: v.result[kind].tests, pass: v.result[kind].pass, fail: v.result[kind].fail, skipped: v.result[kind].skipped, files: (v.result[kind].files ?? []).map(f => ({ file: f.file, state: f.state, code: f.code, tests: f.tests, pass: f.pass, fail: f.fail, skipped: f.skipped })), failed: v.result[kind].failed ?? [] } : { state: v.state, files: v.files[kind].map(file => ({ file })) }])) } : null,
+      kinds: Object.fromEntries(RUN_KINDS.filter(kind => (v.files?.[kind] ?? []).length).map(kind => [kind, v.result?.[kind] ? { state: v.result[kind].state, ...(v.result[kind].tier ? { tier: v.result[kind].tier } : {}), ...(typeof v.result[kind].codeBound === 'boolean' ? { codeBound: v.result[kind].codeBound } : {}), tests: v.result[kind].tests, pass: v.result[kind].pass, fail: v.result[kind].fail, skipped: v.result[kind].skipped, files: (v.result[kind].files ?? []).map(f => ({ file: f.file, state: f.state, code: f.code, tests: f.tests, pass: f.pass, fail: f.fail, skipped: f.skipped })), failed: v.result[kind].failed ?? [] } : { state: v.state, files: v.files[kind].map(file => ({ file })) }])) } : null,
     suite: suite ? {
       state: suite.interrupted ? 'interrupted' : suite.state,
       head: job.suite?.head ?? null,
@@ -6713,11 +6892,27 @@ export async function openPullRequest(ctxOrInput, job, options = {}) {
     : options.vectors !== undefined && options.vectors !== null
       ? (normalizeCountedEvidence(options.vectors, EVIDENCE.vectors) ?? { state: 'fail' })
       : (normalizeCountedEvidence(parsedEv.vectors, EVIDENCE.vectors) ?? { state: 'not-run' });
-  const evFormal = vecDone?.formal
-    ? { state: vecDone.formal.state === 'pass' ? 'bounded' : 'failed' }
-    : options.formal !== undefined && options.formal !== null
-      ? (object(options.formal) && EVIDENCE.formal.includes(options.formal.state) ? { state: options.formal.state } : { state: 'failed' })
-      : (object(parsedEv.formal) && EVIDENCE.formal.includes(parsedEv.formal.state) ? { state: parsedEv.formal.state } : { state: 'not-applicable' });
+  const resolveFormalEvidence = () => {
+    const hasExplicit = options.formal !== undefined && options.formal !== null;
+    if (hasExplicit && (!object(options.formal) || !EVIDENCE.formal.includes(options.formal.state))) {
+      return { state: 'failed' };
+    }
+    const candidateState = hasExplicit
+      ? options.formal.state
+      : (object(parsedEv.formal) && EVIDENCE.formal.includes(parsedEv.formal.state) ? parsedEv.formal.state : null);
+    if (vecDone?.formal) {
+      if (vecDone.formal.state !== 'pass') return { state: 'failed' };
+      const mechTier = EVIDENCE.formal.includes(vecDone.formal.tier) ? vecDone.formal.tier : null;
+      if (mechTier === 'proved_spec_model') return { state: 'proved_spec_model' };
+      if (candidateState === 'proved_spec_model') return { state: 'proved_spec_model' };
+      if (mechTier === 'proved_solver_code') return { state: 'proved_solver_code' };
+      if (mechTier === 'bounded') return { state: 'bounded' };
+      if (candidateState && POSITIVE_FORMAL_STATES.includes(candidateState)) return { state: candidateState };
+      return { state: 'bounded' };
+    }
+    return candidateState ? { state: candidateState } : { state: 'not-applicable' };
+  };
+  const evFormal = resolveFormalEvidence();
   const evTests = options.tests !== undefined && options.tests !== null
     ? (normalizeCountedEvidence(options.tests, EVIDENCE.tests) ?? { state: 'fail' })
     : (normalizeCountedEvidence(parsedEv.tests, EVIDENCE.tests) ?? { state: 'fail' });
@@ -6910,9 +7105,20 @@ async function syncStampedReplayEvidence(ctx, job, pr) {
   }
   const rf = v.result?.formal;
   const formalClean = rf?.state === 'pass' && !rf.skipped && Number.isInteger(rf.tests) && rf.tests > 0 && !rf.empty?.length && !(v.skipped ?? []).some(row => row.kind === 'formal');
-  if (formalClean && !POSITIVE_FORMAL_STATES.includes(next.formal?.state)) {
-    next.formal = { state: 'bounded' };
-    changed = true;
+  if (formalClean) {
+    if (rf.tier === 'proved_spec_model') {
+      // Never launder a false positive claim (proved_solver_code/proved/bounded) into proved_spec_model before
+      // engineEvidenceReds & collectLiveEvidenceContract evaluate and reject it, and never upgrade proved_spec_model to bounded!
+      const curState = next.formal?.state;
+      if ((!curState || curState === 'not-applicable' || curState === 'not-run') && rf.hasProductionCode !== false) {
+        next.formal = { state: 'proved_spec_model' };
+        changed = true;
+      }
+    } else if (next.formal?.state !== 'proved_spec_model' && !POSITIVE_FORMAL_STATES.includes(next.formal?.state)) {
+      const targetState = rf.tier && POSITIVE_FORMAL_STATES.includes(rf.tier) ? rf.tier : 'bounded';
+      next.formal = { state: targetState };
+      changed = true;
+    }
   }
   if (!changed) return;
   const newLine = evidenceText(next);
@@ -7909,6 +8115,164 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
   };
 }
 
+/**
+ * #3561: Determine whether a PR should auto-run `pdd test --target code --json` (0 AI calls):
+ * returns true when repo `pdd.json` declares `code.commands`, or changed files touch a CLI-implemented
+ * prompt (or a module owned by one via `// Prompt:` / `pdd-bindings.json`) and at least one Story exists.
+ */
+export function shouldRunCompiledCodeTest({ root, changedFiles = [], fs = nativeFs } = {}) {
+  if (!named(root) || !Array.isArray(changedFiles) || !changedFiles.length) return false;
+  let realRoot;
+  try { realRoot = typeof fs.realpathSync === 'function' ? fs.realpathSync(root) : root; } catch { return false; }
+  const hasStories = (() => {
+    for (const dir of ['user_stories', 'pdd/stories']) {
+      try {
+        const parts = dir.split('/');
+        let cur = realRoot;
+        let okDir = true;
+        for (const p of parts) {
+          cur = join(cur, p);
+          const st = fs.lstatSync(cur);
+          if (st.isSymbolicLink() || !st.isDirectory()) { okDir = false; break; }
+        }
+        if (!okDir) continue;
+        const entries = fs.readdirSync(cur);
+        if (entries.some(name => String(name).endsWith('.md'))) return true;
+      } catch {}
+    }
+    return false;
+  })();
+  if (!hasStories) return false;
+
+  const parseCleanJson = rel => {
+    const raw = readCleanFileUtf8(fs, realRoot, rel);
+    if (typeof raw !== 'string') return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  };
+  const pddJson = parseCleanJson('pdd.json');
+  const codeCmds = pddJson?.code?.commands;
+  if ((Array.isArray(codeCmds) && codeCmds.length > 0) || (object(codeCmds) && Object.keys(codeCmds).length > 0)) {
+    return true;
+  }
+
+  const candidatePrompts = new Set(changedFiles.filter(f => typeof f === 'string' && f.endsWith('.prompt.md')));
+  const bindings = parseCleanJson('pdd-bindings.json');
+  if (Array.isArray(bindings?.modules)) {
+    const changedSet = new Set(changedFiles);
+    for (const entry of bindings.modules) {
+      if (entry && typeof entry.module === 'string' && typeof entry.prompt === 'string' && changedSet.has(entry.module)) {
+        candidatePrompts.add(entry.prompt);
+      }
+    }
+  }
+  for (const rel of changedFiles) {
+    if (typeof rel !== 'string' || rel.endsWith('.prompt.md') || !CODE_FILE.test(rel)) continue;
+    const headText = readCleanHeadLines(fs, realRoot, rel, 24);
+    if (!headText) continue;
+    for (const h of headerEntries(headText)) {
+      if (h.prompt) candidatePrompts.add(h.prompt);
+    }
+  }
+  for (const promptPath of candidatePrompts) {
+    const text = readCleanFileUtf8(fs, realRoot, promptPath);
+    if (typeof text === 'string' && /"kind"\s*:\s*"cli"/i.test(text) && /"implementation"\s*:/i.test(text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * #3561: Invoke `pdd test --target code --json` via CLI subprocess (0 AI calls, bounded timeout,
+ * zero edits to `src/compiled-test.mjs` internals). Reads JSON stdout or symlink-safe `.pdd/code-test/latest.json`.
+ */
+export async function runCompiledCodeTestCheck(ctx, job, { headTree, changedFiles = [], timeoutMs = 60_000 } = {}) {
+  const fs = ctx?.fs ?? nativeFs;
+  if (typeof ctx?.ports?.runCompiledCodeTest === 'function') {
+    return ctx.ports.runCompiledCodeTest({ job, headTree, changedFiles, timeoutMs });
+  }
+  if (!headTree || !shouldRunCompiledCodeTest({ root: headTree, changedFiles, fs })) {
+    return { applicable: false, state: 'not-applicable', exitCode: 0, failedStories: [], summary: 'not-applicable' };
+  }
+  const pddEntry = ctx?.pdd;
+  if (!named(pddEntry)) {
+    return { applicable: true, state: 'not-run', exitCode: null, failedStories: [], summary: 'pdd CLI entrypoint unavailable' };
+  }
+  const childEnv = scrubChildEnv(ctx?.env ?? ctx?.ports?.env ?? process.env);
+  delete childEnv.NODE_TEST_CONTEXT;
+  delete childEnv.NODE_OPTIONS;
+  let exitCode = 0;
+  let stdout = '';
+  let stderr = '';
+  try {
+    const res = await execFileAsync(process.execPath, [pddEntry, 'test', '--target', 'code', '--json'], {
+      cwd: headTree,
+      env: childEnv,
+      timeout: timeoutMs,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    stdout = String(res?.stdout ?? '');
+    stderr = String(res?.stderr ?? '');
+  } catch (err) {
+    exitCode = typeof err?.code === 'number' ? err.code : 1;
+    stdout = String(err?.stdout ?? '');
+    stderr = String(err?.stderr ?? '');
+    if (err?.killed) {
+      return { applicable: true, state: 'not-run', exitCode, failedStories: [], summary: `pdd test --target code timed out after ${Math.round(timeoutMs / 1000)}s` };
+    }
+  }
+  if (exitCode === 2) {
+    return { applicable: false, state: 'not-applicable', exitCode: 2, failedStories: [], summary: oneLine(stderr || 'no selected Story tests', 200) };
+  }
+  let report = null;
+  try { report = JSON.parse(stdout); } catch {
+    // Fallback to symlink-safe `.pdd/code-test/latest.json`
+    const latestRaw = readCleanFileUtf8(fs, headTree, '.pdd/code-test/latest.json');
+    if (typeof latestRaw === 'string') { try { report = JSON.parse(latestRaw); } catch {} }
+  }
+  const stories = Array.isArray(report?.stories) ? report.stories : [];
+  const failedStories = stories.filter(s => s?.status === 'failed');
+  const passedStories = stories.filter(s => s?.status === 'passed');
+  if (failedStories.length > 0) {
+    const details = failedStories.slice(0, 5).map(s => {
+      const badStep = (s.steps ?? []).find(st => st?.status === 'failed');
+      const badCheck = (badStep?.checks ?? []).find(ch => ch?.status === 'failed');
+      return badCheck
+        ? `${s.story} (${badStep.step_id} ${badCheck.criterion_id} ${badCheck.path})`
+        : `${s.story}${badStep ? ` (${badStep.step_id})` : ''}`;
+    });
+    return {
+      applicable: true,
+      state: 'fail',
+      exitCode,
+      failedStories: details,
+      passedCount: passedStories.length,
+      totalCount: stories.length,
+      summary: `pdd test --target code failed (${failedStories.length}/${stories.length} Story failures: ${details.join('; ')})`,
+    };
+  }
+  if (exitCode === 0 && passedStories.length > 0) {
+    return {
+      applicable: true,
+      state: 'pass',
+      exitCode: 0,
+      failedStories: [],
+      passedCount: passedStories.length,
+      totalCount: stories.length,
+      summary: `pdd test --target code passed (${passedStories.length}/${stories.length} Stories, 0 AI calls)`,
+    };
+  }
+  return {
+    applicable: true,
+    state: 'not-run',
+    exitCode,
+    failedStories: [],
+    passedCount: passedStories.length,
+    totalCount: stories.length,
+    summary: oneLine(stderr || 'pdd test --target code returned no passing CLI Stories', 200),
+  };
+}
+
 async function runValidatorV2Gate(ctx, job, pr, { suite }) {
   let changed = [];
   let allTouched = [];
@@ -8000,6 +8364,10 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
     repairAttempts: job.validationRepairs ?? 0,
   });
   // Live production evidence collector: ALWAYS run when no explicit test port injected a contractInput!
+  const prBodyText = String(pr?.body ?? '');
+  const hasBehaviorPath = /^[\s>*-]*Path:\s*[aceACE]\b/m.test(prBodyText);
+  const hasPathB = /^[\s>*-]*Path:\s*[bB]\b/m.test(prBodyText);
+  const isPathBPureRefactor = Boolean(hasPathB && !hasBehaviorPath && !isBugFixPr(job, prBodyText));
   if (outcome.eligible && contractInput === null) {
     const suiteCmd = resolveSuiteCommand(ctx, job) || 'npm test';
     const suiteLog = job.suite?.agent?.log ? cleanLogText(readTail(ctx.fs, job.suite.agent.log)) : '';
@@ -8025,8 +8393,11 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
       fs: ctx.fs ?? nativeFs,
       probeOptions: ctx.ports.probeOptions ?? {},
       testEnvPath: ctx.ports.testEnvPath ?? null,
+      isPathBPureRefactor,
       ...(typeof ctx.ports.runProve === 'function' ? { runProveFn: ctx.ports.runProve } : {}),
       ...(typeof ctx.ports.runBaseOracle === 'function' ? { runOracleFn: ctx.ports.runBaseOracle } : {}),
+      ...(typeof ctx.ports.runFormal === 'function' ? { runFormalFn: ctx.ports.runFormal } : {}),
+      ...(typeof ctx.ports.runRefactorEquivalence === 'function' ? { runEquivalenceFn: ctx.ports.runRefactorEquivalence } : {}),
       strictWithoutVerifyPaths: ctx.settings?.strictEvidenceContract === true,
     });
     contractInput = liveEvidence.contractInput;
@@ -8041,7 +8412,25 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
       postReviewSandboxUsed: liveEvidence.postReviewSandboxUsed,
       reportDiffStatus: liveEvidence.reportDiff?.status ?? null,
       baseOracleStatus: liveEvidence.oracleResult?.status ?? null,
+      formalTier: liveEvidence.formalVerification?.tier ?? null,
+      formalSatisfiesCode: liveEvidence.formalVerification?.satisfiesCodeVerification ?? null,
+      refactorEquivalenceStatus: liveEvidence.refactorEquivalence?.status ?? null,
     };
+  }
+  // #3561 Auto-run `pdd test --target code --json` via CLI subprocess (0 AI calls) when CLI-implemented prompts or code.commands apply.
+  if (outcome.eligible && headTree && !changedFilesError) {
+    const codeTest = await runCompiledCodeTestCheck(ctx, job, { headTree, changedFiles: changed });
+    if (codeTest?.applicable) {
+      job.codeTest = { head: job.head, ...codeTest };
+      if (codeTest.state !== 'pass' || codeTest.exitCode !== 0) {
+        ctx.saveJob(job);
+        const red = `[Compiled Code Test ${codeTest.state === 'fail' ? 'FAIL' : 'ERROR'}] ${codeTest.summary}`;
+        await repairOrEnd(ctx, job, [red], [red], null, {
+          maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS),
+        });
+        return { handled: true, outcome, codeTest };
+      }
+    }
   }
   if (outcome.eligible && contractInput !== null) {
     const contract = evaluateCoreEvidenceContract({
@@ -11264,7 +11653,10 @@ async function finishLocal(ctx, job, outcome, text) {
         gates: {
           runtime: ev?.runtime?.state ?? job.runtime?.state ?? null,
           vectors: ev?.vectors?.state ?? job.vectors?.result?.vectors?.state ?? null,
-          formal: ev?.formal?.state ?? job.vectors?.result?.formal?.state ?? null,
+          formal: ev?.formal?.state
+            ?? (job.vectors?.result?.formal?.tier === 'proved_spec_model'
+              ? 'proved_spec_model'
+              : (job.vectors?.result?.formal?.tier ?? job.vectors?.result?.formal?.state ?? null)),
           suite: outcome === 'merged' || outcome === 'would-merge' ? 'pass' : (/full test suite|suite runner failed/i.test(String(text ?? '')) ? 'fail' : null),
           review: outcome === 'merged' || outcome === 'would-merge' ? 'pass' : (job.review?.verdict ?? (/Review FAIL|fresh reviewer ended/i.test(String(text ?? '')) ? 'fail' : null)),
           ci: outcome === 'merged' || outcome === 'would-merge' ? 'pass' : (/CI check .* failed|checks-stuck/i.test(String(text ?? '')) ? 'fail' : null),
@@ -11376,7 +11768,7 @@ async function advance(ctx, job) {
   const head = String(r?.head ?? '').trim().toLowerCase();
   if (object(r) && r.outcome === 'pr' && (!hasExplicitPr || prNumber > 0) && /^[0-9a-f]{40}$/.test(head)) {
     let stamped = null;
-    const shouldStamp = !prNumber || r.stamp === true || r.summary !== undefined || r.body !== undefined || r.title !== undefined || object(r.tests) || Array.isArray(r.choices);
+    const shouldStamp = !prNumber || r.stamp === true || r.summary !== undefined || r.body !== undefined || r.title !== undefined || object(r.tests) || object(r.formal) || Array.isArray(r.choices);
     if (shouldStamp) {
       stamped = await openPullRequest(ctx, job, {
         pr: prNumber,

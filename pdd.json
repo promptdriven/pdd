@@ -22,15 +22,17 @@
       },
       {
         "id": "lint-and-prove",
-        "name": "Offline PDD lint, verify.paths and pdd prove",
+        "name": "Offline PDD lint, verify.paths, formal verification and pdd prove",
         "when": [
           "src/core/lint/**",
           "src/core/prove.mjs",
           "src/core/verify-paths.mjs",
+          "src/core/formal-verify.mjs",
+          "src/core/polyglot-runners.mjs",
           "src/repo-hygiene-lint.mjs",
           "src/story-lint.mjs"
         ],
-        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/core/lint/*.test.mjs test/core/prove.test.mjs"
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/core/lint/*.test.mjs test/core/prove.test.mjs test/core/formal-verify.test.mjs"
       },
       {
         "id": "accounts",
