@@ -7,10 +7,10 @@ I can run `pdd help` and see where the `/pdd` skill and Prompting guide are on m
 1. `pdd`, `pdd --help`, `pdd -h` and `pdd help` each name `pdd help prompting` and the full paths of the installed skill (`skills/pdd/SKILL.md`) and Prompting guide (`skills/pdd/references/prompting.md`), print nothing to stderr and exit with code 0.
 2. `pdd help prompting` shows how to write a prompt file, `prompts/NAME.prompt.md`, with its `## Dependencies` section, prints nothing to stderr and exits with code 0.
 3. `pdd help prompting` shows how to write a Story file, `user_stories/STORY.md`, with its numbered acceptance criteria, and the Story's test file, `tests/STORY.json`, and exits with code 0.
-4. `pdd help prompting` names the commands `pdd test`, `pdd lint` and `pdd approve`, and exits with code 0.
+4. `pdd help prompting` names the commands `pdd test`, `pdd lint` and `pdd prove`, and exits with code 0.
 5. `pdd help prompting` names the full paths of the installed `skills/pdd/SKILL.md` and `skills/pdd/references/prompting.md`, and exits with code 0.
 6. `pdd prompting` is still an unknown command: it prints nothing to stdout, prints one line to stderr that says "Unknown command" and names `prompting`, and exits with code 2.
-7. `pdd --help` and `pdd help prompting` never name a removed command ("pdd check", "pdd try" or "workflow start") and exit with code 0.
+7. `pdd --help` and `pdd help prompting` never name a removed command ("pdd check", "pdd try", "pdd approve" or "workflow start") and exit with code 0.
 
 ## What must not change
 
@@ -24,6 +24,6 @@ Help is local. `pdd help` and `pdd help prompting` work with no network, no gh l
 
 `prompting` is a help topic, not a command. Forbidden: `pdd prompting` that runs something or prints help, and `pdd help prompting` with another word after it that prints the topic (it exits with code 2).
 
-The new lines name only current commands. Forbidden: "pdd check", "pdd try" or "workflow start" in a help line.
+The new lines name only current commands. Forbidden: "pdd check", "pdd try", "pdd approve" or "workflow start" in a help line.
 
 The PDD interpreter cannot know the folder where pdd is installed. So the test file checks that the help names `/skills/pdd/SKILL.md` and `/skills/pdd/references/prompting.md`. The code area adds Node tests: both paths are absolute and exist on disk, help works with no network and no PDD skills, and `pdd help prompting` with another word exits with code 2.

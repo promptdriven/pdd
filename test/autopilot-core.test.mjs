@@ -2026,57 +2026,47 @@ test('H2 a Runtime report goes to the configured Runtime repository when readabl
   assert.equal(coreSettings({ autopilot: { reports: { runtimeRepo: 'not a repo' } } }).runtimeRepo, null);
 });
 
-// ---- B (#3185): the operator's start approves the prompt changes in auto mode ---------------------------------
+// ---- B (#3537): build prompts emit no pdd approve / strict_approvals rules and ignore leftover strict_approvals ----
 const promptWith = status => `# Words\n\nCount the words of a text.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({ status, operations: [] })}\n\`\`\`\n</details>\n`;
 const writePrompt = (w, n, role, status) => {
   const cwd = w.job(n, role).cwd; mkdirSync(join(cwd, 'prompts'), { recursive: true }); mkdirSync(join(cwd, 'src'), { recursive: true });
   writeFileSync(join(cwd, 'prompts', 'words.prompt.md'), promptWith(status));
   writeFileSync(join(cwd, 'src', 'words.js'), '// Generated from prompts/words.prompt.md\nexport const words = s => s.split(" ").length;\n');   // the new code that the new prompt owns
 };
-const WORDS = `Operator action: pdd autopilot start --engine core in auto mode for acme/widgets on m-${createHash('sha256').update('machine-a').digest('hex').slice(0, 12)} at 2026-11-10T11:00:00.000Z`;
 
-test('I1 in auto mode the job records the operator approval for each changed prompt; observe mode too, with "observe" in its words (T05)', async t => {
-  const w = await coreWorld(t, { settings: { runs: 1 } });
-  w.state.startedAt = '2026-11-10T11:00:00.000Z';
-  w.issue(17); await w.tick();
-  const input = w.job(17, 'build').input;
-  assert.ok(input.includes(`printf '%s' '${WORDS}' | "$PDD_CLI" approve PROMPT --said -`), 'the exact operator words');
-  assert.match(input, /commit the result in the PR/);
-  const v = await coreWorld(t, { settings: { runs: 1, mode: 'observe' } });
-  v.state.startedAt = '2026-11-10T11:00:00.000Z';
-  v.issue(17); await v.tick();
-  assert.ok(v.job(17, 'build').input.includes(`printf '%s' '${WORDS.replace('in auto mode', 'in observe mode')}' | "$PDD_CLI" approve PROMPT --said -`), 'the real mode in the words');
+test('I1 build briefs contain no pdd approve or strict_approvals rules in auto or observe mode, even with leftover strict_approvals in pdd.json', async t => {
+  for (const mode of ['auto', 'observe']) {
+    const w = await coreWorld(t, { settings: { runs: 1, mode } });
+    w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
+    w.issue(17); await w.tick();
+    const input = w.job(17, 'build').input;
+    assert.doesNotMatch(input, /pdd approve/);
+    assert.doesNotMatch(input, /strict_approvals/);
+  }
 });
 
-test('I2 a changed prompt with a draft interface is red: one repair with the approval command, then it merges; with no repairs left it ends', async t => {
+test('I2 changed prompts merge cleanly in auto mode without pdd approve or strict_approvals blockers', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
-  w.state.startedAt = '2026-11-10T11:00:00.000Z';
+  w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
   w.issue(17); await w.tick();
   writePrompt(w, 17, 'build', 'draft');
   const { pr } = w.build(17); await w.tick();
-  const repair = w.job(17, 'repair');
-  assert.ok(repair, 'a draft interface starts a repair');
-  assert.match(repair.input, /Changed prompts are not approved: prompts\/words\.prompt\.md/); assert.ok(repair.input.includes(WORDS));
-  const approved = `# Words\n\nCount the words of a text.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify({ status: 'approved', prose_sha256: '', operations: [] })}\n\`\`\`\n</details>\n`;
-  const { proseSha256: hash } = await import('../src/runtime-seam.mjs');
-  const text = approved.replace('"prose_sha256":""', `"prose_sha256":"${hash(approved)}"`);
-  writeFileSync(join(w.job(17, 'repair').cwd, 'prompts', 'words.prompt.md'), text);
-  const dir = join(w.git(w.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'pdd'); mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'approvals.json'), JSON.stringify({ v: 1, approvals: [{ id: 'a1', route: 'said', actor: { kind: 'agent', id: 'codex' }, at: 1, words: WORDS, prompts: [{ path: 'prompts/words.prompt.md', proseSha256: hash(text) }] }] }));
-  w.build(17, { role: 'repair' }); await w.tick();
+  assert.equal(w.job(17, 'repair'), undefined, 'changed prompt must not trigger pdd approve repair');
   w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
-  const v = await coreWorld(t, { settings: { runs: 1, repairs: 0 } });
-  v.issue(17); await v.tick(); writePrompt(v, 17, 'build', 'draft'); v.build(17); await v.tick();
-  assert.match(endComments(v, 17)[0], /Changed prompts are not approved/); assert.ok(v.labels(17).includes('pdd:stuck'));
 });
 
-test('I3 observe mode records approvals as auto mode does (T05): a draft prompt is red and gets a repair, not a "would merge" note', async t => {
+test('I3 observe mode posts would-merge for changed prompts without pdd approve or strict_approvals blockers', async t => {
   const w = await coreWorld(t, { settings: { runs: 1, mode: 'observe' } });
+  w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
   w.issue(17); await w.tick(); writePrompt(w, 17, 'build', 'draft');
   const { pr } = w.build(17); await w.tick();
-  assert.match(w.job(17, 'repair')?.input ?? '', /Changed prompts are not approved: prompts\/words\.prompt\.md/);
-  assert.equal(pr.comments.map(c => c.body).find(body => body.includes('would-merge')), undefined);
+  assert.equal(w.job(17, 'repair'), undefined);
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  const note = pr.comments.map(c => c.body).find(body => body.includes('would-merge'));
+  assert.ok(note, 'observe mode posts would-merge note');
+  assert.doesNotMatch(note, /strict_approvals/);
+  assert.deepEqual(w.github.merges, []);
 });
 
 // ---- D (#3188): a job asks a person; the answer and the label removal bring the issue back ---------------------
@@ -2335,62 +2325,23 @@ test('L4 an exact conflict in the final step (add/add) starts an agent conflict 
   assert.ok(!laneLabel(pr), 'the lane is free during the update');
 });
 
-// ---- Review 9 regressions (each failed on 5c8b7426c) -----------------------------------------------------------
+// ---- Review 9 helpers ------------------------------------------------------------------------------------------
 const { proseSha256 } = await import('../src/runtime-seam.mjs');
 const block9 = json => `<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${json}\n\`\`\`\n</details>\n`;
 const approvedText = prose => {
   const text = `# Words\n\n${prose}\n\n${block9(JSON.stringify({ status: 'approved', prose_sha256: '', operations: [] }))}`;
   return `# Words\n\n${prose}\n\n${block9(JSON.stringify({ status: 'approved', prose_sha256: proseSha256(text), operations: [] }))}`;
 };
-const recordApproval = (w, path, text) => {
-  const dir = join(w.git(w.cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'pdd'); mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'approvals.json'), JSON.stringify({ v: 1, approvals: [{ id: 'a1', route: 'said', actor: { kind: 'agent', id: 'codex' }, at: 1, words: 'Operator action', prompts: [{ path, proseSha256: proseSha256(text) }] }] }));
-};
 const writeIn = (cwd, path, text) => { mkdirSync(join(cwd, path, '..'), { recursive: true }); writeFileSync(join(cwd, path), text); };
 const greenTick = async (w, n) => { await w.tick(); w.review(n, 'PASS'); w.suite(n, 0); await w.tick(); };
 
-test('N1 the prompt gate uses pdd\'s own checks: a stale edit, a broken block, a renamed draft and a hand-written approval are red; a recorded approval merges', async t => {
-  const prose = Array.from({ length: 20 }, (_, i) => `Rule ${i}: count the words of line ${i}.`).join('\n');
-  const cases = [
-    ['stale', w => writeIn(w.job(17, 'build').cwd, 'prompts/words.prompt.md', approvedText(prose).replace('Rule 3:', 'Rule 3 (changed):')), /changed after its interface was approved/],
-    ['broken', w => writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', `# New\n\nCount.\n\n${block9('{"status": "draft", "operations": [],}')}`), /not valid JSON/],
-    ['renamed', w => { const cwd = w.job(17, 'build').cwd; mkdirSync(join(cwd, 'prompts', 'text'), { recursive: true }); w.git(cwd, 'mv', 'prompts/words.prompt.md', 'prompts/text/words.prompt.md');
-      writeIn(cwd, 'prompts/text/words.prompt.md', `# Words\n\n${prose}\nRule 31: new.\n\n${block9(JSON.stringify({ status: 'draft', operations: [] }))}`); }, /prompts\/text\/words\.prompt\.md (has a draft|has a prose_sha256)/],
-    ['hand-written', w => writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', approvedText('Count the new words.')), /no approval for its text is recorded/]];
-  for (const [name, edit, finding] of cases) {
-    const w = await coreWorld(t, { settings: { runs: 1 } });
-    w.baseCommit('prompts/words.prompt.md', approvedText(prose));
-    w.issue(17); await w.tick(); edit(w); w.build(17); await w.tick();
-    const repair = w.job(17, 'repair');
-    assert.ok(repair, `${name}: red, one repair`); assert.match(repair.input, finding, name);
-  }
+test('N1 changed prompts (plain Markdown or legacy interface) pass mergeCheck without approval journal entries', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.issue(17); await w.tick();
-  const text = approvedText('Count the new words.');
-  writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', text); recordApproval(w, 'prompts/new.prompt.md', text);
-  writeIn(w.job(17, 'build').cwd, 'src/new.js', '// Generated from prompts/new.prompt.md\nexport const n = 1;\n');
+  writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', '# New\n\nCount the new words.\n');
+  writeIn(w.job(17, 'build').cwd, 'src/new.js', '// Prompt: prompts/new.prompt.md\nexport const n = 1;\n');
   const { pr } = w.build(17); await greenTick(w, 17);
-  assert.deepEqual(w.github.merges, [pr.number], 'an approval recorded with pdd approve merges');
-});
-
-test('N1b a strict repository: the job does not approve, and a changed prompt becomes a question for a person; the PR stays open', async t => {
-  const w = await coreWorld(t, { settings: { runs: 1 } });
-  w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
-  w.issue(17); await w.tick();
-  const input = w.job(17, 'build').input;
-  assert.doesNotMatch(input, /approve PROMPT --said -/); assert.match(input, /needs a person's approval for prompt changes \(strict_approvals\)/);
-  writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', approvedText('Count the new words.'));
-  const { pr } = w.build(17); await w.tick();
-  const question = w.comments(17).find(body => body.includes('<!-- pdd:autopilot-core:question:17:'));
-  assert.match(question, new RegExp(`PR #${pr.number} changes prompts that need a person's approval`));
-  assert.ok(w.labels(17).includes('pdd:needs-decision')); assert.equal(pr.state, 'open'); assert.deepEqual(w.github.merges, []);
-  assert.ok(pr.comments.some(c => c.body.includes(`<!-- pdd:autopilot-core:needs-approval:${pr.number} -->`)));
-  // A comment never ends a prompt approval wait (T10 trial rule): only the approval and the label removal do.
-  w.github.comment(17, 'I will approve it tomorrow.', 'acme'); await w.tick(); await w.tick();
-  assert.ok(w.labels(17).includes('pdd:needs-decision'));
-  assert.equal(w.started.filter(job => job.issue === 17).length, 1, 'no new job');
-  assert.equal(w.comments(17).filter(body => body.includes('<!-- pdd:autopilot-core:question:17:')).length, 1, 'no second question');
-  assert.ok(!w.github.issues.get(17).timeline.some(e => e.event === 'unlabeled' && e.label === 'pdd:needs-decision'), 'the engine never removed the label');
+  assert.deepEqual(w.github.merges, [pr.number]);
 });
 
 test('N2 only this engine\'s question counts, and only trusted answers and a trusted label removal', async t => {
@@ -2618,11 +2569,9 @@ test('Q2b M-a: a conflict only in provenance headers resolves mechanically to a 
   const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
   w.baseCommit('prompts/x.prompt.md', base);
   w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${createHash('sha256').update(base).digest('hex')})\n${bodyTail}`);
-  recordApproval(w, 'prompts/x.prompt.md', base);
   w.issue(17); await w.tick();
   const mine = prompt(['Rule 1 (PR).', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6.']);
   editIn(w, 17, 'prompts/x.prompt.md', mine); editIn(w, 17, 'src/x.js', `// Prompt: prompts/x.prompt.md sha256=${sha(mine)}\n${bodyTail}`);
-  recordApproval(w, 'prompts/x.prompt.md', mine);
   w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: b — src/x.js, prompts/x.prompt.md — prompts/x.prompt.md — prompt changed — Test: done check' }); await greenLane(w, 17);
   w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(base)})\n${bodyTail}`);
   await w.tick();
@@ -2636,7 +2585,6 @@ test('Q2b M-a: a conflict only in provenance headers resolves mechanically to a 
   const w2 = await coreWorld(t, { settings: { runs: 1 } }); w2.github.mergeMovesBase = true;
   w2.baseCommit('prompts/a.prompt.md', base); w2.baseCommit('prompts/b.prompt.md', base); w2.baseCommit('prompts/c.prompt.md', base);
   w2.baseCommit('src/owned.js', '// Prompt: prompts/a.prompt.md\nexport const owned = 1;\n');
-  for (const p of ['prompts/a.prompt.md', 'prompts/b.prompt.md', 'prompts/c.prompt.md']) recordApproval(w2, p, base);
   w2.issue(18); await w2.tick();
   editIn(w2, 18, 'src/owned.js', '// Prompt: prompts/b.prompt.md\nexport const owned = 1;\n');
   w2.build(18, { body: 'Fixes #18\n\nRuntime: PASS\nPath: a — src/owned.js — prompts/b.prompt.md — code changed — Test: done check' }); await greenLane(w2, 18);
@@ -2648,7 +2596,7 @@ test('Q2b M-a: a conflict only in provenance headers resolves mechanically to a 
 
   // Moving a provenance header from line 1 beyond the 4 KiB window during a conflict update must NOT preserve review.kept.
   const w3 = await coreWorld(t, { settings: { runs: 1 } }); w3.github.mergeMovesBase = true;
-  w3.baseCommit('prompts/m.prompt.md', base); recordApproval(w3, 'prompts/m.prompt.md', base);
+  w3.baseCommit('prompts/m.prompt.md', base);
   w3.baseCommit('src/m.js', `// Prompt: prompts/m.prompt.md\n${pad}export const v = 0;\n`);
   w3.issue(19); await w3.tick();
   editIn(w3, 19, 'src/m.js', `// Prompt: prompts/m.prompt.md\n${pad}export const v = 1;\n`);
@@ -2669,7 +2617,7 @@ test('Q2b M-a: a conflict only in provenance headers resolves mechanically to a 
   // Deleting >4 KiB padding on ours must not allow M-a on a line that sat past 4 KiB in base and theirs; malformed hashes are not mechanical either.
   const w4 = await coreWorld(t, { settings: { runs: 1 } }); w4.github.mergeMovesBase = true;
   const ctxLines = '// context\n'.repeat(5);
-  w4.baseCommit('prompts/x.prompt.md', base); recordApproval(w4, 'prompts/x.prompt.md', base);
+  w4.baseCommit('prompts/x.prompt.md', base);
   w4.baseCommit('pdd-bindings.json', bindings([['src/deep.js', 'prompts/x.prompt.md'], ['src/badhash.js', 'prompts/x.prompt.md']]));
   w4.baseCommit('src/deep.js', `${pad}${ctxLines}// Prompt: prompts/x.prompt.md sha256=${'b'.repeat(64)}\nexport const deep = 1;\n`);
   w4.baseCommit('src/badhash.js', '// Prompt: prompts/x.prompt.md sha256=bad0\nexport const bad = 1;\n');
@@ -2681,7 +2629,7 @@ test('Q2b M-a: a conflict only in provenance headers resolves mechanically to a 
   assert.equal(Boolean(jobFile(w4, 20).mechanical), false, 'header-shaped line past 4 KiB in base/theirs does not resolve via M-a');
 
   const w5 = await coreWorld(t, { settings: { runs: 1 } }); w5.github.mergeMovesBase = true;
-  w5.baseCommit('prompts/x.prompt.md', base); recordApproval(w5, 'prompts/x.prompt.md', base);
+  w5.baseCommit('prompts/x.prompt.md', base);
   w5.baseCommit('pdd-bindings.json', bindings([['src/badhash.js', 'prompts/x.prompt.md']]));
   w5.baseCommit('src/badhash.js', '// Prompt: prompts/x.prompt.md sha256=bad0\nexport const bad = 1;\n');
   w5.issue(21); await w5.tick();
@@ -2694,7 +2642,7 @@ test('Q2b M-a: a conflict only in provenance headers resolves mechanically to a 
   // Deleting a >4 KiB `-- ` comment during conflict resolution (moving a header into the 4 KiB window) must NOT preserve review.kept.
   const w6 = await coreWorld(t, { settings: { runs: 1 } }); w6.github.mergeMovesBase = true;
   const luaPad = `-- ${'p'.repeat(4050)}\n`;
-  w6.baseCommit('prompts/x.prompt.md', base); recordApproval(w6, 'prompts/x.prompt.md', base);
+  w6.baseCommit('prompts/x.prompt.md', base);
   w6.baseCommit('pdd-bindings.json', bindings([['src/x.lua', 'prompts/x.prompt.md']]));
   w6.baseCommit('src/x.lua', `${luaPad}-- Prompt: prompts/x.prompt.md sha256=${'b'.repeat(64)}\nreturn 0\n`);
   w6.issue(22); await w6.tick();
@@ -2935,7 +2883,7 @@ test('U3 (M2) after a final-step refresh, a head with no CI run yet waits for it
   assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /- CI: green/);
 });
 
-test('U4 (M3) a pure rename or stripping a legacy interface block on an approved, current prompt passes the gate and merges', async t => {
+test('U4 (M3) renaming, stripping a legacy interface block, or editing a prompt merges cleanly even when pdd.json has leftover strict_approvals', async t => {
   const prose = 'Count the words of a text.';
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.baseCommit('prompts/words.prompt.md', approvedText(prose));
@@ -2943,45 +2891,21 @@ test('U4 (M3) a pure rename or stripping a legacy interface block on an approved
   const cwd = w.job(17, 'build').cwd;
   mkdirSync(join(cwd, 'prompts', 'text'), { recursive: true }); w.git(cwd, 'mv', 'prompts/words.prompt.md', 'prompts/text/words.prompt.md');
   const { pr } = w.build(17); await greenTick(w, 17);
-  assert.deepEqual(w.github.merges, [pr.number], 'a rename keeps the approval that Git has');
+  assert.deepEqual(w.github.merges, [pr.number], 'a rename merges cleanly');
   const v = await coreWorld(t, { settings: { runs: 1 } });
   v.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
   v.baseCommit('prompts/words.prompt.md', approvedText(prose));
   v.issue(17); await v.tick();
   writeIn(v.job(17, 'build').cwd, 'prompts/words.prompt.md', `# Words\n\n${prose}\n`);
   const { pr: plainPr } = v.build(17); await greenTick(v, 17);
-  assert.deepEqual(v.github.merges, [plainPr.number], 'stripping a legacy Runtime interface block keeps the prose approval even under strict_approvals');
+  assert.deepEqual(v.github.merges, [plainPr.number], 'stripping a legacy Runtime interface block merges cleanly');
   const s = await coreWorld(t, { settings: { runs: 1 } });
   s.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
   s.baseCommit('prompts/words.prompt.md', `# Words\n\n${prose}\n`);
   s.issue(17); await s.tick();
   writeIn(s.job(17, 'build').cwd, 'prompts/words.prompt.md', '# Words\n\nCount words and sentences.\n');
-  const { pr: strictPlainPr } = s.build(17); await s.tick();
-  assert.ok(s.labels(17).includes('pdd:needs-decision'), 'strict_approvals plain prompt edit asks a person');
-  assert.equal(strictPlainPr.state, 'open');
-  // A changed approved prompt with no recorded approval: the finding says what works (draft, then pdd approve).
-  const x = await coreWorld(t, { settings: { runs: 1 } });
-  x.issue(17); await x.tick();
-  writeIn(x.job(17, 'build').cwd, 'prompts/new.prompt.md', approvedText('Count the new words.')); writeIn(x.job(17, 'build').cwd, 'src/new.js', '// Generated from prompts/new.prompt.md\n');
-  x.build(17); await x.tick();
-  assert.match(x.job(17, 'repair').input, /set its interface status to "draft", then run pdd approve/);
-});
-
-test('U5 (M4) strict repository: a trusted APPROVED review and the label removal resume the same PR (no new build), and it merges', async t => {
-  const w = await coreWorld(t, { settings: { runs: 1 } });
-  w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
-  w.issue(17); await w.tick();
-  writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', approvedText('Count the new words.')); writeIn(w.job(17, 'build').cwd, 'src/new.js', '// Generated from prompts/new.prompt.md\n');
-  const { pr, head } = w.build(17); await w.tick();
-  assert.ok(w.labels(17).includes('pdd:needs-decision')); assert.equal(pr.state, 'open');
-  pr.reviews = [{ state: 'APPROVED', commit_id: head, user: { login: 'acme' } }];
-  w.github.unlabel(17, 'pdd:needs-decision', 'acme');
-  await w.tick();
-  assert.equal(w.started.filter(j => j.issue === 17 && j.role === 'build').length, 1, 'no new build');
-  assert.equal(jobFile(w, 17).pr, pr.number, 'the same PR resumes');
-  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
-  assert.deepEqual(w.github.merges, [pr.number]);
-  assert.equal(w.comments(17).filter(body => body.includes('<!-- pdd:autopilot-core:question:17:')).length, 1, 'never the same question again');
+  const { pr: editedPr } = s.build(17); await greenTick(s, 17);
+  assert.deepEqual(s.github.merges, [editedPr.number], 'leftover strict_approvals in pdd.json does not block plain prompt edits');
 });
 
 test('U6 (M5) the backstop is absolute from each process start: file changes do not reset it, and the reviewer and the suite have it too', async t => {
@@ -3478,46 +3402,6 @@ test('Y3 (L8) the last guard compares the base right before the merge: a base pu
   assert.equal(pr.state, 'open');
 });
 
-test('Y4 (M3b) a rename that also changes the interface block is no pure rename: it needs an approval', async t => {
-  const prose = 'Count the words of a text.';
-  const w = await coreWorld(t, { settings: { runs: 1 } });
-  w.baseCommit('prompts/words.prompt.md', approvedText(prose));
-  w.issue(17); await w.tick();
-  const cwd = w.job(17, 'build').cwd;
-  mkdirSync(join(cwd, 'prompts', 'text'), { recursive: true }); w.git(cwd, 'mv', 'prompts/words.prompt.md', 'prompts/text/words.prompt.md');
-  const text = readFileSync(join(cwd, 'prompts', 'text', 'words.prompt.md'), 'utf8');
-  writeFileSync(join(cwd, 'prompts', 'text', 'words.prompt.md'), text.replace('"operations":[]', '"operations":[{"name":"count","input":{"type":"string"},"output":{"type":"integer"}}]'));
-  assert.notEqual(readFileSync(join(cwd, 'prompts', 'text', 'words.prompt.md'), 'utf8'), text);
-  w.build(17); await w.tick();
-  assert.equal(w.job(17, 'review'), undefined, 'red before the review');
-  assert.deepEqual(w.github.merges, [], 'an interface change is a real change');
-  assert.match(w.job(17, 'repair')?.input ?? '', /prompts\/text\/words\.prompt\.md/);
-});
-
-test('Y5 (M4b, M4c, M4d) strict repository: an approval of another head, an approval by an untrusted person, or an agent journal entry never merges', async t => {
-  const strictWorld = async () => {
-    const w = await coreWorld(t, { settings: { runs: 1 } });
-    w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
-    w.issue(17); await w.tick();
-    writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', approvedText('Count the new words.')); writeIn(w.job(17, 'build').cwd, 'src/new.js', '// Generated from prompts/new.prompt.md\n');
-    return w;
-  };
-  for (const review of [head => ({ state: 'APPROVED', commit_id: 'f'.repeat(40), user: { login: 'acme' } }), () => ({ state: 'APPROVED', commit_id: null, user: { login: 'stranger' } })]) {
-    const w = await strictWorld();
-    const { pr, head } = w.build(17); await w.tick();
-    assert.ok(w.labels(17).includes('pdd:needs-decision'));
-    const r = review(head); pr.reviews = [{ ...r, commit_id: r.commit_id ?? head }];
-    w.github.unlabel(17, 'pdd:needs-decision', 'acme');
-    for (let i = 0; i < 3; i++) { await w.tick(); if (w.job(17, 'review') && w.alive.has(w.job(17, 'review').pid)) w.review(17, 'PASS'); if (w.job(17, 'suite') && w.alive.has(w.job(17, 'suite').pid)) w.suite(17, 0); }
-    assert.deepEqual(w.github.merges, [], JSON.stringify(pr.reviews[0]));
-  }
-  const w = await strictWorld();
-  recordApproval(w, 'prompts/new.prompt.md', approvedText('Count the new words.'));   // an agent journal entry
-  w.build(17); await w.tick();
-  assert.ok(w.labels(17).includes('pdd:needs-decision'), 'strict mode needs a person, not an agent entry');
-  assert.deepEqual(w.github.merges, []);
-});
-
 test('Y6 (M6b) the "other" report cap is per day: a new other cause 2 hours later is still a draft; a day later it files', async t => {
   const { fileReport } = await import('../src/autopilot-reports.mjs');
   const { mkdtempSync } = await import('node:fs');
@@ -3532,18 +3416,25 @@ test('Y6 (M6b) the "other" report cap is per day: a new other cause 2 hours late
 
 test('Y7 (R11 should-fix 5) a failed checkout of a kept PR undoes the claim: no orphan pdd:working, no claim comment, no job', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
-  w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
-  w.issue(17); await w.tick();
-  writeIn(w.job(17, 'build').cwd, 'prompts/new.prompt.md', approvedText('Count the new words.')); writeIn(w.job(17, 'build').cwd, 'src/new.js', '// Generated from prompts/new.prompt.md\n');
-  const { pr, head } = w.build(17); await w.tick();
+  const origGh = w.gh;
+  const ghWithReviewReq = async (args, options) => {
+    if (args.some(a => typeof a === 'string' && a.includes('/branches/main/protection/required_pull_request_reviews'))) {
+      return { code: 0, stdout: `HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: 4000\r\n\r\n${JSON.stringify({ required_approving_review_count: 1 })}`, stderr: '' };
+    }
+    return origGh(args, options);
+  };
+  w.issue(17); await w.tick({ gh: ghWithReviewReq });
+  const { pr, head } = w.build(17); await w.tick({ gh: ghWithReviewReq });
+  w.review(17, 'PASS'); w.suite(17, 0); await w.tick({ gh: ghWithReviewReq });
+  assert.ok(w.labels(17).includes('pdd:needs-decision'), 'branch protection holds PR for GitHub review');
   pr.reviews = [{ state: 'APPROVED', commit_id: head, user: { login: 'acme' } }];
   w.github.unlabel(17, 'pdd:needs-decision', 'acme');
   const own = w.ports();
-  await w.tick({ git: async (args, options) => args[0] === 'worktree' && args[1] === 'add' && args.includes('-B') ? { code: 1, stdout: '', stderr: 'fatal: boom' } : own.git(args, options) });
+  await w.tick({ gh: ghWithReviewReq, git: async (args, options) => args[0] === 'worktree' && args[1] === 'add' && args.includes('-B') ? { code: 1, stdout: '', stderr: 'fatal: boom' } : own.git(args, options) });
   assert.ok(!jobFile(w, 17), 'no job file');
   assert.ok(!w.labels(17).includes('pdd:working'), 'no orphan claim label');
   assert.equal(claimComments(w, 17).length, 0, 'no claim comment');
-  await w.tick();
+  await w.tick({ gh: ghWithReviewReq });
   assert.equal(jobFile(w, 17)?.pr, pr.number, 'the next tick resumes the same PR');
 });
 
@@ -3649,49 +3540,29 @@ test('Z5 (R12 should-fix 7) two short findings at nearby lines that share one wo
 });
 
 // ---- 0.1.29 ---------------------------------------------------------------------------------------------------
-test('X7 (T05) observe mode records the operator approval of a changed approved prompt, with the real mode in its words, and never merges; strict observe asks no one', async t => {
+test('X7 (T05) observe mode posts would-merge without merging for changed prompts; auto mode merges cleanly even with leftover strict_approvals', async t => {
   const prose = 'Count the words of a text.', changed = 'Count the words and the lines of a text.', path = 'prompts/words.prompt.md';
   const w = await coreWorld(t, { settings: { mode: 'observe', runs: 1 } });
-  w.state.startedAt = '2026-11-11T09:00:00.000Z';
+  w.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
   w.baseCommit(path, approvedText(prose));
   w.issue(17); await w.tick();
-  const words = `Operator action: pdd autopilot start --engine core in observe mode for acme/widgets on ${claimOf(w, 17).machine} at 2026-11-11T09:00:00.000Z`;
-  assert.ok(w.job(17, 'build').input.includes(`9. Approval: in observe mode the operator's start is the approval of your prompt changes.`));
-  assert.ok(w.job(17, 'build').input.includes(`printf '%s' '${words}' | "$PDD_CLI" approve PROMPT --said -`), 'the real mode in the words');
+  assert.doesNotMatch(w.job(17, 'build').input, /pdd approve|strict_approvals/);
   writeIn(w.job(17, 'build').cwd, path, approvedText(changed));
-  const { pr } = w.build(17); await w.tick();
-  const repair = w.job(17, 'repair');
-  assert.ok(repair, 'an unapproved changed prompt is red in observe mode too');
-  assert.match(repair.input, /Changed prompts are not approved: prompts\/words\.prompt\.md/); assert.ok(repair.input.includes(words));
-  recordApproval(w, path, approvedText(changed));                            // the repair records it with the native command
-  w.build(17, { role: 'repair' }); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  const { pr } = w.build(17); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.equal(w.job(17, 'repair'), undefined);
   assert.deepEqual(w.github.merges, [], 'observe never merges');
-  assert.ok(pr.comments.some(c => c.body.includes('<!-- pdd:autopilot-core:would-merge:')));
+  const note = pr.comments.map(c => c.body).find(body => body.includes('<!-- pdd:autopilot-core:would-merge:'));
+  assert.ok(note);
+  assert.doesNotMatch(note, /strict_approvals/);
   assert.ok(w.labels(17).includes('pdd:would-merge'));
-  // Auto mode: the same flow merges, with "auto" in the words.
+  // Auto mode merges cleanly even with leftover strict_approvals in pdd.json.
   const a = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  a.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
   a.baseCommit(path, approvedText(prose));
   a.issue(17); await a.tick();
-  assert.match(a.job(17, 'build').input, /in auto mode for acme\/widgets/);
   writeIn(a.job(17, 'build').cwd, path, approvedText(changed));
-  a.build(17); await a.tick();
-  assert.ok(a.job(17, 'repair'));
-  recordApproval(a, path, approvedText(changed));
-  a.build(17, { role: 'repair' }); await a.tick(); a.review(17, 'PASS'); a.suite(17, 0); await a.tick();
+  a.build(17); await a.tick(); a.review(17, 'PASS'); a.suite(17, 0); await a.tick();
   assert.equal(a.github.merges.length, 1);
-  // Strict repository in observe mode: no question, no pdd:needs-decision, the prompts listed in the would-merge note.
-  const s = await coreWorld(t, { settings: { mode: 'observe', runs: 1 } });
-  s.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
-  s.baseCommit(path, approvedText(prose));
-  s.issue(17); await s.tick();
-  assert.match(s.job(17, 'build').input, /Autopilot lists the prompts for a person in its note/);
-  writeIn(s.job(17, 'build').cwd, path, approvedText(changed));
-  const strict = s.build(17); await s.tick(); s.review(17, 'PASS'); s.suite(17, 0); await s.tick();
-  assert.equal(s.job(17, 'repair'), undefined, 'no repair for a person approval');
-  assert.ok(!s.labels(17).includes('pdd:needs-decision')); assert.equal(s.comments(17).filter(body => body.includes('pdd:autopilot-core:question:')).length, 0);
-  const note = strict.pr.comments.map(c => c.body).find(body => body.includes('<!-- pdd:autopilot-core:would-merge:'));
-  assert.match(note ?? '', /Prompts that need a person's approval before a merge \(strict_approvals\): prompts\/words\.prompt\.md/);
-  assert.deepEqual(s.github.merges, []);
 });
 
 test('Y8 (T01) "Runtime: PASS" counts only when the saved checks cover the changed prompts and Stories at the exact head', async t => {

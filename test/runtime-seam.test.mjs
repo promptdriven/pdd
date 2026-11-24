@@ -842,7 +842,7 @@ registerHooks({
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
   const coveredLocals = new Set([
-    'help', 'version', 'version-detailed', 'completion', 'setup', 'init', 'status', 'lint', 'prove', 'project-files', 'file-owner', 'update-sync', 'prompt-approve',
+    'help', 'version', 'version-detailed', 'completion', 'setup', 'init', 'status', 'lint', 'prove', 'project-files', 'file-owner', 'update-sync',
     'runtime-check', 'runtime-try', 'contracts', 'contracts-sync', 'runtime-jobs', 'mcp', 'metrics',
     'issue-dependency-graph',
     'product-status', 'product-next', 'product-start',
@@ -872,7 +872,6 @@ registerHooks({
     ['cli:files', [bin, 'files', '--json'], repo],
     ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:update', [bin, 'update', 'prompts/a.prompt.md', '--json'], repo],
-    ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
     ['cli:prove', [bin, 'prove', '--json'], repo],
@@ -896,7 +895,6 @@ registerHooks({
     ['child:scripts/autopilot-smoke.mjs', [join(root, 'scripts/autopilot-smoke.mjs')], nonGit],
     ['tick:autopilot-launcher', [join(root, 'src/autopilot-launcher.mjs'), join(scratch, 'missing-state.json')], nonGit],
     ['lib:svg-layout.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`], nonGit],
-    ['lib:prompt-approve.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/prompt-approve.mjs')).href)})`], nonGit],
     ['lib:file-owner.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/file-owner.mjs')).href)})`], nonGit],
     ['lib:update-sync.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/update-sync.mjs')).href)})`], nonGit],
     ['lib:agent-adapters.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/agent-adapters.mjs')).href)})`], nonGit],
@@ -905,8 +903,8 @@ registerHooks({
   ];
 
   const ACYCLIC_ENTRIES = new Set([
-    'cli:--help', 'cli:owner', 'cli:update', 'cli:files', 'cli:approve',
-    'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
+    'cli:--help', 'cli:owner', 'cli:update', 'cli:files',
+    'lib:svg-layout.mjs',
     'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
   const ZERO_SRC_ENTRIES = new Set([
@@ -914,10 +912,10 @@ registerHooks({
   ]);
   const LIGHT_ENTRIES = new Set([
     'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion',
-    'cli:files', 'cli:owner', 'cli:update', 'cli:approve',
+    'cli:files', 'cli:owner', 'cli:update',
     'cli:jobs', 'cli:contracts', 'cli:contracts-sync', 'cli:simulate', 'cli:mcp',
     'child:try-doors-launcher',
-    'lib:svg-layout.mjs', 'lib:prompt-approve.mjs', 'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
+    'lib:svg-layout.mjs', 'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
   const HEAVY_ORCHESTRATORS = new Set([
     'src/autopilot-core.mjs',
@@ -970,7 +968,7 @@ registerHooks({
 
   for (const [cmdArgs, suffix] of [
     [['test', 'a'], '/file-owner.mjs'],
-    [['simulate', '--stop', 'a'], '/approve-prompt.mjs'],
+    [['simulate', '--stop', 'a'], '/agent-config.mjs'],
   ]) {
     const checkOrTryFail = runWithRejectedModule(suffix, [bin, ...cmdArgs], repo);
     assert.equal(checkOrTryFail.status, 3);
@@ -1937,6 +1935,112 @@ test('SEAM13 (WEAKER DEFAULTS): agent-project has no localEvidenceEligibility fa
   }
 });
 
+test('SEAM13b (#3537): seam.runTry binds compatibility promptPath/askApproval stubs so bundled runtime-client@1.1.1 never throws unboundPortError', async t => {
+  const { Readable } = await import('node:stream');
+  const { harbor, fakeRuntime, portsFor } = await import('./helpers/runtime-fake.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+  const setup = harbor(t);
+  const promptFile = join(setup.repo, 'prompts/place_order.prompt.md');
+  const promptBefore = readFileSync(promptFile, 'utf8');
+  const approvalPosts = [];
+  let pollCount = 0;
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
+    if (entry.method === 'GET' && entry.url.endsWith('/tests')) return { status: 200, json: { tests: [] } };
+    if (entry.method === 'GET' && entry.url.endsWith('/approvals')) {
+      pollCount += 1;
+      if (pollCount > 1) return { status: 410, json: { error: { code: 'ended', message: 'Try ended' } } };
+      return {
+        status: 200,
+        json: {
+          approvals: [
+            {
+              id: 'req-compat-1',
+              prompt_path: 'prompts/place_order.prompt.md',
+              prose_sha256: 'a'.repeat(64),
+              requested_at: '2026-11-23T00:00:00Z',
+              state: 'pending',
+            },
+            {
+              id: 'req-compat-escape',
+              prompt_path: '../etc/passwd',
+              prose_sha256: 'b'.repeat(64),
+              requested_at: '2026-11-23T00:00:00Z',
+              state: 'pending',
+            },
+            {
+              id: 'req-compat-drive',
+              prompt_path: 'C:/Windows/evil.prompt.md',
+              prose_sha256: 'c'.repeat(64),
+              requested_at: '2026-11-23T00:00:00Z',
+              state: 'pending',
+            },
+          ],
+        },
+      };
+    }
+    if (entry.method === 'POST' && entry.url.includes('/approvals/')) {
+      approvalPosts.push({ url: entry.url, json: entry.json });
+      return { status: 200, json: { ok: true } };
+    }
+    return { status: 404, json: {} };
+  });
+
+  const { ports } = portsFor(
+    { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin },
+    {
+      interactive: true,
+      agentBridge: false,
+      openUrl: async () => true,
+      stdin: Readable.from(['y\n']),
+      watchMs: 1,
+      sleep: async () => {},
+    },
+  );
+  const code = await seam.runTry(
+    { cwd: setup.repo, words: ['place-order'], options: { '--no-open': true } },
+    ports,
+  );
+  assert.equal(code, 0, `seam.runTry should exit 0 cleanly, stderr=${ports.stderr.text}`);
+  assert.ok(pollCount >= 1, 'expected runtime-client to poll /approvals');
+  assert.equal(approvalPosts.length, 3, `expected all pending approvals declined via compat stub, got ${JSON.stringify(approvalPosts)}`);
+  for (const post of approvalPosts) {
+    assert.deepEqual(post.json, { state: 'declined' });
+  }
+  assert.match(ports.stdout.text, /not approved: prompts\/place_order\.prompt\.md \(approve prompt changes in chat or GitHub PR review\)/);
+  assert.equal(readFileSync(promptFile, 'utf8'), promptBefore, 'compat approval stub must never mutate prompt files on disk');
+
+  // Caller-supplied port overrides win over compatibility stubs.
+  const overrideSetup = harbor(t);
+  pollCount = 0;
+  approvalPosts.length = 0;
+  const customCalls = [];
+  const { ports: overridePorts } = portsFor(
+    { HOME: overrideSetup.home, PDD_STATE_DIR: overrideSetup.state, PDD_RUNTIME_URL: fake.origin },
+    {
+      interactive: true,
+      agentBridge: false,
+      openUrl: async () => true,
+      stdin: Readable.from([]),
+      watchMs: 1,
+      sleep: async () => {},
+      promptPath: (_root, _cwd, word) => (word === 'prompts/place_order.prompt.md' ? word : null),
+      askApproval: async ({ path }) => {
+        customCalls.push(path);
+        return { state: 'declined', message: `custom override declined ${path}` };
+      },
+    },
+  );
+  const overrideCode = await seam.runTry(
+    { cwd: overrideSetup.repo, words: ['place-order'], options: { '--no-open': true } },
+    overridePorts,
+  );
+  assert.equal(overrideCode, 0, `override seam.runTry should exit 0 cleanly, stderr=${overridePorts.stderr.text}`);
+  assert.deepEqual(customCalls, ['prompts/place_order.prompt.md']);
+  assert.match(overridePorts.stdout.text, /custom override declined prompts\/place_order\.prompt\.md/);
+});
+
 test('SEAM14 (Should-fix 1 & 5): single shared defaultLineReader in src/runtime and base load order for agent-adapters in Try', async t => {
   const { spawnSync } = await import('node:child_process');
   const { pathToFileURL } = await import('node:url');
@@ -2322,7 +2426,6 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   const index = await import('@promptdriven/runtime-client');
   const seam = await import('../src/runtime-seam.mjs');
   const { redactSecrets } = await import('../src/secret-redaction.mjs');
-  const { approvePromptText } = await import('../src/prompt-approve.mjs');
 
   for (const name of ['lint', 'check', 'read', 'retry', 'local', 'simulate', 'jobs', 'health', 'mcp', 'contracts', 'render']) {
     assert.equal(typeof seam[name], 'function', `seam.${name} must be a function`);
@@ -2513,7 +2616,7 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   assert.deepEqual(seam.render(sampleRows, { as: 'story-lines' }), seam.storyLines(sampleRows));
   assert.equal(seam.render({ rows: sampleRows, exitCode: 0 }, { as: 'json' }).exit_code, 0);
 
-  // format.setInterfaceStatus agrees with approvePromptText on single-key prompts and rejects duplicate keys / fence injection.
+  // format.setInterfaceStatus updates single-key prompts and rejects duplicate keys / fence injection.
   for (const body of [
     '{"status":"draft","prose_sha256":"0000"}',
     '{\n  "kind": "partial",\n  "status": "draft",\n  "prose_sha256": "",\n  "entries": [{"operation": "op", "nested": {"status": "keep"}}]\n}',
@@ -2521,10 +2624,12 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   ]) {
     const doc = `# Title\n\nBody text.\n\n<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${body}\n\`\`\`\n</details>\n`;
     const digest = seam.format.proseSha256(doc);
-    assert.equal(
-      seam.format.setInterfaceStatus(doc, { status: 'approved', prose_sha256: digest }),
-      approvePromptText(doc),
-    );
+    const updated = seam.format.setInterfaceStatus(doc, { status: 'approved', prose_sha256: digest });
+    assert.ok(typeof updated === 'string');
+    assert.equal(seam.format.proseSha256(updated), digest);
+    const parsedBlock = JSON.parse(seam.interfaceBlocks(updated)[0][1]);
+    assert.equal(parsedBlock.status, 'approved');
+    assert.equal(parsedBlock.prose_sha256, digest);
   }
   const dupStatusDoc =
     '# Title\n\nBody.\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"draft","status":"draft","prose_sha256":""}\n```\n</details>\n';

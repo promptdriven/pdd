@@ -3110,32 +3110,27 @@ export async function runTry(input = {}, ports = {}) {
     { loadAgentDefinitions },
     { parseProductDocuments, parseProductWorldWriters },
     { lineReader },
-    { createPromptApproval },
-    { createHumanBoundaryCard },
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
     import('./product-documents.mjs'),
     import('./shared/line-reader.mjs'),
-    import('./core/approve-prompt.mjs'),
-    import('./core/human-boundary-card-core.mjs'),
   ]);
-  const { buildHumanBoundaryCard, formatApproveBoundaryCard } = createHumanBoundaryCard({
-    TEST_SCHEMA,
-    findTests,
-    gitFiles,
-    interfaceBlocks,
-    parseScenarioJson,
-    promptMarkdownTargets,
-    readPrompt,
-    storyCriteria,
-  });
-  const { askApproval, promptPath } = createPromptApproval({
-    ...runtimePreflightSlice(),
-    defaultEnv: forwardPorts.env ?? process.env,
-    formatBoundaryCardLines: ({ root: cardRoot, focusPrompt, env: cardEnv }) =>
-      formatApproveBoundaryCard(buildHumanBoundaryCard({ root: cardRoot, focusPrompt, env: cardEnv ?? forwardPorts.env ?? process.env })),
-  });
+  // Zero-dependency compatibility stubs for bundled @promptdriven/runtime-client@1.1.1,
+  // which checks ports.promptPath and ports.askApproval inside runTry's collectApprovals loop.
+  const compatPromptPath = (_root, _cwd, word) => {
+    if (typeof word !== 'string') return null;
+    const cleaned = word.replace(/[\x00-\x1f\x7f-\x9f]/g, '').trim().replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+    if (!cleaned || !cleaned.endsWith('.prompt.md') || cleaned.startsWith('/') || /^[A-Za-z]:/.test(cleaned) || cleaned.split('/').includes('..')) return null;
+    return cleaned;
+  };
+  const compatAskApproval = async ({ path } = {}) => {
+    const target = typeof path === 'string' && path ? cleanText(path) : 'prompt';
+    return {
+      state: 'declined',
+      message: `not approved: ${target} (approve prompt changes in chat or GitHub PR review).`,
+    };
+  };
   const defaultDiscoverAgents = async (...args) => (await import('./shared/agent-process.mjs')).discoverAgents(...args);
   const defaultAskAgent = async (turnInput, ...rest) => askAgent(turnInput, ...rest);
   const defaultAgentBridge = (context, test, tryId, opts, link) =>
@@ -3162,9 +3157,9 @@ export async function runTry(input = {}, ports = {}) {
           askAgent: tryPorts.askAgent ?? tryPorts.agents?.ask ?? defaultAskAgent,
           parseProductDocuments,
           parseProductWorldWriters,
-          askApproval,
+          askApproval: compatAskApproval,
           lineReader,
-          promptPath,
+          promptPath: compatPromptPath,
           files: wrapCaseFilesForShortJson(tryPorts.files, tryPorts),
           redaction: seamRedaction(tryPorts),
         }),

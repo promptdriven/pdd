@@ -20,7 +20,7 @@ Check for removed commands first, before any other rule, also right after `help`
 | `check`, any other words | `pdd check was removed. Use pdd test.` |
 | `try`, any words | `pdd try was removed. Use pdd simulate.` |
 
-2. Standalone retired commands (`REMOVED_COMMANDS` in the catalog): `pdd workflow` (with any subcommand, flags, or after `help`) throws `CommandInputError` (exit 2) with an actionable pointer to `/pdd` (or `$pdd`), `pdd prove`, and `pdd autopilot` instead of bare `Unknown command "workflow"`.
+2. Standalone retired commands (`REMOVED_COMMANDS` in the catalog): `pdd workflow` (with any subcommand, flags, or after `help`) throws `CommandInputError` (exit 2) with an actionable pointer to `/pdd` (or `$pdd`), `pdd prove`, and `pdd autopilot` instead of bare `Unknown command "workflow"`; `pdd approve` (with any operands, flags, or after `help`) throws `CommandInputError` (exit 2) pointing to chat or GitHub PR review instead of bare `Unknown command "approve"`.
 
 ## Help topics
 

@@ -4,7 +4,7 @@ import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, isAbsolute, join } from 'node:path';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
-import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
+import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { gitContext as defaultGitContext, gitFiles } from './shared/git-context.mjs';
 import { PACKAGE_ROOT } from './shared/package-root.mjs';
 import { causeText } from './shared/safe-read.mjs';
@@ -176,8 +176,8 @@ function wrapHelpDescription(text, width = 76, indent = '    ') {
   const out = [];
   for (const rawLine of String(text ?? '').split('\n')) {
     if (!rawLine.trim()) { out.push(''); continue; }
-    // Preserve short code/heredoc lines (like `pdd approve ... <<'PDD_SAID'`) verbatim without re-wrapping.
-    if (/^(?:pdd\s|<|PDD_SAID$)/.test(rawLine)) { out.push(`${indent}${rawLine}`); continue; }
+    // Preserve short code/heredoc lines verbatim without re-wrapping.
+    if (/^(?:pdd\s|<)/.test(rawLine)) { out.push(`${indent}${rawLine}`); continue; }
     let line = '';
     for (const word of rawLine.trim().split(/\s+/)) {
       if (!line) { line = word; continue; }
@@ -808,10 +808,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           json: plan.options['--json'] === true,
         }, { stdout, stderr });
       } catch (error) { line(stderr, `pdd update failed.${reason(error)}`); return 1; }
-    }
-    case 'prompt-approve': {
-      const { runApprove } = await import('./prompt-approve.mjs');
-      return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });
     }
     case 'completion': {
       const { renderCompletion } = await import('./completion.mjs');

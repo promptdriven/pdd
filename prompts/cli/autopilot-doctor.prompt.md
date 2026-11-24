@@ -108,7 +108,7 @@ Check these boundaries in order and continue after failures:
   the folder(s) and a safely quoted `mkdir -p '<root>/.pdd-retired' && mv ...`
   backup command without deleting anything or blocking readiness. Off warns; native
   start owns mode admission. Describe observe versus auto authority,
-  owner/write-access trust even with [], explicit trusted users and strict approvals
+  owner/write-access trust even with [], and explicit trusted users
   in plain words. Never change mode or trust.
 - GitHub settings (`settings-github`): Autopilot job worktrees and other machines
   start from GitHub, so they read `pdd.json` of the default branch there. Read it

@@ -276,7 +276,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   }
   const config = json(read(join(cwd,'pdd.json'))), auto = config?.autopilot;
   const valid = auto && ['auto','observe'].includes(auto.mode) && (auto.trust===undefined || Array.isArray(auto.trust)&&auto.trust.every(x=>typeof x==='string'&&x.trim()));
-  add('setup-mode',valid?'pass':'warn',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; ${config.strict_approvals===true?'strict person-terminal approvals required':'delegated ordinary gates allowed; required human reviews still apply'}`:'Choose mode and trust in pdd setup; off does not start work','pdd setup');
+  add('setup-mode',valid?'pass':'warn',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; required human reviews still apply`:'Choose mode and trust in pdd setup; off does not start work','pdd setup');
   // Job worktrees and other machines read pdd.json of the default branch on GitHub.
   // The settings differ as autopilot-github defines: the mode, or the trust names ignoring case and order.
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);

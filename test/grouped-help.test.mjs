@@ -54,7 +54,8 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   assert.ok(baseline.indexOf('  pdd autopilot status|logs') > autopilotIdx);
   assert.ok(baseline.includes('  pdd --version, pdd -V, pdd -VV Show CLI version & interpreter build.'));
 
-  // No duplicate approval heredoc blocks or stale removed-engine migration note on root help
+  // No removed approve command, duplicate approval heredoc blocks or stale removed-engine migration note on root help
+  assert.doesNotMatch(baseline, /\bapprove\b/i);
   assert.doesNotMatch(baseline, /<<'PDD_SAID'/);
   assert.doesNotMatch(baseline, /removed full engine/i);
 
@@ -75,8 +76,8 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   assert.match(baseline, /Prompting guide: \/opt\/pdd\/skills\/pdd\/references\/prompting\.md/);
 });
 
-test('3496: focused family and command help exposes complete options, defaults, constraints and approval heredocs within 80 columns', async () => {
-  const families = ['test', 'lint', 'prove', 'simulate', 'approve', 'accounts', 'product', 'autopilot', 'metrics'];
+test('3496: focused family and command help exposes complete options, defaults, and constraints within 80 columns', async () => {
+  const families = ['test', 'lint', 'prove', 'simulate', 'accounts', 'product', 'autopilot', 'metrics'];
   for (const family of families) {
     const res = await runHelp([family, '--help']);
     assert.equal(res.exit, 0, `${family} --help`);

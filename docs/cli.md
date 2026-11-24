@@ -2,9 +2,9 @@
 
 This page lists every command of pdd 0.1.50, as `pdd --help` and `pdd <command> --help` show it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help catalog is on this page.
 
-You need the pdd command for local inspection (`pdd status`, `pdd files`, `pdd owner`, `pdd update`, `pdd lint`, `pdd prove`), remote checks (`pdd test`, `pdd lint --remote`, `pdd simulate`, `pdd approve`), and headless Autopilot issue runs (`pdd autopilot`). Install the single `/pdd` skill globally with `pdd setup` (or `npx skills add promptdriven/pdd -g`), and set up each repository once with `pdd init`. For simulations that your agent drives, use the Try tools in `pdd mcp`. Call the skill with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
+You need the pdd command for local inspection (`pdd status`, `pdd files`, `pdd owner`, `pdd update`, `pdd lint`, `pdd prove`), remote checks (`pdd test`, `pdd lint --remote`, `pdd simulate`), and headless Autopilot issue runs (`pdd autopilot`). Install the single `/pdd` skill globally with `pdd setup` (or `npx skills add promptdriven/pdd -g`), and set up each repository once with `pdd init`. For simulations that your agent drives, use the Try tools in `pdd mcp`. Call the skill with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
-Typing `pdd check`, `pdd try`, or `pdd workflow` runs nothing and prints the command or skill to use.
+Typing `pdd check`, `pdd try`, `pdd workflow`, or `pdd approve` runs nothing and prints what to use instead.
 
 ## Set up your machine and repo
 
@@ -44,17 +44,16 @@ Settings live in the repository's `pdd.json`, for example `{"autopilot":{"mode":
 
 When another change of `pdd.json` on GitHub comes between pdd's read and its write, pdd reads the file again and tries once more. When GitHub cannot be reached or `gh` is not signed in, the local setting stays, the exit code is 0, and the line tells you to run the same command again. `pdd autopilot start` and `pdd autopilot status` print a warning when the copy on GitHub has another mode or trust list, with the commands that change it, or when a settings PR is still open, with its URL. The warning says that Autopilot on this machine uses this checkout's settings (and this machine's `--mode` and `--label`, when set), and that other machines and people read the GitHub copy. Invalid saved modes count as `off` with a notice; a mode command replaces them. Names match ignoring case. The repository owner, people with write access (including access through an organization team), and explicitly added names are trusted independently. An incomplete lookup never establishes trust for an unknown person.
 
-These commands store settings and determine trust. Selecting a mode starts no run and makes no interpreter call. Approval policy, including `strict_approvals`, stays independent.
+These commands store settings and determine trust. Selecting a mode starts no run and makes no interpreter call.
 
 ## Inspect authored files
 
 `pdd files [--json]` lists prompts, Stories, tests and refusal
-reasons. It reads working files only. It does not sign in, call the interpreter
-or approve prompts. It works from any folder in a Git repository.
+reasons. It reads working files only. It does not sign in, call the interpreter,
+or edit files. It works from any folder in a Git repository.
 
 The reader expands `$contract` references and preserves numeric JSON tokens for
-lint, test and approval. Approval shows resolved fields and constraints. It keeps
-the references in the authored file when it records a person's approval.
+lint and test.
 
 The JSON result has `schema_version: "pdd.files.v1"` and arrays `prompts`,
 `stories`, `tests`, `orphans`, `refusals` and `warnings`. Paths are relative to the
@@ -109,8 +108,7 @@ null when the prompt is not available), `state` and `legacy`. The header hash
 is the SHA-256 of the prompt's behavior text: for a plain prompt, the prompt
 text itself; when an embedded Runtime interface JSON block is present, the prompt
 with `status` and `prose_sha256` taken out and that JSON written without white
-space. `pdd approve` does not change it, so an approval keeps the headers of the
-prompt current.
+space.
 
 | `state` | Meaning |
 |---|---|
@@ -601,7 +599,7 @@ Autopilot destination. A test clears only that route's older delivery failure. A
 needs attention. Configure external credential-maintenance and machine-health
 senders at their own source; PDD does not change those programs.
 
-## Tests on the PDD interpreter and prompt approval
+## Tests on the PDD interpreter
 
 Before a check, PDD prints one local plan. It lists target Stories, the changed
 paths that affect each Story, and their dependency closures. A full batch also
@@ -666,7 +664,6 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]` | Run isolated base-vs-head bug-contrast proof in temporary worktrees: proves `CMD` fails on base with `TEXT` and passes on head; exits `0` Proved, `1` Failed, `2` Usage, `3` Not proved |
 | `pdd product contracts` | List shared product records, their users and Stories stale since their last check (alias: `pdd contracts`); local working files only |
 | `pdd test --screen URL --drawing PATH [--look] [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport (`--look` also checks canvas color, painted card/section boxes, box size and spacing within tolerance, without pixel equality; `pdd test --screen URL --drawing PATH [--json]` checks parts only). No AI or interpreter call; missing/hidden parts, order, region or look differences fail |
-| `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
 | `pdd simulate [STORY\|PROMPT.md] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--fresh] [--no-open] [--no-wait] [--agent NAME]` | Automatically open a shell for command-line programs, localhost with an example request for HTTP routes, or the Simulator page (Screen tab for `app-map.json` or single-file plain-prose `render`/`handle_event` UI prompts with zero `app-map.json`, zero `Runtime interface` and optional Story; Form tab for other typed operations). With no operand, open the whole project (or the sole `.prompt.md` when no Stories exist). `--fresh` requests fresh uncached interpreter execution (`fresh: true`; also accepted with `--page`, `--cli` and `--serve`). |
 | `pdd simulate [STORY\|PROMPT.md] --page [--new] [--fresh]` | Open the Simulator page explicitly (`--fresh` bypasses saved answer caches) |
 | `pdd simulate --stop [STORY\|PROMPT.md]` | Stop the open Simulator link of a Story, prompt, or exact Try ID |
@@ -683,7 +680,7 @@ or unrun Story makes the command nonzero.
 
 Ordinary `pdd test` reuses complete unchanged Story passes from the Git-ignored `.pdd/cache/test/` folder, showing their previous pass time and zero current AI calls. `pdd test --lf` selects the last known failures; a later attempt without a verdict keeps a failure selected until it passes. With no failures in the selected scope it uses the normal selection, including unchanged-pass reuse. Completed saved reads populate the cache after source verification, dated from the original batch start, never the later read time. `pdd test --cache-clear` discards prior local evidence and runs the normal selected scope; it takes precedence over `--lf`. It sends again and prints one stderr notice with the selected Story count; the interpreter may return a saved answer for the same key.
 
-Reuse includes reached call targets, exact authored bytes, interpreter origin, call budget, pdd version, and the interpreter build and requested model reported by job answers. A missing identity or a pass older than seven days runs again. A different build or model observed during a run also runs the selected Stories initially skipped, with a reason; after a timeout or interrupt those rows are marked not sent. Reuse requires one clean record naming the same known build and model as the pass. A clean normal run starts after the previous sample, sees no record change during the run, and has only agreeing complete identities. Overlap, any read that writes the record (even after resending), an old or unknown writer, partial or mixed observations, or multiple stored values leaves doubt and runs. A later clean normal run can restore reuse. Before sending checks, a run saves an in-progress mark with its pid and start time. Another run's mark, live or dead, makes checks run. Live marks remain until their owners finish; dead marks are retired after forcing a run. A run can finish clean only while it still owns its mark and no other run has changed the record; it removes only its own mark. A failed sign-in removes its own mark but leaves doubt. All check sends share one ownership boundary: normal checks, saved-read continuations, retries and recovery hold their own mark from before the first send until their last send and observations finish. A retry retains ownership across its initial read. Reads and retries finish with doubt; direct callers with reuse disabled still coordinate their sends. Cache clear preserves every in-progress mark. A crash therefore costs one extra run, and overlap remains doubt until a later clean run. An all-skipped local run cannot discover an interpreter update without calls. Stories using the real clock or AI-played fakes run every time and say why; completely deterministic simulation bindings and fixed clock data permit reuse. Fixed clock values must be finite numbers or ISO 8601 date-time strings; labels such as `real 2026`, `now 1` and `1` run with the real-clock reason. Unknown resource kinds or actions run. Missing Story footprints, missing sources or malformed declarations report `runs again: resource declarations unavailable`; reuse can resume once evidence is complete; plain dependencies without an interface declare no resources. An expired pass reports `runs again: saved pass is older than seven days`. `CI` unset or set to the empty string, `0` or `false` permits ordinary reuse; every other value runs every selected Story. A saved pass at most seven days old still counts for prompt approval. Tracked cache files and caches copied without their external machine-local state are never reused. Damaged regular metadata heals after a completed run; its warning names `pdd test --cache-clear`. Dead-owner cache locks recover with one warning. Symlinked ancestors of `PDD_STATE_DIR` are accepted, but a final state-folder symlink is refused.
+Reuse includes reached call targets, exact authored bytes, interpreter origin, call budget, pdd version, and the interpreter build and requested model reported by job answers. A missing identity or a pass older than seven days runs again. A different build or model observed during a run also runs the selected Stories initially skipped, with a reason; after a timeout or interrupt those rows are marked not sent. Reuse requires one clean record naming the same known build and model as the pass. A clean normal run starts after the previous sample, sees no record change during the run, and has only agreeing complete identities. Overlap, any read that writes the record (even after resending), an old or unknown writer, partial or mixed observations, or multiple stored values leaves doubt and runs. A later clean normal run can restore reuse. Before sending checks, a run saves an in-progress mark with its pid and start time. Another run's mark, live or dead, makes checks run. Live marks remain until their owners finish; dead marks are retired after forcing a run. A run can finish clean only while it still owns its mark and no other run has changed the record; it removes only its own mark. A failed sign-in removes its own mark but leaves doubt. All check sends share one ownership boundary: normal checks, saved-read continuations, retries and recovery hold their own mark from before the first send until their last send and observations finish. A retry retains ownership across its initial read. Reads and retries finish with doubt; direct callers with reuse disabled still coordinate their sends. Cache clear preserves every in-progress mark. A crash therefore costs one extra run, and overlap remains doubt until a later clean run. An all-skipped local run cannot discover an interpreter update without calls. Stories using the real clock or AI-played fakes run every time and say why; completely deterministic simulation bindings and fixed clock data permit reuse. Fixed clock values must be finite numbers or ISO 8601 date-time strings; labels such as `real 2026`, `now 1` and `1` run with the real-clock reason. Unknown resource kinds or actions run. Missing Story footprints, missing sources or malformed declarations report `runs again: resource declarations unavailable`; reuse can resume once evidence is complete; plain dependencies without an interface declare no resources. An expired pass reports `runs again: saved pass is older than seven days`. `CI` unset or set to the empty string, `0` or `false` permits ordinary reuse; every other value runs every selected Story. Tracked cache files and caches copied without their external machine-local state are never reused. Damaged regular metadata heals after a completed run; its warning names `pdd test --cache-clear`. Dead-owner cache locks recover with one warning. Symlinked ancestors of `PDD_STATE_DIR` are accepted, but a final state-folder symlink is refused.
 
 Run local source preflight and the prompt check in one shell call:
 
@@ -856,9 +853,8 @@ Only Stories using a changed record become stale because of that record. A
 Story stays current when you check one of its tests or include it in a larger
 batch without changing its files.
 
-`pdd approve` still approves prompt prose; it does not cover shared contract
-contents. Editing a contract never approves a prompt. Sync writes that edit an
-approved interface set it to draft; review the preview and approve it as usual.
+Editing a contract never approves a prompt; review the sync preview and diff as
+usual.
 
 ## Product plans
 
@@ -870,21 +866,9 @@ approved interface set it to draft; review the preview and approve it as usual.
 
 See [Build a whole product](build-a-whole-product.md).
 
-## Record a chat approval
+## Prompt review and approvals
 
-Show the prompt changes before asking for approval. The person may reply in their own Claude Code, Codex, Gemini, or Antigravity conversation. The agent judges the later reply. Questions, change requests and earlier messages are not approval. No exact phrase is required.
-
-After the person approves, record their exact words for each approved prompt:
-
-```sh
-pdd approve PROMPT --said - <<'PDD_SAID'
-<the person's exact words>
-PDD_SAID
-```
-
-Replace the payload line with the person's words. Choose a delimiter that does not occur as a whole line in those words. Keep the delimiter quoted. Do not put the words into shell quotes or interpolate them into a command. `--said -` reads stdin exactly, including newlines. Blank input is refused. pdd records nonblank words without a yes-word list or semantic grading.
-
-Without `--said`, a person at a normal terminal answers y/N. `pdd approve PROMPT` reads `pdd.json` from the Git root of the current checkout. `"strict_approvals": true` permits only a person at a terminal and refuses `--said`. Absent or false allows chat approvals via `--said`. Agents never edit approval fields or decide expected values. Records retain the invoking actor, time, route, exact words and prompt path/hash.
+Show prompt and Story changes in chat or on a GitHub pull request before asking for approval. The person reviews the diff and replies in chat or in GitHub PR review. Questions, change requests, and earlier messages are not approval. Agents never invent a person's decision, decide expected values, or merge without explicit permission.
 
 ## Metrics
 
@@ -1037,7 +1021,7 @@ are subsets, not extra total tokens.
 
 ## Prompt coverage and native-only declarations
 
-Plain Markdown prompts are checkable by default; the interpreter synthesizes and caches their Runtime interfaces on demand. For pure OS, network, database or byte-level plumbing with `0` Runtime Stories, declare YAML frontmatter at the top of the prompt (`kind: native-only` and a nonblank `reason` naming an effect the bound ports in [Ports and CLI](../skills/pdd/references/ports-and-cli.md) cannot fake). Prompts with an embedded Runtime interface block remain supported (`partial` or `native-only`). A checker reviews a native-only reason. Approval records the prompt's prose SHA-256 in the local approval journal without editing plain Markdown prompts. Checks show `not run: <reason>`, with no passing result. Other selected tests can run.
+Plain Markdown prompts are checkable by default; the interpreter synthesizes and caches their Runtime interfaces on demand. For pure OS, network, database or byte-level plumbing with `0` Runtime Stories, declare YAML frontmatter at the top of the prompt (`kind: native-only` and a nonblank `reason` naming an effect the bound ports in [Ports and CLI](../skills/pdd/references/ports-and-cli.md) cannot fake). Prompts with an embedded Runtime interface block remain supported (`partial` or `native-only`). A checker reviews a native-only reason. Checks show `not run: <reason>`, with no passing result. Other selected tests can run.
 
 Test output and saved PR evidence include prompt coverage counts. Text uses `Runtime coverage: N of M prompts checkable, K native-only` for native declarations and `Interpreter coverage` otherwise. A response with only passed and busy checks uses `Runtime coverage` and retains all coverage counts. Native-only rows retain their paths and reasons, including all-local selections. Invalid native-only scenarios retain refusal details as `not run (broken-test)` and are never uploaded.
 
@@ -1074,11 +1058,8 @@ question and lists big choices marked "(big)". In both modes a blocker asks: mis
 access or a secret, an issue that contradicts itself, work that cannot be done, a
 change against a person's answer to an earlier question, and a change of what blocks
 merges (a required check, a gate, CI policy). A bug fix may change a rule of an approved
-prompt without asking; the PR lists it as "(changes approved rule: OLD -> NEW)", and
-the repository's approval setting still applies to that prompt. `--mode off` saves the mode and stops the timer of this machine. In
-`observe` mode the core does everything except the merge (it also records the
-operator approval of changed prompts, with "in observe mode" in its words; in a
-`strict_approvals` repository it asks no person and lists those prompts in its note): when all checks pass, it
+prompt without asking; the PR lists it as "(changes approved rule: OLD -> NEW)". `--mode off` saves the mode and stops the timer of this machine. In
+`observe` mode the core does everything except the merge: when all checks pass, it
 posts "Autopilot would merge this PR (observe mode)" with the same evidence, keeps
 the PR open and ready for review, releases the issue and adds `pdd:would-merge`, so
 no machine builds it again. Remove the label to have it built again. Comments
@@ -1208,15 +1189,6 @@ Each tick, without AI calls:
    without `verify.paths` run path-receipt checks in compatibility advisory mode
    (emitting `Not proved` with zero forged `proved` receipts while still strictly
    enforcing protected paths, real-E2E validation, blind review, full tests, and CI).
-   In `auto` and `observe` mode your `pdd autopilot start` is the approval of the job's
-   prompt changes: the job records it for each changed prompt with `pdd approve PROMPT --said
-   -`, in the PR. The words start with "Operator action: pdd autopilot start" and
-   name the real mode, the repository, the machine id and the time of the start. A changed prompt that
-   still has a draft interface is red: a draft, a stale or broken interface, or an
-   approval that `pdd approve` did not record. In a repository with `strict_approvals`,
-   the job does not approve: in `auto` mode Autopilot asks a person
-   (`pdd:needs-decision`) and keeps the PR open; in `observe` mode it asks no one and
-   lists those prompts in its "would merge" note.
 
 Only a real Runtime FAIL blocks a merge. A failed check is a FAIL, also when its check
 has no verdict because another step had no answer. When Runtime cannot check a change

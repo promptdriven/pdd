@@ -721,10 +721,9 @@ the agent's shell finds another pdd or the installed skills have another version
 status shows those notes beside the running process. They file nothing and never end a
 job. The briefs use it (#3177): build and repair rule 6 says "Run pdd as "$PDD_CLI" (for
 example "$PDD_CLI" test STORY), never as a bare pdd: your shell can find an older pdd
-first on PATH. $PDD_CLI is the pdd of this Autopilot."; the approval command of rule 9
-is `printf '%s' WORDS | "$PDD_CLI" approve PROMPT --said -`; the conflict and review
+first on PATH. $PDD_CLI is the pdd of this Autopilot."; the conflict and review
 briefs say "When you run pdd, run it as "$PDD_CLI", never as a bare pdd."; and the red
-texts that name a pdd command name `"$PDD_CLI" test` and `"$PDD_CLI" approve`. Build and
+texts that name a pdd command name `"$PDD_CLI" test`. Build and
 repair rule 1 says "Read these PDD skills and their step files from "$PDD_SKILLS" (for
 example "$PDD_SKILLS/pdd-feature/SKILL.md"), never from ~/.agents/skills or
 ~/.claude/skills: the installed copies can be older than this Autopilot."; the review
@@ -779,9 +778,8 @@ the evidence record.
   change an approved rule** (Serhan, D1, Nov 11: "it can change the rule without you
   needed if its a bug"): a pdd-bug or pdd-small-change run whose fix is a change of a
   rule in an approved prompt makes it without asking and lists it under `Choices
-  Autopilot made:` with `(changes approved rule: OLD -> NEW)`, so a person sees it; the
-  repository's approval setting still applies to the changed prompt (strict approvals
-  wait for a person's approval, as before), but the choice rule never asks for it.
+  Autopilot made:` with `(changes approved rule: OLD -> NEW)`, so a person sees it; any
+  required GitHub PR review still applies before merge, and the choice rule never asks for it.
   **Two cases always go to a person**, in every run kind and mode (audit, Nov 11): a
   change against a person's recorded answer to an earlier question (an answer in the
   brief, a decision issue), and a change of what blocks merges (a new required check, a
@@ -846,25 +844,7 @@ the evidence record.
   error in the result's `runtime` with kind `runtime`. One `Evidence:` line
   in the PR body and the same text as the result's `evidence` (below). No review
   verdict or review claim (for example "Review: no must-fix") in the PR body or a
-  comment: only the core's fresh reviewer gives one. **Approval (auto and observe
-  mode):** observe mode does everything that auto mode does except the merge, so the
-  operator's start is the approval of the job's prompt changes in both. For each changed
-  `*.prompt.md` that has a Runtime interface block, after its checks pass, the job runs
-  `printf '%s' 'WORDS' | pdd approve PROMPT --said -` (trial B5: a prompt with no
-  interface block needs no approval, as the prompt gate says; the rule says "A prompt
-  with no Runtime interface block needs no approval: do not run pdd approve for it, and
-  do not invent an interface.") with WORDS exactly `Operator action: pdd autopilot start --engine
-  core in MODE mode for REPO on MACHINE-ID at TIME` (MODE is the real mode, `auto` or
-  `observe`, because the words must be true; the machine id, never the host; TIME =
-  `state.startedAt`, else `state.activatedAt`) and commits the result in the PR. The
-  merge check makes an unapproved changed prompt red in both modes, with the same
-  command, so a repair records it. In a repository whose worktree `pdd.json` has
-  `strict_approvals: true` the rule says instead: do not run `pdd approve` and do not
-  edit an interface status; in auto mode "Autopilot asks a person"; in observe mode
-  "Autopilot lists the prompts for a person in its note": observe asks no one (a
-  question only makes sense when a merge would follow), adds no `pdd:needs-decision`,
-  and its would-merge note lists `Prompts that need a person's approval before a merge
-  (strict_approvals): …`. Push the job
+  comment: only the core's fresh reviewer gives one. Push the job
   branch and either let `openPullRequest(ctx, job, options)` open/update the PR from the result's `head`, `title` and `summary` or open one PR against BASE with `Fixes #N`; `openPullRequest` (using a temporary scratch root cleaned up on exit without overwriting saved job files or polluting `job.worktree` when called standalone) deterministically stamps missing closing keywords (`Fixes #N` / `Closes #N`), `Path:` lines (from the Git diff and base/head `ownerRead`, grouping `Path: a` under the changed owner prompt even on multi-owner modules and placing modified existing `.prompt.md` files on `Path: a`), `Runtime:` lines (from verified saved `pdd test` checks at `head` or honest `not run` / `FAIL` state, never inventing a pass), and the `Evidence:` line in code (failing closed on malformed explicit `tests`/`vectors`/`formal` inputs or omitted `tests` without a valid existing `Evidence:` `tests=` claim, preserving contradictory test counts so `evidenceReds` catches them, and syncing `vectors=`/`formal=` counts in `mergeCheck` once engine replays finish on stamped heads) so the agent does not have to hand-type machine metadata strings. Never merge, push to BASE,
   force-push or close the issue, and never assign it or change its labels. The result
   file is JSON: `outcome` `pr` with `head`, optional `pr`, `title`, `summary`, optional `skill` (`small-change`, `bug` or `feature`), `tests`, `choices`, `promptChanged` (Boolean),
@@ -1164,9 +1144,7 @@ remove `pdd:working`; clean up locally with outcome `needs-person`. The slot is 
 for it in the machine state (`decisionSeen`, so each change is read once), the core
 reads the answer below; with a trusted reply after the question (one that starts with
 an option letter, or any other), it removes `pdd:needs-decision` itself and the issue is
-ready in the same tick. A strict repository's prompt approval question (its text names
-`(strict_approvals)`) is not ended by a reply: it waits for the approval and the label
-removal. A trusted person's removal of the label still works. When the core claims an issue with comments, it reads
+ready in the same tick. A trusted person's removal of the label still works. When the core claims an issue with comments, it reads
 the latest question comment that this engine posted (author = the engine's own login,
 `GET user`, and a marker that names this issue—either
 `<!-- pdd:autopilot-core:question:N:JOB-ID -->` or
@@ -1371,45 +1349,15 @@ runs until its end):
    `shareCpus` is configured (`ports.machine` or `ports.env.PDD_CHECK_CPUS`, or directly on a
    `node --test` command). A merge base read error is not red: the engine
    warns, and the record keeps the error. The port gets `{root, tree, head, base:
-   true}` for the merge base read. **Prompt gate**
-   (once per head, saved as `approvals {head, strict, problems}`): after a fetch of the
-   base and the branch, each changed prompt of `git diff --name-status --find-renames
-   origin/BASE...HEAD` (added, modified, renamed or copied; the new path) is read in a
-   clean checkout of the head (`worktrees/N-approve`) with the
-   [Runtime seam](runtime-seam.prompt.md)'s `readPrompt` and `promptRefusal`. Plain
-   Markdown prompts (`interface-missing`) and valid frontmatter `kind: native-only` prompts
-   pass without embedded-block status checks (removing an embedded Runtime interface block
-   to leave plain Markdown is valid; in a `strict` repository, a pure rename or stripping
-   an approved, current Runtime interface block without changing the prose keeps the
-   approval that Git has, while a changed plain or frontmatter prompt requires a trusted
-   GitHub review or a terminal `pdd approve` journal entry for its `proseSha256`). For prompts with an embedded Runtime interface block, a
-   problem is: a refusal (two blocks, invalid JSON, a bad status, a stale prose hash), a
-   status other than `approved`, or an approved status with
-   no approval: not the same interface and prose hash as the base version at the old
-   path (a pure rename keeps the approval that Git has), and no entry for that path and
-   prose hash in the approval journal of the repository's common Git dir
-   (`readPromptApprovals`). Its finding says: set the status to "draft", then run `pdd
-   approve` (it records an approval only for a draft or stale prompt). A strict
-   repository accepts only a person's approval: a trusted APPROVED review of the head
-   on GitHub, or a journal entry made at a terminal. `strict` is true
-   when `strict_approvals` is true in `pdd.json` on the base or at the head. In auto
-   mode, problems in a strict repository end the job as **needs a person** (below)
-   with the question "PR #P changes prompts that need a person's approval in this
-   repository (strict_approvals): … Please approve the PR on GitHub (or approve each
-   prompt with pdd approve on its branch and push), then remove pdd:needs-decision:
-   Autopilot checks the same PR again, with no new build. To give up on it, close the
-   PR.", the PR stays open with one note `<!-- pdd:autopilot-core:needs-approval:P -->`.
-   After a trusted removal of the label (or after `pdd autopilot release N` when an open
-   core PR carries this engine's `<!-- pdd:autopilot-core:end-pr:N:... -->` note), intake
+   true}` for the merge base read. After a trusted removal of `pdd:needs-decision` on an
+   open PR waiting on a human review or after `pdd autopilot release N` when an open
+   core PR carries this engine's `<!-- pdd:autopilot-core:end-pr:N:... -->` or
+   `<!-- pdd:autopilot-core:needs-approval:... -->` note, intake
    resumes that PR (phase `pr`, its branch in the job worktree, `resumed: true`, marking a
    draft PR ready for review before merge) instead of closing it as `superseded` and starting
    a new build (a failed fetch or
    checkout of that branch undoes the claim and removes the worktree, as other intake
-   failures do; the next tick tries again); in other repositories they are red,
-   with the approval command and words in the finding (one repair, then END as usual).
-   Observe mode approves as auto mode does, with "in observe mode" in the words (above),
-   so problems outside a strict repository are red there too. In a strict repository
-   observe mode asks no person: it lists the problems in its "would merge" note.
+   failures do; the next tick tries again).
    **Path checks** (debate A section 6.3 and #3239; no AI, once per head and PR body,
    saved as `paths`, and read again when its result has unchecked files and the base
    tip moved; the rules are the pure, exported `pathRules({changed, baseFiles, before,
@@ -1847,7 +1795,7 @@ runs until its end):
      worker slot, and post the exact 3-line Human Verification Card (`Passed offline:`,
      `Unverified boundary:`, `Verify command:`).
 6. **Merge lane** (one final step per repository). All Autopilot `auto` merges and `observe` validations route through `pdd:merge-lane` (never a separate landing queue; legacy `autopilot.mergeQueue` in `pdd.json` is ignored). A green PR (CI green, local or none,
-   review PASS, suite pass, and Validator v2 `eligible: true`) enters the lane. Before entering the lane across all green PR states (`green`, `local`, `none`), read server-side branch protection and rulesets on `BASE` (`GET repos/REPO/branches/BASE/protection/required_pull_request_reviews` and `rules/branches/BASE`, preserving an explicit `required_approving_review_count: 0`, treating only `404` as no review protection, and surfacing non-`200`/non-`404` responses as retryable `{code: "github"}` waits rather than merging). When `requiredApprovals > 0`, count distinct non-engine, non-bot (`user.type !== "Bot"` and no `[bot]` suffix) trusted (`author_association` in `OWNER`, `MEMBER`, `COLLABORATOR`, or `ports.trusted` when `author_association` is absent) `APPROVED` reviews whose `commit_id` matches `job.head` case-insensitively (surfacing transient review API errors as retryable `{code: "github"}` waits rather than swallowing them into `0` approvals). When approvals are still missing, `auto` mode stops checks and parks as `needs-person` (`keepPr: true`, `branchApproval: true`, posting a branch-protection PR review wait comment rather than the prompt-change approval comment, and asking a trusted person to approve on GitHub and remove `pdd:needs-decision`) before merging, while `observe` mode prepares full evidence, notes the required human approval on the `would-merge` comment, and leaves merging to the person. The lane is the label `pdd:merge-lane` on
+   review PASS, suite pass, and Validator v2 `eligible: true`) enters the lane. Before entering the lane across all green PR states (`green`, `local`, `none`), read server-side branch protection and rulesets on `BASE` (`GET repos/REPO/branches/BASE/protection/required_pull_request_reviews` and `rules/branches/BASE`, preserving an explicit `required_approving_review_count: 0`, treating only `404` as no review protection, and surfacing non-`200`/non-`404` responses as retryable `{code: "github"}` waits rather than merging). When `requiredApprovals > 0`, count distinct non-engine, non-bot (`user.type !== "Bot"` and no `[bot]` suffix) trusted (`author_association` in `OWNER`, `MEMBER`, `COLLABORATOR`, or `ports.trusted` when `author_association` is absent) `APPROVED` reviews whose `commit_id` matches `job.head` case-insensitively (surfacing transient review API errors as retryable `{code: "github"}` waits rather than swallowing them into `0` approvals). When approvals are still missing, `auto` mode stops checks and parks as `needs-person` (`keepPr: true`, `branchApproval: true`, posting a branch-protection PR review wait comment and asking a trusted person to approve on GitHub and remove `pdd:needs-decision`) before merging, while `observe` mode prepares full evidence, notes the required human approval on the `would-merge` comment, and leaves merging to the person. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
    PRs only). Because that label search index can lag behind both `POST` and `DELETE` or
    merge writes, every holder read (before `POST`, on the post-`POST` readback, and in
