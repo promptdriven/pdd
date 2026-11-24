@@ -122,7 +122,7 @@ test('INSTALL2: pdd setup installs missing skills into each agent user folder, s
   for (const name of RETIRED_SKILL_NAMES) assert.equal(PDD_SKILL_NAMES.includes(name), false, name);
   const skillLabel = `${PDD_SKILL_NAMES.length} PDD skill${PDD_SKILL_NAMES.length === 1 ? '' : 's'}`;
   for (const skillRoot of ROOTS) {
-    assert.ok(first.stdout.includes(`Installed ${skillLabel} to ${join(home, skillRoot)}: ${PDD_SKILL_NAMES.join(', ')}\n`), first.stdout);
+    assert.ok(first.stdout.includes(`Installed ${skillLabel} to ~/${skillRoot}: ${PDD_SKILL_NAMES.join(', ')}\n`), first.stdout);
     assert.deepEqual(readdirSync(join(home, skillRoot)).sort(), [...PDD_SKILL_NAMES].sort());
     for (const name of PDD_SKILL_NAMES) {
       const installed = join(home, skillRoot, name), source = join(pkg, 'skills', name);
@@ -135,7 +135,7 @@ test('INSTALL2: pdd setup installs missing skills into each agent user folder, s
   const inodes = ROOTS.map(skillRoot => statSync(join(home, skillRoot, 'pdd')).ino);
   const second = run(['setup']);
   assert.equal(second.status, 0, second.stderr);
-  for (const skillRoot of ROOTS) assert.ok(second.stdout.includes(`PDD skills found in ${join(home, skillRoot)}\n`), second.stdout);
+  for (const skillRoot of ROOTS) assert.ok(second.stdout.includes(`PDD skills found in ~/${skillRoot}\n`), second.stdout);
   assert.doesNotMatch(second.stdout, /Installed|Updated/);
   assert.deepEqual(ROOTS.map(skillRoot => statSync(join(home, skillRoot, 'pdd')).ino), inodes);
 });
@@ -258,8 +258,8 @@ test('INSTALL7: pdd setup names each skill that it updated', t => {
   writeFileSync(marker, JSON.stringify({ ...JSON.parse(readFileSync(marker, 'utf8')), version: '0.0.1' }));
   const result = run(['setup']);
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout.includes(`Updated 1 PDD skill in ${join(home, '.agents/skills')}: pdd\n`), result.stdout);
-  assert.ok(result.stdout.includes(`PDD skills found in ${join(home, '.agents/skills')}\n`), result.stdout);
+  assert.ok(result.stdout.includes(`Updated 1 PDD skill in ~/.agents/skills: pdd\n`), result.stdout);
+  assert.ok(result.stdout.includes(`PDD skills found in ~/.agents/skills\n`), result.stdout);
 });
 
 // Wrong (0.1.6 tester): setup said "PDD skills found in ~/.agents/skills" for npx skills copies that were older than this
@@ -314,7 +314,7 @@ test('INSTALL9: the SKILL.md version line decides older or different, and pdd --
   assert.deepEqual(stderrOf(), []);
   const repairedDiff = run(['setup']);
   assert.equal(repairedDiff.status, 0, repairedDiff.stderr);
-  assert.ok(repairedDiff.stdout.includes(`Updated 1 PDD skill in ${join(home, '.agents/skills')}: pdd`), repairedDiff.stdout);
+  assert.ok(repairedDiff.stdout.includes(`Updated 1 PDD skill in ~/.agents/skills: pdd`), repairedDiff.stdout);
   assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd', MARKER), 'utf8')).version, version());
   // An older version line (unmarked): --version prints the update line on stderr and only the version on stdout.
   rmSync(join(home, '.agents/skills/pdd', MARKER), { force: true });

@@ -10,6 +10,18 @@ import { parse } from './shared/toml/parse.js';
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const same = (actual, wanted) => object(actual) && Object.entries(wanted).every(([key, value]) => JSON.stringify(actual[key]) === JSON.stringify(value));
 
+function displayPath(filePath, home) {
+  if (!home || !filePath) return filePath;
+  const normHome = resolve(home).replace(/[\\/]+$/, '');
+  if (!normHome) return filePath;
+  const normFile = resolve(filePath);
+  if (normFile === normHome) return '~';
+  if (normFile.startsWith(`${normHome}/`) || normFile.startsWith(`${normHome}\\`)) {
+    return `~${normFile.slice(normHome.length)}`;
+  }
+  return filePath;
+}
+
 // Recognize a previously registered PDD MCP server (e.g. pointing to an older Node or package path)
 // so setup updates stale entries cleanly instead of failing on upgrades.
 function isStalePddEntry(entry) {
@@ -236,36 +248,91 @@ export async function setupAgentMcp(
   if (!changes.length) {
     if (!hadError && !upgradeOnly) {
       say(candidates.length
-        ? 'PDD Simulator MCP tools already registered. No config change.'
+        ? 'PDD MCP tools already registered. No config change.'
         : 'No Codex, Claude Code, Gemini or Antigravity installation found. No config change.');
     }
     return hadError ? 1 : 0;
   }
 
   if (!upgradeOnly) {
-    for (const change of changes) say(`${change.name}: ${change.file}\n${change.preview}`);
-    say('Only the PDD server is approved to run on your intent. Runs use the Simulator call budget and appear on its page. Claude Code keeps its normal tool approval controls.');
+    const padWidth = Math.max(14, ...changes.map(change => change.name.length + 2));
+    say('MCP tools to register (pdd mcp):');
+    for (const change of changes) {
+      const suffix = change.updating ? ' (update)' : '';
+      say(`  • ${change.name.padEnd(padWidth)}${displayPath(change.file, home)}${suffix}`);
+    }
 
     if (!yes) {
       if (!interactive) {
         say('PDD MCP registration skipped. No config change.');
         return hadError ? 1 : 0;
       }
-      const question = 'Register these PDD Simulator MCP tools? [y/N] ';
-      let answer;
-      if (confirm) {
-        stdout.write(question);
-        answer = await confirm(question);
-      } else if (stdin.isTTY && stdout.isTTY) {
-        const rl = createInterface({ input: stdin, output: stdout });
-        try {
-          answer = await new Promise(resolveAnswer => {
-            rl.once('close', () => resolveAnswer(undefined));
-            rl.question(question, resolveAnswer);
-          });
-        } finally { rl.close(); }
+      const targetLabel = changes.length === 1 ? 'this 1 config' : `these ${changes.length} configs`;
+      const showDetails = () => {
+        stdout.write('\n');
+        for (const change of changes) say(`${change.name}: ${change.file}\n${change.preview}`);
+        say('Only the PDD server is approved to run on your intent. Claude Code keeps its normal tool approval controls.');
+      };
+      let consented = false;
+      let detailsShown = false;
+      const rl = !confirm && stdin.isTTY && stdout.isTTY ? createInterface({ input: stdin, output: stdout }) : null;
+      const queuedLines = [];
+      let pendingResolve = null;
+      let rlClosed = false;
+      if (rl) {
+        rl.on('line', value => {
+          if (pendingResolve) {
+            const done = pendingResolve;
+            pendingResolve = null;
+            done(value);
+          } else {
+            queuedLines.push(value);
+          }
+        });
+        rl.once('SIGINT', () => rl.close());
+        rl.once('close', () => {
+          rlClosed = true;
+          if (pendingResolve) {
+            const done = pendingResolve;
+            pendingResolve = null;
+            done(undefined);
+          }
+        });
       }
-      if (typeof answer !== 'string' || answer.trim().toLowerCase() !== 'y') {
+      const ask = async question => {
+        if (confirm) {
+          stdout.write(question);
+          return confirm(question);
+        }
+        if (!rl) return undefined;
+        stdout.write(question);
+        if (queuedLines.length > 0) return queuedLines.shift();
+        if (rlClosed) return undefined;
+        return new Promise(resolveAnswer => {
+          pendingResolve = resolveAnswer;
+        });
+      };
+      try {
+        stdout.write('\n');
+        for (let turn = 0; turn < 16; turn++) {
+          const question = detailsShown
+            ? `Register PDD MCP tools in ${targetLabel}? [y/N] `
+            : `Register PDD MCP tools in ${targetLabel}? [y/N/d] `;
+          const answer = await ask(question);
+          const normalized = typeof answer === 'string' ? answer.trim().toLowerCase() : '';
+          if (normalized === 'd' || normalized === 'details') {
+            showDetails();
+            detailsShown = true;
+            stdout.write('\n');
+            continue;
+          }
+          consented = normalized === 'y';
+          break;
+        }
+      } finally {
+        rl?.close();
+      }
+      if (!consented) {
         say('PDD MCP registration skipped. No config change.');
         return hadError ? 1 : 0;
       }
@@ -291,7 +358,7 @@ export async function setupAgentMcp(
       safePath(change.file, change.boundary);
       const mode = change.before === null ? 0o600 : existingMode(change.file);
       writeAtomicPrivate(null, change.file, change.after, 0o700, mode);
-      say(`${change.updating ? 'Updated' : 'Registered'} PDD Simulator MCP tools for ${change.name} in ${change.file}.`);
+      say(`${change.updating ? 'Updated' : 'Registered'} PDD MCP tools for ${change.name} in ${displayPath(change.file, home)}.`);
     } catch (error) {
       const warning = error.code === 'PDD_MCP_SYMLINK';
       stderr.write(`pdd setup: ${warning ? 'warning: ' : ''}${String(error.message).split(/[\r\n]/)[0]}\n`);

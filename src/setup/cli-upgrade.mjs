@@ -126,7 +126,7 @@ function parseSetupUpgradeOutput(rawStdout) {
       });
       continue;
     }
-    if (/^Updated PDD Simulator MCP tools /.test(line)) {
+    if (/^Updated PDD (?:Simulator )?MCP tools /.test(line)) {
       updatedMcp.push(line);
     }
   }

@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, isAbsolute, join } from 'node:path';
+import { basename, delimiter, isAbsolute, join, resolve } from 'node:path';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { gitContext as defaultGitContext, gitFiles } from './shared/git-context.mjs';
@@ -112,6 +112,22 @@ async function autopilotGithub(module, name, input, ports, fallback = '') {
 }
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
+const formatRetiredNames = folders => {
+  const names = folders.map(folder => basename(folder));
+  if (names.length <= 3) return names.join(', ');
+  return `${names.slice(0, 2).join(', ')}, +${names.length - 2} more (${names.length} total)`;
+};
+const displayPath = (filePath, home) => {
+  if (!home || !filePath) return filePath;
+  const normHome = resolve(home).replace(/[\\/]+$/, '');
+  if (!normHome) return filePath;
+  const normFile = resolve(filePath);
+  if (normFile === normHome) return '~';
+  if (normFile.startsWith(`${normHome}/`) || normFile.startsWith(`${normHome}\\`)) {
+    return `~${normFile.slice(normHome.length)}`;
+  }
+  return filePath;
+};
 const canonicalFolder = folder => { try { return realpathSync(folder); } catch { return folder; } };
 const isProjectFolder = (folder, scope, cwd, home) => {
   if (scope === 'project') return true;
@@ -526,20 +542,21 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           ...(!setupSkills && env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
           ...(plan.options['--skills-dir'] !== undefined ? { skillsDir: plan.options['--skills-dir'] } : {}),
         };
+        const showPath = folder => displayPath(folder, setupHome);
         for (const result of skillsFn(skillOpts)) {
-          if (result.removed?.length) line(stdout, `Removed retired PDD skills from ${result.root}: ${skillNames(result.removed)}`);
+          if (result.removed?.length) line(stdout, `Removed retired PDD skills from ${showPath(result.root)}: ${formatRetiredNames(result.removed)}`);
           if (result.pluginManaged) {
-            if (!upgrade) line(stdout, `PDD skills for ${result.agent} are managed by an installed plugin (${result.found}). Skipping duplicate copy.`);
+            if (!upgrade) line(stdout, `PDD skills for ${result.agent} are managed by an installed plugin (${showPath(result.found)}). Skipping duplicate copy.`);
             if (result.error) { line(stderr, `pdd setup: the PDD skills could not be cleaned in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
             continue;
           }
-          if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
+          if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${showPath(result.root)}: ${skillNames(result.updated)}`);
           if (result.found && result.stale) {
             reportedStaleRoots.add(canonicalFolder(result.found));
             const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
             line(stdout, staleLine(result, version, cwd, setupHome));
-          } else if (result.found && !upgrade) line(stdout, `PDD skills found in ${result.found}`);
-          else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${result.root}: ${skillNames(result.installed)}`);
+          } else if (result.found && !upgrade) line(stdout, `PDD skills found in ${showPath(result.found)}`);
+          else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${showPath(result.root)}: ${skillNames(result.installed)}`);
           if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
         }
         if (upgrade && !setupSkills && plan.options['--skills-dir'] === undefined) {
