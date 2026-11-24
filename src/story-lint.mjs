@@ -1,14 +1,7 @@
 // Prompt: prompts/cli/story-lint.prompt.md
 import { isAbsolute } from 'node:path';
 
-const IMPL_DIR = /(?:^|[\s"'(\[`])((?:src|lib|internal|pkg|cmd|__tests__)\/[A-Za-z0-9_./-]+|(?:dist|build)\/[A-Za-z0-9_./-]*[./][A-Za-z0-9_./-]+|prompts\/(?:cli|tests?|__tests__)\/[A-Za-z0-9_./-]+)/;
 const RUNNER_CMD = /(["`])\s*(?:node|npm|pnpm|yarn|pytest|cargo|go)\s+[^"`\r\n]+\1/g;
-const URL_SPAN = /https?:\/\/\S+/gi;
-const CODE_EXT = /(?:^|[\s"'(\[`])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|java|kt|rb|php|cs|cpp|cc|c|hpp|h|swift)|[A-Za-z0-9_.-]+\.(?:mjs|cjs|ts|tsx|jsx)|(?:test_[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+(?:_test|\.(?:test|spec)))\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|java|kt|rb|php|cs|cpp|cc|c|hpp|h|swift))\b/;
-const CODE_SYNTAX = /\b(?:export\s+(?:async\s+)?(?:function|const|class|default)\b|async\s+function\b|function\s+[A-Za-z_$][\w$]*\s*\()|\s=>\s/;
-const CALL_SIG = /\b(?:[a-z]+[A-Z][\w$]*\s*\([^)\r\n]*\)|[a-z]+_[a-z0-9_]*\s*\(\s*[A-Za-z_$][\w$]*\s*,[^)\r\n]*\))/;
-const CODE_TERMS = /\b(?:AST|Abstract Syntax Tree|bit-flips?|bit-flipping|bitmasks?|0x[0-9a-fA-F]{2,}|Uint8Array|Int32Array|Float64Array|ArrayBuffer|Buffer\.from|RegExp|process\.exit|child_process|fs\.(?:read|write|lstat|stat|open|exists)\w*|TypeError|ReferenceError|SyntaxError)\b/;
-const RAW_DIGEST = /\b(?:sha256:\s*[a-f0-9]{7,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-f0-9]{64}|[a-f0-9]{40})\b/i;
 const GENERIC_ROLE = /\bAs\s+(?:a|an|the)\s+(?:(?:end[- ])?user|system|caller)(?=\s*(?:[,;.]|$|\bI\s+(?:want|can|need)\b))/i;
 const UI_LITERAL = /"[^"\r\n]+"|(?<![A-Za-z0-9])'[^'\r\n]+'(?![A-Za-z0-9])/g;
 const GROUNDED_OUTCOME = /\b(?:exits?\s+with\s+(?:code|status)\s+\d+|HTTP\s+\d{3}|status\s+(?:code\s+)?\d+|\d+\s+times?|saves\s+nothing)\b/i;
@@ -36,18 +29,6 @@ const trimExcerpt = line => {
   return trimmed.length <= 140 ? trimmed : `${trimmed.slice(0, 139)}…`;
 };
 
-function findImplPath(line) {
-  const dir = IMPL_DIR.exec(line);
-  if (dir) return dir[1].replace(/[.,;:!?)]+$/, '');
-  const ext = CODE_EXT.exec(line.replace(RUNNER_CMD, ' ').replace(URL_SPAN, ' '));
-  return ext ? ext[1] : null;
-}
-
-function findCodeInternals(line) {
-  const match = CODE_SYNTAX.exec(line) ?? CALL_SIG.exec(line) ?? CODE_TERMS.exec(line);
-  return match ? match[0].trim() : null;
-}
-
 function findVagueCriterion(line) {
   const withoutCmds = line.replace(RUNNER_CMD, ' ');
   const unquoted = withoutCmds.replace(UI_LITERAL, ' ');
@@ -70,21 +51,6 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
     const excerpt = trimExcerpt(rawLine);
     const push = (code, message, fix) => problems.push({ path, line: lineNo, code, message, fix, excerpt });
 
-    const implPath = findImplPath(line);
-    if (implPath) push('story-implementation-path',
-      `Implementation path "${implPath}" belongs in module prompts or tests, not the Story. Describe what the person runs or sees instead of naming code files.`,
-      `Remove "${implPath}" from ${path}:${lineNo} and describe the visible command, screen, or outcome instead`);
-
-    const internal = findCodeInternals(line);
-    if (internal) push('story-code-internals',
-      `Low-level code detail "${internal}" leaks implementation internals into the Story. State observable user inputs, outputs or exit behavior instead (put formal invariants under "## Rules to check").`,
-      `Replace "${internal}" at ${path}:${lineNo} with observable inputs, outputs, or exit behavior (move technical invariants to .prompt.md)`);
-
-    const digest = RAW_DIGEST.exec(line)?.[0];
-    if (digest) push('story-raw-digest',
-      `Raw hash or UUID "${digest}" pins internal machine state in the Story. Describe the visible behavior or rule without hard-coding digests, commit hashes or UUIDs.`,
-      `Remove raw digest/UUID "${digest}" at ${path}:${lineNo} and state the user-visible rule instead`);
-
     const role = GENERIC_ROLE.exec(line)?.[0];
     if (role) push('story-generic-role',
       `Generic role "${role}" hides who uses the behavior. Name a real person or role (for example "As a customer", "As a shop owner" or "As a developer who runs pdd test").`,
@@ -100,11 +66,18 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i], rawLine = rawLines[i] ?? line;
-    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
+    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
     if (fenceMatch) {
-      const token = fenceMatch[1];
-      if (!fence) { fence = { char: token[0], len: token.length }; continue; }
-      if (token[0] === fence.char && token.length >= fence.len && /^\s*(?:`{3,}|~{3,})\s*$/.test(line)) { fence = null; continue; }
+      const token = fenceMatch[1], rest = fenceMatch[2];
+      if (!fence) {
+        if (!(token[0] === '`' && rest.includes('`'))) {
+          fence = { char: token[0], len: token.length };
+          continue;
+        }
+      } else if (token[0] === fence.char && token.length >= fence.len && /^\s*$/.test(rest)) {
+        fence = null;
+        continue;
+      }
     }
     if (fence) continue;
     if (/^#\s+/.test(line)) {
@@ -194,6 +167,6 @@ export function formatStoryLint(result) {
     rows.push(`  ${path}:${line} [${code}] ${message}`);
     if (excerpt) rows.push(`    > ${excerpt}`);
   }
-  rows.push('Rewrite the Story in user-observable terms: name who uses the behavior, what they do and what they see; keep file paths, function signatures, hashes and bit-level internals in module prompts or tests.');
+  rows.push('Rewrite the Story in user-observable terms: name who uses the behavior, what they do and what they see; keep implementation details in module prompts or tests.');
   return rows.join('\n');
 }

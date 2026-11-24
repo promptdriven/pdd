@@ -114,8 +114,9 @@ export function discoverTestAndAppMaps({ root, files, policy, safeRead }) {
     parsedTests.set(testFile, { doc, error });
     if (!isFixturePath(testFile) && Array.isArray(doc?.app_maps)) {
       for (const candidate of doc.app_maps) {
-        if (typeof candidate === 'string' && !isFixturePath(candidate) && workspace.allows(policy, candidate)) {
-          mapPaths.add(candidate);
+        const normalized = typeof candidate === 'string' ? candidate.trim().replace(/^\.\//, '') : '';
+        if (normalized && !isFixturePath(normalized) && workspace.allows(policy, normalized)) {
+          mapPaths.add(normalized);
         }
       }
     }
@@ -141,6 +142,7 @@ export function lintAppMaps({
   root,
   promptRecords,
   promptFilter,
+  appMapFilter = null,
   parsedAppMaps,
   appMapParseErrors,
   mapPaths,
@@ -154,6 +156,7 @@ export function lintAppMaps({
     const cssPaths = new Set();
     const inspectedPrompts = new Set(promptRecords.map(record => record.path));
     for (const mapPath of [...mapPaths].sort()) {
+      if (appMapFilter && !appMapFilter.has(mapPath)) continue;
       const doc = parsedAppMaps.get(mapPath);
       if (
         !doc
@@ -198,8 +201,9 @@ export function lintAppMaps({
   }
 
   for (const mapPath of [...mapPaths].sort()) {
+    if (appMapFilter && !appMapFilter.has(mapPath)) continue;
     if (appMapParseErrors.has(mapPath)) {
-      if (!promptFilter) {
+      if (appMapFilter || !promptFilter) {
         const text = `Warning: ${mapPath}: app-map.json is not valid JSON; fix syntax (omit "schema_version" for compact app-map.json or set "schema_version": "prompt-runtime.app-map.v1").`;
         warnings.push({ key: `${mapPath}\0mapjson`, text });
       }
@@ -211,9 +215,11 @@ export function lintAppMaps({
       ? mapDoc.screens.map((s, idx) => [s, idx]).filter(([s]) => s && typeof s === 'object' && !Array.isArray(s))
       : [];
     const timers = Array.isArray(mapDoc.timers) ? mapDoc.timers : [];
-    if (promptFilter) {
+    const handlers = Array.isArray(mapDoc.handlers) ? mapDoc.handlers : [];
+    if (!appMapFilter && promptFilter) {
       const referenced = new Set([
         ...screenEntries.map(([s]) => s.prompt_path).filter(p => typeof p === 'string'),
+        ...handlers.map(h => h?.handler?.prompt_path).filter(p => typeof p === 'string'),
         ...timers.map(t => t?.handler?.prompt_path).filter(p => typeof p === 'string'),
       ]);
       if (![...referenced].some(p => promptFilter.has(p))) continue;
@@ -222,7 +228,7 @@ export function lintAppMaps({
       const text = `Warning: ${mapPath}: app-map schema_version ${JSON.stringify(mapDoc.schema_version ?? null)} is invalid; set "schema_version": "prompt-runtime.app-map.v1" (or omit it for compact app-map.json).`;
       warnings.push({ key: `${mapPath}\0mapschema`, text });
     }
-    if (!screenEntries.length && !promptFilter) {
+    if (!screenEntries.length && (appMapFilter || !promptFilter)) {
       const text = `Warning: ${mapPath}: app-map.json must declare a non-empty "screens" array.`;
       warnings.push({ key: `${mapPath}\0mapscreens`, text });
     }

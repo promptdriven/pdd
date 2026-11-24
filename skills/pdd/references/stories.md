@@ -35,7 +35,7 @@ As a person who keeps a to-do list in the terminal, I want to mark a task as don
 ### Five authoring rules
 
 1. Name a specific role (`"a customer"`, `"a shop owner"`) and concrete values (`"Sam"`, `"08:30"`, `"$9.00"`), never generic `"a user"` or `"the system"`.
-2. Keep implementation out of Stories — no file paths (`src/...`), function signatures, schema keys, raw hashes/UUIDs, or vague fillers (`"correctly"`, `"gracefully"`).
+2. Keep implementation code and internal plumbing out of Stories (including inside fenced code blocks) — move implementation details to the owning `.prompt.md` and large sample fixtures to `tests/` or `fixtures/`. Exact values and short examples are fine when they define what the user actually sees; avoid vague fillers (`"correctly"`, `"gracefully"`).
 3. Write `1` observable check per material claim without piling redundant assertions onto one claim.
 4. Ground negative and failure criteria with `calls = 0`, unchanged `world` state, or `simulation_overrides`.
 5. Keep long fixtures in the paired scenario JSON, not inline in the Story.
