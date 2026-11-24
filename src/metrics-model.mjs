@@ -351,7 +351,7 @@ function normalizeGateState(gate, rawValue) {
       if (val === 'fail') return 'fail';
       return 'na';
     case 'formal':
-      if (val === 'proved' || val === 'bounded' || val === 'pass') return 'pass';
+      if (val === 'proved' || val === 'bounded' || val === 'proved_solver_code' || val === 'pass') return 'pass';
       if (val === 'failed' || val === 'fail') return 'fail';
       return 'na';
     case 'suite':
