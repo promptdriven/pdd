@@ -9,7 +9,9 @@ import {runAutopilotDoctor} from '../src/autopilot-doctor.mjs';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {runAutopilotLauncher} from '../src/autopilot-launcher.mjs';
 import {doctorFixture} from './helpers/doctor-fixture.mjs';
-import {checkRuntimeHealth} from '../src/runtime-seam.mjs';
+import {checkRuntimeHealth, runtimePreflightSlice} from '../src/runtime-seam.mjs';
+
+const {proseSha256} = runtimePreflightSlice();
 
 const invoke=async(f,command='doctor')=>{
   let stdout='',stderr='';
@@ -60,7 +62,14 @@ test('doctor: advisory findings warn; warnings permit readiness; critical prereq
     if(fault==='settings')f.remote=null;
     const r=await invoke(f);assert.equal(r.code,0,`${fault}: ${r.text}`);
     check(r,{permission:'github-permission',merge:'merge-method',setup:'setup-block',timers:'user-timers',identity:'git-identity',settings:'settings-github'}[fault],'WARN');
+    if(fault==='setup')assert.match(r.text,/WARN setup-block: .*; fix: pdd init(?:\n|$)/);
   }
+  const offMode=doctorFixture();offMode.paths.set('/project/pdd.json',JSON.stringify({autopilot:{mode:'off'}}));
+  const offReport=await runAutopilotDoctor(offMode.input,offMode.ports);
+  const modeRow=offReport.checks.find(c=>c.id==='setup-mode');
+  assert.equal(modeRow.status,'warn');
+  assert.match(modeRow.detail,/pdd autopilot observe or pdd autopilot auto/);
+  assert.equal(modeRow.fix,'pdd autopilot observe');
   for(const critical of ['node','git','github-cli','platform']) {
     const f=doctorFixture();
     if(critical==='node')f.ports.nodeVersion='22.19.9';
@@ -71,10 +80,44 @@ test('doctor: advisory findings warn; warnings permit readiness; critical prereq
     assert.equal(r.code,1,`critical ${critical} must exit 1: ${r.text}`);
     check(r,critical,'FAIL');
   }
-  const plain=doctorFixture();plain.tracked='one.prompt.md\0';plain.paths.set('/project/one.prompt.md','# Plain prompt');
-  const pr=await invoke(plain);assert.equal(pr.code,0,pr.text);check(pr,'draft-prompts','PASS');
+  // Plain-Markdown and valid frontmatter kind: native-only prompts are ready as is (even with leftover strict_approvals).
+  const plainText='# Plain prompt\n\nReturn ok.\n';
+  const plain=doctorFixture();plain.tracked='one.prompt.md\0';plain.paths.set('/project/one.prompt.md',plainText);
+  const prPlain=await invoke(plain);assert.equal(prPlain.code,0,prPlain.text);check(prPlain,'draft-prompts','PASS');
+  plain.paths.set('/project/pdd.json',JSON.stringify({autopilot:{mode:'auto',trust:[]},strict_approvals:true}));
+  const prStrict=await invoke(plain);assert.equal(prStrict.code,0,prStrict.text);check(prStrict,'draft-prompts','PASS');
+  assert.doesNotMatch(prStrict.text,/strict person-terminal|pdd approve/);
+  const nativeText='---\nkind: native-only\nreason: direct host clock binding\n---\n# Clock\n\nRead clock.\n';
+  const nat=doctorFixture();nat.tracked='clock.prompt.md\0';nat.paths.set('/project/clock.prompt.md',nativeText);
+  check(await invoke(nat),'draft-prompts','PASS');
+  // Malformed native-only frontmatter (missing reason) warns with pdd files --json fix.
+  const badFmText='---\nkind: native-only\n---\n# Bad native\n';
+  const badFm=doctorFixture();badFm.tracked='bad.prompt.md\0';badFm.paths.set('/project/bad.prompt.md',badFmText);
+  const badFmRes=await invoke(badFm);check(badFmRes,'draft-prompts','WARN');assert.match(badFmRes.text,/fix: pdd files --json/);
+  // Conflicting frontmatter + embedded block and duplicate embedded blocks warn.
+  const conflict=doctorFixture();conflict.tracked='c.prompt.md\0';conflict.paths.set('/project/c.prompt.md','---\nkind: native-only\nreason: x\n---\n# Both\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"approved"}\n```\n</details>\n');
+  check(await invoke(conflict),'draft-prompts','WARN');
+  const dupBlock=doctorFixture();dupBlock.tracked='d.prompt.md\0';dupBlock.paths.set('/project/d.prompt.md','# Two\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"approved"}\n```\n</details>\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"approved"}\n```\n</details>\n');
+  check(await invoke(dupBlock),'draft-prompts','WARN');
+  // Legacy embedded block: approved with current prose_sha256 passes; missing/stale prose_sha256 or invalid JSON warns.
+  const legBase='# Legacy\n\nDo work.\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"approved","prose_sha256":"PLACEHOLDER"}\n```\n</details>\n';
+  const legOk=legBase.replace('PLACEHOLDER',proseSha256(legBase));
+  const leg=doctorFixture();leg.tracked='leg.prompt.md\0';leg.paths.set('/project/leg.prompt.md',legOk);
+  check(await invoke(leg),'draft-prompts','PASS');
+  leg.paths.set('/project/leg.prompt.md',legBase.replace('PLACEHOLDER','0'.repeat(64)));
+  check(await invoke(leg),'draft-prompts','WARN');
+  leg.paths.set('/project/leg.prompt.md','# Legacy\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"approved"}\n```\n</details>\n');
+  check(await invoke(leg),'draft-prompts','WARN');
+  leg.paths.set('/project/leg.prompt.md','# Legacy\n\n<details><summary>Runtime interface</summary>\n\n```json\n{bad json\n```\n</details>\n');
+  check(await invoke(leg),'draft-prompts','WARN');
+  // Symlinked tracked prompt is rejected as unreadable.
+  const sym=doctorFixture();sym.tracked='sym.prompt.md\0';sym.paths.set('/project/sym.prompt.md',plainText);
+  sym.ports.files.lstatSync=p=>p==='/project/sym.prompt.md'?{isSymbolicLink:()=>true,isFile:()=>false}:{isSymbolicLink:()=>false,isFile:()=>true};
+  const symRes=await invoke(sym);check(symRes,'draft-prompts','WARN');assert.match(symRes.text,/unreadable: sym\.prompt\.md/);
+  // Legacy embedded draft block still warns with pdd files --json fix (never pdd approve).
   const f=doctorFixture();f.tracked='one.prompt.md\0';f.paths.set('/project/one.prompt.md','# Draft\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"draft"}\n```\n</details>\n');f.ports.codexLimits=async()=>({state:'unknown'});
   const r=await invoke(f);assert.equal(r.code,0,r.text);check(r,'draft-prompts','WARN');check(r,'agent-usage','WARN');
+  assert.doesNotMatch(r.text,/pdd approve/);
 });
 
 test('doctor: Claude on macOS probes auth and launchctl without generation',async()=>{
@@ -269,7 +312,7 @@ test('doctor: GitHub settings warn when only this checkout has pdd.json',async()
   f.paths.set('/project/pdd.json',JSON.stringify({autopilot:{mode:'off'}}));
   assert.equal((await settingsRow(f)).fix,'git add pdd.json && git commit -m "Add PDD settings" && git push');
   f.paths.delete('/project/pdd.json');
-  assert.deepEqual(await settingsRow(f),{id:'settings-github',status:'warn',detail:'pdd.json is missing in this checkout and on GitHub (main)',fix:'pdd setup'});
+  assert.deepEqual(await settingsRow(f),{id:'settings-github',status:'warn',detail:'pdd.json is missing in this checkout and on GitHub (main)',fix:'pdd autopilot observe'});
 });
 
 test('doctor: GitHub settings warn when the mode or trust names differ, and pass when only case and order differ',async()=>{

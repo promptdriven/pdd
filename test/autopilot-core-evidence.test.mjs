@@ -1632,15 +1632,17 @@ test('E81 (T10, Serhan D1) a bug fix may change an approved rule: it decides, no
   }
 });
 
-test('E82 (trial B5) a prompt change needs no pdd approve step and merges cleanly with no approval red', async t => {
+test('E82 (trial B5, #3654) a plain-Markdown prompt change needs no pdd approve step and merges cleanly with no approval red', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   seed(w, { 'prompts/notes.prompt.md': '# Notes\n\nThe shop opens at 07:00.\n' });
   w.issue(17); await w.tick();
   const build = w.job(17, 'build').input;
   assert.doesNotMatch(build, /pdd approve/);
   assert.doesNotMatch(build, /strict_approvals/);
+  assert.doesNotMatch(build, /A prompt with no Runtime interface block needs no approval/);
+  assert.doesNotMatch(build, /native-only prompt with no Runtime interface/);
   writeIn(w.job(17, 'build').cwd, 'prompts/notes.prompt.md', '# Notes\n\nThe shop opens at 07:30.\n');
-  const { pr } = w.build(17, { body: 'Fixes #17.\n\nRuntime: not run (prompts/notes.prompt.md has no Runtime interface)\nPath: d — prompts/notes.prompt.md, change-17.txt — unowned — no contract change — Test: done check' });
+  const { pr } = w.build(17, { body: 'Fixes #17.\n\nRuntime: not run (no Story reaches prompts/notes.prompt.md)\nPath: d — prompts/notes.prompt.md, change-17.txt — unowned — no contract change — Test: done check' });
   await w.tick();
   assert.doesNotMatch(w.job(17, 'repair')?.input ?? '', /Changed prompts are not approved/);
   await finishChecks(w); await w.tick();
