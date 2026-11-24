@@ -1707,6 +1707,18 @@ export function renderMetricsHtml(report) {
     </section>`
     : '';
 
+  const invFindings = Array.isArray(report.investigation?.findings) ? report.investigation.findings : [];
+  const investigationHtml = invFindings.length > 0 && isPlainObject(report.investigation?.summary)
+    ? `
+    <section class="card">
+      <h2>Daily Investigation (${escapeHtml(report.investigation.date ?? 'latest')}) · Unique: ${report.investigation.summary.uniqueFindings ?? invFindings.length}</h2>
+      <ul class="funnel-list">
+        <li>Buckets: ${['orchestrator', 'agent-quality', 'environment', 'real-hold'].map(b => `${b}=${report.investigation.summary.buckets?.[b]?.count ?? 0}`).join(' · ')}</li>
+        ${invFindings.slice(0, 5).map(f => `<li><code>[#${escapeHtml(String(f.proposal?.rank ?? '?'))} ${escapeHtml(f.proposal?.rung ?? 'fix')}]</code> <code>${escapeHtml(f.bucket)}/${escapeHtml(f.reasonCode)}</code>: ${escapeHtml(f.proposal?.title ?? f.title ?? '')}</li>`).join('\n        ')}
+      </ul>
+    </section>`
+    : '';
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1785,7 +1797,7 @@ export function renderMetricsHtml(report) {
         <thead><tr><th>Skill</th><th class="num">Taken</th><th class="num">PRs</th><th class="num">Merged (Conv%)</th><th class="num">Median Time</th></tr></thead>
         <tbody>${skillRowsHtml}</tbody>
       </table>
-    </section>${recurringFlakesHtml}
+    </section>${recurringFlakesHtml}${investigationHtml}
   </div>
 </body>
 </html>

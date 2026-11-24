@@ -1,7 +1,7 @@
 // Generated from prompts/cli/autopilot-core.prompt.md (sha256: 64ef901ed9fbc60aae53dcf4c4b17bbbc69958c8d18632069bca59566b667afd)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
-import { availableParallelism, hostname, tmpdir } from 'node:os';
+import { availableParallelism, homedir, hostname, tmpdir } from 'node:os';
 import { join, dirname, basename, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
@@ -13,7 +13,7 @@ import { githubFullLastPage } from './github-calls.mjs';
 import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
-import { redactSecrets } from './secret-redaction.mjs';
+import { knownSecretValues, redactSecrets } from './secret-redaction.mjs';
 import { runtimePreflightSlice, workspace } from './runtime-seam.mjs';
 import { findOwners, headerEntries, isTestOwnedPath, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
@@ -78,11 +78,16 @@ import { scrubChildEnv } from './core/lint/diagnostics.mjs';
 import { buildRunnerEnv, detectTestRunner, extractTestCases, parseTestSummaryOutput, resolvePytestBinary } from './core/polyglot-runners.mjs';
 import { loadVerifyConfig } from './core/verify-paths.mjs';
 import {
+  collectCoreLocalIncidents,
+  diagnoseStuckCause,
   formatInvestigationMarkdown,
   investigateIncidents,
+  isValidCalendarDate,
   loadInvestigationLedger,
   persistDailyInvestigationReport,
+  readLatestDailyInvestigation,
 } from './autopilot/investigator/investigator.mjs';
+import { DEFAULT_STANDUP_TIMEZONE, localDateParts } from './autopilot/metrics/funnel-cohort.mjs';
 import { lintRepoProject, loadProjectLintConfig } from './repo-hygiene-lint.mjs';
 import { collectTestInventory } from './autopilot/test-inventory.mjs';
 import { appendBoundedFlakeEntries, formatRecurringFlakesLine, parseFlakeLedger, summarizeRecurringFlakes } from './autopilot-regressions.mjs';
@@ -883,18 +888,40 @@ function readMachine(fs, root, warn, now = Date.now()) {
     ciDown: object(m.ciDown) && Number.isFinite(m.ciDown.since) && ['queued', 'billing'].includes(m.ciDown.reason) ? m.ciDown : null,
     // #3252: every login in the multi-harness pool is exhausted or on cooldown (one record and one alert per outage).
     poolOut: object(m.poolOut) && Number.isFinite(m.poolOut.since) ? m.poolOut : null,
-    // #3484: post-merge safety circuit breaker that downgraded mode from auto to observe.
-    circuitBreakerClearedAt: Number.isFinite(m.circuitBreakerClearedAt) && m.circuitBreakerClearedAt <= now ? m.circuitBreakerClearedAt : null,
+    // #3484, #3560: post-merge safety circuit breaker that downgraded mode from auto to observe.
+    circuitBreakerClearedAt: Number.isFinite(m.circuitBreakerClearedAt) && m.circuitBreakerClearedAt <= now + 5 * MIN ? m.circuitBreakerClearedAt : null,
     circuitBreaker: object(m.circuitBreaker) && m.circuitBreaker.active !== false && Number.isSafeInteger(m.circuitBreaker.pr) && m.circuitBreaker.pr > 0 && named(m.circuitBreaker.reason)
       ? {
           active: true,
-          kind: ['ci_broken', 'reverted'].includes(m.circuitBreaker.kind) ? m.circuitBreaker.kind : 'ci_broken',
-          code: ['post-merge-ci', 'post-merge-revert'].includes(m.circuitBreaker.code) ? m.circuitBreaker.code : 'post-merge-ci',
+          kind: ['ci_broken', 'reverted', 'reopened_cluster', 'reopened'].includes(m.circuitBreaker.kind) ? m.circuitBreaker.kind : 'ci_broken',
+          code: ['post-merge-ci', 'post-merge-revert', 'post-merge-reopen', 'post-merge-reopen-cluster'].includes(m.circuitBreaker.code)
+            ? m.circuitBreaker.code
+            : (m.circuitBreaker.kind === 'reverted' ? 'post-merge-revert'
+              : ['reopened_cluster', 'reopened'].includes(m.circuitBreaker.kind) ? 'post-merge-reopen' : 'post-merge-ci'),
           pr: m.circuitBreaker.pr,
           issue: Number.isSafeInteger(m.circuitBreaker.issue) && m.circuitBreaker.issue > 0 ? m.circuitBreaker.issue : null,
+          ...(Array.isArray(m.circuitBreaker.issues) && m.circuitBreaker.issues.filter(n => Number.isSafeInteger(n) && n > 0).length
+            ? { issues: [...new Set(m.circuitBreaker.issues.filter(n => Number.isSafeInteger(n) && n > 0))] }
+            : {}),
+          ...(Array.isArray(m.circuitBreaker.prs) && m.circuitBreaker.prs.filter(n => Number.isSafeInteger(n) && n > 0).length
+            ? { prs: [...new Set(m.circuitBreaker.prs.filter(n => Number.isSafeInteger(n) && n > 0))] }
+            : {}),
+          ...(Number.isSafeInteger(m.circuitBreaker.count) && m.circuitBreaker.count > 0 ? { count: m.circuitBreaker.count } : {}),
+          ...(Number.isSafeInteger(m.circuitBreaker.windowHours) && m.circuitBreaker.windowHours > 0 ? { windowHours: m.circuitBreaker.windowHours } : {}),
           trippedAt: named(m.circuitBreaker.trippedAt) ? m.circuitBreaker.trippedAt : new Date(now).toISOString(),
           url: named(m.circuitBreaker.url) ? m.circuitBreaker.url : null,
           reason: oneLine(m.circuitBreaker.reason, 300),
+        }
+      : null,
+    // #3140: once-per-day per-repo daily investigator metadata.
+    lastInvestigation: object(m.lastInvestigation) && /^\d{4}-\d{2}-\d{2}$/.test(String(m.lastInvestigation.date ?? ''))
+      ? {
+          date: m.lastInvestigation.date,
+          at: Number.isFinite(m.lastInvestigation.at) ? m.lastInvestigation.at : now,
+          uniqueFindings: Number.isSafeInteger(m.lastInvestigation.uniqueFindings) && m.lastInvestigation.uniqueFindings >= 0 ? m.lastInvestigation.uniqueFindings : 0,
+          newFindings: Number.isSafeInteger(m.lastInvestigation.newFindings) && m.lastInvestigation.newFindings >= 0 ? m.lastInvestigation.newFindings : 0,
+          createdIssuesCount: Number.isSafeInteger(m.lastInvestigation.createdIssuesCount) && m.lastInvestigation.createdIssuesCount >= 0 ? m.lastInvestigation.createdIssuesCount : 0,
+          ...(object(m.lastInvestigation.buckets) ? { buckets: m.lastInvestigation.buckets } : {}),
         }
       : null,
     // T10: the updated_at of each issue with pdd:needs-decision when the engine last read its answer.
@@ -11617,10 +11644,27 @@ async function continueEnd(ctx, job) {
   }
   const waits = blocking && e.report?.ref && !e.loop;
   if (!e.comment && e.commentTried) e.comment = String((await gh.all(`repos/${repo}/issues/${job.issue}/comments?per_page=100`)).find(c => String(c.body ?? '').includes(marker))?.id ?? '') || undefined;
+  const log = job.agent?.log ?? job.suite?.agent?.log;
+  const stepLog = why.component === 'review' ? (job.review?.agent?.log ?? log)
+    : why.component === 'suite' ? (job.suite?.agent?.log ?? log)
+      : why.component === 'vectors' ? (job.vectors?.agent?.log ?? log)
+        : log;
+  const ref = e.report?.ref ? (e.report.ref.toLowerCase().startsWith(`${repo.toLowerCase()}#`) ? `#${e.report.number}` : e.report.ref) : null;
+  if (!waits && !e.diagnosis) {
+    try {
+      e.diagnosis = buildStuckDiagnosis(ctx, job, why, stepLog, ref);
+      ctx.saveJob(job);
+    } catch (error) { ctx.warn(`Autopilot core stuck diagnosis for #${job.issue} skipped: ${error.message}`); }
+  }
   if (!e.comment) {
-    const ref = e.report?.ref ? (e.report.ref.toLowerCase().startsWith(`${repo.toLowerCase()}#`) ? `#${e.report.number}` : e.report.ref) : null;
-    const log = job.agent?.log ?? job.suite?.agent?.log;
-    const body = [`Autopilot ended this run: ${sentence(why.text)}`, '', `- Cause: ${reportKind(why) ?? why.kind} / ${why.code}`, ...(log ? [`- Log: \`${basename(log)}\` on this machine`] : []),
+    const diag = !waits && object(e.diagnosis) ? e.diagnosis : null;
+    const body = [`Autopilot ended this run: ${sentence(why.text)}`, '', `- Cause: ${reportKind(why) ?? why.kind} / ${why.code}`,
+      ...(diag ? [
+        `- Diagnosis: ${diag.label} (\`${diag.bucket}\` / \`${diag.reasonCode}\`) — ${diag.summary}`,
+        `- Next step: ${diag.nextStep}`,
+        ...(diag.evidence ? [`- Evidence: ${diag.evidence}`] : []),
+      ] : []),
+      ...(log ? [`- Log: \`${basename(log)}\` on this machine`] : []),
       `- Branch: \`${job.branch}\`${job.pr ? `, PR #${job.pr}` : ''}`, ...(ref ? [`- Blocked by ${ref}`] : []),
       ...(e.report?.state === 'draft' ? ['- Report: saved as a local draft on this machine; a person can send it with `pdd autopilot report`.'] : []),
       '', waits ? `Nothing else waits on this run. This issue is ready again when ${ref} closes.`
@@ -11683,7 +11727,8 @@ async function finishLocal(ctx, job, outcome, text) {
       const nowAt = ctx.now();
       const ev = honestEvidence(job) ?? null;
       const letters = Array.isArray(job.paths?.letters) ? job.paths.letters : [];
-      appendHistory(ctx, { at: nowAt, issue: job.issue, ...(jobIssues(job).length > 1 ? { issues: jobIssues(job) } : {}), ...(job.skill ? { skill: job.skill } : {}), outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null, evidence: ev,
+      appendHistory(ctx, { at: nowAt, issue: job.issue, ...(jobIssues(job).length > 1 ? { issues: jobIssues(job) } : {}), ...(job.skill ? { skill: job.skill } : {}), outcome, ...(job.end?.cause?.code ? { code: job.end.cause.code } : {}), text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null, evidence: ev,
+        ...(object(job.end?.diagnosis) ? { diagnosis: { bucket: job.end.diagnosis.bucket, label: job.end.diagnosis.label, reasonCode: job.end.diagnosis.reasonCode, summary: job.end.diagnosis.summary, nextStep: job.end.diagnosis.nextStep } } : {}),
         ...(letters.length ? { paths: { letters } } : {}),
         ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
         ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
@@ -12137,6 +12182,7 @@ export async function tickCore(input, ports) {
     }
   } catch (error) { ctx.warn(`Autopilot intake (${intakeMode(settings.intake)}) skipped this tick: ${error.message}`); }
   if (ctx.peers.size) { const m = ctx.machineState(); ctx.saveMachine({ ...m, peers: { ...m.peers, ...Object.fromEntries(ctx.peers) } }); }
+  await runDailyInvestigationIfDue(ctx);
   const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length, c = ctx.counts;
   return {
     exitCode: 0,
@@ -12202,12 +12248,17 @@ async function runPostMergeCheck(ctx) {
       try {
         appendHistory(ctx, {
           at: ctx.now(),
+          ...(ctx.repo ? { repo: ctx.repo } : {}),
           issue: item.issue ?? null,
           ...(Array.isArray(item.issues) && item.issues.length > 1 ? { issues: item.issues } : {}),
           pr: item.pr,
           postMerge: true,
           kind: item.kind,
           code: item.code,
+          ...(item.mergeCommit ? { mergeCommit: item.mergeCommit } : {}),
+          ...(item.mergedAt ? { mergedAt: item.mergedAt } : {}),
+          ...(item.at ? { signalAt: item.at } : {}),
+          ...(item.url ? { url: item.url } : {}),
           text: oneLine(item.detail, 300),
           ...(filed?.ref ? { report: filed.ref, reportState: filed.state } : { reportState: filed?.state ?? null }),
         });
@@ -12217,7 +12268,8 @@ async function runPostMergeCheck(ctx) {
     const stateCleared = Number.isFinite(ctx.state?.circuitBreakerClearedAt) ? ctx.state.circuitBreakerClearedAt : null;
     const machineCleared = Number.isFinite(m.circuitBreakerClearedAt) ? m.circuitBreakerClearedAt : null;
     const clearedAfter = stateCleared !== null && machineCleared !== null ? Math.max(stateCleared, machineCleared) : (stateCleared ?? machineCleared);
-    const breaker = regressionsMod.selectCircuitBreakerRegression(result?.newlyDetected ?? [], { now: ctx.now, clearedAfter });
+    const postMergeState = object(result?.state) ? result.state : readJson(ctx.fs, join(ctx.root, 'post-merge.json'), null);
+    const breaker = regressionsMod.selectCircuitBreakerRegression(result?.newlyDetected ?? [], { now: ctx.now, clearedAfter, postMergeState });
     if (breaker && (ctx.settings.mode === 'auto' || ctx.state.mode === 'auto')) {
       if (ctx.state.mode !== 'observe') ctx.state.circuitBreakerForcedObserve = true;
       ctx.settings.mode = 'observe';
@@ -12230,8 +12282,12 @@ async function runPostMergeCheck(ctx) {
           issue: breaker.issue ?? breaker.pr,
           kind: 'test-suite',
           text: `Post-merge safety circuit breaker tripped (${breaker.code}): ${breaker.reason}`,
-          tried: 'Autopilot downgraded this repository from auto to observe mode so no more pull requests merge onto a broken default branch.',
-          need: 'Fix the default branch and run pdd autopilot start --mode auto to resume automatic merges.',
+          tried: breaker.kind === 'reopened_cluster'
+            ? 'Autopilot downgraded this repository from auto to observe mode because 2 or more merged issues were reopened within 24 hours.'
+            : 'Autopilot downgraded this repository from auto to observe mode so no more pull requests merge onto a broken default branch.',
+          need: breaker.kind === 'reopened_cluster'
+            ? 'Investigate the reopened regressions and run pdd autopilot start --mode auto to resume automatic merges.'
+            : 'Fix the default branch and run pdd autopilot start --mode auto to resume automatic merges.',
         })).catch(error => ctx.warn(`Autopilot circuit-breaker alert failed: ${error.message}`));
       }
     }
@@ -12281,7 +12337,10 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   }
   const breaker = (object(state?.circuitBreaker) && state.circuitBreaker.active !== false ? state.circuitBreaker : null) ?? machine.circuitBreaker;
   if (breaker) {
-    lines.push(`Circuit breaker: mode downgraded from auto to observe at ${breaker.trippedAt} (${breaker.reason}); fix the default branch and run pdd autopilot start --mode auto to resume merges.`);
+    const resumeHint = breaker.kind === 'reopened_cluster'
+      ? 'investigate the reopened regressions and run pdd autopilot start --mode auto to resume merges.'
+      : 'fix the default branch and run pdd autopilot start --mode auto to resume merges.';
+    lines.push(`Circuit breaker: mode downgraded from auto to observe at ${breaker.trippedAt} (${breaker.reason}); ${resumeHint}`);
   }
   if (intakeMode(settings.intake) === 'active' && named(state.intakeNote)) lines.push(oneLine(state.intakeNote, 300));
   const words = { now: (ports.now ?? Date.now)(), settings, longest: readLongest(fs, ports.root, (ports.now ?? Date.now)()) };
@@ -12334,6 +12393,20 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
     const flakeSummary = summarizeRecurringFlakes(flakeEntries, { nowMs: now });
     const flakeLine = formatRecurringFlakesLine(flakeSummary);
     if (flakeLine) lines.push(flakeLine);
+    const latestInv = readLatestDailyInvestigation(ports.root, { fs });
+    const invSummary = latestInv?.summary ?? machine.lastInvestigation;
+    const invDate = latestInv?.date ?? machine.lastInvestigation?.date ?? null;
+    const invUnique = Number.isSafeInteger(invSummary?.uniqueFindings) ? invSummary.uniqueFindings : 0;
+    if (invDate && invUnique > 0) {
+      const bucketCounts = ['orchestrator', 'agent-quality', 'environment', 'real-hold']
+        .map(b => {
+          const val = invSummary?.buckets?.[b];
+          const count = typeof val === 'number' ? val : (val?.count ?? 0);
+          return `${b}=${count}`;
+        })
+        .join(', ');
+      lines.push(`Investigation (${invDate}): ${invUnique} unique finding(s) (${invSummary?.newFindings ?? 0} new, ${invSummary?.createdIssuesCount ?? 0} filed; ${bucketCounts}).`);
+    }
   }
   const drafts = ports.reportRoot ? listReportDrafts({ root: ports.reportRoot }, { fs }).length : 0;
   if (drafts) lines.push(`Reports: ${drafts} local draft(s); run pdd autopilot report to list or send them.`);
@@ -12699,52 +12772,187 @@ export function preparePostReviewTestEnv({
   return { ok: true, reviewApproved: true, testEnv, capabilities, sandbox, env: sandbox.env };
 }
 
-function collectLocalAutopilotIncidents(root, { repo = null, fs = nativeFs } = {}) {
-  if (!named(root)) return [];
-  const f = folders(root);
-  const incidents = [];
-  for (const row of chronological(fs, root)) {
-    const isIncident = ['ended', 'failed', 'stopped', 'abandoned'].includes(row.outcome)
-      || row.hold === true
-      || row.noResult === true
-      || row.poolExhausted === true
-      || (row.outcome === 'released' && named(row.owner));
-    if (!isIncident) continue;
-    incidents.push({
-      repo: row.repo ?? repo ?? null,
-      issue: row.issue ?? null,
-      pr: row.pr ?? null,
-      code: row.code ?? (row.poolExhausted ? 'quota-exhausted' : (row.hold ? 'orchestrator-bug' : (row.owner === 'pdd' ? 'harness-bug' : row.outcome))),
-      reason: row.text ?? '',
-      stage: row.outcome ?? 'ended',
-    });
+function readBoundedLogTail(fs, logPath, maxBytes = 4096) {
+  if (!named(logPath) || isSymlinkSafe(fs, logPath)) return '';
+  try {
+    const st = (fs.lstatSync ?? fs.statSync)(logPath);
+    if (st?.isSymbolicLink?.() || (st && typeof st.isFile === 'function' && !st.isFile())) return '';
+    const size = Number(st?.size ?? 0);
+    if (size <= 0) return '';
+    let raw = '';
+    if (typeof fs.openSync === 'function' && typeof fs.readSync === 'function' && typeof fs.closeSync === 'function') {
+      const len = Math.min(size, maxBytes);
+      const buf = Buffer.alloc(len);
+      const fd = fs.openSync(logPath, 'r');
+      try {
+        const read = fs.readSync(fd, buf, 0, len, Math.max(0, size - len));
+        raw = buf.subarray(0, read).toString('utf8');
+      } finally { fs.closeSync(fd); }
+    } else {
+      raw = String(fs.readFileSync(logPath, 'utf8')).slice(-maxBytes);
+    }
+    // Drop a truncated partial leading line when reading mid-file so secrets/headers are not split at byte 0.
+    if (size > maxBytes) {
+      const nl = raw.indexOf('\n');
+      if (nl >= 0 && nl + 1 < raw.length) raw = raw.slice(nl + 1);
+    }
+    return raw;
+  } catch {
+    return '';
   }
+}
+
+const LOG_ERROR_LINE_RE = /\b(?:error|fail(?:ed|ure)?|fatal|exception|sigkill|sigterm|oom|enomem|killed|quota|rate[\s_-]?limit|http[\s:=]+(?:401|429|502|503|504|529)|exit(?:ed)?\s+(?:with\s+)?(?:137|143)|timeout|timed out)\b/i;
+
+function buildStuckDiagnosis(ctx, job, why, logPath, reportRef) {
+  const secrets = knownSecretValues(ctx.ports.env ?? process.env);
+  const isHarnessKind = ['pdd', 'runtime'].includes(why?.kind) || why?.owner === 'pdd';
+  const isServiceStop = Boolean(why?.poolExhausted || why?.service || why?.owner === 'service');
+  const rawCode = named(why?.code) ? why.code : null;
+  let effectiveCode = rawCode;
+  if (why?.poolExhausted) effectiveCode = 'quota-exhausted';
+  else if (why?.kind === 'runtime' && (!rawCode || rawCode === 'no-verdict' || rawCode === 'runtime-fail')) effectiveCode = 'runtime-bug';
+  else if (isHarnessKind && rawCode !== 'base-test-red') effectiveCode = rawCode === 'suite-broken' || rawCode === 'claim-expired' ? rawCode : 'harness-bug';
+  else if (rawCode === 'checks-red') {
+    const redsText = Array.isArray(job?.repairReds) ? job.repairReds.join(' ') : '';
+    if (job?.review?.verdict === 'FAIL' || /\breview\b/i.test(redsText)) effectiveCode = 'review-fail';
+    else if (/\bruntime\b/i.test(redsText)) effectiveCode = 'runtime-fail';
+    else if (/\bvectors?\b/i.test(redsText)) effectiveCode = 'vectors-fail';
+    else if (/\bformal\b/i.test(redsText)) effectiveCode = 'formal-fail';
+    else if (/\bsuite\b|\btest/i.test(redsText)) effectiveCode = 'suite-fail';
+  }
+  const needsLogScan = !effectiveCode || effectiveCode === 'no-result' || isServiceStop;
+  const rawLogTail = needsLogScan ? readBoundedLogTail(ctx.fs, logPath, 4096) : '';
+  // Redact BEFORE slicing, and extract from the END of the tail where fatal errors occur.
+  let tailSnippet = null;
+  if (rawLogTail) {
+    const redactedTail = redactSecrets(rawLogTail, secrets);
+    const errorLines = redactedTail.split(/\r?\n/).map(l => l.trim()).filter(l => l && LOG_ERROR_LINE_RE.test(l));
+    const chosenText = errorLines.length ? errorLines.slice(-3).join(' | ') : redactedTail.replace(/\s+/g, ' ').trim();
+    const bounded = chosenText.length > 600 ? chosenText.slice(-600) : chosenText;
+    if (bounded) tailSnippet = bounded;
+  }
+  const detailParts = [
+    why?.detail,
+    why?.service,
+    Array.isArray(job?.repairReds) && job.repairReds.length ? job.repairReds.join('; ') : null,
+    job?.lastError,
+  ].filter(named);
+  const detailText = detailParts.length ? detailParts.join(' | ') : null;
+  return diagnoseStuckCause({
+    repo: ctx.repo,
+    issue: job.issue,
+    pr: job.pr ?? null,
+    code: effectiveCode === 'no-result' ? null : effectiveCode,
+    harnessBug: isHarnessKind,
+    reason: why?.text ?? '',
+    ...(detailText ? { detail: detailText } : {}),
+    ...(tailSnippet ? { stderr: tailSnippet } : {}),
+    ...(isServiceStop && !why?.poolExhausted && (!effectiveCode || effectiveCode === 'no-result') ? { category: 'environment' } : {}),
+    ...(why?.owner === 'machine' && effectiveCode === 'no-result' ? { category: 'environment' } : {}),
+  }, {
+    secrets,
+    reportRef,
+    logName: logPath ? basename(logPath) : null,
+  });
+}
+
+const MAX_INVESTIGATION_LIST_PAGES = 20;
+
+function createRepoInvestigationGh(ctx) {
+  if (!named(ctx.repo) || !ctx.gh) return null;
+  const repo = ctx.repo;
+  return {
+    listIssues: async ({ page = 1, perPage = 100 } = {}) => {
+      const r = await ctx.gh.call('GET', `repos/${repo}/issues?state=all&labels=${encodeURIComponent('pdd:autopilot-report')}&per_page=${perPage}&page=${page}`);
+      if (r.status !== 200 || !Array.isArray(r.value)) {
+        throw Error(`GitHub GET repos/${repo}/issues returned ${r.status || 'error'}`);
+      }
+      if (Boolean(r.next) && page >= MAX_INVESTIGATION_LIST_PAGES) {
+        throw Error(`GitHub issue pagination truncated after ${MAX_INVESTIGATION_LIST_PAGES} pages.`);
+      }
+      const items = r.value.filter(row => !row?.pull_request);
+      return { items, hasNext: Boolean(r.next) };
+    },
+    createIssue: async ({ title, body, labels = ['pdd:autopilot-report'] }) => {
+      const safeTitle = oneLine(ctx.publicBody(title), 180);
+      const safeIssueBody = ctx.publicBody(body);
+      return ctx.gh.ok('POST', `repos/${repo}/issues`, { title: safeTitle, body: safeIssueBody, labels });
+    },
+  };
+}
+
+function currentStandupDate(nowMs, timezone = DEFAULT_STANDUP_TIMEZONE) {
+  const p = localDateParts(nowMs, timezone);
+  return `${String(p.year).padStart(4, '0')}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
+}
+
+const DAILY_INVESTIGATION_LOOKBACK_DAYS = 14;
+
+async function runDailyInvestigationIfDue(ctx) {
+  if (!named(ctx.repo) || !named(ctx.root)) return null;
+  if (ctx.budget?.state === 'low' || ctx.budget?.state === 'reserve') return null;
   try {
-    const flakeRaw = fs.readFileSync(f.flakes, 'utf8');
-    for (const entry of parseFlakeLedger(flakeRaw)) {
-      incidents.push({
-        repo: entry.repo ?? repo ?? null,
-        issue: entry.issue ?? null,
-        pr: entry.pr ?? null,
-        code: entry.outcome || 'flaky-infra',
-        target: entry.target ?? '',
-        reason: entry.detail ?? entry.outcome ?? 'flake',
-        stage: 'suite',
-      });
-    }
-  } catch { /* No flake ledger yet. */ }
-  try {
-    for (const draft of listReportDrafts(join(root, 'reports'), fs)) {
-      incidents.push({
-        repo: repo ?? null,
-        code: draft.code ?? draft.kind ?? 'harness-bug',
-        title: draft.title ?? '',
-        reason: draft.cause ?? draft.detail ?? '',
-        stage: draft.step ?? 'report',
-      });
-    }
-  } catch { /* No report drafts yet. */ }
-  return incidents;
+    const today = currentStandupDate(ctx.now(), DEFAULT_STANDUP_TIMEZONE);
+    const m = ctx.machineState();
+    if (m.lastInvestigation?.date === today) return null;
+    // Strictly per-repo drafts directory (`ctx.root/reports`) — NEVER sweep shared cross-repo `core-reports` into `ctx.repo`!
+    const repoReportRoot = join(ctx.root, 'reports');
+    const sinceMs = ctx.now() - DAILY_INVESTIGATION_LOOKBACK_DAYS * DAY;
+    const incidents = collectLocalAutopilotIncidents(ctx.root, { repo: ctx.repo, reportRoot: repoReportRoot, sinceMs, fs: ctx.fs });
+    if (incidents.length === 0) return null;
+    const secrets = knownSecretValues(ctx.ports.env ?? process.env);
+    const writeIssues = typeof ctx.ports.investigationWriteIssues === 'boolean'
+      ? ctx.ports.investigationWriteIssues
+      : (ctx.settings.report === 'file' && (object(ctx.ports.investigationGh) || typeof ctx.ports.gh === 'function'));
+    const gh = ctx.ports.investigationGh ?? (writeIssues ? createRepoInvestigationGh(ctx) : null);
+    const out = await runDailyAutopilotInvestigation({
+      root: ctx.root,
+      repo: ctx.repo,
+      reportRoot: repoReportRoot,
+      incidents,
+      date: today,
+      timezone: DEFAULT_STANDUP_TIMEZONE,
+      now: ctx.now,
+      writeIssues: Boolean(writeIssues && gh),
+      gh,
+      ...(Number.isSafeInteger(ctx.ports.investigationMaxIssues) ? { maxIssuesPerRun: ctx.ports.investigationMaxIssues } : {}),
+      secrets,
+      persist: true,
+      fs: ctx.fs,
+    });
+    const buckets = Object.fromEntries(
+      ['orchestrator', 'agent-quality', 'environment', 'real-hold']
+        .map(b => [b, out.report.summary.buckets?.[b]?.count ?? 0]),
+    );
+    const freshMachine = ctx.machineState();
+    ctx.saveMachine({
+      ...freshMachine,
+      lastInvestigation: {
+        date: today,
+        at: ctx.now(),
+        uniqueFindings: out.report.summary.uniqueFindings,
+        newFindings: out.report.summary.newFindings,
+        createdIssuesCount: out.report.summary.createdIssuesCount,
+        buckets,
+      },
+    });
+    return out;
+  } catch (error) {
+    ctx.warn(`Autopilot daily investigation skipped this tick: ${error.message}`);
+    return null;
+  }
+}
+
+export function collectLocalAutopilotIncidents(root, { repo = null, reportRoot = null, sinceMs = null, fs = nativeFs } = {}) {
+  return collectCoreLocalIncidents(root, {
+    repo,
+    reportRoot,
+    sinceMs,
+    fs,
+    parseFlakeLedger,
+    listReportDrafts,
+  });
 }
 
 /**
@@ -12754,6 +12962,8 @@ function collectLocalAutopilotIncidents(root, { repo = null, fs = nativeFs } = {
 export async function runDailyAutopilotInvestigation({
   root = null,
   repo = null,
+  reportRoot = null,
+  sinceMs = null,
   incidents = null,
   date = null,
   timezone,
@@ -12768,7 +12978,7 @@ export async function runDailyAutopilotInvestigation({
   const ledger = named(root) ? loadInvestigationLedger(root, { fs }) : { seen: new Set(), filed: new Set() };
   const resolvedIncidents = Array.isArray(incidents)
     ? incidents
-    : collectLocalAutopilotIncidents(root, { repo, fs });
+    : collectLocalAutopilotIncidents(root, { repo, reportRoot, sinceMs, fs });
   const report = await investigateIncidents({
     incidents: resolvedIncidents,
     repo,
@@ -12787,6 +12997,89 @@ export async function runDailyAutopilotInvestigation({
     : null;
   const markdown = formatInvestigationMarkdown(report, { secrets });
   return { report, markdown, persisted };
+}
+
+/** CLI adapter for `pdd autopilot investigate [--date YYYY-MM-DD] [--json] [--write-issues] [--max-issues N]`. */
+export async function runAutopilotInvestigate({
+  cwd = process.cwd(),
+  env = process.env,
+  date = null,
+  json = false,
+  writeIssues = false,
+  maxIssues,
+} = {}, ports = {}) {
+  if (date !== null && date !== undefined && !isValidCalendarDate(date)) {
+    return { exitCode: 2, message: `Invalid --date "${date}". Expected YYYY-MM-DD.` };
+  }
+  const parsedMax = maxIssues !== undefined && maxIssues !== null ? Number(maxIssues) : undefined;
+  if (parsedMax !== undefined && (!Number.isSafeInteger(parsedMax) || parsedMax < 1 || parsedMax > 20)) {
+    return { exitCode: 2, message: 'Option "--max-issues" must be an integer between 1 and 20.' };
+  }
+  const fs = ports.fs ?? nativeFs;
+  const run = ports.run ?? execFileAsync;
+  const execute = async (command, args) => {
+    const result = await run(command, args, { cwd, env, encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024 });
+    if (!result || (result.code ?? 0) !== 0) throw Error();
+    return String(result.stdout ?? '').trim();
+  };
+  try {
+    let root = ports.root, repo = ports.repo, reportRoot = ports.reportRoot ?? null;
+    if (!root) {
+      const checkout = await execute('git', ['rev-parse', '--show-toplevel']);
+      if (!checkout) throw Error();
+      const id = createHash('sha256').update(checkout).digest('hex').slice(0, 20);
+      const baseState = (typeof env?.PDD_STATE_DIR === 'string' && env.PDD_STATE_DIR.trim())
+        || join(env?.HOME || homedir(), '.local', 'state', 'pdd');
+      const folder = ports.stateRoot ?? join(baseState, 'autopilot');
+      root = join(folder, `${id}-core`);
+      reportRoot ??= join(root, 'reports');
+      let savedState = null;
+      try { savedState = JSON.parse(fs.readFileSync(join(folder, `${id}.json`), 'utf8')); }
+      catch (error) { if (error.code !== 'ENOENT') throw Error(); }
+      repo = savedState?.repo ?? githubOriginRepository(await execute('git', ['remote', 'get-url', 'origin']));
+    }
+    if (!repo) return { exitCode: 1, message: 'Autopilot investigation failed: could not resolve repository name.' };
+    const secrets = knownSecretValues(env);
+    let ghPort = ports.investigationGh ?? null;
+    if (writeIssues && !ghPort) {
+      const ghExec = ports.gh ?? (args => run('gh', args, { cwd, env, encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024 }));
+      const api = githubApi({ gh: ghExec });
+      const user = ports.user ?? basename(String(env?.HOME || homedir() || ''));
+      const sanitize = text => safeBody(publicText(redactSecrets(text, secrets), hostname(), user));
+      ghPort = {
+        listIssues: async ({ page = 1, perPage = 100 } = {}) => {
+          const r = await api.call('GET', `repos/${repo}/issues?state=all&labels=${encodeURIComponent('pdd:autopilot-report')}&per_page=${perPage}&page=${page}`);
+          if (r.status !== 200 || !Array.isArray(r.value)) throw Error(`GitHub GET repos/${repo}/issues returned ${r.status || 'error'}`);
+          if (Boolean(r.next) && page >= MAX_INVESTIGATION_LIST_PAGES) throw Error(`GitHub issue pagination truncated after ${MAX_INVESTIGATION_LIST_PAGES} pages.`);
+          return { items: r.value.filter(row => !row?.pull_request), hasNext: Boolean(r.next) };
+        },
+        createIssue: async ({ title, body, labels = ['pdd:autopilot-report'] }) => api.ok('POST', `repos/${repo}/issues`, {
+          title: oneLine(sanitize(title), 180),
+          body: sanitize(body),
+          labels,
+        }),
+      };
+    }
+    const result = await runDailyAutopilotInvestigation({
+      root,
+      repo,
+      reportRoot: reportRoot ?? join(root, 'reports'),
+      date: date ? String(date).trim() : null,
+      now: ports.now ?? Date.now,
+      writeIssues: Boolean(writeIssues && ghPort),
+      gh: ghPort,
+      ...(parsedMax !== undefined ? { maxIssuesPerRun: parsedMax } : {}),
+      secrets,
+      persist: ports.persist !== false && fs.existsSync?.(root),
+      fs,
+    });
+    const message = json
+      ? JSON.stringify(result.report, null, 2)
+      : result.markdown;
+    return { exitCode: 0, message };
+  } catch {
+    return { exitCode: 1, message: 'Autopilot investigation failed: could not read repository state.' };
+  }
 }
 
 export { buildGapCheckInput, computeCanonicalDigest, formatInvestigationMarkdown, parseHarnessPrReceipt, validateGapCheckOutput };
