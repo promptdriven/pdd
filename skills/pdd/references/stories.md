@@ -89,7 +89,7 @@ Place `<slug>.json` in `tests/` or `test/` (use `tests/runtime/` or `test/runtim
 
 ## 4. Check targets, operators, schemas, and dates
 
-- **4 targets:** `result`, `error` (shorthand `["error", "=", "code"]`), `world`, `calls` (never `output`), plus HTML shorthands (see [ui-and-screens.md §4](ui-and-screens.md#4-html-checks-and-simulator-rules)). `input` is valid only as a `ref_target` reference source.
+- **4 targets:** `result`, `error` (shorthand `["error", "=", "code"]`), `world`, `calls` (never `output`), plus HTML shorthands (see [ui-and-screens.md §4](ui-and-screens.md#4-html-checks-and-prompt-interpreter-rules)). `input` is valid only as a `ref_target` reference source.
 - **14 exact operators:** `equals` (`=`), `not_equals` (`!=`), `not_contains`, `count`, `one_of`, `all_in`, `equals_ignore_case`, `at_least` (`>=`), `at_most` (`<=`), `lt` (`<`), `lte`, `gt` (`>`), `gte`, `integer_relation` (plus `html_exists`, `len>=`, `len<=`).
 - **2 supplemental operators** (pair with at least one exact check on the same criterion): `contains` (`contains_all`), non-HTML `exists`.
 - **Exact integer conservation (`integer_relation`):** compare `left` vs `right` (`eq`/`le`/`ge`) across `result`, `input`, and `world` with `field`, `ref_target`/`ref_path`, `integer`, `sum`, `product`.

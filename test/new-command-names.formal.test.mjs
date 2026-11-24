@@ -11,27 +11,29 @@ import { runPdd } from '../src/pdd-cli.mjs';
 import { harbor, root, sink, temp } from './helpers/runtime-fake.mjs';
 
 // Bounded check of user_stories/new-command-names.md, Rules to check (RUNBOOK §17).
-// Oracle from the Story: `check` names `pdd test`, or `pdd lint` when `--lint` is one of its words; `try` names
-// `pdd simulate`. `sim` and `workflow start` are quiet forms of `simulate` and `workflow run`.
+// Oracle from the Story: `check` names `pdd test`, or `pdd lint` when `--lint` is one of its words;
+// `try`, `simulate`, and `sim` name direct `pdd <PROMPT.md|STORY>`. `-V` is a quiet form of `--version`.
 const words = list => list.join(' ');
 // The one line names the old and the new command; the test does not pin the rest of the sentence.
 const names = (line, before, after) => line.includes(`pdd ${before}`) && line.includes(`pdd ${after}`);
 const label = argv => JSON.stringify(argv);
 const effect = plan => ({ local: plan.local, operands: plan.operands, options: plan.options, helpPrefix: plan.helpPrefix });
 const parse = argv => { try { return { plan: parseArgv(argv) }; } catch (error) { return { error: String(error?.message), input: error instanceof CommandInputError }; } };
-const oracle = (command, tail) => command === 'try' ? ['try', 'simulate'] : tail.includes('--lint') ? ['check --lint', 'lint'] : ['check', 'test'];
-const QUIET = [{ quiet: ['sim'], main: ['simulate'] }];
-const HEADS = { simulate: [[], ['place-order'], ['place-order', 'unknown-item']] };
+const oracle = (command, tail) => ['try', 'simulate', 'sim'].includes(command)
+  ? [command, '<PROMPT.md|STORY>']
+  : tail.includes('--lint') ? ['check --lint', 'lint'] : ['check', 'test'];
+const QUIET = [{ quiet: ['-V'], main: ['--version'] }];
+const HEADS = { '--version': [[], ['extra']] };
 
-// The input range: every option of the test, lint and simulate routes, each without a value, with a good value and with bad values.
+// The input range: every option of the check, lint, and direct try routes, each without a value, with a good value and with bad values.
 function optionSamples() {
   const samples = new Map();
   const add = sample => samples.set(label(sample), sample);
-  for (const prefix of [['test'], ['lint'], ['simulate']]) {
-    const route = PUBLIC_COMMAND_ROUTES.find(item => words(item.prefix) === words(prefix));
-    assert.ok(route, `route ${words(prefix)}`);
+  for (const id of ['check', 'lint', 'try']) {
+    const route = PUBLIC_COMMAND_ROUTES.find(item => item.id === id);
+    assert.ok(route, `route ${id}`);
     for (const option of route.options) {
-      const values = { flag: [], text: ['place-order', '--json'], 'optional-text': ['main', '--json'], uuid: ['0b5a1f2e-1c2d-4e5f-8a9b-0c1d2e3f4a5b', 'nope'],
+      const values = { flag: [], text: ['place-order', '--json'], 'optional-text': ['main', '--json'], 'text-list': ['phone', '--json'], uuid: ['0b5a1f2e-1c2d-4e5f-8a9b-0c1d2e3f4a5b', 'nope'],
         integer: [String(option.min), String(option.max), '0', String(option.max + 1), 'x'], 'optional-integer': ['8123', '0', '70000'],
         value: [...(option.choices ?? []), 'other'] }[option.kind];
       assert.ok(values, `kind ${option.kind}`);
@@ -55,26 +57,26 @@ function tails(heads, pairs = true) {
   return list;
 }
 
-test('removed: every check or try argv, also after help, is one exit-2 line that names the old and the new command', t => {
+test('removed: every check, try, simulate, or sim argv, also after help, is one exit-2 line that names the old and replacement', t => {
   let count = 0;
-  for (const command of ['check', 'try']) for (const head of [[], ['help']]) for (const tail of tails([[], ['place-order']])) {
+  for (const command of ['check', 'try', 'simulate', 'sim']) for (const head of [[], ['help']]) for (const tail of tails([[], ['place-order']], command === 'check' || command === 'simulate')) {
     const argv = [...head, command, ...tail], result = parse(argv), [before, after] = oracle(command, tail);
     assert.ok(result.input, `${label(argv)}: a CommandInputError`);
     assert.ok(!result.error.includes('\n') && names(result.error, before, after), `${label(argv)}: ${result.error}`);
     count++;
   }
   // The oracle line itself: one line, the old and the new command, no other word of the input.
-  for (const [before, after] of [oracle('check', []), oracle('check', ['--lint']), oracle('try', [])]) {
-    const line = parse(before === 'try' ? ['try'] : before.split(' ')).error;
+  for (const [before, after] of [oracle('check', []), oracle('check', ['--lint']), oracle('try', []), oracle('simulate', []), oracle('sim', [])]) {
+    const line = parse(before.split(' ')).error;
     assert.ok(!line.includes('\n') && line.includes(`pdd ${before}`) && line.includes(`pdd ${after}`), line);
   }
   assert.ok(count > 10000, 'the range reaches every option pair');
-  t.diagnostic(`bounds: ${SAMPLES.length} option samples; ${count} removed argv (check, try, help check, help try with 0 to 2 options and a help flag)`);
+  t.diagnostic(`bounds: ${SAMPLES.length} option samples; ${count} removed argv (check, try, simulate, sim + help prefixes)`);
 });
 
-test('quiet: every sim and workflow start argv parses like its main name, with the same plan or usage error and no notice', t => {
+test('quiet: -V parses like --version and test --lint parses like lint, with no notice', async t => {
   let good = 0, bad = 0, lintSame = 0;
-  for (const { quiet, main } of QUIET) for (const tail of tails(HEADS[words(main)])) {
+  for (const { quiet, main } of QUIET) for (const tail of tails(HEADS[words(main)], false)) {
     const short = parse([...quiet, ...tail]), current = parse([...main, ...tail]), argv = label([...quiet, ...tail]);
     assert.equal(!!short.plan, !!current.plan, `${argv}: the quiet and the main name accept the same input`);
     if (current.plan) {
@@ -84,7 +86,7 @@ test('quiet: every sim and workflow start argv parses like its main name, with t
     } else {
       bad++;
       assert.equal(short.error, current.error, `${argv}: same usage error`);
-      assert.doesNotMatch(short.error, /was removed|workflow start|Unknown command/, argv);
+      assert.doesNotMatch(short.error, /was removed|Unknown command/, argv);
     }
   }
   // `pdd test --lint` works like `pdd lint`: no new refusal.
@@ -96,7 +98,7 @@ test('quiet: every sim and workflow start argv parses like its main name, with t
     assert.deepEqual(effect(same.plan), effect(lint.plan), `test --lint ${tail.join(' ')}`);
     lintSame++;
   }
-  assert.ok(good > 1000 && bad > 1000 && lintSame > 10, 'the range reaches good and bad parses');
+  assert.ok(good > 0 && bad > 100 && lintSame > 10, 'the range reaches good and bad parses');
   t.diagnostic(`bounds: ${good + bad} quiet/main argv pairs (${good} good parses, ${bad} usage errors); ${lintSame} test --lint = lint argv`);
 });
 
@@ -110,7 +112,7 @@ test('removed names run nothing on runPdd', async t => {
   const calls = [], state = join(setup.sandbox, 'state');
   const spy = new Proxy({}, { get: (_, name) => typeof name !== 'string' ? undefined : (...input) => { calls.push(name); return { exitCode: 0, message: '' }; } });
   let count = 0;
-  for (const command of ['check', 'try']) for (const head of [[], ['help']]) for (const tail of tails([[], ['place-order']], false)) {
+  for (const command of ['check', 'try', 'simulate', 'sim']) for (const head of [[], ['help']]) for (const tail of tails([[], ['place-order']], false)) {
     const argv = [...head, command, ...tail], stdout = sink(), stderr = sink(), [before, after] = oracle(command, tail);
     const env = { HOME: setup.home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PATH: `${bin}:/usr/bin:/bin` };
     const code = await runPdd(argv, { stdout, stderr, cwd: setup.repo, env, packageRoot: root, workflowRunner: spy, workflowAreas: spy,
@@ -126,15 +128,15 @@ test('removed names run nothing on runPdd', async t => {
   t.diagnostic(`bounds: ${count} removed argv on runPdd; 0 runner calls, 0 fetches, 0 gh calls`);
 });
 
-// Every help argv: the root, every catalog prefix, the quiet forms. The output must name no old or quiet command.
-const OLD_IN_HELP = [/\bpdd check\b/, /\bpdd try\b/, /\bworkflow start\b/];
+// Every help argv: the root, every catalog prefix, direct `.`, and quiet forms. Output names no removed command or Simulator.
+const OLD_IN_HELP = [/\bpdd check\b/, /\bpdd try\b/, /\bpdd sim\b/, /\bpdd simulate\b/, /\bSimulator\b/, /\bworkflow start\b/];
 function helpArgvs() {
   const prefixes = new Map();
   for (const route of PUBLIC_COMMAND_ROUTES) for (let length = 1; length <= route.prefix.length; length++) {
     const prefix = route.prefix.slice(0, length);
     if (!['help', '--version'].includes(prefix[0])) prefixes.set(words(prefix), prefix);
   }
-  const list = [[], ['--help'], ['-h'], ['help']];
+  const list = [[], ['--help'], ['-h'], ['help'], ['.', '--help'], ['.', '-h'], ['help', '.']];
   for (const prefix of [...prefixes.values(), ...QUIET.map(item => item.quiet)]) {
     list.push(['help', ...prefix], [...prefix, '--help'], [...prefix, '-h']);
   }
@@ -168,7 +170,7 @@ function completionChoices(t, script, shell, contexts) {
   return blocks.map(block => block.split('\n').filter(Boolean));
 }
 const SHELLS = ['bash', ...(spawnSync('zsh', ['-fc', 'true']).status === 0 ? ['zsh'] : [])];
-const NOT_OFFERED = [['check'], ['try'], ['sim']];
+const NOT_OFFERED = [['check'], ['try'], ['sim'], ['simulate'], ['workflow']];
 function completionContexts() {
   const contexts = new Map(), add = context => contexts.set(words(context), context);
   add([]); add(['help']);
@@ -191,7 +193,8 @@ test('shell completion offers no removed or quiet name in any context', t => {
       }
     });
     const at = context => all[contexts.findIndex(item => words(item) === context)];
-    for (const name of ['test', 'lint', 'simulate']) assert.ok(at('').includes(name), `${shell}: root offers ${name}`);
+    for (const name of ['test', 'lint']) assert.ok(at('').includes(name), `${shell}: root offers ${name}`);
+    assert.deepEqual(at('--tab').sort(), ['call', 'screen', 'terminal', 'world']);
   }
   t.diagnostic(`bounds: ${contexts.length} contexts x ${SHELLS.join(', ')}`);
 });
@@ -201,7 +204,7 @@ test('the new words are data in one place', async t => {
   const sandbox = temp(t), copy = join(sandbox, 'src'); cpSync(join(root, 'src'), copy, { recursive: true });
   symlinkSync(join(root, 'node_modules'), join(sandbox, 'node_modules'), 'dir');
   const file = join(copy, 'shared', 'command-names.mjs'), source = readFileSync(file, 'utf8');
-  const RENAMED = { test: 'exam', lint: 'sweep', simulate: 'sandbox', run: 'begin' };
+  const RENAMED = { test: 'exam', lint: 'sweep', run: 'begin' };
   const edited = source.replace(/(export const NAMES = Object\.freeze\()\{[^}]*\}/, (_, head) => `${head}${JSON.stringify(RENAMED)}`);
   assert.notEqual(edited, source, 'NAMES holds the words');
   assert.equal(edited.split('\n').filter((line, index) => line !== source.split('\n')[index]).length, 1, 'one line changes');
@@ -210,16 +213,15 @@ test('the new words are data in one place', async t => {
   const parser = await import(pathToFileURL(join(copy, 'argument-parser.mjs')));
   const completion = await import(pathToFileURL(join(copy, 'completion.mjs')));
   const help = cli.renderHelp();
-  for (const word of ['exam', 'sweep', 'sandbox']) assert.match(help, new RegExp(`\\n  pdd ${word}\\b`), word);
-  for (const word of ['test', 'lint', 'simulate']) assert.doesNotMatch(help, new RegExp(`\\bpdd ${word}\\b`), word);
-  for (const [before, after] of [[['check'], 'exam'], [['check', '--lint'], 'sweep'], [['try'], 'sandbox']]) {
+  for (const word of ['exam', 'sweep']) assert.match(help, new RegExp(`\\n  pdd ${word}\\b`), word);
+  for (const word of ['test', 'lint', 'simulate', 'sim']) assert.doesNotMatch(help, new RegExp(`\\bpdd ${word}\\b`), word);
+  for (const [before, after] of [[['check'], 'exam'], [['check', '--lint'], 'sweep'], [['try'], '<PROMPT.md|STORY>'], [['simulate'], '<PROMPT.md|STORY>'], [['sim'], '<PROMPT.md|STORY>']]) {
     assert.throws(() => parser.parseArgv([...before, '--help']), error => error.message.includes(`pdd ${words(before)}`) && error.message.includes(`pdd ${after}`));
   }
   assert.deepEqual(effect(parser.parseArgv(['exam', '--lint', '--local'])), effect(parser.parseArgv(['sweep', '--local'])));
-  assert.deepEqual(parser.parseArgv(['sim', '--help']), parser.parseArgv(['sandbox', '--help']), 'the quiet form follows the route');
   for (const shell of SHELLS) {
     const [rootChoices] = completionChoices(t, completion.renderCompletion(shell), shell, [[]]);
-    for (const word of ['exam', 'sweep', 'sandbox']) assert.ok(rootChoices.includes(word), `${shell} ${word}`);
-    for (const word of ['test', 'lint', 'simulate', 'check', 'try']) assert.ok(!rootChoices.includes(word), `${shell} ${word}`);
+    for (const word of ['exam', 'sweep']) assert.ok(rootChoices.includes(word), `${shell} ${word}`);
+    for (const word of ['test', 'lint', 'simulate', 'sim', 'check', 'try']) assert.ok(!rootChoices.includes(word), `${shell} ${word}`);
   }
 });

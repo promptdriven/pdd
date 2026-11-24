@@ -26,7 +26,7 @@ Open Codex, Claude Code, Gemini CLI, or Antigravity in your repository and invok
    - [`skills/pdd/references/prompting.md`](../skills/pdd/references/prompting.md): module ownership, contracts, and prompt authoring.
    - [`skills/pdd/references/stories.md`](../skills/pdd/references/stories.md): Stories (`user_stories/*.md`) and scenario JSON (`tests/*.json`).
    - [`skills/pdd/references/ports-and-cli.md`](../skills/pdd/references/ports-and-cli.md): ports, interfaces, CLI programs, HTTP routes, and persistence.
-   - [`skills/pdd/references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md): screens, `.ui.svg` drawings, app maps, and Simulator verification.
+   - [`skills/pdd/references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md): screens, `.ui.svg` drawings, app maps, and Prompt Interpreter verification.
    - [`skills/pdd/references/product.md`](../skills/pdd/references/product.md): multi-part roadmaps and shared contracts.
    - [`skills/pdd/references/verification.md`](../skills/pdd/references/verification.md): real-path verification, `pdd prove`, and independent review.
    - [`skills/pdd/references/formal.md`](../skills/pdd/references/formal.md): code-bound formal verification and mutation control (loaded only for invariant-heavy work).
@@ -34,9 +34,9 @@ Open Codex, Claude Code, Gemini CLI, or Antigravity in your repository and invok
    - For a `bug`, reproduce the defect first with the smallest failing test and check ownership. If the owning prompt is already right (a pure code bug), skip prompt edits and proceed straight to Red→Green TDD.
    - For a `feature` or prompt-level `bug`, edit the owning `prompts/*.prompt.md`, `user_stories/*.md`, and `tests/*.json` before changing product code. Keep 1 Story per cohesive user loop (ask before creating more than 3 Stories). Expected values come from the person and Stories, never from reading code output.
    - For `small-change` (non-product files only with zero owned/product code touched), skip prompts and Stories.
-4. **Check and simulate:**
+4. **Lint, test, and run:**
    - Run offline `pdd lint` (0 AI, 0 network) to catch structural, SVG, scenario, and diff problems immediately.
-   - Run `pdd test --files STORY && pdd test STORY` on the PDD interpreter, or `pdd simulate STORY` (short: `pdd sim`) to try the program interactively before writing code.
+   - Run `pdd test --files STORY && pdd test STORY` on the PDD interpreter, or `pdd STORY` / `pdd prompts/<app>.prompt.md` to run the program interactively on the Prompt Interpreter before writing code.
 5. **Approve prompts:**
    - Review prompt changes and approve with `pdd approve PROMPT` in a terminal, or reply in chat so your agent records your exact words with `pdd approve PROMPT --said - <<'PDD_SAID'`. Strict mode (`"strict_approvals": true` in root `pdd.json`) requires a person terminal.
 6. **Build, prove, and review:**

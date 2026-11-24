@@ -20,12 +20,13 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
   assert.deepEqual(PUBLIC_COMMAND_IDS, ['setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use', 'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause', 'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log', 'product.status', 'product.next', 'product.start', 'product.contracts', 'graph', 'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop', 'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust', 'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.graph', 'autopilot.report', 'autopilot.regressions', 'autopilot.alerts', 'autopilot.alert', 'autopilot.check-base', 'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off', 'completion', 'help', 'version', 'version.detailed']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
-    ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['setup', '--skills-dir', '/tmp/s'], ['init'], ['status'], ['status', '--changed', '--json'], ['sim', 'demo'], ['product', '--help'], ['autopilot', '--help']]) {
+    ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['setup', '--skills-dir', '/tmp/s'], ['init'], ['status'], ['status', '--changed', '--json'], ['prompts/app.prompt.md'], ['.'], ['--stop', 'demo'], ['product', '--help'], ['autopilot', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
   }
   // G1: people call the skills in their own chat; pdd starts no session and no named-workflow chat.
   for (const argv of [['interface', 'draft'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'], ['workflow','list'], ['workflow','run','bug','1'],
+    ['sim', 'demo'], ['simulate', 'demo'],
     ['setup', 'now'], ['setup', '--json'], ['run', 'start', 'issue'], ['verify'], ['runtime', 'discover'],
     ['replay'], ['call'], ['tests'], ['doctor'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
     ['unknown', '--help'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
@@ -112,7 +113,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['agy','claude','codex','gemini']);
     }
   }
-  for (const word of ['run', 'verify', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown', 'workflow']) {
+  for (const word of ['run', 'verify', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown', 'workflow', 'sim', 'simulate']) {
     for (const args of [[word], [word, '--help'], [word, '-h']]) {
       const result = run(args); assert.equal(result.status, 2, JSON.stringify(args)); assert.equal(result.stdout, ''); assert.ok(result.stderr.trim());
     }
@@ -124,12 +125,14 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   assert.ok(PUBLIC_COMMAND_MANIFEST.length > 0);
 });
 
-test('Try and product accept named local launchers; product completion keeps the built-in agent choices', () => {
+test('Direct Prompt Interpreter and product accept named local launchers; product completion keeps the built-in agent choices', () => {
   for (const name of ['Codex (work5)', 'Claude (work3)', 'codex', 'claude', 'gemini']) {
-    const plan=parseArgv(['simulate','my-story','--agent',name]);
-    assert.equal(plan.commandId,'try');assert.equal(plan.options['--agent'],name);
+    const plan=parseArgv(['--agent',name,'my-story']);
+    assert.equal(plan.commandId,'try');assert.equal(plan.options['--agent'],name);assert.deepEqual(plan.operands,['my-story']);
+    const filePlan=parseArgv(['prompts/app.prompt.md','--agent',name]);
+    assert.equal(filePlan.commandId,'try');assert.equal(filePlan.options['--agent'],name);assert.deepEqual(filePlan.operands,['prompts/app.prompt.md']);
   }
-  for (const args of [['simulate','--agent'],['simulate','--agent',''],['simulate','--agent','   '],['product','start','run-1','--agent'],['product','start','run-1','--agent',''],['product','start','run-1','--agent','   ']]) assert.throws(()=>parseArgv(args),CommandInputError);
+  for (const args of [['--agent'],['--agent',''],['--agent','   '],['product','start','run-1','--agent'],['product','start','run-1','--agent',''],['product','start','run-1','--agent','   ']]) assert.throws(()=>parseArgv(args),CommandInputError);
   // 2901: --agent may name an agents.json entry; the agent owner refuses an unknown name, not the parser.
   for (const agent of ['codex','claude','gemini','agy','Codex (work5)','other']) assert.equal(parseArgv(['product','start','run-1','--agent',agent]).options['--agent'],agent);
   for (const shell of ['bash','zsh']) {

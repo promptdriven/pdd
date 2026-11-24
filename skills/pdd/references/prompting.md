@@ -63,7 +63,7 @@ reason: <concrete physical effect bound ports cannot fake, e.g. fsync, live sock
 
 ## 5. Expected values, approvals, and merges
 
-- **Expected values** come from the Story and the person — never from observed code or simulation output, and never edited silently to force a pass.
+- **Expected values** come from the Story and the person — never from observed code or interpreter output, and never edited silently to force a pass.
 - **Approvals (`--said`):** Show the prompt/Story changes, then judge the person's later reply in chat (a question, change request, or earlier message is not approval; no exact phrase is needed). Record actual attributed words with:
 
 ```sh

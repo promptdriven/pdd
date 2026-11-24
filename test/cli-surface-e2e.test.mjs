@@ -949,7 +949,7 @@ test('every public command renders focused --help via real bin/pdd.mjs subproces
     route => !['help', 'version', 'version.detailed'].includes(route.id),
   );
   const results = await runPool(helpTargets, 8, async route => {
-    const res = await fx.cli([...route.prefix, '--help']);
+    const res = await fx.cli([...(route.prefix.length ? route.prefix : ['.']), '--help']);
     return { route, res };
   });
   for (const { route, res } of results) {
@@ -971,7 +971,7 @@ test('discovery, help, version, and shell completion commands work end-to-end', 
   for (const args of [[], ['--help'], ['-h'], ['help']]) {
     const res = await fx.cli(args);
     assert.equal(res.code, 0, `pdd ${args.join(' ')} failed: ${res.stderr}`);
-    assert.match(res.stdout, /Usage: pdd <command> \[options\]/);
+    assert.match(res.stdout, /Usage: pdd <PROMPT\.md\|STORY\|\.> \[args\.\.\.\]  \|  pdd <command> \[options\]/);
     assert.match(res.stdout, /Core PDD workflow:/);
     assert.match(res.stdout, /Autopilot \(pdd autopilot --help\):/);
   }
@@ -1270,29 +1270,33 @@ test('test, lint, and simulate commands exercise local modes and flag combinatio
   assert.equal(prodContracts.code, 0, prodContracts.stderr);
   markExecuted('product.contracts');
 
-  // pdd simulate (and quiet alias pdd sim): offline --stop and --save-last
-  const simStop = await fx.cli(['simulate', '--stop', 'demo']);
-  assert.equal(simStop.code, 2, simStop.stderr);
-  assert.match(simStop.stderr, /No open Try for "demo"/);
+  // Direct Prompt Interpreter execution: offline --stop, --save-last, Story, prompt file, and `.`
+  const directStop = await fx.cli(['--stop', 'demo']);
+  assert.equal(directStop.code, 2, directStop.stderr);
+  assert.match(directStop.stderr, /No open Try for "demo"/);
 
-  const simQuietStop = await fx.cli(['sim', '--stop', 'demo']);
-  assert.equal(simQuietStop.code, simStop.code);
-  assert.equal(simQuietStop.stderr, simStop.stderr);
+  const directSaveLast = await fx.cli(['--save-last']);
+  assert.notEqual(directSaveLast.code, 0);
+  assert.doesNotMatch(directSaveLast.stderr, /ReferenceError|TypeError|SyntaxError/);
 
-  const simSaveLast = await fx.cli(['simulate', '--save-last']);
-  assert.notEqual(simSaveLast.code, 0);
-  assert.doesNotMatch(simSaveLast.stderr, /ReferenceError|TypeError|SyntaxError/);
-
-  // Flag combination acceptance on simulate (offline unreachable runtime fails cleanly, not exit 2)
-  const simOffline = await fx.cli([
-    'simulate', 'demo', '--tab', 'call', '--max-calls', '20', '--no-open', '--no-wait', '--new',
+  // Flag combination acceptance on direct Story & prompt execution (offline unreachable runtime fails cleanly, not exit 2)
+  const directOffline = await fx.cli([
+    'demo', '--tab', 'call', '--max-calls', '20', '--no-open', '--no-wait', '--new',
   ]);
-  assert.notEqual(simOffline.code, 2, `valid simulate flags rejected: ${simOffline.stderr}`);
-  assert.doesNotMatch(simOffline.stderr, /ReferenceError|TypeError|SyntaxError/);
+  assert.notEqual(directOffline.code, 2, `valid direct Story flags rejected: ${directOffline.stderr}`);
+  assert.doesNotMatch(directOffline.stderr, /ReferenceError|TypeError|SyntaxError/);
 
-  const simCliMode = await fx.cli(['simulate', 'demo', '--cli', '--no-open', '--no-wait']);
-  assert.notEqual(simCliMode.code, 2, `valid simulate --cli flags rejected: ${simCliMode.stderr}`);
-  assert.doesNotMatch(simCliMode.stderr, /ReferenceError|TypeError|SyntaxError/);
+  const directCliMode = await fx.cli(['demo', '--cli', '--no-open', '--no-wait']);
+  assert.notEqual(directCliMode.code, 2, `valid direct --cli flags rejected: ${directCliMode.stderr}`);
+  assert.doesNotMatch(directCliMode.stderr, /ReferenceError|TypeError|SyntaxError/);
+
+  const directPrompt = await fx.cli(['prompts/app.prompt.md', '--no-open', '--no-wait']);
+  assert.notEqual(directPrompt.code, 2, `valid direct prompt file rejected: ${directPrompt.stderr}`);
+  assert.doesNotMatch(directPrompt.stderr, /ReferenceError|TypeError|SyntaxError/);
+
+  const directDot = await fx.cli(['.', '--no-open', '--no-wait']);
+  assert.notEqual(directDot.code, 2, `valid direct . rejected: ${directDot.stderr}`);
+  assert.doesNotMatch(directDot.stderr, /ReferenceError|TypeError|SyntaxError/);
   markExecuted('try');
 });
 
@@ -1518,7 +1522,7 @@ test('all 3 product commands work end-to-end on real coffee-pickup product fixtu
   assert.match(startRes.stdout, /91|issue/i);
   markExecuted('product.start');
 
-  // Product-mode flags on pdd test (--journeys, --app-map) and pdd simulate (--product)
+  // Product-mode flags on pdd test (--journeys, --app-map) and direct pdd --product
   const journeysPreview = await fx.cli(['test', '--journeys', '--files', '--json']);
   assert.equal(journeysPreview.code, 2, journeysPreview.stderr);
   assert.match(journeysPreview.stderr, /No root product journeys found/);
@@ -1527,9 +1531,9 @@ test('all 3 product commands work end-to-end on real coffee-pickup product fixtu
   assert.notEqual(appMapPreview.code, 3, appMapPreview.stderr);
   assert.doesNotMatch(appMapPreview.stderr, /ReferenceError|TypeError|SyntaxError/);
 
-  const simProduct = await fx.cli(['simulate', '--product', '--no-open', '--no-wait']);
-  assert.doesNotMatch(simProduct.stderr, /Unsupported command or options|ReferenceError|TypeError|SyntaxError/);
-  assert.match(simProduct.stderr, /No tests found/);
+  const directProduct = await fx.cli(['--product', '--no-open', '--no-wait']);
+  assert.doesNotMatch(directProduct.stderr, /Unsupported command or options|ReferenceError|TypeError|SyntaxError/);
+  assert.match(directProduct.stderr, /No tests found/);
 });
 
 test('graph and dependencies commands execute end-to-end safely offline', async () => {
@@ -1822,8 +1826,13 @@ test('removed commands, quiet aliases, and invalid flag/operand errors return ex
     // Removed commands name the replacement command
     { args: ['check'], match: /was removed.*Use pdd test/ },
     { args: ['check', '--lint'], match: /was removed.*Use pdd lint/ },
-    { args: ['try'], match: /was removed.*Use pdd simulate/ },
+    { args: ['try'], match: /was removed\. Run pdd <PROMPT\.md\|STORY> instead\./ },
+    { args: ['simulate'], match: /was removed\. Run pdd <PROMPT\.md\|STORY> instead\./ },
+    { args: ['sim'], match: /was removed\. Run pdd <PROMPT\.md\|STORY> instead\./ },
+    { args: ['sim', 'demo'], match: /was removed\. Run pdd <PROMPT\.md\|STORY> instead\./ },
     { args: ['help', 'check'], match: /was removed.*Use pdd test/ },
+    { args: ['help', 'sim'], match: /was removed\. Run pdd <PROMPT\.md\|STORY> instead\./ },
+    { args: ['help', 'simulate'], match: /was removed\. Run pdd <PROMPT\.md\|STORY> instead\./ },
     // Unknown commands & unknown/duplicate flags
     { args: ['not-a-real-command'], match: /Unknown command "not-a-real-command"/ },
     { args: ['--no-such-flag'], match: /Unsupported command or options/ },
@@ -1858,10 +1867,15 @@ test('removed commands, quiet aliases, and invalid flag/operand errors return ex
     assert.match(res.stderr, item.match, `pdd ${item.args.join(' ')} stderr mismatch: ${res.stderr}`);
   }
 
-  // Quiet aliases parse and run like their canonical prefixes
-  const quietSimHelp = await fx.cli(['sim', '--help']);
-  assert.equal(quietSimHelp.code, 0, quietSimHelp.stderr);
-  assert.match(quietSimHelp.stdout, /pdd simulate/);
+  // Direct Prompt Interpreter help (`pdd . --help`, `pdd --stop --help`) exits 0 cleanly
+  const dotHelp = await fx.cli(['.', '--help']);
+  assert.equal(dotHelp.code, 0, dotHelp.stderr);
+  assert.match(dotHelp.stdout, /pdd \[OPTIONS\] <PROMPT\.md\|app-map\.json> \[ARGS\.\.\.\]/);
+  assert.doesNotMatch(dotHelp.stdout, /\b(?:sim|simulate|simulator)\b/i);
+
+  const stopHelp = await fx.cli(['--stop', '--help']);
+  assert.equal(stopHelp.code, 0, stopHelp.stderr);
+  assert.equal(stopHelp.stdout, dotHelp.stdout);
 });
 });
 

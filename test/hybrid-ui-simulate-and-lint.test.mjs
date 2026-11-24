@@ -52,37 +52,37 @@ test('3595/3596 CLI catalog & parser accept PROMPT.md targets, --stop PROMPT.md,
   assert.ok(tryRoute);
   assert.ok(tryRoute.options.some(option => option.name === '--fresh' && option.kind === 'flag'));
 
-  assert.deepEqual(parseArgv(['simulate', 'prompts/app.prompt.md']), {
+  assert.deepEqual(parseArgv(['prompts/app.prompt.md']), {
     commandId: 'try',
     local: 'runtime-try',
     operands: ['prompts/app.prompt.md'],
     options: {},
   });
-  assert.deepEqual(parseArgv(['sim', 'prompts/app.prompt.md', '--fresh']), {
+  assert.deepEqual(parseArgv(['prompts/app.prompt.md', '--fresh']), {
     commandId: 'try',
     local: 'runtime-try',
     operands: ['prompts/app.prompt.md'],
     options: { '--fresh': true },
   });
-  assert.deepEqual(parseArgv(['simulate', '--stop', 'prompts/app.prompt.md']), {
+  assert.deepEqual(parseArgv(['--stop', 'prompts/app.prompt.md']), {
     commandId: 'try',
     local: 'runtime-try',
     operands: ['prompts/app.prompt.md'],
     options: { '--stop': true },
   });
-  assert.deepEqual(parseArgv(['simulate', 'prompts/app.prompt.md', '--page', '--new', '--fresh']), {
+  assert.deepEqual(parseArgv(['prompts/app.prompt.md', '--page', '--new', '--fresh']), {
     commandId: 'try',
     local: 'runtime-try',
     operands: ['prompts/app.prompt.md'],
     options: { '--page': true, '--new': true, '--fresh': true },
   });
-  assert.deepEqual(parseArgv(['simulate', 'prompts/app.prompt.md', '--cli', '--fresh']), {
+  assert.deepEqual(parseArgv(['prompts/app.prompt.md', '--cli', '--fresh']), {
     commandId: 'try',
     local: 'runtime-try',
     operands: ['prompts/app.prompt.md'],
     options: { '--cli': true, '--fresh': true },
   });
-  assert.deepEqual(parseArgv(['simulate', 'prompts/app.prompt.md', '--serve', '8080', '--fresh']), {
+  assert.deepEqual(parseArgv(['prompts/app.prompt.md', '--serve', '8080', '--fresh']), {
     commandId: 'try',
     local: 'runtime-try',
     operands: ['prompts/app.prompt.md'],
@@ -95,14 +95,15 @@ test('3595/3596 CLI catalog & parser accept PROMPT.md targets, --stop PROMPT.md,
     options: { '--read': true, '--details': true },
   });
 
-  assert.ok(PUBLIC_COMMAND_MANIFEST.some(({ form }) => form.includes('pdd simulate [STORY|PROMPT.md]') && form.includes('[--fresh]')));
-  assert.ok(PUBLIC_COMMAND_MANIFEST.some(({ form }) => form === 'pdd simulate --stop [STORY|PROMPT.md]'));
+  assert.ok(PUBLIC_COMMAND_MANIFEST.some(({ form }) => form.includes('pdd [OPTIONS] <PROMPT.md|app-map.json> [ARGS...]')));
+  assert.ok(PUBLIC_COMMAND_MANIFEST.some(({ form }) => form === 'pdd --stop [STORY|PROMPT.md]'));
   assert.ok(PUBLIC_COMMAND_MANIFEST.some(({ form }) => form === 'pdd test --read [BATCH|CALL_ID] [--json] [--details] [--timeout MIN]'));
 
-  const simHelp = renderHelp(['simulate']);
-  assert.match(simHelp, /\[STORY\|PROMPT\.md\]/);
-  assert.match(simHelp, /--stop \[STORY\|PROMPT\.md\]/);
-  assert.match(simHelp, /--fresh/);
+  const directHelp = renderHelp(['.']);
+  assert.match(directHelp, /<PROMPT\.md\|app-map\.json>/);
+  assert.match(directHelp, /--stop \[STORY\|PROMPT\.md\]/);
+  assert.match(directHelp, /--fresh/);
+  assert.doesNotMatch(directHelp, /\b(?:sim|simulate|simulator)\b/i);
   assert.match(renderHelp(['test']), /--details/);
 });
 
@@ -162,11 +163,11 @@ test('3596 CLI & runtime-seam forward prompts/app.prompt.md, --stop prompts/app.
     hasRunTryPort: false,
   });
 
-  // With runtime-client@1.1.1, `pdd simulate prompts/app.prompt.md` is accepted natively
+  // With runtime-client@1.1.1, direct `pdd prompts/app.prompt.md` is accepted natively
   // and proceeds past Story discovery to runtime authentication (exit 5 without gh sign-in, no old-client refusal).
   const cliStreams = captureStreams();
   const env = { HOME: home, PDD_RUNTIME_URL: 'https://runtime.example', PDD_STATE_DIR: state };
-  const cliCode = await runPdd(['simulate', 'prompts/app.prompt.md'], { cwd: root, env, stdout: cliStreams.stdout, stderr: cliStreams.stderr });
+  const cliCode = await runPdd(['prompts/app.prompt.md'], { cwd: root, env, stdout: cliStreams.stdout, stderr: cliStreams.stderr });
   assert.equal(cliCode, 5, cliStreams.err);
   assert.doesNotMatch(cliStreams.err, /No tests found|Unknown story|No Stories are available/);
 });

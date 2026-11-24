@@ -320,10 +320,11 @@ test('#3594: pdd test --fresh parses cleanly, bypasses local cache reuse, sends 
   }
 });
 
-test('#3594: pdd simulate --fresh forwards fresh: true to POST /v1/try, CLI door descriptors, and runDoorCall', async t => {
-  assert.deepEqual(parseArgv(['simulate', 'place-order', '--fresh']).options, { '--fresh': true });
-  assert.deepEqual(parseArgv(['simulate', 'place-order', '--cli', '--fresh']).options, { '--cli': true, '--fresh': true });
-  assert.throws(() => parseArgv(['simulate', '--fresh=1']), CommandInputError);
+test('#3594: direct pdd --fresh forwards fresh: true to POST /v1/try, CLI door descriptors, and runDoorCall', async t => {
+  assert.deepEqual(parseArgv(['--fresh', 'place-order']).options, { '--fresh': true });
+  assert.deepEqual(parseArgv(['--cli', '--fresh', 'place-order']).options, { '--cli': true, '--fresh': true });
+  assert.deepEqual(parseArgv(['prompts/app.prompt.md', '--fresh']).options, { '--fresh': true });
+  assert.throws(() => parseArgv(['--fresh=1']), CommandInputError);
 
   const webSetup = harbor(t);
   const setup = harbor(t, makeCliStory);
@@ -1145,7 +1146,7 @@ test('#3594 R1 regressions: simulate --fresh --shell 0o600 single-session patch,
   assert.equal(screenPosts[0].json.fresh, true, 'openServe --fresh must inject fresh: true on Screen POSTs');
 });
 
-test('#3594 R2/R3 regression: pdd simulate --product --fresh handles open, sibling, journey, and absent product Tries accurately', async t => {
+test('#3594 R2/R3 regression: pdd --product --fresh handles open, sibling, journey, and absent product Tries accurately', async t => {
   // 0. When NO product Try is open, --product --fresh proceeds cleanly without false refusal.
   const cleanSetup = harbor(t);
   let cleanInvoked = false;
@@ -1204,7 +1205,7 @@ test('#3594 R2/R3 regression: pdd simulate --product --fresh handles open, sibli
     2,
     '--product place-order --fresh without --new must fail closed when place-order has an open Try',
   );
-  assert.match(targetPorts.ports.stderr.text, /pdd simulate --product place-order --fresh --new/);
+  assert.match(targetPorts.ports.stderr.text, /pdd --product place-order --fresh --new/);
   assert.equal(invokedTry, false);
 
   // 2. Sibling Story target `--product unknown-item --fresh` (while place-order has an open product Try) MUST proceed cleanly!
@@ -1246,7 +1247,7 @@ test('#3594 R2/R3 regression: pdd simulate --product --fresh handles open, sibli
     2,
     '--product --journey checkout --fresh without --new must fail closed when checkout journey Try is open',
   );
-  assert.match(journeyPorts.ports.stderr.text, /pdd simulate --product --journey checkout --fresh --new/);
+  assert.match(journeyPorts.ports.stderr.text, /pdd --product --journey checkout --fresh --new/);
   assert.equal(journeyInvoked, false);
 
   // 4. Bare `--product --fresh` without --new fails closed when the unique open product Try matches, and `--new` proceeds.
@@ -1259,7 +1260,7 @@ test('#3594 R2/R3 regression: pdd simulate --product --fresh handles open, sibli
     await seam.simulate({ words: [], fresh: true, options: { '--product': true, '--no-wait': true }, cwd: setup.repo }, prodPorts.ports),
     2,
   );
-  assert.match(prodPorts.ports.stderr.text, /pdd simulate --product --fresh --new/);
+  assert.match(prodPorts.ports.stderr.text, /pdd --product --fresh --new/);
   assert.equal(bareInvoked, false);
 
   let newInvoked = false;

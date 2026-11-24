@@ -11,7 +11,7 @@ body:
         - Run `pdd --version`. It must print `0.1.` and a number. `pdd, version 0.0.` and a number is the Python pdd (0.0.x). It is retired. Do not report it here. Install pdd from the [README](https://github.com/promptdriven/pdd#install).
         - Search the [open issues](https://github.com/promptdriven/pdd/issues) first. If an issue has the same problem, add a comment to it.
         - In the title, write what fails for you, in your words. Do not write a guessed cause.
-        - Write one problem in each issue. Never paste tokens, Simulator links, private repo links or personal data.
+        - Write one problem in each issue. Never paste tokens, Prompt Interpreter links, private repo links or personal data.
   - type: input
     id: version
     attributes:
@@ -51,7 +51,7 @@ body:
     id: link
     attributes:
       label: Runtime link or run id
-      description: The report link that `pdd test` printed, a request ID, or for an Autopilot run the output of `pdd autopilot status` and `pdd autopilot logs N`. Anyone with a report link can open it, so add it only when you agree. Never paste a Simulator link. Anyone with a Simulator link can use it.
+      description: The report link that `pdd test` printed, a request ID, or for an Autopilot run the output of `pdd autopilot status` and `pdd autopilot logs N`. Anyone with a report link can open it, so add it only when you agree. Never paste a Prompt Interpreter link. Anyone with a Prompt Interpreter link can use it.
     validations:
       required: false
   - type: textarea
@@ -97,5 +97,5 @@ body:
       options:
         - label: I searched the open issues.
           required: true
-        - label: The text has no tokens, Simulator links, private repo links or personal data.
+        - label: The text has no tokens, Prompt Interpreter links, private repo links or personal data.
           required: true

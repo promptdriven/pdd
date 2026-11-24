@@ -8,7 +8,7 @@ In PDD, you write prompts and Stories first. Prompts are the source of truth for
 flowchart LR
   P["Prompt<br/>the source"] --> S["Story<br/>what a person can do"]
   S --> L["Lint & Test<br/>pdd lint · pdd test"]
-  L --> T["Simulate<br/>pdd sim"]
+  L --> T["Run Prompt<br/>pdd PROMPT.md"]
   T --> A["Approve<br/>pdd approve"]
   A --> K["Build & Prove<br/>code · pdd prove"]
 ```
@@ -17,7 +17,7 @@ PDD is the `pdd` command and one `/pdd` skill (`$pdd` in Codex, `/pdd` in Claude
 
 ## Install
 
-You need [Node.js](https://nodejs.org) 22.16.0 or newer (22.20.0+ for Autopilot), [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. Install Codex, Claude Code, Gemini CLI or Antigravity CLI to run PDD with your coding agent. Without `--agent`, pdd selects the first ready agent in that order. Remote `pdd test`, `pdd lint --remote`, and `pdd simulate` need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
+You need [Node.js](https://nodejs.org) 22.16.0 or newer (22.20.0+ for Autopilot), [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. Install Codex, Claude Code, Gemini CLI or Antigravity CLI to run PDD with your coding agent. Without `--agent`, pdd selects the first ready agent in that order. Remote `pdd test`, `pdd lint --remote`, and direct `pdd <PROMPT.md|STORY|.>` execution need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
 
 ```sh
 npm install -g @promptdriven/pdd
@@ -28,7 +28,7 @@ pdd init
 ```
 
 1. `npm install -g @promptdriven/pdd` installs the `pdd` command.
-2. `pdd setup` installs the global `/pdd` skill into `~/.agents/skills`, `~/.claude/skills` (cleaning marked retired skills and skipping duplicates when a Claude Code plugin is installed), and `~/.gemini/config/skills`, and previews Simulator MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to confirm previewed MCP registration without prompting, or `--skills-dir PATH` for a custom skill folder.
+2. `pdd setup` installs the global `/pdd` skill into `~/.agents/skills`, `~/.claude/skills` (cleaning marked retired skills and skipping duplicates when a Claude Code plugin is installed), and `~/.gemini/config/skills`, and previews Prompt Interpreter MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to confirm previewed MCP registration without prompting, or `--skills-dir PATH` for a custom skill folder.
 3. If you prefer another skills installer, `npx skills add promptdriven/pdd -g --skill pdd` installs the `/pdd` skill globally (without MCP registration).
 4. `pdd --version` prints `0.1.50`. When an installed skill is older than pdd, it prints the update command on stderr.
 5. `pdd init` adds a 4-line PDD block to `CLAUDE.md` (else `AGENTS.md`) inside a repository and detects its language and test command without editing root `.gitignore` (`.pdd/.gitignore` is managed automatically).
@@ -105,35 +105,35 @@ Reports (anyone with a link can open it):
 
 Checks show `✓` when all passed and `✗` when a check failed. Exit codes: `0` passed, `1` check failed, `3` unknown or still running, `4` refused, `5` access or service unavailable.
 
-### 3. Simulate (try before coding)
+### 3. Run prompts directly (try before coding)
 
-`pdd simulate` (short: `pdd sim`) lets you use the program by hand in the PDD Simulator before writing code.
+Run any prompt, Story, or whole project (`.`) directly with `pdd` on the **Prompt Interpreter** before writing code — just like running a script with `python script.py`.
 
 | Your program | Command | What you do |
 |---|---|---|
-| A screen | `pdd sim STORY` | Opens the PDD Simulator in your browser. On the **Screen** tab, click **Open the app**, then use it. |
-| A command line | `pdd sim STORY --cli` | Prints an `export PATH=…` line. Run it, then run your program's commands. |
-| An HTTP API | `pdd sim STORY --serve PORT` | Serves your prompt's routes at `http://127.0.0.1:PORT`. Send requests with `curl`. Ctrl-C stops the server. |
-| Anything else | `pdd sim STORY` | On the **Form** tab, fill the fields and click **Run**. |
+| A screen | `pdd prompts/app.prompt.md` or `pdd STORY` | Opens the Prompt Interpreter in your browser. On the **Screen** tab, click **Open the app**, then use it. |
+| A command line | `pdd prompts/todo.prompt.md add "Buy milk"` or `pdd STORY --cli` | Runs CLI args directly, or prints an `export PATH=…` line (`--cli`) so you can run your program's commands. |
+| An HTTP API | `pdd STORY --serve PORT` | Serves your prompt's routes at `http://127.0.0.1:PORT`. Send requests with `curl`. Ctrl-C stops the server. |
+| Anything else | `pdd STORY` or `pdd .` | On the **Form** tab, fill the fields and click **Run**. |
 
 For a CLI named `my-program`, or an API with `/api/items`:
 
 ```sh
-pdd sim my-story --cli
+pdd my-story --cli
 export PATH=/path/to/your-repo/.pdd/try/bin:"$PATH"
 my-program --help
 ```
 
 ```sh
-pdd sim my-story --serve 8091
+pdd my-story --serve 8091
 curl http://127.0.0.1:8091/api/items
 ```
 
-- **Budget:** A new simulation starts with 400 AI calls. Raise it in the Simulator or run `pdd sim STORY --new --max-calls 600`.
-- **Save a case:** Click **Save as test** in the Simulator, or run `pdd sim --save-last` after a `--cli` command.
-- **Keep the link private:** Anyone with a Simulator link can use it and spend its AI calls.
-- **Stop it:** Simulations end after 24 hours, or sooner with `pdd sim --stop STORY`.
-- **Ask your agent:** While `pdd sim` runs in your terminal, the Simulator's **Ask your agent** panel connects to your local Codex, Claude, or Gemini (`--agent NAME` to choose).
+- **Budget:** A new Prompt Interpreter session starts with 400 AI calls. Raise it in the browser or run `pdd STORY --new --max-calls 600`.
+- **Save a case:** Click **Save as test** in the Prompt Interpreter, or run `pdd --save-last` after a `--cli` command.
+- **Keep the link private:** Anyone with a Prompt Interpreter link can use it and spend its AI calls.
+- **Stop it:** Sessions end after 24 hours, or sooner with `pdd --stop STORY`.
+- **Ask your agent:** While `pdd STORY` runs in your terminal, the Prompt Interpreter's **Ask your agent** panel connects to your local Codex, Claude, or Gemini (`--agent NAME` to choose).
 
 ### 4. Approve prompts
 
@@ -161,13 +161,13 @@ pdd prove --base origin/main
 
 | Command | What it does |
 |---|---|
-| `pdd setup [--yes] [--skills-dir PATH]` | Install laptop-wide `/pdd` skill and preview Simulator MCP setup. |
+| `pdd setup [--yes] [--skills-dir PATH]` | Install laptop-wide `/pdd` skill and preview Prompt Interpreter MCP setup. |
 | `pdd init` | Add the 4-line PDD block to `CLAUDE.md` (else `AGENTS.md`) and detect stack/tests. |
 | `pdd status [PATH...] [--changed] [--json]` | Compact offline overview of prompts, Stories, ownership, and `pdd.json` Feature Map. |
 | `pdd lint [STORY...] [--diff [BASE]]` | Offline structural, SVG, scenario, and diff lint (0 AI, 0 network). Pass `--remote` for hosted lint. |
 | `pdd prove [--base REF]` | Run offline lint, diff checks, repo tests, and merge-base `verify.paths` recipes (or `--test`/`--expect` bug contrast). |
 | `pdd test [STORY...]` | Run Story tests on the PDD interpreter (`--files` previews uploads; `--read` reads saved results). |
-| `pdd simulate [STORY\|PROMPT.md]` | Try prompts interactively in the PDD Simulator (short: `pdd sim`; `--cli`, `--serve PORT`, `--stop`). |
+| `pdd <PROMPT.md\|STORY\|.> [args...]` | Run prompts directly on the Prompt Interpreter (`--page`, `--cli`, `--serve PORT`, `--product`, `--stop`). |
 | `pdd approve PROMPT [--said WORDS]` | Review prompt diff and record approval (terminal y/N or `--said -`; strict mode requires terminal). |
 | `pdd update [FILE...] [--branch] [--check]` | Inspect changed code vs owning prompts offline. |
 | `pdd upgrade [--main]` | Update global `@promptdriven/pdd` and refresh marked user skill (`--main` tracks pinned `main`). |
@@ -180,17 +180,17 @@ Run `pdd --help` for the overview, `pdd <command> --help` for full options, or r
 
 ## Key ideas
 
-- **Prompt space and code space:** Your program lives in prompt space first (`prompts/*.prompt.md`, `user_stories/*.md`, `tests/*.json`). Check, simulate, and approve it there; code follows the approved prompts.
+- **Prompt space and code space:** Your program lives in prompt space first (`prompts/*.prompt.md`, `user_stories/*.md`, `tests/*.json`). Check, run, and approve it there; code follows the approved prompts.
 - **Stories:** One cohesive user loop per Story (`<= 35` lines, `1–6` numbered acceptance criteria) with exact checks in its scenario JSON.
 - **Small test steps:** Keep each test step focused (one action or a short run; 10-minute server cap per step).
 - **Draft and approved:** Prompts start as drafts. New behavior needs human approval (or an applicable Autopilot delegation); editing an approved prompt returns it to draft.
-- **AI-call budgets:** Ceilings, not charges. Checks default to 12 calls/step (`18..1000`); new simulations start at 400 calls (`--max-calls 1..1000`).
+- **AI-call budgets:** Ceilings, not charges. Checks default to 12 calls/step (`18..1000`); new Prompt Interpreter sessions start at 400 calls (`--max-calls 1..1000`).
 - **Fakes:** The interpreter never touches real databases or external services; prompts declare `<port>.<op>` ports and tests bind deterministic fakes ([Ports and CLI](skills/pdd/references/ports-and-cli.md)).
 - **Scoped uploads:** `pdd test` uploads only Git-visible files needed by the selected Stories and refuses secret-like names (`pdd test --files` previews).
 
 ## Access
 
-`pdd test`, `pdd lint --remote`, `pdd simulate`, and the Try tools in `pdd mcp` use the hosted PDD interpreter with your GitHub login (`gh auth status`) once PDD Cloud approves your account. Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with that GitHub account; access activates within 1 minute of approval. For questions, [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Interpreter%20access%20for%20) with your GitHub login.
+`pdd test`, `pdd lint --remote`, direct `pdd <PROMPT.md|STORY|.>` execution, and the Try tools in `pdd mcp` use the hosted PDD interpreter with your GitHub login (`gh auth status`) once PDD Cloud approves your account. Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with that GitHub account; access activates within 1 minute of approval. For questions, [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Interpreter%20access%20for%20) with your GitHub login.
 
 The `/pdd` skill and all other commands (`pdd setup`, `pdd init`, `pdd status`, `pdd lint`, `pdd prove`, `pdd owner`, `pdd files`, `pdd update`) run 100% locally offline.
 
@@ -258,9 +258,9 @@ See the [CLI reference](docs/cli.md#autopilot-on-this-machine) for all options a
 | `FAILED` (exit 1) | Read the failed check and report. A person decides expected values. |
 | `UNKNOWN` or `Still running` (exit 3) | Run `pdd test --read` later; do not resend the same check. |
 | `STOPPED … took more than 10 minutes` | Split the test step into smaller steps and re-run. |
-| `This Try session is busy.` | Wait for the current simulation command to finish. |
-| `The runtime is busy` (exit 5) or `Too many Try links are open.` | Wait a few minutes or close unused sessions with `pdd sim --stop STORY`. |
-| `This Try has ended` | Simulation hit its call limit or 24-hour TTL; run `pdd sim STORY --new`. |
+| `This Try session is busy.` | Wait for the current Prompt Interpreter command to finish. |
+| `The runtime is busy` (exit 5) or `Too many Try links are open.` | Wait a few minutes or close unused sessions with `pdd --stop STORY`. |
+| `This Try has ended` | Session hit its call limit or 24-hour TTL; run `pdd STORY --new`. |
 | `Autopilot did not start: it works only on the issues that you mark with an opt-in label.` | Run `pdd autopilot add N`, then `pdd autopilot start --label pdd:autopilot`. |
 | `pdd --version` does not print `0.1.50` | Another `pdd` comes first on PATH. Run `"$(npm prefix -g)/bin/pdd" --version` for the exact fix line. |
 
@@ -272,7 +272,7 @@ Follow [docs/ISSUES.md](docs/ISSUES.md) (your agent can follow it too):
 
 1. Run `pdd --version` (must print `0.1.` and a number).
 2. Search [open issues](https://github.com/promptdriven/pdd/issues) and comment if your issue already exists.
-3. Otherwise fill the [issue form](https://github.com/promptdriven/pdd/issues/new?template=bug.yml) with one problem, exact command, and output (never paste tokens, Simulator links, or private code).
+3. Otherwise fill the [issue form](https://github.com/promptdriven/pdd/issues/new?template=bug.yml) with one problem, exact command, and output (never paste tokens, Prompt Interpreter links, or private code).
 
 ## Links
 
