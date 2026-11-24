@@ -9,7 +9,6 @@ import {readCodexLimits} from './codex-limits.mjs';
 import {isCloudAccountsActive, managedClaudeSettingsPath, managedCodexAuthPath, pddManagedCodexHome} from './login-pool.mjs';
 import {checkWorkflowAgents} from './shared/agent-readiness.mjs';
 import {githubOriginRepository} from './shared/github-repo.mjs';
-import {readPromptApprovals} from './approval-policy.mjs';
 import {PDD_SKILL_NAMES, RETIRED_SKILL_NAMES} from './shared/skills-install.mjs';
 import {health as runtimeHealthCheck, runtimeClientSlice, runtimePreflightSlice} from './runtime-seam.mjs';
 
@@ -279,7 +278,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   }
   const config = json(read(join(cwd,'pdd.json'))), auto = config?.autopilot;
   const valid = auto && ['auto','observe'].includes(auto.mode) && (auto.trust===undefined || Array.isArray(auto.trust)&&auto.trust.every(x=>typeof x==='string'&&x.trim()));
-  add('setup-mode',valid?'pass':'warn',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; ${config.strict_approvals===true?'strict person-terminal approvals required':'delegated ordinary gates allowed; required human reviews still apply'}`:'Choose mode with pdd autopilot observe or pdd autopilot auto; off does not start work','pdd autopilot observe');
+  add('setup-mode',valid?'pass':'warn',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; required human reviews still apply`:'Choose mode with pdd autopilot observe or pdd autopilot auto; off does not start work','pdd autopilot observe');
   // Job worktrees and other machines read pdd.json of the default branch on GitHub.
   // The settings differ as autopilot-github defines: the mode, or the trust names ignoring case and order.
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -310,27 +309,6 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const tracked = await run('git',['ls-files','-z','--','*.prompt.md']);
   const promptPaths = ready(tracked)?tracked.stdout.split('\0').filter(Boolean):[];
   const drafts = [], unreadable = [];
-  let journal = [], journalUnreadable = false;
-  if (promptPaths.length) {
-    let commonDirReply = await run('git',['rev-parse','--path-format=absolute','--git-common-dir']);
-    let commonDir = ready(commonDirReply) && commonDirReply.stdout.trim() ? commonDirReply.stdout.trim() : null;
-    if (!commonDir) {
-      commonDirReply = await run('git',['rev-parse','--git-common-dir']);
-      commonDir = ready(commonDirReply) && commonDirReply.stdout.trim() ? resolve(cwd, commonDirReply.stdout.trim()) : null;
-    }
-    if (!commonDir) {
-      journalUnreadable = true;
-    } else {
-      try { journal = readPromptApprovals({commonDir},{fs:files}); }
-      catch { journalUnreadable = true; }
-    }
-  }
-  const strictApprovals = config?.strict_approvals === true;
-  const journalApproved = (path, text) => {
-    const hash = proseSha256(text);
-    return journal.some(entry => (!strictApprovals || entry.actor?.kind === 'terminal')
-      && entry.prompts?.some(item => item.path === path && item.proseSha256 === hash));
-  };
   const realCwd = (() => { try { return typeof files.realpathSync === 'function' ? files.realpathSync(cwd) : resolve(cwd); } catch { return resolve(cwd); } })();
   const isSafePromptFile = filePath => {
     if (typeof files.lstatSync === 'function') {
@@ -358,13 +336,10 @@ export async function runAutopilotDoctor(input, ports = {}) {
     if (blocks.length === 1) {
       const data = json(blocks[0][1]);
       if (!object(data) || data.status!=='approved' || data.prose_sha256!==proseSha256(text)) drafts.push(path);
-      continue;
     }
-    if (!journalApproved(path, text)) drafts.push(path);
   }
-  const draftDetail = `First check may need prompt approval: ${drafts.join(', ')||'none'}${unreadable.length?`; unreadable: ${unreadable.join(', ')}`:''}${journalUnreadable?'; approval journal unreadable':''}`;
-  const draftFix = drafts.length ? `pdd approve ${quote(drafts[0])}` : 'pdd files --json';
-  add('draft-prompts',!ready(tracked)||drafts.length||unreadable.length||journalUnreadable?'warn':'pass',draftDetail,draftFix);
+  const draftDetail = `First check may need prompt approval: ${drafts.join(', ')||'none'}${unreadable.length?`; unreadable: ${unreadable.join(', ')}`:''}`;
+  add('draft-prompts',!ready(tracked)||drafts.length||unreadable.length?'warn':'pass',draftDetail,'pdd files --json');
 
   let health;
   try { runtimeOrigin(env); } catch { health={state:'address'}; }

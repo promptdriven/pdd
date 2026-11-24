@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-selection.prompt.md (sha256: 51dbd663136bdabce204db3fafbf7d297c41792abad1fb25cc5f9def7b3276e6).
+// Generated from prompts/cli/test-selection.prompt.md (sha256: 1cf9def8fbfac60b267e41c8d87b3bf515941ebeaee4e9d802ae13809a1d31eb).
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
@@ -1300,7 +1300,7 @@ export function selectAffectedTests(options = {}, ports = {}) {
   if (touchedPrompts) {
     for (const testPath of totalTests) {
       if (
-        /^(?:test|tests)\/(?:core\/lint\/)?(?:plain-prompts-and-frontmatter|prompt-approve|repo-hygiene-lint|file-owner|story-quality-lint|authoring-lint-parity|skills)\.(?:test|spec)\./.test(testPath) ||
+        /^(?:test|tests)\/(?:core\/lint\/)?(?:plain-prompts-and-frontmatter|repo-hygiene-lint|file-owner|story-quality-lint|authoring-lint-parity|skills)\.(?:test|spec)\./.test(testPath) ||
         /^(?:test|tests)\/(?:core\/lint\/)?.*prompt.*contract.*\.(?:test|spec)\./i.test(testPath)
       ) {
         addTest(testPath, 'prompt-contract');

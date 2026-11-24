@@ -914,7 +914,7 @@ const REGISTERED_E2E_ROUTES = Object.freeze([
   // Discovery, help, version, completion
   'help', 'version', 'version.detailed', 'completion',
   // Core PDD workflow
-  'setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'doctor',
+  'setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'doctor',
   // Cloud accounts
   'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use',
   'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause',
@@ -1018,7 +1018,7 @@ test('discovery, help, version, and shell completion commands work end-to-end', 
   markExecuted('completion');
 });
 
-test('core local authoring commands: setup, init, status, files, owner, contracts, jobs, mcp, approve, upgrade', async () => {
+test('core local authoring commands: setup, init, status, files, owner, contracts, jobs, mcp, upgrade', async () => {
   const fx = makeIsolatedFixture('core-local');
 
   // setup --yes: laptop-only — installs global skills to temp HOME without touching repo files
@@ -1153,16 +1153,17 @@ test('core local authoring commands: setup, init, status, files, owner, contract
   assert.ok(Array.isArray(mcpReplies[2].result.tools) && mcpReplies[2].result.tools.length > 0);
   markExecuted('mcp');
 
-  // approve: --said WORDS and --said - via stdin
-  const approve1 = await fx.cli(['approve', 'prompts/app.prompt.md', '--said', 'Approved app CLI contract']);
-  assert.equal(approve1.code, 0, approve1.stderr);
-  assert.match(readFileSync(join(fx.repo, 'prompts', 'app.prompt.md'), 'utf8'), /"status":\s*"approved"/);
-  const approve2 = await fx.cli(['approve', 'prompts/linked.prompt.md', '--said', '-'], {
-    stdin: 'Approved linked prompt via stdin\n',
-  });
-  assert.equal(approve2.code, 0, approve2.stderr);
-  assert.match(readFileSync(join(fx.repo, 'prompts', 'linked.prompt.md'), 'utf8'), /"status":\s*"approved"/);
-  markExecuted('approve');
+  // Removed `pdd approve` exits 2 cleanly with a helpful pointer to chat / GitHub PR review and zero file edits
+  const appBefore = readFileSync(join(fx.repo, 'prompts', 'app.prompt.md'), 'utf8');
+  const approveRemoved = await fx.cli(['approve', 'prompts/app.prompt.md']);
+  assert.equal(approveRemoved.code, 2, approveRemoved.stderr);
+  assert.equal(approveRemoved.stdout, '');
+  assert.match(approveRemoved.stderr, /pdd approve was removed.*chat or GitHub PR review/i);
+  assert.equal(readFileSync(join(fx.repo, 'prompts', 'app.prompt.md'), 'utf8'), appBefore);
+  const rootHelp = await fx.cli(['--help']);
+  assert.equal(rootHelp.code, 0, rootHelp.stderr);
+  const rootHelpBody = rootHelp.stdout.split('\n').filter(line => !/^(?:Skill|Prompting guide): /.test(line)).join('\n');
+  assert.doesNotMatch(rootHelpBody, /\bapprove\b/i);
 
   // upgrade & upgrade --main: refuses source Git checkout cleanly without touching npm or network
   for (const args of [['upgrade'], ['upgrade', '--main']]) {

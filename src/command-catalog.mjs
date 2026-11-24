@@ -22,7 +22,6 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
       "  pdd prove [--base REF]         Run lint, tests & Feature Map recipes.",
       `  pdd ${test} [STORY...]            Run Story tests on the PDD interpreter.`,
       `  pdd ${simulate} [STORY]           Try prompts interactively (short: sim).`,
-      "  pdd approve PROMPT             Review prompt diff and record approval.",
       "  pdd update [FILE...]           Check changed code vs owning prompts.",
       "  pdd files [--json]             List prompts, Stories, tests & refusals.",
       "  pdd owner PATH...              Show which prompt owns each file.",
@@ -63,7 +62,7 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
   ]),
   focusedHelpLines: Object.freeze([
     `Run pdd <command> --help for full options (for example, pdd ${test} --help,`,
-    "pdd prove --help, pdd approve --help, or pdd autopilot --help).",
+    `pdd prove --help, pdd ${simulate} --help, or pdd autopilot --help).`,
   ]),
   closingLines: Object.freeze([
     "Open Codex ($pdd) or Claude Code (/pdd) to plan products, build features,",
@@ -82,15 +81,10 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
     "3. Story & Test: user_stories/STORY.md (## Acceptance criteria) +",
     "   tests/STORY.json (or tests/runtime/ when native tests live in tests/).",
     `4. Check: run pdd ${lint} first (offline, 0 AI), then pdd ${test} STORY.`,
-    "5. Approve: review each changed prompt and run pdd approve PROMPT.",
+    "5. Review: review each changed prompt in chat or GitHub PR review.",
     "6. Build & Prove: code from approved prompts, then run pdd prove.",
   ]),
 });
-const approvalHelp = command => `Show the prompt diff first and ask the person; then relay their words with --said in any chat (pdd records nonblank words without grading them; chat alone never approves). Without --said, use a separate person terminal for terminal y/N approval. Default quoted heredoc for agent relay:
-${command} --said - <<'PDD_SAID'
-<the person's exact words>
-PDD_SAID
-Choose a delimiter absent as a whole line from the words and keep it quoted (--said - reads UTF-8 stdin including newlines and trims only trailing newlines; simple replies may use --said WORDS). Root pdd.json "strict_approvals": true requires a person terminal.`;
 const routes = [
   // Core PDD workflow
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }, { name: '--skills-dir', kind: 'text' }, { name: '--upgrade', kind: 'flag' }],
@@ -139,8 +133,6 @@ const routes = [
       form(`pdd ${simulate} [STORY|PROMPT.md] --serve [PORT] [--max-calls N] [--new] [--fresh]`, 'Serve real HTTP requests through your Simulator session on localhost (default port 8080).'),
       form(`pdd ${simulate} --save-last`, 'Save the last terminal command and its output in the original Story test file.'),
       form(`pdd ${simulate} --stop [STORY|PROMPT.md]`, 'Stop the open Simulator link of a Story, prompt, or exact Try ID.')] },
-  { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [{name:'--said',kind:'text'}],
-    forms: [form('pdd approve PROMPT [--said WORDS]', "Show one prompt's changes since its last approval and approve only that prompt. " + approvalHelp('pdd approve PATH'))] },
   { id: 'files', prefix: ['files'], local: 'project-files', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd files [--json]', 'List prompts, Stories, tests and refusal reasons; no network calls.')] },
   { id: 'owner', prefix: ['owner'], local: 'file-owner', operands: [{ name: 'path', type: 'text', repeat: true }], options: [{ name: '--json', kind: 'flag' }],
@@ -288,6 +280,10 @@ export const REMOVED_COMMANDS = Object.freeze([
   Object.freeze({
     words: Object.freeze(['workflow']),
     message: 'pdd workflow was removed. Use /pdd (or $pdd) in your coding agent, pdd prove for base-vs-head proof, or pdd autopilot for headless issue runs.',
+  }),
+  Object.freeze({
+    words: Object.freeze(['approve']),
+    message: 'pdd approve was removed. Review and approve prompt changes directly in chat or GitHub PR review.',
   }),
 ]);
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,

@@ -80,33 +80,20 @@ test('doctor: advisory findings warn; warnings permit readiness; critical prereq
     assert.equal(r.code,1,`critical ${critical} must exit 1: ${r.text}`);
     check(r,critical,'FAIL');
   }
-  // Plain-Markdown prompts check local approval journal (<commonDir>/pdd/approvals.json).
+  // Plain-Markdown and valid frontmatter kind: native-only prompts are ready as is (even with leftover strict_approvals).
   const plainText='# Plain prompt\n\nReturn ok.\n';
   const plain=doctorFixture();plain.tracked='one.prompt.md\0';plain.paths.set('/project/one.prompt.md',plainText);
-  const prUnapproved=await invoke(plain);assert.equal(prUnapproved.code,0,prUnapproved.text);check(prUnapproved,'draft-prompts','WARN');
-  assert.match(prUnapproved.text,/WARN draft-prompts: .*one\.prompt\.md.*; fix: pdd approve 'one\.prompt\.md'/);
-  plain.paths.set('/project/.git/pdd/approvals.json',JSON.stringify({v:1,approvals:[{id:'a1',route:'said',actor:{kind:'agent',id:'codex'},at:1,words:'ok',prompts:[{path:'one.prompt.md',proseSha256:proseSha256(plainText)}]}]}));
-  const prApproved=await invoke(plain);assert.equal(prApproved.code,0,prApproved.text);check(prApproved,'draft-prompts','PASS');
-  // Editing the prompt invalidates the prose hash -> WARN again.
-  plain.paths.set('/project/one.prompt.md','# Plain prompt\n\nReturn ok updated.\n');
-  check(await invoke(plain),'draft-prompts','WARN');
-  // strict_approvals requires actor.kind === 'terminal'.
-  plain.paths.set('/project/one.prompt.md',plainText);
+  const prPlain=await invoke(plain);assert.equal(prPlain.code,0,prPlain.text);check(prPlain,'draft-prompts','PASS');
   plain.paths.set('/project/pdd.json',JSON.stringify({autopilot:{mode:'auto',trust:[]},strict_approvals:true}));
-  check(await invoke(plain),'draft-prompts','WARN');
-  plain.paths.set('/project/.git/pdd/approvals.json',JSON.stringify({v:1,approvals:[{id:'a2',route:'terminal',actor:{kind:'terminal',id:'operator'},at:2,words:null,prompts:[{path:'one.prompt.md',proseSha256:proseSha256(plainText)}]}]}));
-  check(await invoke(plain),'draft-prompts','PASS');
-  // Valid frontmatter kind: native-only requires journal approval (unapproved WARN -> approved PASS).
+  const prStrict=await invoke(plain);assert.equal(prStrict.code,0,prStrict.text);check(prStrict,'draft-prompts','PASS');
+  assert.doesNotMatch(prStrict.text,/strict person-terminal|pdd approve/);
   const nativeText='---\nkind: native-only\nreason: direct host clock binding\n---\n# Clock\n\nRead clock.\n';
   const nat=doctorFixture();nat.tracked='clock.prompt.md\0';nat.paths.set('/project/clock.prompt.md',nativeText);
-  check(await invoke(nat),'draft-prompts','WARN');
-  nat.paths.set('/project/.git/pdd/approvals.json',JSON.stringify({v:1,approvals:[{id:'a3',route:'terminal',actor:{kind:'terminal',id:'operator'},at:3,words:null,prompts:[{path:'clock.prompt.md',proseSha256:proseSha256(nativeText)}]}]}));
   check(await invoke(nat),'draft-prompts','PASS');
-  // Malformed native-only frontmatter (missing reason) warns even if journal has hash.
+  // Malformed native-only frontmatter (missing reason) warns with pdd files --json fix.
   const badFmText='---\nkind: native-only\n---\n# Bad native\n';
   const badFm=doctorFixture();badFm.tracked='bad.prompt.md\0';badFm.paths.set('/project/bad.prompt.md',badFmText);
-  badFm.paths.set('/project/.git/pdd/approvals.json',JSON.stringify({v:1,approvals:[{id:'a4',route:'terminal',actor:{kind:'terminal',id:'operator'},at:4,words:null,prompts:[{path:'bad.prompt.md',proseSha256:proseSha256(badFmText)}]}]}));
-  check(await invoke(badFm),'draft-prompts','WARN');
+  const badFmRes=await invoke(badFm);check(badFmRes,'draft-prompts','WARN');assert.match(badFmRes.text,/fix: pdd files --json/);
   // Conflicting frontmatter + embedded block and duplicate embedded blocks warn.
   const conflict=doctorFixture();conflict.tracked='c.prompt.md\0';conflict.paths.set('/project/c.prompt.md','---\nkind: native-only\nreason: x\n---\n# Both\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"approved"}\n```\n</details>\n');
   check(await invoke(conflict),'draft-prompts','WARN');
@@ -123,29 +110,14 @@ test('doctor: advisory findings warn; warnings permit readiness; critical prereq
   check(await invoke(leg),'draft-prompts','WARN');
   leg.paths.set('/project/leg.prompt.md','# Legacy\n\n<details><summary>Runtime interface</summary>\n\n```json\n{bad json\n```\n</details>\n');
   check(await invoke(leg),'draft-prompts','WARN');
-  // Corrupt approvals.json and failed git-common-dir report journal unreadable (and fallback relative git-common-dir resolves).
-  const corrupt=doctorFixture();corrupt.tracked='one.prompt.md\0';corrupt.paths.set('/project/one.prompt.md',plainText);
-  corrupt.paths.set('/project/.git/pdd/approvals.json','{broken');
-  const corruptRes=await invoke(corrupt);check(corruptRes,'draft-prompts','WARN');assert.match(corruptRes.text,/approval journal unreadable/);
-  const noCommon=doctorFixture();noCommon.tracked='one.prompt.md\0';noCommon.paths.set('/project/one.prompt.md',plainText);
-  const origNoCommonRun=noCommon.ports.run;
-  noCommon.ports.run=(file,args,o)=>file==='git'&&args[0]==='rev-parse'&&args.includes('--git-common-dir')?noCommon.answer('',1):origNoCommonRun(file,args,o);
-  const noCommonRes=await invoke(noCommon);check(noCommonRes,'draft-prompts','WARN');assert.match(noCommonRes.text,/approval journal unreadable/);
-  const relCommon=doctorFixture();relCommon.tracked='one.prompt.md\0';relCommon.paths.set('/project/one.prompt.md',plainText);
-  relCommon.paths.set('/project/.git/pdd/approvals.json',JSON.stringify({v:1,approvals:[{id:'a5',route:'terminal',actor:{kind:'terminal',id:'operator'},at:5,words:null,prompts:[{path:'one.prompt.md',proseSha256:proseSha256(plainText)}]}]}));
-  const origRelRun=relCommon.ports.run;
-  relCommon.ports.run=(file,args,o)=>file==='git'&&args[0]==='rev-parse'&&args.includes('--path-format=absolute')?relCommon.answer('',129):file==='git'&&args[0]==='rev-parse'&&args.includes('--git-common-dir')?relCommon.answer('.git\n'):origRelRun(file,args,o);
-  check(await invoke(relCommon),'draft-prompts','PASS');
-  // Symlinked tracked prompt is rejected as unreadable, and paths with spaces/quotes are shell-quoted in fix.
+  // Symlinked tracked prompt is rejected as unreadable.
   const sym=doctorFixture();sym.tracked='sym.prompt.md\0';sym.paths.set('/project/sym.prompt.md',plainText);
   sym.ports.files.lstatSync=p=>p==='/project/sym.prompt.md'?{isSymbolicLink:()=>true,isFile:()=>false}:{isSymbolicLink:()=>false,isFile:()=>true};
   const symRes=await invoke(sym);check(symRes,'draft-prompts','WARN');assert.match(symRes.text,/unreadable: sym\.prompt\.md/);
-  const quoted=doctorFixture();quoted.tracked="prompts/it's one.prompt.md\0";quoted.paths.set("/project/prompts/it's one.prompt.md",plainText);
-  const quotedRow=(await runAutopilotDoctor(quoted.input,quoted.ports)).checks.find(c=>c.id==='draft-prompts');
-  assert.equal(quotedRow.fix,"pdd approve 'prompts/it'\\''s one.prompt.md'");
-  // Legacy embedded draft block still warns.
+  // Legacy embedded draft block still warns with pdd files --json fix (never pdd approve).
   const f=doctorFixture();f.tracked='one.prompt.md\0';f.paths.set('/project/one.prompt.md','# Draft\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status":"draft"}\n```\n</details>\n');f.ports.codexLimits=async()=>({state:'unknown'});
   const r=await invoke(f);assert.equal(r.code,0,r.text);check(r,'draft-prompts','WARN');check(r,'agent-usage','WARN');
+  assert.doesNotMatch(r.text,/pdd approve/);
 });
 
 test('doctor: Claude on macOS probes auth and launchctl without generation',async()=>{

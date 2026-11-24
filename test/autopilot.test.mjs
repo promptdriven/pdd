@@ -7,7 +7,6 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { runAutopilot } from '../src/autopilot.mjs';
-import { readApprovalPolicy } from '../src/approval-policy.mjs';
 
 const stories = ['author', 'invalid-mode', 'invalid-type', 'mode', 'setup-auto', 'setup-observe', 'setup-trust', 'setup', 'trust'];
 const at = (value, pointer) => pointer.split('/').slice(1).reduce((v, key) => v?.[key.replaceAll('~1', '/').replaceAll('~0', '~')], value);
@@ -197,10 +196,15 @@ test('native GitHub lookup times out across calls, terminates its child and reta
   assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
 });
 
-test('autopilot-mode: approval policy stays independent for all modes and still enforces strict policy', t => {
+test('autopilot-mode: leftover strict_approvals key in pdd.json is ignored gracefully and preserved on settings writes', async t => {
   const cwd = realRepo(t);
-  for (const mode of ['off', 'observe', 'auto', 'turbo']) for (const strict_approvals of [true, false]) {
-    fs.writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ strict_approvals, autopilot: { mode, trust: ['Dana'] } }));
-    assert.deepEqual(readApprovalPolicy({ root: cwd }), { strictApprovals: strict_approvals });
+  for (const mode of ['off', 'observe', 'auto']) {
+    fs.writeFileSync(join(cwd, 'pdd.json'), JSON.stringify({ strict_approvals: true, autopilot: { mode: 'off', trust: ['Dana'] } }));
+    const result = await runAutopilot({ action: 'mode', mode }, { cwd });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.mode, mode);
+    const saved = JSON.parse(fs.readFileSync(join(cwd, 'pdd.json'), 'utf8'));
+    assert.equal(saved.strict_approvals, true);
+    assert.equal(saved.autopilot.mode, mode);
   }
 });

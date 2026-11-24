@@ -33,10 +33,10 @@ Each problem is `{path, line, code, message, fix, excerpt}`, where `excerpt` is 
 
 - `isLintableStoryPath(path)`: return `true` when `path` is a lintable Story path as above.
 - `lintStory(text, {path = 'user_stories/story.md', criteriaHygiene = true} = {})`: pure. Return `{ok, path, problems}`, with `ok` equal to `problems.length === 0`.
-- `lintStories(entries = [], {criteriaHygiene = false} = {})`: pure. Accept `{path, text}` rows, skip rows where `!isLintableStoryPath(path)`, lint the rest with `{path: entry.path, criteriaHygiene}` in order, and return `{ok, problems}` so pre-PR and approval callers preserve existing admission unless `criteriaHygiene: true` is requested.
+- `lintStories(entries = [], {criteriaHygiene = false} = {})`: pure. Accept `{path, text}` rows, skip rows where `!isLintableStoryPath(path)`, lint the rest with `{path: entry.path, criteriaHygiene}` in order, and return `{ok, problems}` so pre-PR callers preserve existing admission unless `criteriaHygiene: true` is requested.
 - `formatStoryLint(result)`: pure. Return `''` when `!result` or `result.ok` or `!result.problems?.length`. Otherwise return plain text starting with `Story quality check failed:`, listing each `  PATH:LINE [CODE] MESSAGE` and `    > EXCERPT`, and ending with one rewrite instruction telling the author to state who uses the behavior, what they do and what they see, while keeping implementation details in module prompts or tests.
 
 ## Callers and context
 
 - [Story guide](../../skills/pdd/references/stories.md): authoring rules that this check enforces locally.
-- [Prompt approve](prompt-approve.prompt.md) and workflow runner: run `lintStories` on changed Story files at approval and pre-PR gates.
+- Local lint and verification callers: run `lintStories` on authored Story files.

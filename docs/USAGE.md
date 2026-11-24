@@ -62,7 +62,7 @@ Do these steps in this order:
 
 ### 2.1 Install the pdd command
 
-You need the pdd command for offline repo tools (`pdd init`, `pdd status`, `pdd lint`, `pdd prove`, `pdd update`, `pdd owner`, `pdd files`), interpreter commands (`pdd test`, `pdd simulate`, `pdd approve`), and headless Autopilot (`pdd autopilot`).
+You need the pdd command for offline repo tools (`pdd init`, `pdd status`, `pdd lint`, `pdd prove`, `pdd update`, `pdd owner`, `pdd files`), interpreter commands (`pdd test`, `pdd simulate`), and headless Autopilot (`pdd autopilot`).
 
 ```sh
 npm install -g @promptdriven/pdd
@@ -108,8 +108,8 @@ Start runs the same checks before it changes local state or starts work.
 Only missing or signed-out agent sign-in refuses preflight. All other findings
 warn with fix commands in observe and auto mode. Native start keeps its own guards.
 Manual gates need your later approval. Explicit auto setup and start can delegate
-ordinary automatic gates and eligible merges. Strict approvals and required
-human reviews still need a person. An empty trust list still trusts the owner
+ordinary automatic gates and eligible merges. Required human reviews still
+need a person. An empty trust list still trusts the owner
 and write-access users. Draft prompts may need approval at the first check;
 doctor lists them without approving them. Interpreter access is checked without
 running a prompt, so native green CI and doctor do not prove prompt behavior.
@@ -233,7 +233,7 @@ You can also inspect repository state offline at any time with `pdd status` (or 
 
 ### 6.1 Interactive issue work in your coding agent
 
-In Codex, Claude Code, Gemini CLI, or Antigravity, invoke `/pdd` with the issue number or description. The skill inspects the repo with `pdd status --json`, selects `feature`, `bug`, `small-change`, or `product` mode, writes prompts/Stories/tests before code, checks them with `pdd lint` and `pdd test`, waits for your approval (`pdd approve PROMPT`), builds the implementation, and proves the change with `pdd prove`:
+In Codex, Claude Code, Gemini CLI, or Antigravity, invoke `/pdd` with the issue number or description. The skill inspects the repo with `pdd status --json`, selects `feature`, `bug`, `small-change`, or `product` mode, writes prompts/Stories/tests before code, checks them with `pdd lint` and `pdd test`, waits for your review in chat or GitHub PR review, builds the implementation, and proves the change with `pdd prove`:
 
 ```sh
 pdd status --changed
@@ -264,7 +264,7 @@ pdd autopilot logs 42 -f               # follow live worker progress (Ctrl-C det
 - Each issue runs in an isolated Git worktree and branch using a headless worker job.
 - Full test suites run through the shared machine queue (`pdd autopilot suite --command "npm test"`).
 - In `observe` mode, Autopilot opens the PR, runs CI, fresh review, and full tests, and posts "would merge" for a person to merge.
-- In `auto` mode, Autopilot merges its own PR once CI, fresh review, and full tests pass (required GitHub branch protections and `strict_approvals` still apply).
+- In `auto` mode, Autopilot merges its own PR once CI, fresh review, and full tests pass (required GitHub branch protections still apply).
 - Run `pdd autopilot stop` to stop the timer while letting any active step finish.
 
 <a id="7-check-prompts-on-the-pdd-runtime"></a>
@@ -327,18 +327,9 @@ The interpreter address is set in one place in pdd. You do not need to set it.
 
 Factories and method-bearing instances can bind through opaque handles and collections (or explicit Runtime interface v2 blocks). Put injected I/O and callbacks behind ports, and use the declared SQL, blob and compute simulations. Preserve the public API and report native effects as unbound. See [Factories and simulated resources](runtime-boundaries.md#native-factories-and-json-operations).
 
-### 7.1 Approve a prompt
+### 7.1 Review and approve prompts
 
-In interactive work, a person approves a prompt. Explicit Autopilot auto setup and start can delegate ordinary approval gates through the supported commands. Strict approvals and required human reviews still need a person. An agent never edits approval metadata directly.
-
-```sh
-pdd approve prompts/place_order.prompt.md
-```
-
-pdd shows the prompt summary and the text that you approve: the changes since the last approved version in Git, or the whole text when there is none, at most 40 lines. Then it asks `Approve prompts/place_order.prompt.md? y/n`. When you answer `y`, pdd records your approval for the prompt's prose SHA-256 (keeping plain Markdown prompts unchanged on disk). Any other answer changes nothing.
-
-- If the prompt has schema problems, pdd lists them and does not approve.
-- If an approved prompt changes, ask the person to approve the updated prose again.
+In interactive work, review the prompt and Story changes your agent shows in chat or on a GitHub pull request and reply in your own words. Questions and change requests keep the prompt in review. Agents never invent a person's decision or auto-merge without explicit permission.
 
 ### 7.2 Simulate a Story
 
@@ -347,7 +338,6 @@ pdd shows the prompt summary and the text that you approve: the changes since th
 In your terminal, `pdd simulate` keeps waiting while the page is open:
 
 - When you save a case in the Simulator, pdd adds it as a new step to the Story's test file.
-- When you click **Approve** in the Simulator, pdd asks `Approve PROMPT? y/n` in this terminal. Only your `y` there approves the prompt. If the prompt changed after you clicked, pdd does not approve it.
 
 Use `--no-open` to get the link without opening a browser. Use `--no-wait` to return at once. When an agent runs `pdd simulate`, it reads the saved cases once and returns. Anyone with a Simulator link can use it, so the link never goes into a file, a PR or an issue.
 
@@ -457,7 +447,6 @@ If setup added MCP registration, remove only its `pdd` entry from `$CODEX_HOME/c
 | `pdd test` says that your GitHub account does not have PDD interpreter access | Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses, and wait for the approval. See [section 7.3](#73-when-a-check-does-not-run). |
 | `pdd test` or `pdd simulate` says `Please update pdd` | Run `pdd upgrade` (or `npm install -g @promptdriven/pdd && pdd setup`). |
 | `pdd test` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
-| `pdd approve is for a person at a terminal` | In strict mode (`"strict_approvals": true`), run the approval yourself in a normal terminal. Otherwise, your agent can record your actual chat approval with `--said -`. |
 | `npm error code EEXIST` on `<prefix>/bin/pdd` | An unscoped `pdd` npm package owns `bin/pdd`. Run `npm uninstall -g pdd && npm install -g @promptdriven/pdd` (do not use `--force`). |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
 

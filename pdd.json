@@ -78,15 +78,11 @@
       },
       {
         "id": "runtime-seam",
-        "name": "Runtime seam, prompt approvals and human boundary cards",
+        "name": "Runtime seam compatibility layer",
         "when": [
-          "src/runtime-seam.mjs",
-          "src/prompt-approve.mjs",
-          "src/core/approve-prompt.mjs",
-          "src/human-boundary-card.mjs",
-          "src/core/human-boundary-card-core.mjs"
+          "src/runtime-seam.mjs"
         ],
-        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/runtime-seam.test.mjs test/human-boundary-card.test.mjs test/prompt-approve.test.mjs"
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/runtime-seam.test.mjs"
       },
       {
         "id": "ui-screens",

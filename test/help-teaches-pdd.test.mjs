@@ -143,8 +143,8 @@ test('root help keeps its first line, grouped commands, learn paths and closing 
   for (const line of closing) assert.ok(!topic.includes(line), line);
   const text = topic.join('\n');
   for (const name of ['prompts/NAME.prompt.md', '## Dependencies', 'user_stories/STORY.md', 'Acceptance criteria',
-    'tests/STORY.json', 'pdd test', 'pdd lint', 'pdd approve', 'pdd prove']) assert.ok(text.includes(name), name);
-  for (const pattern of [/\bpdd check\b/, /\bpdd try\b/, /\bworkflow start\b/, /simulat/i]) {
+    'tests/STORY.json', 'pdd test', 'pdd lint', 'pdd prove']) assert.ok(text.includes(name), name);
+  for (const pattern of [/\bpdd check\b/, /\bpdd try\b/, /\bpdd approve\b/, /\bworkflow start\b/, /simulat/i]) {
     assert.doesNotMatch(text, pattern); assert.doesNotMatch(rest.join('\n'), pattern);
   }
 });

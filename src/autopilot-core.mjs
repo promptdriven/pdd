@@ -16,7 +16,6 @@ import { checkAutopilotBase } from './autopilot-base.mjs';
 import { knownSecretValues, redactSecrets } from './secret-redaction.mjs';
 import { runtimePreflightSlice, workspace } from './runtime-seam.mjs';
 import { findOwners, headerEntries, isTestOwnedPath, resolveOwners } from './file-owner.mjs';
-import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode, isPersonComment, personComments, recordForensicsFixedCard, findOtherRepoSkipLabel, preflightCoreIssue, reserveIntakeFileClaim, releaseIntakeFileClaim, checkIntakeFileConflicts } from './autopilot-intake.mjs';
 import { evaluateForensicsResult, findConfiguredSkipLabel, formatForensicsBrief, formatForensicsComment, readOnlyAgentCommand, runPreRunForensics } from './autopilot-forensics.mjs';
 import { readSuiteProgress, reconcileSuiteQueue } from './test-suite-queue.mjs';
@@ -96,7 +95,7 @@ const MAX_LOCAL_TEST_REPAIRS = MAX_VALIDATION_REPAIRS;
 
 const execFileAsync = promisify(cbExecFile);
 
-const { interfaceBlocks, proseSha256, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
+const { readPrompt, gitFiles } = runtimePreflightSlice();
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, NO_RESULT_LIMIT = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
@@ -1117,9 +1116,8 @@ async function decisionReplies(ctx, rows) {
     const key = String(row.number), stamp = String(row.updated_at ?? '');
     if (seen[key] === stamp) continue;
     try {
-      // A strict repository's prompt approval waits for the approval itself, never for a comment.
       const answer = await personAnswer(ctx, row.number);
-      if (answer?.comments.length && !/\(strict_approvals\)/.test(answer.question)) {
+      if (answer?.comments.length) {
         await ctx.gh.ok('DELETE', `repos/${ctx.repo}/issues/${row.number}/labels/${encodeURIComponent(DECISION)}`);
         if (Array.isArray(row.labels)) row.labels = row.labels.filter(l => (typeof l === 'string' ? l : l?.name) !== DECISION);
         ready.add(row.number); delete seen[key];
@@ -1341,16 +1339,11 @@ function ownerBrief(ctx, root, job = null) {
 const orderedMore = count => count - MAX_OWNER_BRIEF_PATHS;
 
 // ---- Job prompts ----------------------------------------------------------------------------------------
-// In auto and observe mode the operator's start is the approval of the job's prompt changes, recorded with these
-// words. They name the real mode (they must be true); observe mode does everything that auto mode does except the merge.
-const strictRepo = (ctx, job) => readJson(ctx.fs, join(job.worktree ?? ctx.state.cwd, 'pdd.json'), {})?.strict_approvals === true;
-const approving = ctx => ['auto', 'observe'].includes(ctx.settings.mode);
-const approvalWords = ctx => `Operator action: pdd autopilot start --engine core in ${ctx.settings.mode === 'observe' ? 'observe' : 'auto'} mode for ${ctx.repo} on ${ctx.machineId} at ${ctx.state.startedAt ?? ctx.state.activatedAt ?? 'an unknown time'}`;
 
 // T10, the choice rule: a bug fix is not a big decision. Autopilot decides when one reasonable fix
 // solves the problem and breaks nothing people use today; it asks a choice only when every fix breaks something, or for
 // a product-direction decision of a feature. Two cases always go to a person as a blocker.
-const DECIDE_RULE = 'Autopilot decides when at least one reasonable fix solves the problem and breaks nothing that people use today: pick that fix and list it in the PR body under "Choices Autopilot made:", one line each with its reason (marking "(changes public behavior: WHAT)" when users see a change). For example, "make remove safer" is decided: ask y/N only in an interactive terminal, --yes skips it, scripts stay unchanged; nothing is asked. A bug-fix or small-change run never asks a choice question: pick the fix that makes the reported behavior right with the least surprise. When that fix changes a rule in an approved prompt, change it without asking and note "(changes approved rule: OLD -> NEW)"; the repository\'s approval setting still applies to the changed prompt.';
+const DECIDE_RULE = 'Autopilot decides when at least one reasonable fix solves the problem and breaks nothing that people use today: pick that fix and list it in the PR body under "Choices Autopilot made:", one line each with its reason (marking "(changes public behavior: WHAT)" when users see a change). For example, "make remove safer" is decided: ask y/N only in an interactive terminal, --yes skips it, scripts stay unchanged; nothing is asked. A bug-fix or small-change run never asks a choice question: pick the fix that makes the reported behavior right with the least surprise. When that fix changes a rule in an approved prompt, change it without asking and note "(changes approved rule: OLD -> NEW)".';
 const PERSON_CASES = 'Two cases always go to a person, in every run: a change against a person\'s recorded answer to an earlier question (an answer above, a decision issue), and a change of what blocks merges (a new required check, a gate, a hash pin, CI policy). Do not make such a change: write the needs-person result with "kind":"blocker". A real blocker (missing access or a secret, an issue that contradicts itself, work that cannot be done) is "kind":"blocker" too.';
 const ROUTINE_CHOICE = 'Routine compatible choices of command syntax, options or data representation are agent decisions when a safe, low-surprise choice exists. Preserve existing APIs, defaults and behavior unless the request authorizes a change. Several valid designs alone are not a reason to ask.';
 const PRODUCT_DIRECTION = 'whether a new feature area or capability should exist, removing a feature, an on-purpose change to a core contract, security, privacy or data policy, or something that costs money; an open trusted issue that asks the same product question counts too';
@@ -1376,7 +1369,7 @@ const RESULT_RULES = (result, ctx = null, allowNotReproduced = false) => `Before
 - Needs a person: {"outcome":"needs-person","kind":"blocker|choice","question":"<one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"}, only when you cannot go on without a person's decision: "kind":"blocker" for a blocker or one of the two cases that always go to a person (rule 1)${ctx && !asking(ctx) ? ', and never for a choice: decide it (rule 1)' : ', "kind":"choice" only for a choice that rule 1 lets you ask'}. Ask exactly one question with 2 or 3 options; Autopilot posts it on the issue and a later job gets the answer.
 - kind "pdd": the pdd command failed or crashed. kind "job": you could not do the task. A Runtime check that could not run is never a failure: ship the PR (rule 6).`;
 function workRules(ctx, job) {
-  const { state, settings } = ctx;
+  const { state } = ctx;
   const fullTestCommand = resolveSuiteCommand(ctx, job) ?? job?.repairReproduce?.checks?.find(c => c.kind === 'suite' && named(c.command))?.command ?? null;
   return `Rules:
 1. Read the PDD skill from "$PDD_SKILLS/pdd/SKILL.md" (and load its guides from "$PDD_SKILLS/pdd/references/" on demand), never from ~/.agents/skills or ~/.claude/skills: the installed copies can be older than this Autopilot. Choose the workflow mode that fits: small-change strictly when every planned file is non-product maintenance outside PDD (docs, guides, CI, lock files, package metadata, or test-only maintenance — never *.prompt.md, user_stories/*.md, or product/app code); bug for a defect; feature for new behavior. Make ONE cohesive PR without waiting for a person. ${choiceRule(ctx)}
@@ -1393,10 +1386,7 @@ function workRules(ctx, job) {
 6. Runtime & \`pdd prove\`. Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. Run pdd as "$PDD_CLI" (for example \`"$PDD_CLI" prove\` or \`"$PDD_CLI" test STORY\`), never as a bare pdd: your shell can find an older pdd first on PATH. $PDD_CLI is the pdd of this Autopilot. For prompt-owned Stories affected by your changes, commit your changes and run \`"$PDD_CLI" test STORY ...\`. A FAIL line blocks the merge: fix until it passes. Never treat a failed check or \`real-binding-unavailable\` as a silent skip or pass. When pdd prints a fixable refusal, apply the Number spelling that pdd prints and rerun. When pdd prints that the interpreter is in maintenance, stop pdd then and report \`maintenance until HH:MM UTC\` in \`runtime.cause\`; Autopilot retries when maintenance ends. When Runtime could not check for an unfixable cause (a \`kind: native-only\` prompt, maintenance, or a refusal that pdd gives no fix for), do not stop and do not invent an interface: cover the case with native tests, ship the PR, and record the cause in the result's \`runtime\` field; Autopilot records the harness receipt automatically.
 7. Report your focused test counts in the result's \`"tests"\` field, your formal verification status in \`"formal"\` (\`bounded\`, \`proved_solver_code\`, \`proved_spec_model\`, or \`not-applicable\` with a short reason), and \`"runtime"\` when Runtime could not check; Autopilot's harness stamps verified evidence and receipts deterministically.
 8. Do not write a review verdict or any review claim (for example "Review: no must-fix") in the PR body or a comment. Only Autopilot's fresh reviewer gives a review verdict.
-${approving(ctx) && !strictRepo(ctx, job) ? `9. Approval: in ${settings.mode} mode the operator's start is the approval of your prompt changes. For each *.prompt.md you changed, after its checks pass, record it with the native command (and commit the result in the PR if the file changed): printf '%s' ${quote(approvalWords(ctx))} | "$PDD_CLI" approve PROMPT --said -. Plain-Markdown and \`kind: native-only\` prompts record in the local approval journal without editing the file; do not invent a Runtime interface block.
-` : settings.mode === 'observe' ? `9. This repository needs a person's approval for prompt changes (strict_approvals). Do not run pdd approve and do not edit an interface status by hand; Autopilot lists the prompts for a person in its note.
-` : settings.mode === 'auto' ? `9. This repository needs a person's approval for prompt changes (strict_approvals). Do not run pdd approve and do not edit an interface status by hand; Autopilot asks a person.
-` : ''}10. Commit, push branch ${job.branch} to origin, and use ONE PR against ${state.baseBranch} with "${jobIssues(job).length > 1 ? jobIssues(job).map(n => `Closes #${n}`).join(', ') : `Fixes #${job.issue}`}" (either omit \`"pr"\` and provide \`"title"\` + \`"summary"\` in the result so Autopilot opens the PR in code, or run \`gh pr create --base ${state.baseBranch} --head ${job.branch}\`). Never merge, never push to ${state.baseBranch}, never force-push, never close the issue. Do not assign the issue to anyone and do not change its labels: Autopilot owns them.`;
+9. Commit, push branch ${job.branch} to origin, and use ONE PR against ${state.baseBranch} with "${jobIssues(job).length > 1 ? jobIssues(job).map(n => `Closes #${n}`).join(', ') : `Fixes #${job.issue}`}" (either omit \`"pr"\` and provide \`"title"\` + \`"summary"\` in the result so Autopilot opens the PR in code, or run \`gh pr create --base ${state.baseBranch} --head ${job.branch}\`). Never merge, never push to ${state.baseBranch}, never force-push, never close the issue. Do not assign the issue to anyone and do not change its labels: Autopilot owns them.`;
 }
 // B2 (final battle plan): no input is cut silently. A cut text ends with a marker: how much is left out, and where to read it.
 const cutText = (text, max, where) => { const all = String(text ?? ''); return all.length <= max ? all : `${all.slice(0, max)}\n[cut: ${all.length - max} more characters; ${where}]`; };
@@ -2938,7 +2928,7 @@ async function intake(ctx, rows) {
         await undoClaim(ctx, n, claim); await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {}); ctx.skip.add(n);
         continue;
       }
-      // A PR that waits for a person's approval (strict repository) resumes after a trusted label removal: no new build.
+      // A PR that waits for a person's approval (GitHub branch protection) resumes after a trusted label removal: no new build.
       const kept = await keptPr(ctx, n).catch(error => { ctx.warn(`Autopilot core could not read the PRs of #${n}: ${error.message}`); return null; });
       if (kept) {
         await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {});
@@ -9405,7 +9395,7 @@ function hasLocalVectorsFailure(job) {
 }
 
 async function mergeCheck(ctx, job) {
-  const { gh, repo, state, settings } = ctx;
+  const { gh, repo, state } = ctx;
   // A merged PR is a merge, also after a quiet period: END never runs on a merged issue. The checks end only when
   // nothing runs and nothing changes for the quiet period.
   let pr;
@@ -9464,17 +9454,7 @@ async function mergeCheck(ctx, job) {
   saveEvidence(ctx, job, { lines, claims, ...(preSuite ? { suite: preSuite } : {}) }); // the reviewer reads it (the cover is known now)
   const verdicts = new Set(lines.map(l => l.verdict));
   reds.push(...evidenceReds(job.evidence, verdicts.size === 1 ? [...verdicts][0] : null));
-  // In auto and observe mode a changed prompt must carry a recorded approval (the operator's start, with the real mode
-  // in its words). A strict repository needs a person: auto mode asks one; observe mode asks no one (a question only
-  // makes sense when a merge would follow) and lists the prompts in its would-merge note.
-  const gate = await promptGate(ctx, job), drafts = gate.problems;
-  if (drafts.length && ctx.settings.mode === 'auto' && gate.strict) {
-    await stopChecks(ctx, job);
-    return end(ctx, job, { kind: 'job', component: 'autopilot-core', code: 'needs-person', text: 'the prompt changes need a person\'s approval', keepPr: true,
-      question: `PR #${job.pr} changes prompts that need a person's approval in this repository (strict_approvals): ${drafts.join('; ')}. Please approve the PR on GitHub (or approve each prompt with pdd approve on its branch and push), then remove pdd:needs-decision: Autopilot checks the same PR again, with no new build. To give up on it, close the PR.` });
-  }
   reds.push(...(await pathChecks(ctx, job, pr.body)).reds);
-  if (drafts.length && approving(ctx) && !gate.strict) reds.push(`Changed prompts are not approved: ${drafts.join('; ')}. Record the operator approval for each changed prompt with the native command and commit it: printf '%s' ${quote(approvalWords(ctx))} | "$PDD_CLI" approve PROMPT --said -`);
   // #3557: Static, zero-execution pre-review cheap gates (repo-hygiene-lint on changed files + workflow-inventory
   // new-skip / unacknowledged deleted-test gate) run BEFORE CI/review/suite/vectors with 0 AI calls while preserving
   // #3588's deferSuiteForReview security boundary.
@@ -9785,7 +9765,6 @@ async function mergeCheck(ctx, job) {
       ...(job.coverage?.consumers?.line ? [`- ${job.coverage.consumers.line}`] : []),
       ...engineEvidenceLines(job), `- Evidence record: ${basename(saveEvidence(ctx, job, { lines: runtimeVerdicts(pr.body), claims: runtimeClaims(pr.body, job), ci, review, suite }) ?? evidencePath(ctx, job))} on this machine`,
       ...(missingApprovals > 0 ? [`- Human pull-request approvals still needed on GitHub before merging: ${missingApprovals} of ${requiredApprovals}`] : []),
-      ...(drafts.length ? [`- Prompts that need a person's approval before a merge (strict_approvals): ${drafts.join('; ')}`] : []),
       ...(job.liveEvidence?.head === job.head ? [`- Evidence contract: ${job.liveEvidence.verifyPathsConfigured ? `verify.paths proved (${job.liveEvidence.proveOutcome})` : `advisory (${job.liveEvidence.proveOutcome}; verify.paths not configured on merge base)`}`] : []),
       ...(named(job.harnessReceipt) && job.harnessReceiptHead === job.head && job.harnessReceiptPostedHead !== job.head ? ['', job.harnessReceipt] : []), '',
       `<!-- pdd:autopilot-core:${observe ? 'would-merge' : 'merge'}:${job.head} -->`].join('\n'));
@@ -10611,80 +10590,6 @@ async function pathChecks(ctx, job, body) {
   return job.paths;
 }
 
-// The prompt gate: each changed prompt of the PR head (renames too) passes pdd's own checks at that head: one valid
-// interface block, status approved, a current prose hash, and a recorded approval in this repository's journal for
-// that path and hash (a hand-written status is not an approval). A prompt with no interface on both sides is not an
-// approval matter. Read once per head, in a clean checkout of the head.
-async function promptGate(ctx, job) {
-  if (job.approvals?.head === job.head && Array.isArray(job.approvals.problems)) return job.approvals;
-  const base = ctx.state.baseBranch, cwd = job.worktree;
-  await ctx.git(['fetch', '-q', 'origin', base, job.branch], cwd);
-  const strictAt = async ref => { try { return JSON.parse(await ctx.git(['show', `${ref}:pdd.json`], cwd))?.strict_approvals === true; } catch { return false; } };
-  const strict = await strictAt(`origin/${base}`) || await strictAt(job.head);
-  const changed = [];
-  for (const line of (await ctx.git(['diff', '--name-status', '--find-renames', `origin/${base}...${job.head}`], cwd)).split('\n').filter(Boolean)) {
-    const [status, first, second] = line.split('\t'), path = /^[RC]/.test(status) ? second : first;
-    if (!status.startsWith('D') && path?.endsWith('.prompt.md')) changed.push({ path, from: /^R/.test(status) ? first : path });
-  }
-  const problems = [];
-  if (changed.length) {
-    const head = await treeAt(ctx, job, 'head', job.head), visible = new Set(gitFiles(head));
-    const commonDir = await ctx.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd);
-    const journal = (() => { try { return readPromptApprovals({ commonDir }); } catch { return []; } })();
-    // The base version of each prompt: a pure rename (or no real change) of an approved, current prompt keeps the
-    // approval that Git already has.
-    const baseRoot = await treeAt(ctx, job, 'base', await ctx.git(['rev-parse', `origin/${base}`], cwd)), baseVisible = new Set(gitFiles(baseRoot));
-    // A strict repository accepts a person's approval only: a trusted APPROVED review of this head on GitHub, or a
-    // journal entry that a person made at a terminal.
-    const reviewed = strict && job.pr ? await githubApproved(ctx, job) : false;
-    for (const { path, from } of changed) {
-      let prompt;
-      try { prompt = readPrompt(head, visible, path); } catch (error) { problems.push(`${path} cannot be checked (${oneLine(error.message, 200)})`); continue; }
-      if (prompt.error === 'interface-missing' || prompt.frontmatter) {
-        if (prompt.frontmatter) {
-          const refusal = promptRefusal(prompt, 'prompt');
-          if (refusal) { problems.push(oneLine(refusal.message, 300)); continue; }
-        }
-        if (strict) {
-          const proseBody = p => p.blocks.reduce((s, b) => s.replace(b[0], ''), p.text).replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trim();
-          let before = null;
-          try { before = baseVisible.has(from) ? readPrompt(baseRoot, baseVisible, from) : null; } catch { before = null; }
-          const baseApproved = before && (
-            (before.error === 'interface-missing' && !prompt.frontmatter)
-            || (before.frontmatter && !promptRefusal(before, 'prompt') && prompt.frontmatter && before.interface.reason === prompt.interface.reason)
-            || (!before.error && !before.frontmatter && !promptRefusal(before, 'prompt') && before.interface.status === 'approved'
-              && (prompt.frontmatter ? before.interface.kind === 'native-only' && before.interface.reason === prompt.interface.reason : before.interface.kind !== 'native-only'))
-          );
-          if (baseApproved && proseBody(before) === proseBody(prompt)) continue;
-          if (reviewed) continue;
-          const hash = proseSha256(prompt.rawText);
-          const recorded = journal.some(e => e.actor?.kind === 'terminal' && e.prompts.some(p => p.path === path && p.proseSha256 === hash));
-          if (!recorded) problems.push(`${path} changed, and strict_approvals requires a person's approval (pdd approve ${path} or a trusted GitHub review)`);
-        }
-        continue;
-      }
-      const refusal = promptRefusal(prompt, 'prompt');
-      if (refusal) { problems.push(oneLine(refusal.message, 300)); continue; }
-      if (prompt.interface.status !== 'approved') { problems.push(`${path} has a draft Runtime interface`); continue; }
-      let before = null;
-      try { before = baseVisible.has(from) ? readPrompt(baseRoot, baseVisible, from) : null; } catch { before = null; }
-      if (before && !before.error && before.prose === prompt.prose && deepSame(before.interface, prompt.interface)) continue;
-      if (reviewed) continue;
-      const recorded = journal.some(e => (!strict || e.actor?.kind === 'terminal') && e.prompts.some(p => p.path === path && p.proseSha256 === prompt.prose));
-      if (!recorded) problems.push(`${path} is marked approved, but no approval for its text is recorded: set its interface status to "draft", then run pdd approve (it records an approval only for a draft or stale prompt)`);
-    }
-  }
-  job.approvals = { head: job.head, strict, problems }; ctx.saveJob(job);
-  return job.approvals;
-}
-// A trusted person's APPROVED review of the PR head on GitHub.
-async function githubApproved(ctx, job) {
-  try {
-    for (const review of await ctx.gh.all(`repos/${ctx.repo}/pulls/${job.pr}/reviews?per_page=100`))
-      if (review.state === 'APPROVED' && review.commit_id === job.head && await ctx.ports.trusted({ user: review.user })) return true;
-  } catch (error) { ctx.warn(`Autopilot core could not read the reviews of PR #${job.pr}: ${error.message}`); }
-  return false;
-}
 // Runtime could not check, and the job shipped its PR with "Runtime: not run": file or count one deduped report for
 // the cause. It never blocks or ends the job; one report per job and cause.
 async function runtimeNotRunReport(ctx, job) {
@@ -11588,9 +11493,7 @@ async function continueEnd(ctx, job) {
       } else if (why.repairExhausted) {
         prBody = `Autopilot reached the maximum of ${MAX_VALIDATION_REPAIRS} validation repair attempts on PR #${job.pr} (issue #${job.issue}): ${why.text}\n\nThis PR stays open for a person to inspect; Autopilot does not merge it.\n\n<!-- pdd:autopilot-core:repair-exhausted:${job.pr} -->`;
       } else {
-        const prNote = why.branchApproval
-          ? `Autopilot waits for a person's pull-request review approval on GitHub required by branch protection on \`${ctx.state.baseBranch}\` (see issue #${job.issue}). It stays open; Autopilot does not merge it.`
-          : `Autopilot waits for a person's approval of the prompt changes in this PR (see issue #${job.issue}). It stays open; Autopilot does not merge it.`;
+        const prNote = `Autopilot waits for a person's pull-request review approval on GitHub required by branch protection on \`${ctx.state.baseBranch}\` (see issue #${job.issue}). It stays open; Autopilot does not merge it.`;
         prBody = `${prNote}\n\n<!-- pdd:autopilot-core:needs-approval:${job.pr} -->`;
       }
       await ctx.comment(job.pr, prBody);

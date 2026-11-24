@@ -1621,7 +1621,8 @@ test('E81 (T10, Serhan D1) a bug fix may change an approved rule: it decides, no
   for (const decisions of ['ask', 'decide']) {
     const { w, pr } = await t10World(t, { decisions });
     const build = w.started.find(job => job.role === 'build').input, review = w.job(17, 'review').input;
-    assert.match(build, /When that fix changes a rule in an approved prompt, change it without asking and note "\(changes approved rule: OLD -> NEW\)"; the repository's approval setting still applies to the changed prompt\./);
+    assert.match(build, /When that fix changes a rule in an approved prompt, change it without asking and note "\(changes approved rule: OLD -> NEW\)"\./);
+    assert.doesNotMatch(build, /repository's approval setting|strict_approvals|pdd approve/);
     assert.doesNotMatch(build, /a change that contradicts a rule in an approved prompt/);
     assert.match(review, /A bug-fix or small-change PR may update an approved prompt rule when required by the issue; check that code and prompt agree\./);
     // The A1 shape: "round down" becomes one decimal; the PR lists it and merges with no question.
@@ -1631,13 +1632,13 @@ test('E81 (T10, Serhan D1) a bug fix may change an approved rule: it decides, no
   }
 });
 
-test('E82 (#3654) builder rule 9 approves every changed prompt (plain-Markdown included) without inventing a Runtime interface block, and non-strict plain prompt merges cleanly', async t => {
+test('E82 (trial B5, #3654) a plain-Markdown prompt change needs no pdd approve step and merges cleanly with no approval red', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   seed(w, { 'prompts/notes.prompt.md': '# Notes\n\nThe shop opens at 07:00.\n' });
   w.issue(17); await w.tick();
   const build = w.job(17, 'build').input;
-  assert.match(build, /For each \*\.prompt\.md you changed, after its checks pass, record it with the native command/);
-  assert.match(build, /Plain-Markdown and `kind: native-only` prompts record in the local approval journal without editing the file; do not invent a Runtime interface block\./);
+  assert.doesNotMatch(build, /pdd approve/);
+  assert.doesNotMatch(build, /strict_approvals/);
   assert.doesNotMatch(build, /A prompt with no Runtime interface block needs no approval/);
   assert.doesNotMatch(build, /native-only prompt with no Runtime interface/);
   writeIn(w.job(17, 'build').cwd, 'prompts/notes.prompt.md', '# Notes\n\nThe shop opens at 07:30.\n');

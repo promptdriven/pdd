@@ -1,4 +1,4 @@
-// Layer-0 sequential stdin line reader shared by prompt approval and Simulator CLI doors.
+// Layer-0 sequential stdin line reader for Simulator CLI doors.
 import { createInterface } from 'node:readline';
 
 export function lineReader(stdin) {

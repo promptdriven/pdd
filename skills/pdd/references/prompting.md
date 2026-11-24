@@ -64,13 +64,5 @@ reason: <concrete physical effect bound ports cannot fake, e.g. fsync, live sock
 ## 5. Expected values, approvals, and merges
 
 - **Expected values** come from the Story and the person — never from observed code or simulation output, and never edited silently to force a pass.
-- **Approvals (`--said`):** Show the prompt/Story changes, then judge the person's later reply in chat (a question, change request, or earlier message is not approval; no exact phrase is needed). Record actual attributed words with:
-
-```sh
-pdd approve PROMPT --said - <<'PDD_SAID'
-<the person's exact words>
-PDD_SAID
-```
-
-  Choose a delimiter absent as a whole line from the text, keep it quoted, and never interpolate untrusted words into shell strings. Blank input is refused; `"strict_approvals": true` in root `pdd.json` requires a person terminal.
-- **Merges:** `pdd` has no merge command. Merge only on an explicit person request, after verifying required checks are green and posting the merge request comment; use `--match-head-commit <head>`.
+- **Approvals:** Show the prompt and Story changes in chat or on a GitHub pull request, then wait for the person's review and reply (a question, change request, or earlier message is not approval; no exact phrase is needed). Never invent a person's decision.
+- **Merges:** `pdd` has no merge command. Never auto-merge without explicit permission — merge only on an explicit person request, after verifying required checks are green and posting the merge request comment; use `--match-head-commit <head>`.

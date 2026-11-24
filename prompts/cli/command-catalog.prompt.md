@@ -2,7 +2,7 @@
 
 Own `src/command-catalog.mjs`; export `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `REMOVED_COMMANDS`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)), and `BUNDLED_WORKFLOW_NAMES` (`feature`, `bug`, `small-change`, `product`).
 
-Each route has a stable `id`, exact `prefix`, `local` disposition, operand/option specs, and plain help forms. Expose no excluded command, private schema/type, service flag, or removed `pdd workflow` / `pdd dependencies` route. Help, parser, and shell completion share this one authority.
+Each route has a stable `id`, exact `prefix`, `local` disposition, operand/option specs, and plain help forms. Expose no excluded command, private schema/type, service flag, or removed `pdd workflow` / `pdd approve` / `pdd dependencies` route. Help, parser, and shell completion share this one authority.
 
 ## Authoring
 
@@ -19,7 +19,7 @@ Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before
 | `try` | `simulate` | `runtime-try` | `sim` | `try` (new command `pdd simulate`) |
 
 - A quiet word (`sim`, `-V`) parses like the prefix of its route, with nothing added. Completion never offers it. Help names `sim` once, in the description of the first `simulate` form.
-- A removed word runs nothing. The [argument parser](argument-parser.prompt.md#removed-names) refuses route-owned removed words (`check`, `check --lint`, `try`) and standalone `REMOVED_COMMANDS` (`workflow` → actionable pointer to `/pdd`, `pdd prove`, and `pdd autopilot`) with exit 2 and zero side effects.
+- A removed word runs nothing. The [argument parser](argument-parser.prompt.md#removed-names) refuses route-owned removed words (`check`, `check --lint`, `try`) and standalone `REMOVED_COMMANDS` (`workflow` → actionable pointer to `/pdd`, `pdd prove`, and `pdd autopilot`; `approve` → actionable pointer to review and approve prompt changes in chat or GitHub PR review) with exit 2 and zero side effects.
 
 ## Core PDD workflow routes
 
@@ -31,7 +31,6 @@ Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before
 - `lint` (`lint`, local `lint`, implies `--lint`): optional repeated text `story`, options `--json`, `--local`, `--remote`, `--diff` (`optional-text`), `--base`, `--timeout` (`1..120`), `--max-calls` (`1..1000`), `--codex`, `--issue`, `--emit-v1`, `--write`, `--bind-criteria`. Offline-first by default (`0` AI, `0` network, `0` batch-state writes); `--remote` runs hosted interpreter lint.
 - `prove` (`prove`, local `prove`): no operands, options `--base`, `--test`, `--expect`, `--overlay`, `--setup`, `--timeout` (`1..120`), `--json`. Forms cover zero-flag merge-base proof (`pdd prove [--base REF] [--timeout MIN] [--json]`) and isolated base-vs-head bug-contrast proof (`pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]`).
 - `try` (`simulate`, quiet `sim`, local `runtime-try`): optional text `story`, options `--product`, `--parts`, `--journey`, `--agent`, `--tab` (`call|screen|terminal|world`), `--new`, `--fresh`, `--page`, `--cli`, `--shell`, `--save-last`, `--serve` (`optional-integer` `1..65535`, default `8080`), `--max-calls` (`1..1000`), `--no-open`, `--stop`, `--app-map`, `--no-wait`.
-- `approve` (`approve`, local `prompt-approve`, [prompt approve](prompt-approve.prompt.md)): required text `prompt`, optional text `--said`. Form `pdd approve PROMPT [--said WORDS]` includes the shared quoted-heredoc approval template.
 - `files` (`files`, local `project-files`, [files view](files.prompt.md)): flag `--json`. Form `pdd files [--json]`.
 - `owner` (`owner`, local `file-owner`, [file owner lookup](file-owner.prompt.md)): required repeated text `path`, flag `--json`. Form `pdd owner PATH... [--json]`.
 - `update` (`update`, local `update-sync`, [Changed-map wrapper](update-sync.prompt.md)): optional repeated text `file`, options `--from` (text), `--branch` (flag), `--all` (flag), `--check` (flag), hidden `--write` (flag, refused read-only by handler without advertising in help or completion), and `--json` (flag). Form: `pdd update [FILE...] [--from RANGE] [--branch] [--all] [--check] [--json]`.
@@ -87,7 +86,7 @@ In PDD, prompts are the source. Code follows the prompts.
 3. Story & Test: user_stories/STORY.md (## Acceptance criteria) +
    tests/STORY.json (or tests/runtime/ when native tests live in tests/).
 4. Check: run pdd lint first (offline, 0 AI), then pdd test STORY.
-5. Approve: review each changed prompt and run pdd approve PROMPT.
+5. Review: review each changed prompt in chat or GitHub PR review.
 6. Build & Prove: code from approved prompts, then run pdd prove.
 ```
 

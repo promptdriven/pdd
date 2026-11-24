@@ -113,8 +113,7 @@ Check these boundaries in order and continue after failures:
   `mkdir -p '<root>/.pdd-retired' && mv ...` backup command without deleting
   anything or blocking readiness. Off warns; native start owns mode admission.
   Describe observe versus auto authority, owner/write-access trust even with [],
-  explicit trusted users and strict approvals in plain words. Never change mode
-  or trust.
+  and explicit trusted users in plain words. Never change mode or trust.
 - GitHub settings (`settings-github`): Autopilot job worktrees and other machines
   start from GitHub, so they read `pdd.json` of the default branch there. Read it
   with `gh api repos/REPO/contents/pdd.json?ref=BRANCH` (REPO and BRANCH from the
@@ -138,24 +137,17 @@ Check these boundaries in order and continue after failures:
   'Accept: application/vnd.github.raw'`. A trust name or `origin/BRANCH` in a fix
   is shell-quoted unless it has only letters, digits and `_ . @ / -`. Doctor
   makes no GitHub write here: only the printed fix publishes.
-- Enumerate tracked `*.prompt.md` and check approval state across plain-Markdown,
+- Enumerate tracked `*.prompt.md` and check prompt readiness across plain-Markdown,
   frontmatter `kind: native-only`, and legacy embedded `Runtime interface` prompts
-  without mutating files or blocking readiness. Resolve the Git common dir read-only
-  (`git rev-parse --path-format=absolute --git-common-dir`, falling back to
-  `git rev-parse --git-common-dir` resolved against `cwd`) and read
-  `<commonDir>/pdd/approvals.json` through `readPromptApprovals` using the injected
-  file port (warning with `approval journal unreadable` without throwing if the
-  common dir cannot be resolved or the journal cannot be read or parsed). Reject
-  symlinked, non-regular, or repo-escaping tracked prompt files as unreadable.
-  Report as advisory drafts (`warn`, fix `pdd approve <first-draft>`): any prompt
-  with malformed frontmatter or conflicting/duplicate declarations (both frontmatter
-  and an embedded block, or more than one embedded block); any legacy embedded
+  without mutating files or blocking readiness. Reject symlinked, non-regular, or
+  repo-escaping tracked prompt files as unreadable. Plain-Markdown prompts and valid
+  frontmatter `kind: native-only` prompts without an embedded block are ready as is.
+  Report as advisory warnings (`warn`, fix `pdd files --json`): any prompt with
+  malformed frontmatter or conflicting/duplicate declarations (both frontmatter and
+  an embedded block, or more than one embedded block); and any legacy embedded
   `Runtime interface` block that is invalid JSON, lacks `status === "approved"`, or
-  lacks a matching `prose_sha256` (`!== proseSha256(text)`); and any plain-Markdown or
-  valid frontmatter `kind: native-only` prompt without a matching `(path, proseSha256(text))`
-  entry in the approval journal (requiring `actor.kind === "terminal"` when `pdd.json`
-  sets `strict_approvals: true`). Unreadable files warn. Never approve prompts or
-  block doctor solely for drafts.
+  lacks a matching `prose_sha256` (`!== proseSha256(text)`). Unreadable files warn.
+  Never edit prompts or block doctor solely for draft or unreadable prompts.
 - Read interpreter access through the [Runtime seam](runtime-seam.prompt.md) `health` check (`checkRuntimeHealth`)
   with the selected environment and injected gh/fetch/clock ports. No upload or job.
   Preserve its health rules, including a JSON 404 from an interpreter without the
@@ -181,7 +173,6 @@ Check these boundaries in order and continue after failures:
 - Workflow agents: read-only agy readiness.
 - [Codex limits](codex-limits.prompt.md): read-only account usage states.
 - [Multi-harness login pool](login-pool.prompt.md): `isCloudAccountsActive`, `pddManagedCodexHome`, `managedCodexAuthPath` and `managedClaudeSettingsPath` for isolated Cloud Codex and Cloud Claude sign-in detection.
-- [Approval policy](approval-policy.prompt.md): read-only `readPromptApprovals` journal lookup for plain-Markdown and frontmatter prompt approval state.
 - [PDD to Runtime seam](runtime-seam.prompt.md#public-contract): required `health` (`checkRuntimeHealth`) classification, `runtimeOrigin` address rules, and `runtimePreflightSlice` (`interfaceBlocks`, `parsePromptFrontmatter`, `proseSha256`).
 - [Autopilot settings on GitHub](autopilot-github.prompt.md): owns when two
   Autopilot settings differ, the `MODE, trust NAMES` form and the publish commands.
