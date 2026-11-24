@@ -62,7 +62,7 @@ Own `src/metrics-model.mjs`. Export pure deterministic functions `SKILLS`, `GATE
 - Evaluates the primary window across the selected repositories (`repoFilter` or unified).
 - Gate states per issue normalize as:
   - `runtime`, `vectors`: `"pass"` -> `"pass"`; `"fail"` -> `"fail"`; else `"na"`.
-  - `formal`: `"proved"`, `"bounded"`, `"pass"` -> `"pass"`; `"failed"`, `"fail"` -> `"fail"`; else `"na"`.
+  - `formal`: `"proved"`, `"bounded"`, `"proved_solver_code"`, `"pass"` -> `"pass"`; `"failed"`, `"fail"` -> `"fail"`; else `"na"` (keeping `"proved_spec_model"` distinct and never counting disconnected spec models as a code-proved pass).
   - `suite`: `"pass"` -> `"pass"`; `"fail"`, `"broken"`, `"hung"` -> `"fail"`; `"running"` -> `"running"`; else `"na"`.
   - `review`: `"pass"` -> `"pass"`; `"fail"` -> `"fail"`; `"running"` -> `"running"`; else `"na"` (case-insensitive).
   - `ci`: `"green"`, `"pass"` -> `"pass"`; `"red"`, `"fail"` -> `"fail"`; `"pending"`, `"running"` -> `"running"`; else `"na"`.

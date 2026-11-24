@@ -540,9 +540,20 @@ test('#3561/#3634 runPolyglotBaseControl isolates Python formal test files into 
   });
   assert.equal(res.state, 'ran-and-failed-on-base');
   assert.deepEqual(res.isolatedFiles, ['tests_py/test_formal_a.py', 'tests_py/formal/test_b.py']);
-  assert.deepEqual(calls, [
-    ['pytest', '-q', 'tests_py/test_unit.py'],
-    ['pytest', '-q', 'tests_py/test_formal_a.py'],
-    ['pytest', '-q', 'tests_py/formal/test_b.py'],
-  ]);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0][0], 'pytest');
+  assert.equal(calls[0][1], '-v');
+  assert.match(calls[0][2], /^--junitxml=/);
+  assert.equal(calls[0][3], '--');
+  assert.equal(calls[0][4], 'tests_py/test_unit.py');
+  assert.equal(calls[1][0], 'pytest');
+  assert.equal(calls[1][1], '-v');
+  assert.match(calls[1][2], /^--junitxml=/);
+  assert.equal(calls[1][3], '--');
+  assert.equal(calls[1][4], 'tests_py/test_formal_a.py');
+  assert.equal(calls[2][0], 'pytest');
+  assert.equal(calls[2][1], '-v');
+  assert.match(calls[2][2], /^--junitxml=/);
+  assert.equal(calls[2][3], '--');
+  assert.equal(calls[2][4], 'tests_py/formal/test_b.py');
 });

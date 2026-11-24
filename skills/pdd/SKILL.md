@@ -42,11 +42,11 @@ In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned mo
 
 ## Step 4 — Build, prove the real user path, and verify
 
-Load [references/verification.md](references/verification.md) before finalizing implementation and review (and [references/formal.md](references/formal.md) only for invariant-heavy work):
+Load [references/verification.md](references/verification.md) before finalizing implementation and review (and [references/formal.md](references/formal.md) whenever touching rules/state transitions, parsers/validators, auth/trust, math/metrics/money, locking/scheduling, `## Rules to check` / `## Domain decisions`, or formal-tested modules — zero-install seeded PRNG or finite grid by default; skip as `not-applicable` on docs/UI/glue/simple CRUD):
 
 - **Prove the real user path:** Exercise the real user-facing surface (CLI subprocess, local server/browser, or real integration boundary — never mocked-only stubs) and keep `pdd.json` `verify.paths` current when adding or changing a surface.
 - **Native tests:** Cover every Story criterion 1-to-1 in the repo's native runner (with unchanged-state checks on negative rules). Require Red→Green TDD on bug fixes.
-- **Exit check:** Run offline `pdd lint --diff`, native tests, safe live local smoke checks (ask before touching personal credentials), and **`pdd prove`** (`Proved` / `Failed` / `Not proved`). Always disclose `Not proved:` honestly.
+- **Exit check:** Run offline `pdd lint --diff`, native tests, safe live local smoke checks (ask before touching personal credentials), and **`pdd prove`** (`Proved` / `Failed` / `Not proved`, including code-bound `Formal:` status). Always disclose `Not proved:` honestly.
 
 ## Independent verification (scaled to risk)
 
@@ -64,4 +64,4 @@ Load [references/verification.md](references/verification.md) before finalizing 
 | External fakes, DB/HTTP/CLI, 3-Port Rule, telemetry & `pdd mcp` | [references/ports-and-cli.md](references/ports-and-cli.md) |
 | Single-file plain-prose UI, optional `app-map.json`, `.ui.svg` & `pdd sim` | [references/ui-and-screens.md](references/ui-and-screens.md) |
 | Native tests, Feature Map (`verify.paths`), `pdd prove` & Deliberate-Break Probe | [references/verification.md](references/verification.md) |
-| Code-bound formal verification (3-tier stack, Z3 isolation & mutation control) | [references/formal.md](references/formal.md) |
+| Code-bound formal verification (zero-install PRNG/grid default, 3-tier stack & mutation control) | [references/formal.md](references/formal.md) |
