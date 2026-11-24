@@ -1,6 +1,6 @@
 # factory
 
-I can check factory with a deterministic outside world.
+As a developer testing a stateful greeter factory, I want each created instance to keep its own prefix deterministically, so that greeting outputs are verified without external state.
 
 ## Acceptance criteria
 

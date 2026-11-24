@@ -51,7 +51,7 @@ Start with `# <Product name>: plan` (optional `Through: prompt-pr|code` before t
 - Each `contracts/*.md` starts with a title and an `Owner` line naming the plan run.
 - Each record has a `### record_name` heading and a fenced `json` schema (`properties`, `required`, `"additionalProperties": false`).
 - `contracts/world.md` defines a key table (`Key`, `What it holds`, `Writer`, `Readers`, `How it is written`). Each key has one writer. Put shared seed data in `contracts/seed-world.json`.
-- Reference schemas with `{"$contract": "contracts/records.json#/defs/order"}` and seed worlds with `{"$seed": "contracts/seed.json", "set": {...}}`.
+- Reference schemas with `{"$contract": "contracts/<file>.md#record_name"}` (JSON contract files also accept `#/defs/<name>`) and seed worlds with `{"$seed": "contracts/seed-world.json", "set": {...}}`.
 
 ## 5. `kind: native-only` boundary specs
 
