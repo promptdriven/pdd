@@ -83,6 +83,7 @@ export function lintScenarioFiles({
   files,
   policy,
   promptFilter,
+  scenarioFilter = null,
   testFilter = null,
   includeShortDiagnostics = false,
   visiblePromptSet,
@@ -139,6 +140,7 @@ export function lintScenarioFiles({
   };
 
   for (const testFile of testJsonPaths) {
+    const inScenarioScope = !scenarioFilter || scenarioFilter.has(testFile);
     const isFixtureJson = isFixturePath(testFile);
     const baseStem = testFile.split('/').at(-1).slice(0, -5);
     const primaryStem = baseStem.split('.')[0];
@@ -149,7 +151,7 @@ export function lintScenarioFiles({
     const pairedWithStory = pairedStoryPath !== null;
     const cached = parsedTests.get(testFile);
     if (!cached || cached.error) {
-      if (pairedWithStory && !promptFilter) {
+      if (inScenarioScope && pairedWithStory && (scenarioFilter || !promptFilter)) {
         const text = `Warning: ${testFile}: scenario test file is not valid JSON; fix JSON syntax (omit "schema_version" for compact scenario JSON or set "schema_version": "prompt-runtime.program-scenario.v1").`;
         warnings.push({ key: `${testFile}\0testjson`, text });
       }
@@ -201,7 +203,9 @@ export function lintScenarioFiles({
         || (typeof doc.story_path === 'string' && testFilter.has(doc.story_path))
       );
       const hasAnyFilter = Boolean(promptFilter || testFilter);
-      const matchesShortFilter = !hasAnyFilter || Boolean(shortTestMatch) || Boolean(shortPromptMatch);
+      const matchesShortFilter = scenarioFilter
+        ? inScenarioScope
+        : (!hasAnyFilter || Boolean(shortTestMatch) || Boolean(shortPromptMatch));
       if (compiled.refusal) {
         if (includeShortDiagnostics && matchesShortFilter) {
           const r = compiled.refusal;
@@ -224,17 +228,18 @@ export function lintScenarioFiles({
       || typeof doc.story_path === 'string'
       || (Array.isArray(doc.steps) && doc.steps.some(s => s && typeof s === 'object' && (typeof s.entry_path === 'string' || typeof s.operation === 'string') && Array.isArray(s.checks)))
     );
-    if (looksLikeScenario && !shortCompileHandled && doc.schema_version !== V1_SCENARIO_SCHEMA) {
+    if (inScenarioScope && looksLikeScenario && !shortCompileHandled && doc.schema_version !== V1_SCENARIO_SCHEMA) {
       const candidateSteps = Array.isArray(doc.steps) ? doc.steps : [];
-      const matchesFilter = !promptFilter || candidateSteps.some(s => typeof s?.entry_path === 'string' && promptFilter.has(s.entry_path));
+      const matchesFilter = scenarioFilter ? true : (!promptFilter || candidateSteps.some(s => typeof s?.entry_path === 'string' && promptFilter.has(s.entry_path)));
       if (matchesFilter) {
         const text = `Warning: ${testFile}: scenario schema_version ${JSON.stringify(doc.schema_version ?? null)} is invalid; omit "schema_version" for compact scenario JSON or set "schema_version": "prompt-runtime.program-scenario.v1".`;
         warnings.push({ key: `${testFile}\0testschema`, text });
       }
     }
     if (isFixtureJson || isNativeCaseDoc || !doc || typeof doc !== 'object' || doc.schema_version !== V1_SCENARIO_SCHEMA || !Array.isArray(doc.steps)) continue;
+    // Always populate full-repo checkableScenarioEntries lookup index (used by promptFilter-scoped inverted native-only check below).
     for (const mapCandidate of Array.isArray(doc.app_maps) ? doc.app_maps : []) {
-      const mapDoc = typeof mapCandidate === 'string' ? parsedAppMaps.get(mapCandidate) : null;
+      const mapDoc = typeof mapCandidate === 'string' ? parsedAppMaps.get(mapCandidate.trim().replace(/^\.\//, '')) : null;
       if (!mapDoc) continue;
       for (const s of Array.isArray(mapDoc.screens) ? mapDoc.screens : []) {
         if (typeof s?.prompt_path === 'string' && visiblePromptSet.has(s.prompt_path) && !getMeta(s.prompt_path)?.isNativeOnly) checkableScenarioEntries.add(s.prompt_path);
@@ -252,14 +257,14 @@ export function lintScenarioFiles({
     for (const step of inRepoSteps) {
       if (!getMeta(step.entry_path)?.isNativeOnly) checkableScenarioEntries.add(step.entry_path);
     }
-    if (!inRepoSteps.length) continue;
+    if (!inScenarioScope || !inRepoSteps.length) continue;
     const stepClosures = new Map();
     const allClosurePrompts = new Set();
     for (const step of inRepoSteps) {
       if (!stepClosures.has(step.entry_path)) stepClosures.set(step.entry_path, collectClosure(step.entry_path));
       for (const p of stepClosures.get(step.entry_path)) allClosurePrompts.add(p);
     }
-    if (promptFilter && ![...allClosurePrompts].some(p => promptFilter.has(p))) continue;
+    if (!scenarioFilter && promptFilter && ![...allClosurePrompts].some(p => promptFilter.has(p))) continue;
     const resolvedWorld = resolveInitialWorld(root, testFile, doc.initial_world, safeRead);
     const criteriaById = new Map(
       (Array.isArray(doc.criteria) ? doc.criteria : [])
