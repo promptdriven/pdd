@@ -1,4 +1,5 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 18aa708d0828991e58eb46e429cf2cfa4945d7028b9eab5d1ff05562a785c5ed).
+// Prompt: prompts/cli/runtime-seam.prompt.md
+
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -101,7 +102,9 @@ import {
   readContractHistory as runtimeReadContractHistory,
   readPrompt,
   readTryOwner as runtimeReadTryOwner,
+  reconcileCheckBatch as rawReconcileCheckBatch,
   reconcileCheckReceipt as rawReconcileCheckReceipt,
+  reconcileStaleReservations as rawReconcileStaleReservations,
   refusalView as rawRefusalView,
   renderJson as rawRenderJson,
   renderText as rawRenderText,
@@ -2164,6 +2167,9 @@ export function runtimeClientSlice() {
     createSavedStoryEvidenceReader,
     health,
     readContractHistory,
+    reconcileCheckBatch,
+    reconcileCheckReceipt,
+    reconcileStaleReservations,
     runtimeOrigin,
     runtimeWorkspaceMigrationStore,
     resendableStoryChecks,
@@ -2316,14 +2322,15 @@ export async function loadRuntimeClient() {
 
 const NON_EXEC_CHECK_FLAGS = [
   '--lint', '--local', '--files', '--explain-bindings',
-  '--read', '--retry', '--reconcile', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--write', '--bind-criteria',
+  '--read', '--retry', '--reconcile', '--reconcile-stale', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--write', '--bind-criteria',
 ];
 const FRESH_INCOMPATIBLE_CHECK_FLAGS = [
-  '--read', '--retry', '--reconcile', '--files', '--explain-bindings',
+  '--read', '--retry', '--reconcile', '--reconcile-stale', '--files', '--explain-bindings',
   '--request', '--lint', '--local', '--screen', '--drawing', '--look',
   '--emit-v1', '--write', '--bind-criteria',
 ];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BATCH_RE = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -2496,17 +2503,47 @@ async function runCheckReconcileCommand(input = {}, ports = {}) {
   const rawOptions = input?.options ?? {};
   const words = commandWords(input);
   if (words.length > 0 || Object.keys(rawOptions).some(key => !['--reconcile', '--json'].includes(key))) {
-    stderr.write('Use pdd test --reconcile REQUEST_ID [--json] without other options or Stories.\n');
+    stderr.write('Use pdd test --reconcile REQUEST_ID|BATCH [--json] without other options or Stories.\n');
     return 2;
   }
-  const requestId = rawOptions['--reconcile'];
-  if (typeof requestId !== 'string' || !UUID_RE.test(requestId)) {
-    stderr.write(`Invalid CHECK request UUID "${cleanText(safeRequestIdDisplay(requestId))}". Pass the original external request UUID.\n`);
+  const rawTarget = rawOptions['--reconcile'];
+  const target = typeof rawTarget === 'string' ? rawTarget.trim() : '';
+  const isUuid = typeof rawTarget === 'string' && UUID_RE.test(target);
+  const isBatch = typeof rawTarget === 'string' && BATCH_RE.test(target);
+  if (!isUuid && !isBatch) {
+    stderr.write(`Invalid --reconcile target "${cleanText(safeRequestIdDisplay(rawTarget))}". Pass a CHECK request UUID or a local batch ID (e.g. 20261107-182617-8r61).\n`);
     return 2;
+  }
+  if (isBatch) {
+    try {
+      const result = await reconcileCheckBatch(
+        { cwd: input?.cwd ?? process.cwd(), batchId: target },
+        ports,
+      );
+      if (rawOptions['--json'] === true) {
+        stdout.write(`${JSON.stringify(result)}\n`);
+      } else {
+        const { formatBatchReconciliation } = await import('./core/reconcile-format.mjs');
+        stdout.write(`${formatBatchReconciliation(result)}\n`);
+      }
+      return result?.remaining_unresolved_count === 0 ? 0 : 3;
+    } catch (error) {
+      if (error?.code === 'invalid-batch-id' || error?.exitCode === 2) {
+        stderr.write(`${causeText(error.message) || 'Invalid local batch ID.'}\n`);
+        return 2;
+      }
+      if (error?.exitCode === 5) {
+        stderr.write(`${causeText(error.message) || 'Batch reconciliation is unavailable.'}\n`);
+        return 5;
+      }
+      const detail = causeText(error?.message ?? error);
+      stderr.write(`Batch reservation reconciliation failed.${detail ? ` Reason: ${detail}` : ''}\n`);
+      return 3;
+    }
   }
   try {
     const result = await reconcileCheckReceipt(
-      { cwd: input?.cwd ?? process.cwd(), requestId },
+      { cwd: input?.cwd ?? process.cwd(), requestId: target },
       ports,
     );
     if (rawOptions['--json'] === true) {
@@ -2527,6 +2564,46 @@ async function runCheckReconcileCommand(input = {}, ports = {}) {
     }
     const detail = causeText(error?.message ?? error);
     stderr.write(`CHECK receipt reconciliation failed.${detail ? ` Reason: ${detail}` : ''}\n`);
+    return 3;
+  }
+}
+
+async function runCheckReconcileStaleCommand(input = {}, ports = {}) {
+  const stdout = ports.stdout ?? process.stdout;
+  const stderr = ports.stderr ?? process.stderr;
+  const rawOptions = input?.options ?? {};
+  const words = commandWords(input);
+  if (rawOptions['--reconcile-stale'] !== true) {
+    stderr.write('--reconcile-stale takes no value.\n');
+    return 2;
+  }
+  if (words.length > 0 || Object.keys(rawOptions).some(key => !['--reconcile-stale', '--json'].includes(key))) {
+    stderr.write('Use pdd test --reconcile-stale [--json] without other options or Stories.\n');
+    return 2;
+  }
+  try {
+    const result = await reconcileStaleReservations(
+      { cwd: input?.cwd ?? process.cwd() },
+      ports,
+    );
+    if (rawOptions['--json'] === true) {
+      stdout.write(`${JSON.stringify(result)}\n`);
+    } else {
+      const { formatStaleReconciliation } = await import('./core/reconcile-format.mjs');
+      stdout.write(`${formatStaleReconciliation(result)}\n`);
+    }
+    return result?.remaining_unresolved_count === 0 ? 0 : 3;
+  } catch (error) {
+    if (error?.exitCode === 2) {
+      stderr.write(`${causeText(error.message) || 'Invalid --reconcile-stale request.'}\n`);
+      return 2;
+    }
+    if (error?.exitCode === 5) {
+      stderr.write(`${causeText(error.message) || 'Stale reservation reconciliation is unavailable.'}\n`);
+      return 5;
+    }
+    const detail = causeText(error?.message ?? error);
+    stderr.write(`Stale reservation reconciliation failed.${detail ? ` Reason: ${detail}` : ''}\n`);
     return 3;
   }
 }
@@ -2741,6 +2818,9 @@ export async function runCheck(input = {}, ports = {}) {
   if (rawOptions['--reconcile'] !== undefined) {
     return runCheckReconcileCommand(input, ports);
   }
+  if (rawOptions['--reconcile-stale'] !== undefined) {
+    return runCheckReconcileStaleCommand(input, ports);
+  }
   const freshRequested = rawOptions['--fresh'] !== undefined;
   if (freshRequested) {
     const stderr = ports.stderr ?? process.stderr;
@@ -2760,6 +2840,7 @@ export async function runCheck(input = {}, ports = {}) {
     screenRequested ||
     rawOptions['--read'] !== undefined ||
     rawOptions['--retry'] !== undefined ||
+    rawOptions['--reconcile-stale'] !== undefined ||
     rawOptions['--request'] !== undefined ||
     rawOptions['--explain-bindings'] !== undefined;
 
@@ -3095,6 +3176,7 @@ function classifyPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
     };
 
     let sawPlainProseUiStep = false;
+    let sawCoarsePlainProseUiFalsePositive = false;
     for (const item of tests) {
       if (Array.isArray(item?.doc?.app_maps) && item.doc.app_maps.length > 0) return 'none';
       const steps = Array.isArray(item?.doc?.steps) ? item.doc.steps : [];
@@ -3107,10 +3189,27 @@ function classifyPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
         if (promptEntryHasCliOrHttpDoor(realRoot, found.visible, entryPath, promptSource, op)) return 'none';
         if ((op === 'render' || op === 'handle_event') && isPlainProseHybridUiPrompt(promptSource)) {
           sawPlainProseUiStep = true;
+        } else if (
+          interfaceBlocks(promptSource).length === 0 &&
+          !promptSource.includes('<summary>Runtime interface</summary>') &&
+          !promptSource.includes('<pdd-interface>')
+        ) {
+          const low = promptSource.toLowerCase();
+          if (low.includes('render') || low.includes('<main') || low.includes('html') || low.includes('data-pdd-op')) {
+            sawCoarsePlainProseUiFalsePositive = true;
+          }
         }
       }
     }
-    if (!sawPlainProseUiStep) return 'none';
+    if (!sawPlainProseUiStep) {
+      if (sawCoarsePlainProseUiFalsePositive) {
+        if (!opts['--new'] && hasSavedTryRecord(realRoot, tests, rawWords, ports?.env ?? process.env)) {
+          return 'none';
+        }
+        return 'inject-call';
+      }
+      return 'none';
+    }
     if (!opts['--new'] && hasSavedTryRecord(realRoot, tests, rawWords, ports?.env ?? process.env)) {
       return 'reopen';
     }
@@ -3230,11 +3329,11 @@ export async function runTry(input = {}, ports = {}) {
           }
         }
         if (programSessionId) {
-          stderr.write(`Stopping standalone program sessions requires @promptdriven/runtime-client >= 1.1.2 (session ID: ${programSessionId}).\n`);
+          runInput = { ...input, words: [relTarget], options: { '--stop': true } };
         } else {
           stderr.write(`No open Try for "${words[0]}".\n`);
+          return 2;
         }
-        return 2;
       }
     } else if (opts['--save-last']) {
       stderr.write('pdd --save-last takes an optional STORY, not a standalone prompt file. Run pdd --save-last --help.\n');
@@ -3322,8 +3421,10 @@ export async function runTry(input = {}, ports = {}) {
   const effectiveInput =
     screenTabMode === 'inject'
       ? { ...runInput, options: { ...opts, '--tab': 'screen' } }
-      : runInput;
-  if (screenTabMode === 'inject' && !opts['--new']) {
+      : screenTabMode === 'inject-call'
+        ? { ...runInput, options: { ...opts, '--tab': 'call' } }
+        : runInput;
+  if ((screenTabMode === 'inject' || screenTabMode === 'inject-call') && !opts['--new']) {
     let reopenAutoTabConflict = false;
     let startupSucceeded = false;
     const emittedBeforeFallback = new Set();
@@ -3488,6 +3589,37 @@ export async function reconcileCheckReceipt(input = {}, ports = {}) {
   }
   const { reconcileCheckReceipt: injectedReconcile, ...forwardPorts } = ports ?? {};
   const impl = typeof injectedReconcile === 'function' ? injectedReconcile : rawReconcileCheckReceipt;
+  await import('./secret-redaction.mjs');
+  return impl(
+    input,
+    seamRuntimePorts(withPortDefaults(forwardPorts, { redaction: seamRedaction(forwardPorts) }), {
+      cwd: input?.cwd ?? process.cwd(),
+    }),
+  );
+}
+
+export async function reconcileCheckBatch(input = {}, ports = {}) {
+  const rawBatchId = input?.batchId;
+  if (typeof rawBatchId !== 'string' || !BATCH_RE.test(rawBatchId)) {
+    throw Object.assign(
+      new Error(`Invalid local batch ID "${cleanText(safeRequestIdDisplay(rawBatchId))}". Pass a batch ID like 20261107-182617-8r61.`),
+      { code: 'invalid-batch-id', exitCode: 2 },
+    );
+  }
+  const { reconcileCheckBatch: injectedReconcile, ...forwardPorts } = ports ?? {};
+  const impl = typeof injectedReconcile === 'function' ? injectedReconcile : rawReconcileCheckBatch;
+  await import('./secret-redaction.mjs');
+  return impl(
+    input,
+    seamRuntimePorts(withPortDefaults(forwardPorts, { redaction: seamRedaction(forwardPorts) }), {
+      cwd: input?.cwd ?? process.cwd(),
+    }),
+  );
+}
+
+export async function reconcileStaleReservations(input = {}, ports = {}) {
+  const { reconcileStaleReservations: injectedReconcile, ...forwardPorts } = ports ?? {};
+  const impl = typeof injectedReconcile === 'function' ? injectedReconcile : rawReconcileStaleReservations;
   await import('./secret-redaction.mjs');
   return impl(
     input,

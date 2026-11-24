@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import * as seam from '../src/runtime-seam.mjs';
 import { CommandInputError, parseArgv } from '../src/argument-parser.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { formatCheckReconciliation } from '../src/core/reconcile-format.mjs';
+import { formatBatchReconciliation, formatCheckReconciliation, formatStaleReconciliation } from '../src/core/reconcile-format.mjs';
 import { checkRuntimeClientParity } from '../scripts/publish-release.mjs';
 import { PLACE, TOKEN, fakeRuntime, harbor, portsFor } from './helpers/runtime-fake.mjs';
 
@@ -1274,4 +1274,152 @@ test('#3594 R2/R3 regression: pdd --product --fresh handles open, sibling, journ
     newProdPorts.ports.stderr.text,
   );
   assert.equal(newInvoked, true, '--product --fresh --new must proceed to runtimeRunTry');
+});
+
+test('runtime-client 1.1.2: reconcileCheckBatch, reconcileStaleReservations, --reconcile BATCH, --reconcile-stale, and --batch-timeout work end-to-end', async t => {
+  const BATCH_ID = '20261121-000100-ab12';
+  assert.deepEqual(parseArgv(['test', '--reconcile', BATCH_ID, '--json']).options, {
+    '--reconcile': BATCH_ID,
+    '--json': true,
+  });
+  assert.deepEqual(parseArgv(['test', '--reconcile-stale', '--json']).options, {
+    '--reconcile-stale': true,
+    '--json': true,
+  });
+  assert.deepEqual(parseArgv(['test', '--batch-timeout', '45']).options, {
+    '--batch-timeout': '45',
+  });
+  assert.deepEqual(parseArgv(['test', '--read', BATCH_ID, '--batch-timeout', '15']).options, {
+    '--read': true,
+    '--batch-timeout': '15',
+  });
+  for (const invalid of [
+    ['test', '--reconcile', 'not-a-batch-or-uuid'],
+    ['test', '--reconcile-stale=true'],
+    ['test', '--batch-timeout', '0'],
+    ['test', '--batch-timeout', '1441'],
+    ['lint', '--batch-timeout', '5'],
+    ['lint', '--reconcile-stale'],
+  ]) {
+    assert.throws(() => parseArgv(invalid), CommandInputError, invalid.join(' '));
+  }
+
+  // Seam runtimeClientSlice overlays seam-bound reconciliation helpers.
+  const slice = seam.runtimeClientSlice();
+  assert.equal(slice.reconcileCheckReceipt, seam.reconcileCheckReceipt);
+  assert.equal(slice.reconcileCheckBatch, seam.reconcileCheckBatch);
+  assert.equal(slice.reconcileStaleReservations, seam.reconcileStaleReservations);
+
+  const setup = harbor(t);
+  for (const badBatch of [{ toString: () => BATCH_ID }, [BATCH_ID], 123, null, Object.create(null), Symbol('batch')]) {
+    await assert.rejects(
+      () => seam.reconcileCheckBatch({ cwd: setup.repo, batchId: badBatch }),
+      err => err?.code === 'invalid-batch-id' && err?.exitCode === 2,
+    );
+  }
+
+  // Real 1.1.2 batch reconciliation on an already-resolved saved batch (0 network POSTs).
+  const batchDir = join(setup.state, 'batches', BATCH_ID);
+  mkdirSync(batchDir, { recursive: true });
+  writeFileSync(
+    join(batchDir, 'batch.json'),
+    `${JSON.stringify({
+      version: 1,
+      batch: BATCH_ID,
+      intent: 'check',
+      root: setup.repo,
+      rows: [
+        { test: 'tests/place-order.json', story: 'place-order', state: 'passed', calls: 1, accounting_complete: true, request_ids: [VALID_REQUEST_ID] },
+      ],
+    }, null, 2)}\n`,
+  );
+
+  const noNetEnv = {
+    ...process.env,
+    HOME: setup.home,
+    PDD_STATE_DIR: setup.state,
+    PDD_RUNTIME_URL: 'http://127.0.0.1:9',
+  };
+  const batchRes = await seam.reconcileCheckBatch(
+    { cwd: setup.repo, batchId: BATCH_ID },
+    portsFor(noNetEnv, { fetch: async () => { throw new Error('must not call network for already-resolved batch'); } }).ports,
+  );
+  assert.equal(batchRes.schema_version, 'pdd-runtime.batch-reconciliation.v1');
+  assert.equal(batchRes.batch, BATCH_ID);
+  assert.equal(batchRes.status, 'already-resolved');
+  assert.equal(batchRes.remaining_unresolved_count, 0);
+
+  const batchJsonOut = captureStream();
+  const batchJsonErr = captureStream();
+  assert.equal(
+    await runPdd(['test', '--reconcile', BATCH_ID, '--json'], { cwd: setup.repo, env: noNetEnv, stdout: batchJsonOut, stderr: batchJsonErr }),
+    0,
+    batchJsonErr.text,
+  );
+  assert.equal(JSON.parse(batchJsonOut.text).status, 'already-resolved');
+
+  const batchTextOut = captureStream();
+  const batchTextErr = captureStream();
+  assert.equal(
+    await runPdd(['test', '--reconcile', BATCH_ID], { cwd: setup.repo, env: noNetEnv, stdout: batchTextOut, stderr: batchTextErr }),
+    0,
+    batchTextErr.text,
+  );
+  assert.match(batchTextOut.text, new RegExp(`Batch ${BATCH_ID}: no unresolved prior reservations remain\\.`));
+
+  // Real 1.1.2 stale reservation reconciliation when no unresolved reservations exist.
+  const staleRes = await seam.reconcileStaleReservations(
+    { cwd: setup.repo },
+    portsFor(noNetEnv, { fetch: async () => { throw new Error('must not call network when no stale reservations exist'); } }).ports,
+  );
+  assert.equal(staleRes.schema_version, 'pdd-runtime.stale-reconciliation.v1');
+  assert.equal(staleRes.batches_inspected, 0);
+  assert.equal(staleRes.remaining_unresolved_count, 0);
+
+  const staleOut = captureStream();
+  const staleErr = captureStream();
+  assert.equal(
+    await runPdd(['test', '--reconcile-stale'], { cwd: setup.repo, env: noNetEnv, stdout: staleOut, stderr: staleErr }),
+    0,
+    staleErr.text,
+  );
+  assert.match(staleOut.text, /No unresolved prior reservations found for this repository\./);
+
+  const staleJsonOut = captureStream();
+  const staleJsonErr = captureStream();
+  assert.equal(
+    await runPdd(['test', '--reconcile-stale', '--json'], { cwd: setup.repo, env: noNetEnv, stdout: staleJsonOut, stderr: staleJsonErr }),
+    0,
+    staleJsonErr.text,
+  );
+  assert.equal(JSON.parse(staleJsonOut.text).batches_inspected, 0);
+
+  // Invalid mixes with --reconcile-stale fail closed with exit 2.
+  for (const argv of [
+    ['test', '--reconcile-stale', '--fresh'],
+    ['test', '--reconcile-stale', 'place-order'],
+    ['test', '--reconcile', BATCH_ID, '--reconcile-stale'],
+  ]) {
+    const out = captureStream();
+    const err = captureStream();
+    assert.equal(await runPdd(argv, { cwd: setup.repo, env: noNetEnv, stdout: out, stderr: err }), 2, argv.join(' '));
+  }
+
+  // Formatters sanitize control characters cleanly.
+  const batchFmt = formatBatchReconciliation({
+    batch: `${BATCH_ID}\nfake`,
+    cleared_count: 1,
+    settled_count: 1,
+    remaining_unresolved_count: 0,
+    rows: [{ test: 'tests/a.json\r\nbad', status: 'settled', calls: 2, cleared: true, reason: 'ok\u0007' }],
+  });
+  assert.doesNotMatch(batchFmt, /[\r\u0007]/);
+  assert.match(batchFmt, /Reconciled batch 20261121-000100-ab12 fake: 1 cleared \(1 settled\), 0 remaining unresolved\./);
+  const staleFmt = formatStaleReconciliation({
+    batches_inspected: 1,
+    cleared_count: 1,
+    remaining_unresolved_count: 0,
+    batches: [{ batch: BATCH_ID, status: 'reconciled', cleared_count: 1, remaining_unresolved_count: 0 }],
+  });
+  assert.match(staleFmt, /Reconciled 1 prior batch: 1 reservation cleared, 0 remaining unresolved\./);
 });

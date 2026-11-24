@@ -226,13 +226,88 @@ function stringLiterals(source) {
   return out;
 }
 
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return', 'throw', 'case', 'in', 'of', 'typeof', 'void', 'delete', 'await', 'yield', 'new', 'else', 'do',
+]);
+
+function canStartRegexBefore(text, slashIndex) {
+  let j = slashIndex - 1;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  if (j < 0) return true;
+  const prev = text[j];
+  if ((prev === '+' && text[j - 1] === '+') || (prev === '-' && text[j - 1] === '-')) return false;
+  if ('=([,;:!&|?~+-*%^<>{}'.includes(prev)) return true;
+  if (/[A-Za-z0-9_$]/.test(prev)) {
+    let k = j;
+    while (k >= 0 && /[A-Za-z0-9_$]/.test(text[k])) k--;
+    return REGEX_PRECEDING_KEYWORDS.has(text.slice(k + 1, j + 1));
+  }
+  return false;
+}
+
 function stripCommentsPreservingLines(text) {
   let out = '';
   let i = 0;
+  const tplBraceDepths = [];
+  const copyTemplateText = () => {
+    while (i < text.length) {
+      const ch = text[i];
+      if (ch === '\\') {
+        out += text.slice(i, i + 2);
+        i += 2;
+        continue;
+      }
+      if (ch === '`') {
+        out += ch;
+        i++;
+        return;
+      }
+      if (ch === '$' && text[i + 1] === '{') {
+        out += '${';
+        i += 2;
+        tplBraceDepths.push(0);
+        return;
+      }
+      out += ch;
+      i++;
+    }
+  };
   while (i < text.length) {
     const c = text[i];
     const next = text[i + 1];
-    if (c === "'" || c === '"' || c === '`') {
+    if (c === '/' && next === '/') {
+      const end = text.indexOf('\n', i + 2);
+      if (end < 0) break;
+      out += '\n';
+      i = end + 1;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      const end = text.indexOf('*/', i + 2);
+      const body = end < 0 ? text.slice(i + 2) : text.slice(i + 2, end);
+      out += body.replace(/[^\n]/g, ' ');
+      i = end < 0 ? text.length : end + 2;
+      continue;
+    }
+    if (c === '/' && canStartRegexBefore(out, out.length)) {
+      out += c;
+      i++;
+      let inClass = false;
+      while (i < text.length && text[i] !== '\n') {
+        if (text[i] === '\\') {
+          out += text.slice(i, i + 2);
+          i += 2;
+          continue;
+        }
+        if (text[i] === '[') { inClass = true; out += text[i]; i++; continue; }
+        if (text[i] === ']') { inClass = false; out += text[i]; i++; continue; }
+        if (text[i] === '/' && !inClass) { out += text[i]; i++; break; }
+        out += text[i];
+        i++;
+      }
+      continue;
+    }
+    if (c === "'" || c === '"') {
       out += c;
       i++;
       while (i < text.length && text[i] !== c) {
@@ -247,19 +322,33 @@ function stripCommentsPreservingLines(text) {
       if (i < text.length) { out += text[i]; i++; }
       continue;
     }
-    if (c === '/' && next === '/') {
-      const end = text.indexOf('\n', i + 2);
-      if (end < 0) break;
-      out += '\n';
-      i = end + 1;
+    if (c === '`') {
+      out += c;
+      i++;
+      copyTemplateText();
       continue;
     }
-    if (c === '/' && next === '*') {
-      const end = text.indexOf('*/', i + 2);
-      const body = end < 0 ? text.slice(i + 2) : text.slice(i + 2, end);
-      out += body.replace(/[^\n]/g, ' ');
-      i = end < 0 ? text.length : end + 2;
-      continue;
+    if (tplBraceDepths.length > 0) {
+      if (c === '{') {
+        tplBraceDepths[tplBraceDepths.length - 1]++;
+        out += c;
+        i++;
+        continue;
+      }
+      if (c === '}') {
+        const top = tplBraceDepths[tplBraceDepths.length - 1];
+        if (top === 0) {
+          tplBraceDepths.pop();
+          out += c;
+          i++;
+          copyTemplateText();
+          continue;
+        }
+        tplBraceDepths[tplBraceDepths.length - 1] = top - 1;
+        out += c;
+        i++;
+        continue;
+      }
     }
     out += c;
     i++;
@@ -2822,24 +2911,6 @@ test('SEAM25: runtime client uses the exact public npm release', () => {
   assert.doesNotMatch(locked.resolved, /^(?:github:|git\+)/);
 });
 
-const REGEX_PRECEDING_KEYWORDS = new Set([
-  'return', 'throw', 'case', 'in', 'of', 'typeof', 'void', 'delete', 'await', 'yield', 'new', 'else', 'do',
-]);
-
-function canStartRegexBefore(text, slashIndex) {
-  let j = slashIndex - 1;
-  while (j >= 0 && /\s/.test(text[j])) j--;
-  if (j < 0) return true;
-  const prev = text[j];
-  if ('=([,;:!&|?~+-*%^<>{}'.includes(prev)) return true;
-  if (/[A-Za-z0-9_$]/.test(prev)) {
-    let k = j;
-    while (k >= 0 && /[A-Za-z0-9_$]/.test(text[k])) k--;
-    return REGEX_PRECEDING_KEYWORDS.has(text.slice(k + 1, j + 1));
-  }
-  return false;
-}
-
 function skipBalanced(text, start, openChar, closeChar) {
   let depth = 0;
   let i = start;
@@ -4156,7 +4227,8 @@ test('SEAM26 (#3444): every CLI option accepted by @promptdriven/runtime-client 
   plantedModules.set('runtime/synthetic-entry.mjs', [
     "import defaultCompanion, { extraCompanion, fnExprCompanion } from './synthetic-companion.mjs';",
     'export async function runSynthetic({ options = {} } = {}) {',
-    '  const localCopy = { ...options };',
+    "  const stripDotSlash = String(options['--planted-alias'] ?? '').replace(/^\\.\\//, '');",
+    '  const localCopy = { ...options, stripDotSlash };',
     "  const dyn = await import('./synthetic-dyn.mjs');",
     '  const { destructuredDyn } = dyn;',
     "  const keysMod = await import('./synthetic-keys.mjs');",
@@ -4305,7 +4377,7 @@ test('SEAM26 (#3444): every CLI option accepted by @promptdriven/runtime-client 
     if (!option || option.kind === 'flag') return { argv: [option.name], value: true };
     if (option.kind === 'optional-integer') return { argv: [option.name, String(option.default ?? option.min ?? 1)], value: option.default ?? option.min ?? 1 };
     if (option.kind === 'integer') return { argv: [option.name, String(option.min ?? 1)], value: option.min ?? 1 };
-    if (option.kind === 'uuid') return { argv: [option.name, '11111111-1111-4111-8111-111111111111'], value: '11111111-1111-4111-8111-111111111111' };
+    if (option.kind === 'uuid' || option.kind === 'uuid-or-batch') return { argv: [option.name, '11111111-1111-4111-8111-111111111111'], value: '11111111-1111-4111-8111-111111111111' };
     if (option.choices?.length) return { argv: [option.name, option.choices[0]], value: option.choices[0] };
     return { argv: [option.name, 'sample-value'], value: 'sample-value' };
   };

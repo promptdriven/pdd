@@ -51,9 +51,12 @@ function helpFor(words) {
   if (words.length === 1 && explicitRoutes.some(route => route.prefix[0] === words[0])) return help(words);
   fail();
 }
+const UUID_OPTION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BATCH_OPTION_RE = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 const optionValue = (option, value) => option.kind === 'integer'
   ? /^(?:0|[1-9][0-9]{0,5})$/.test(value ?? '') && Number(value) >= option.min && Number(value) <= option.max
-  : option.kind === 'uuid' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value ?? '')
+  : option.kind === 'uuid' ? UUID_OPTION_RE.test(value ?? '')
+  : option.kind === 'uuid-or-batch' ? (UUID_OPTION_RE.test(value ?? '') || BATCH_OPTION_RE.test(value ?? ''))
   : option.kind === 'text' ? typeof value === 'string' && !!value.trim() : !!option.choices?.includes(value);
 
 function consumeOption(route, options, words, index, { speculative = false } = {}) {
