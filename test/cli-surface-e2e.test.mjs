@@ -914,7 +914,7 @@ const REGISTERED_E2E_ROUTES = Object.freeze([
   // Discovery, help, version, completion
   'help', 'version', 'version.detailed', 'completion',
   // Core PDD workflow
-  'setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade',
+  'setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'doctor',
   // Cloud accounts
   'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use',
   'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause',
@@ -1171,6 +1171,17 @@ test('core local authoring commands: setup, init, status, files, owner, contract
     assert.match(res.stderr, /user-owned global npm installation/);
   }
   markExecuted('upgrade');
+
+  // doctor & doctor --json: read-only host health check returns structured pdd.doctor.v1 JSON
+  const docJson = await fx.cli(['doctor', '--json']);
+  assert.ok(docJson.code === 0 || docJson.code === 1, `unexpected doctor exit ${docJson.code}: ${docJson.stderr}`);
+  const parsedDoctor = JSON.parse(docJson.stdout);
+  assert.equal(parsedDoctor.schema_version, 'pdd.doctor.v1');
+  assert.equal(parsedDoctor.checks.runtime.pdd_version, PKG_VERSION);
+  const docText = await fx.cli(['doctor']);
+  assert.equal(docText.code, docJson.code, docText.stderr);
+  assert.match(docText.stdout, /pdd doctor/);
+  markExecuted('doctor');
 });
 
 test('test, lint, and simulate commands exercise local modes and flag combinations end-to-end', async () => {

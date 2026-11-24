@@ -251,7 +251,7 @@ const SKIP_SKILL_SYNC_ROUTES = new Set([
   'help', 'version', 'version-detailed', 'completion',
   'autopilot-alerts', 'autopilot-alert',
   'project-files', 'file-owner', 'status', 'init', 'lint', 'prove', 'update-sync',
-  'mcp', 'setup', 'upgrade', 'autopilot-logs',
+  'mcp', 'setup', 'doctor', 'upgrade', 'autopilot-logs',
 ]);
 
 function resolveLintRoot(cwd) {
@@ -303,7 +303,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, autopilotInvestigate, autopilotInvestigatePorts = {}, issueGraph, issueGraphPorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents, workflowAgentPorts = {}, setupSkills,
   setupProject, initProject, projectStatus, localLint, localLintPorts = {}, proveRunner, proveRunnerPorts = {}, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills, syncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
+  readPackageVersion = defaultReadPackageVersion, findSkills, syncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, doctor, doctorPorts = {}, hostInstallWarnings, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -601,8 +601,21 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
         if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm: interactive ? confirm : undefined, interactive, yes, upgradeOnly: upgrade })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
+      if (!upgrade && (!pathDiagnostic || hostInstallWarnings)) {
+        try {
+          const warnFn = hostInstallWarnings ?? (await import('./path-diagnostic.mjs')).formatHostInstallWarnings;
+          for (const warning of warnFn({ packageRoot, cwd, env })) line(stderr, warning);
+        } catch { /* Advisory install warning never fails setup. */ }
+      }
       if (code === 0 && !upgrade) line(stdout, 'Done! Use /pdd in Claude Code or $pdd in Codex. Run `pdd init` inside a repo to add the 4-line PDD block.');
       return code;
+    }
+    case 'doctor': {
+      try {
+        const mod = doctor ?? await import('./setup/doctor.mjs');
+        const result = await mod.runDoctor({ cwd, env, packageRoot, json: plan.options['--json'] === true }, { stdout, stderr, ...doctorPorts });
+        return typeof result === 'number' ? result : (Number.isInteger(result?.exitCode) ? result.exitCode : 1);
+      } catch (error) { line(stderr, `pdd doctor failed.${reason(error)}`); return 1; }
     }
     case 'init': {
       try {
@@ -923,7 +936,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
     } catch { /* Post-upgrade skill sync never blocks or fails a CLI command. */ }
   }
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'init', 'status', 'lint', 'prove'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'doctor', 'init', 'status', 'lint', 'prove'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

@@ -3,6 +3,7 @@ import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { formatHostInstallWarnings } from '../path-diagnostic.mjs';
 import { isNewerRelease, parseReleaseVersion, pickLatestRelease } from '../release-notice.mjs';
 import {
   classifyInstallKind,
@@ -316,5 +317,18 @@ export async function runCliUpgrade({
     for (const item of failedSkills) writeLine(stderr, `Failed to update PDD skills in ${item.folder} (${item.reason}). To recover, run: ${item.recovery}`);
   }
 
+  if (ports.hostInstallWarnings !== null) {
+    try {
+      const warnFn = ports.hostInstallWarnings ?? formatHostInstallWarnings;
+      const warnPorts = {
+        fs,
+        ...(ports.platform !== undefined ? { platform: ports.platform } : {}),
+        ...(ports.uid !== undefined ? { uid: ports.uid } : {}),
+        ...(ports.homedir !== undefined ? { homedir: ports.homedir } : {}),
+        ...(ports.hostInstallPorts ?? {}),
+      };
+      for (const warning of warnFn({ packageRoot: targetPkgRoot, cwd, env, home: resolvedHome }, warnPorts)) writeLine(stderr, warning);
+    } catch { /* Advisory install warning never fails upgrade. */ }
+  }
   return { exitCode: failedSkills.length > 0 ? 1 : 0, cliUpdated, fromVersion: currentVersion, toVersion, updatedSkills, skippedSkills, failedSkills };
 }
