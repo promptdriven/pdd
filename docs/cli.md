@@ -13,13 +13,24 @@ Typing `pdd check`, `pdd try`, `pdd simulate`, `pdd sim`, or `pdd workflow` runs
 | `pdd setup [--yes] [--skills-dir PATH] [--upgrade]` | Laptop setup: check `gh` authentication (non-blocking), install or refresh the bundled [PDD skill](USAGE.md#4-the-pdd-skills) in user agent skill folders (respecting Claude Code plugin installs while cleaning retired PDD skills and symlinks, or targeting optional `--skills-dir PATH`), preview and register PDD Prompt Interpreter MCP tools in detected agents (Codex, Claude Code, Gemini CLI, Antigravity), and report any PATH conflict. Pass `--upgrade` to sync skills and silently refresh only already-registered stale MCP entries without prompting or creating new registrations. Never edits repository files or asks Autopilot questions |
 | `pdd init` | One-time per-repository setup: add or update the 4-line PDD block between `<!-- pdd:start -->` and `<!-- pdd:end -->` in `CLAUDE.md` (if it exists) else `AGENTS.md` (creating `AGENTS.md` if neither exists), detect project language and test command, and keep all other bytes untouched |
 | `pdd status [PATH...] [--changed] [--json]` | Offline repository overview: inspect prompts, Stories, tests, file ownership, PDD block status, and `pdd.json` `verify.paths` Feature Map coverage without network or AI calls |
-| `pdd upgrade [--main]` | Update a user-owned global npm or Volta `@promptdriven/pdd` installation from npm (with GitHub tag fallback, or the pinned `main` commit with `--main`) using `--ignore-scripts`, run the installed binary's `pdd setup --upgrade` to refresh user PDD skills and already-registered stale MCP entries, and clear cached release notices |
+| `pdd upgrade [--main]` | Update a user-owned global npm or Volta `@promptdriven/pdd` installation from npm (with GitHub tag fallback, or the pinned `main` commit with `--main`) using `--ignore-scripts`, run the installed binary's `pdd setup --upgrade` to refresh user PDD skills and already-registered stale MCP entries, warn on competing `pdd` installs or login-shell PATH splits, and clear cached release notices |
+| `pdd doctor [--json]` | Read-only host health check: inspect CLI and Node.js (`>=22.16.0`) runtime, competing `pdd` installs across `PATH` and version managers, login-subshell (`zsh -lc`, `bash -lc`) PATH parity, user agent skills, agent MCP configs, and `gh` sign-in without writing any files. Exits 0 when healthy, 1 when actionable issues are found, 2 on invalid arguments |
 
 `pdd setup` copies the bundled `/pdd` skill to `~/.agents/skills` (Codex and Gemini CLI), `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path, cleaning retired PDD skills and symlinks and skipping duplicate `/pdd` copies when Claude Code already has the PDD plugin installed in `installed_plugins.json`), and `~/.gemini/config/skills` when Antigravity (`agy` on PATH, `~/.gemini/antigravity-cli`, `~/.gemini/config/mcp_config.json`, or existing PDD skills in `~/.gemini/config/skills`) is present. Pass `--skills-dir PATH` to target a custom skill folder instead of the default roots. Setup also updates existing PDD-managed folders in `~/.codex/skills` and `$CODEX_HOME/skills`. After an update of the pdd command, `pdd setup`, `pdd upgrade`, and the once-per-version automatic sync on normal `pdd` commands recognize real PDD-managed folders carrying `.pdd-skill.json` or `pdd-skills:` frontmatter, replacing older or same-version differing copies with a `.pdd-skill.json`-marked copy, adding missing bundled skills, removing PDD-managed retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`, `pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`), and unlinking retired symlinks that are dangling or point into another user agent skill directory. Do not hand-edit PDD-managed folders because updates replace managed copies; folders lacking both `.pdd-skill.json` and `pdd-skills:` frontmatter, symlinks into developer git checkouts, and unrelated custom skills are never modified. When `pdd --version` or `pdd setup` reports older or retired skills, it names each affected skill and advises `pdd setup` for user folders (or `npx skills add` for project folders). Discovery commands (`pdd files`, `pdd status`, `pdd owner`, default `pdd lint`) make no network calls and write nothing to the repository (`pdd lint --local` may still save local assessment state under `$PDD_STATE_DIR` when assessing scenario JSONs).
 
 Setup shows a compact per-agent summary of planned PDD MCP configuration changes for the Codex, Claude Code, Gemini CLI and Antigravity (`agy`) agents it finds, then asks once (`[y/N/d]`, where `d` prints the exact raw TOML/JSON preview before confirming). Passing `--yes` applies the planned MCP configuration without asking; passing `--upgrade` refreshes only already-registered stale PDD entries silently and skips unregistered agents; without `--yes` in a non-interactive terminal, MCP registration is skipped safely. Existing empty or whitespace-only JSON agent config files are initialized cleanly as `{}` while preserving file permissions. Registrations pin this running pdd executable, so another installation earlier on PATH cannot receive its tools, and stale PDD entries are updated in place while preserving custom keys, unrelated servers and formatting. Codex uses `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and `mcp_servers.pdd` with `default_tools_approval_mode = "approve"`. Claude Code uses `mcpServers.pdd` in its configuration; Gemini CLI uses `mcpServers.pdd` in `~/.gemini/settings.json` with server trust (detected via `settings.json` or `gemini` on PATH); Antigravity uses `mcpServers.pdd` in `~/.gemini/config/mcp_config.json` (detected via `mcp_config.json`, `~/.gemini/antigravity-cli`, or `agy` on PATH). Each entry runs `pdd mcp`. A symlinked agent config is skipped with a warning and exit 0, and a failure in one agent does not block registering healthy agents.
 
-Setup also reports PATH conflicts when another `pdd` executable precedes this one on PATH, listing the running pdd executable and version, the `pdd` paths in order, and the exact command for this pdd. When PATH is clean, setup stays quiet. `--version` preserves its version-only stdout; PATH diagnostics go to stderr.
+Setup also reports PATH conflicts, competing `pdd` installs across version managers (Volta, nvm, fnm, mise, asdf, pnpm, Homebrew, global npm, Python/conda/uv/pipx), and login-subshell (`zsh -lc` / `bash -lc`) PATH splits with single-command cleanup suggestions. When PATH and installs are clean, setup stays quiet. `--version` preserves its version-only stdout and fast local PATH check without spawning login shells; PATH diagnostics go to stderr.
+
+`pdd doctor [--json]` runs a read-only host health check without creating or modifying any files in `$HOME` or the repository. It checks five areas:
+
+1. **CLI & Node runtime:** running `pdd` version, install kind, binary path, and Node.js version (`>=22.16.0`).
+2. **Installs & shell PATH:** all `pdd` executables across `PATH`, Volta, nvm, fnm, mise, asdf, pnpm, global npm, Homebrew, and Python/conda/uv/pipx (deduplicated by realpath, Volta shims, and pnpm wrappers), plus login-subshell (`zsh -lc` and `bash -lc`) parity with exact single-command cleanup hints.
+3. **Agent skills:** checks `~/.agents/skills`, `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR/skills`, respecting Claude Code plugin installs), `~/.gemini/config/skills`, and `~/.codex/skills` (plus `$CODEX_HOME/skills`) for current, missing, stale, or retired PDD skills.
+4. **Agent MCP configs:** read-only inspection of detected Codex, Claude Code, Gemini CLI, and Antigravity MCP config files for missing entries, stale paths pointing to another `pdd` install, 0-byte or malformed JSON/TOML, and symlinks.
+5. **GitHub CLI (`gh`):** bounded read-only sign-in check for hosted interpreter runs (advisory only so offline/local setups stay healthy).
+
+`pdd doctor` exits `0` when all required checks pass (optional advisories such as `gh` sign-in or intentional symlinked MCP configs stay exit `0`), exits `1` when actionable issues are detected (incompatible Node, competing or shadowed installs, login-shell PATH splits, missing/stale/retired skills, or missing/stale/broken MCP configs), and exits `2` on invalid arguments. Pass `--json` for structured `pdd.doctor.v1` JSON output on stdout.
 
 `pdd init` sets up the current repository without touching user-global skills, MCP config, or root `.gitignore` (`.pdd/.gitignore` is written automatically whenever `.pdd/` is created). It preserves existing line endings (LF or CRLF), follows in-repo symlinks such as `CLAUDE.md -> AGENTS.md` cleanly while refusing out-of-repo symlinks, and detects project stack and test commands so the agent can start immediately.
 
@@ -147,25 +158,32 @@ Choose one scope:
   working tree.
 - Pass `--all` to inspect all prompt-mapped files in the repository.
 - Omit all scope flags to inspect staged, unstaged, and untracked non-ignored
-  changes in the current working tree (automatically widening to `--branch` or
-  `--all` on clean committed trees when `--check` runs).
+  changes in the current working tree (automatically widening to `--branch` on
+  clean committed feature branches, or to `--all` during `--check` whenever no
+  owned modules or prompts are in scope).
 
 `pdd update` is strictly read-only and writes zero sidecar files or prompt
 edits. It maps each touched file through `pdd owner` (`pdd-bindings.json` and
 `Prompt:` / `Generated from` headers), groups owned modules by owning
 `.prompt.md` with `+added/-removed` diff stats and changed exported/top-level
-symbols, and lists touched unowned files separately without fabricating
+symbols, and lists genuine unowned product source files separately (excluding
+tests, docs, user stories, prompts, dotfiles/dot-directories, configs,
+manifests, lockfiles, and configured workspace ignores) without fabricating
 ownership.
 
-- Default: print each affected prompt's status (`current`, `prompt-stale`,
-  `changed`, or `deleted`), diff stats, and changed symbols without writing
-  files; exits 0. Use `pdd status --changed` for the same overview alongside the
-  Feature Map.
-- `--check`: read-only verification that exits 0 when every touched owned
-  module is `current` and exits 1 when any touched owned module has changes or a
-  stale prompt header.
+- Default: print each affected prompt's status (`current`, `reconciled`,
+  `changed`, `prompt-stale`, or `deleted`), diff stats, changed symbols, and
+  advisory reminders for code-only edits without writing files; exits 0. Use
+  `pdd status --changed` for the same overview alongside the Feature Map.
+- `--check`: read-only structural check that exits 1 only on broken ownership
+  links (a missing or unreadable owning prompt, invalid prompt path, misplaced
+  test prompt, dangling deleted binding, or a legacy `(sha256: ...)` header
+  whose hash disagrees with its prompt). Path-only `Prompt:` headers,
+  `pdd-bindings.json` bindings, co-changed code and prompt pairs (`reconciled`),
+  and code-only edits (`changed`, printed with an advisory reminder to verify
+  the owning prompt) exit 0.
 - `--json`: emit machine-readable `pdd.update-sync.v1` JSON (`scope`,
-  `prompts`, `modules`, `unowned`, `ok`).
+  `prompts`, `modules`, `unowned`, `drifted`, `reminders`, `updated`, `ok`).
 
 Path traversal (`..`), leading-`-` options/ranges, symlinks, secret-looking
 paths (`.env`, credentials), malformed `pdd-bindings.json`, and binary owned or
@@ -233,6 +251,7 @@ makes no AI call. Each issue gets one headless Codex, Claude, Gemini, or Antigra
 | `pdd autopilot add N...` | Create the `pdd:autopilot` label when it is missing and add it to each named issue of this repository. Use it to choose the issues that Autopilot may take |
 | `pdd autopilot release ISSUE` | Release this machine's claim and remove `pdd:working` and `pdd:stuck`; keep the run folder, branch and PRs |
 | `pdd autopilot regressions [--json] [--file PATH]` | Read core merge history and GitHub CI, parent checks, revert, reopen and issue-link evidence. Classify each merge as ok, suspect or proven; count distinct proven PRs per UTC evidence day. Issue-body attribution uses issue creation time even if added in a later edit; these buckets require a consumer confirmation policy before use as daily scorecard counts. At most 100 GitHub requests per scan; rate exhaustion or Retry-After stops further reads, preserving collected evidence and marking missing evidence incomplete. --json prints structured results; --file exclusively creates a local report without overwriting existing files. No GitHub writes or reverts. Incomplete reads exit 1; complete scans exit 0 even when they detect regressions |
+| `pdd autopilot investigate [--date YYYY-MM-DD] [--json] [--write-issues] [--max-issues N]` | Run the deterministic 4-bucket Autopilot incident investigator against local history, post-merge regressions, flakes, and report drafts. Read-only by default; `--json` prints structured JSON; `--write-issues` opts in to auto-filing deduplicated strong-evidence GitHub issues capped at `--max-issues N` (1..20) with secret redaction |
 | `pdd autopilot report` | List this machine's local Autopilot report drafts. No GitHub call |
 | `pdd autopilot report send FINGERPRINT` | File one local report draft to promptdriven/pdd, or count it on the matching open report |
 | `pdd autopilot intake [--json]` | Print this machine's [intake cards](#intake-cards-shadow) for this repo, the would-pick list and today's changes. Local files only: no AI call and no GitHub call |

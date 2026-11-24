@@ -18,17 +18,17 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use', 'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause', 'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log', 'product.status', 'product.next', 'product.start', 'product.contracts', 'graph', 'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop', 'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust', 'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.graph', 'autopilot.report', 'autopilot.regressions', 'autopilot.alerts', 'autopilot.alert', 'autopilot.check-base', 'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off', 'completion', 'help', 'version', 'version.detailed']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'doctor', 'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use', 'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause', 'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log', 'product.status', 'product.next', 'product.start', 'product.contracts', 'graph', 'autopilot.doctor', 'autopilot.start', 'autopilot.suite', 'autopilot.status', 'autopilot.logs', 'autopilot.stop', 'autopilot.observe', 'autopilot.auto', 'autopilot.off', 'autopilot.trust', 'autopilot.untrust', 'autopilot.add', 'autopilot.release', 'autopilot.intake', 'autopilot.graph', 'autopilot.report', 'autopilot.regressions', 'autopilot.investigate', 'autopilot.alerts', 'autopilot.alert', 'autopilot.check-base', 'metrics', 'metrics.stages', 'metrics.skills', 'metrics.full', 'metrics.on', 'metrics.off', 'completion', 'help', 'version', 'version.detailed']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
-    ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['setup', '--skills-dir', '/tmp/s'], ['init'], ['status'], ['status', '--changed', '--json'], ['prompts/app.prompt.md'], ['.'], ['--stop', 'demo'], ['product', '--help'], ['autopilot', '--help']]) {
+    ['completion', 'zsh'], ['doctor'], ['doctor', '--json'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['setup', '--skills-dir', '/tmp/s'], ['init'], ['status'], ['status', '--changed', '--json'], ['prompts/app.prompt.md'], ['.'], ['--stop', 'demo'], ['product', '--help'], ['autopilot', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
   }
   // G1: people call the skills in their own chat; pdd starts no session and no named-workflow chat.
   for (const argv of [['interface', 'draft'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'], ['workflow','list'], ['workflow','run','bug','1'],
     ['sim', 'demo'], ['simulate', 'demo'],
-    ['setup', 'now'], ['setup', '--json'], ['run', 'start', 'issue'], ['verify'], ['runtime', 'discover'],
-    ['replay'], ['call'], ['tests'], ['doctor'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
+    ['setup', 'now'], ['setup', '--json'], ['doctor', 'extra'], ['run', 'start', 'issue'], ['verify'], ['runtime', 'discover'],
+    ['replay'], ['call'], ['tests'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
     ['unknown', '--help'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
     ['workflow', 'list', '--json', '--json'], ['workflow', 'list', 'extra'], ['completion', 'fish'],
     ['completion'], ['--version', 'extra'], ['--skill'], ['--skill', '--json'], ['help', 'runtime'], ['--help', 'extra'], ['\0']]) {
@@ -71,9 +71,9 @@ for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync
 for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const original=fs[key];fs[key]=function(path,...args){if(/(?:\\/toolbox\\/|\\/\\.ssh(?:\\/|$)|\\/credentials(?:\\/|$)|\\/\\.npmrc$)/.test(String(path)))stop();return original.call(this,path,...args);};}syncBuiltinESMExports();`);
   const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', guard, bin, ...args],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['completion', '--help'], ['setup','--help'], ['init','--help'], ['status','--help'], ['lint','--help'], ['prove','--help'], ['test','--help'], ['approve','--help'], ['product','--help'], ['autopilot','--help']]) {
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['completion', '--help'], ['setup','--help'], ['doctor','--help'], ['init','--help'], ['status','--help'], ['lint','--help'], ['prove','--help'], ['test','--help'], ['approve','--help'], ['product','--help'], ['autopilot','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
-    assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|runtime|doctor|phone)\b/);
+    assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|runtime|phone)\b/);
   }
   // help-teaches-pdd: root help and the prompting topic name the skill and guide files of the installed package, not of the cwd.
   for (const argv of [['help'], ['help', 'prompting']]) {
@@ -87,11 +87,10 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   const skill = run(['--skill']); assert.equal(skill.status, 2); assert.equal(skill.stdout, '');
   for (const shell of ['bash', 'zsh']) {
     const result = run(['completion', shell]); assert.equal(result.status, 0, result.stderr);
-    // The supported doctor is scoped to autopilot; other contexts keep the excluded-command check.
+    // Both top-level `pdd doctor` and `pdd autopilot doctor` are supported; excluded commands remain absent.
     const autopilotChoices = result.stdout.split('\n').filter(line => /^\s*autopilot\) choices=/.test(line));
     assert.equal(autopilotChoices.length, 1); assert.match(autopilotChoices[0], /\bdoctor\b/);
-    assert.doesNotMatch(result.stdout.split('\n').filter(line => !line.includes('--kind)'))
-      .map(line => autopilotChoices.includes(line) ? line.replace(/\bdoctor\b/g, '') : line).join('\n'), /\b(?:doctor|verify|phone|machine)\b|(?<!-)\bruntime\b/);
+    assert.doesNotMatch(result.stdout.split('\n').filter(line => !line.includes('--kind)')).join('\n'), /\b(?:verify|phone|machine)\b|(?<!-)\bruntime\b/);
     const script = join(sandbox, `completion.${shell}`); writeFileSync(script, result.stdout);
     for (const context of ['root', 'autopilot']) {
       const probe = shell === 'bash'
@@ -99,7 +98,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
         : 'autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; if [[ $2 == root ]]; then words=(pdd ""); CURRENT=2; else words=(pdd autopilot ""); CURRENT=3; fi; _pdd';
       const completed = spawnSync(shell, [...(shell === 'bash' ? ['--noprofile', '--norc'] : ['-f']), '-c', probe, 'test', script, context], {env, encoding:'utf8'});
       assert.equal(completed.status, 0, completed.stderr);
-      assert.equal(completed.stdout.trim().split('\n').includes('doctor'), context === 'autopilot');
+      assert.equal(completed.stdout.trim().split('\n').includes('doctor'), true);
     }
     if (shell === 'bash') {
       const loaded = spawnSync('bash', ['--noprofile', '--norc', '-c', 'source "$1"; COMP_WORDS=(pdd product ""); COMP_CWORD=2; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"', 'test', script], { env, encoding: 'utf8' });
@@ -113,7 +112,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['agy','claude','codex','gemini']);
     }
   }
-  for (const word of ['run', 'verify', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown', 'workflow', 'sim', 'simulate']) {
+  for (const word of ['run', 'verify', 'runtime', 'replay', 'call', 'tests', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown', 'workflow', 'sim', 'simulate']) {
     for (const args of [[word], [word, '--help'], [word, '-h']]) {
       const result = run(args); assert.equal(result.status, 2, JSON.stringify(args)); assert.equal(result.stdout, ''); assert.ok(result.stderr.trim());
     }
