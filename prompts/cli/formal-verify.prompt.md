@@ -1,0 +1,41 @@
+# Language-agnostic code-bound formal verification
+
+Own `src/core/formal-verify.mjs` and `src/core/polyglot-runners.mjs` (Layer-1 Core: imports only Layer-1 `src/core/*`, `file-owner.mjs`, and Layer-0 `src/shared/*`; zero `autopilot/` imports). Provide ONE shared, deterministic, language-agnostic polyglot test runner registry (`detectTestRunner`, `resolvePytestBinary`, `buildRunnerInvocation`, `parseJunitXml`, `parseTapReport`, `parseGoJsonReport`, `parseCargoReport`, `parseTestSummaryOutput`, `extractTestCases`) and formal proof discovery, isolated execution, static code-binding inspection, and formal mutation-control verifier consumed by both `pdd prove` (`src/core/prove.mjs`) and Autopilot live evidence (`src/autopilot/core/live-evidence.mjs`, `src/autopilot/core/test-runners.mjs`, and `src/autopilot-core.mjs`).
+
+## Domain decisions
+
+- **Formal file discovery & invariant triggers (`discoverFormalScope`):**
+  - Discover formal test files matching `FORMAL_TEST_FILE_RE`: `*.formal.test.*`, `test_formal_*.py`, `*_formal_test.py`, `formal/test_*.py`, `*_formal_test.go`, and `tests/*formal*.rs` (strictly canonical repo-relative regular files; symlinks refused).
+  - Identify touched production modules (`PRODUCTION_CODE_FILE_RE` excluding tests, fixtures, docs, prompts, Stories, specs, and standalone models), touched formal files, and existing repo formal files that statically import/reference any touched production module (`linkedFormalFiles`).
+  - Inspect touched `.prompt.md` and Story `.md` files for explicit invariant rules (`## Rules to check` in Stories and invariant-related `## Domain decisions` matching `INVARIANT_DOMAIN_KEYWORD_RE` in prompts) (`invariantRules`, `invariantSources`).
+  - When zero formal files apply, zero explicit invariant rules were touched, and no merge-base `verify.formal_command` is configured, return `applicable: false` (`state: "not-applicable"`, `tier: "not-applicable"`, `summary: "Formal: not-applicable"`) so UI, docs, and glue PRs incur zero busywork.
+  - When `invariantRules` exist with zero applicable formal files and no `verify.formal_command` (and no positive `proved`/`proved_solver_code` claim), report an explicit non-blocking advisory (`state: "missing"`, `tier: "missing"`, `ok: true`, `summary: "Formal: missing (advisory: ...)"`) so existing repos are never broken by busywork while gaps remain visible; if a positive `proved`/`proved_solver_code` claim is made with zero formal files, fail closed (`ok: false`).
+- **Language-agnostic static code-binding analysis (`inspectFormalFileBinding`):**
+  - Lex source with single-pass comment-stripping and string-isolating lexers (handling JS/TS quotes & templates, Python `#` comments, docstrings, and backslash line-continued strings, Go raw backtick strings, and Rust raw strings & `'a` lifetimes vs char literals) so commented-out imports, string literals, TS `import type`/`export type`, and string solver mentions never spoof code binding or solver evidence.
+  - Resolve production module imports/references across JS/TS (`import`/`require`/`export ... from` with up to 2 hops through repo test helpers, excluding `import type`/`export type`), Python (`import` / `from ... import` / relative imports / `importlib.import_module` against repo root, `src/`, and `lib/`), Go (cross-package imports via `go.mod` module path and same-package tests verified to reference at least one non-trivial symbol from sibling production `.go` files), and Rust (`use <crate>::...`, `use crate::...`, `mod ...` resolved via `Cargo.toml` package name).
+  - Never count test files, fixtures, `specs/`, `models/`, docs, prompts, or solver libraries (`z3`, `pytest`, `fast-check`, `hypothesis`, `proptest`, `rapid`) as production modules.
+  - Detect code-bound solver markers (`crosshair`, `hypothesis-crosshair`, `#[kani::proof]`, `kani::any`, `verify.formal_command` solver invocations), property-based testing markers (`fast-check`, `hypothesis`, `proptest`, `rapid`, seeded PRNG loops), and standalone Z3 (`import z3` / `from z3 import`) strictly from code and real import specifiers (never arbitrary string literals).
+  - **Hard code-binding rule:** A formal file that imports or references zero production modules is strictly classified as `tier: "proved_spec_model"` (`codeBound: false`, `satisfiesCodeVerification: false`) — NEVER `proved_solver_code` or `bounded`.
+- **Per-file subprocess isolation (`runFormalVerification`):**
+  - Execute every formal file in its **own isolated subprocess** with `scrubChildEnv(env)` and bounded timeout/buffer so Python Z3 runs never share global `main_ctx()` and cannot deadlock across files.
+  - Dispatch polyglot runners cleanly with `--` operand separators and `--no-install` for `npx`: JS `node:test` (`node --test-reporter=tap -- <file>`), Vitest (`npx --no-install vitest run --reporter=junit --outputFile=<tmp> -- <file>`), Python (`<untracked .venv/bin/pytest or pytest> -v --junitxml=<tmp> -- <file>` with `PYTHONPATH=src` when `src/` exists; git-tracked `.venv`/`venv` binaries are strictly refused), Go (`go test -json`), Rust (`cargo test`), and optional merge-base trusted `verify.formal_command` (with `PDD_FORMAL_FILE` set per file so CrossHair, Kani, Dafny, C++/Java/Ruby/Swift tools work seamlessly).
+  - Parse real structured test output (TAP v13, JUnit XML, `go test -json`, Cargo, or verbose fallback). Fail closed on non-zero exit codes, failing assertions, zero executed tests, skipped/todo tests, timeouts, or missing runner binaries.
+- **Tier classification & formal mutation control (`verifyFormalMutationControl`):**
+  - `proved_solver_code` requires: (1) all formal files pass with `> 0` executed tests and `0` skipped, (2) production modules imported/referenced covering required `targetModules`, (3) code-bound solver evidence or verified `verify.formal_command`, AND (4) a verified failing production-code mutation control (`failedOnMutation: true`, rejecting syntax/import/compile-only crashes and never substituting scenario `test_vectors`).
+  - `bounded` applies when passing formal/property tests import real production modules (Tier 1 PBT / bounded grid) without solver+mutation-control `proved_solver_code` evidence.
+  - `proved_spec_model` applies whenever passing formal files import zero production modules; it NEVER satisfies code verification (`satisfiesCodeVerification: false`) and REFUSES any `proved_solver_code` or `proved` claim.
+  - `verifyFormalMutationControl` executes the formal suite in a disposable temp copy (never mutating the caller checkout, rejecting symlinks and non-regular files, resolving repo `.venv/bin/pytest` from the uncopied real root without symlinking `.venv`) with an injected production-code mutation and verifies at least one assertion fails cleanly (rejecting syntax/import/build-only crashes).
+
+## Public contract
+
+- `FORMAL_TEST_FILE_RE`, `PRODUCTION_CODE_FILE_RE`, `NON_PRODUCTION_PROOF_PATH_RE`.
+- `resolvePytestBinary(root)` → repo-local non-symlink, non-git-tracked `.venv/bin/pytest` (or `venv/bin/pytest`) when present, else `"pytest"`.
+- `discoverFormalScope({ root, touchedFiles, allFiles, formalCommand })` → `{ applicable, touchedFormalFiles, linkedFormalFiles, formalFiles, touchedProdFiles, invariantRules, invariantSources, allRepoFiles }`.
+- `inspectFormalFileBinding({ root, filePath, targetModules, allRepoFiles })` → `{ file, language, importedProductionModules, coversTargets, codeBound, hasSolverImport, hasCodeBoundSolver, hasPropertyTesting, isStandaloneZ3, tier, satisfiesCodeVerification, reason }`.
+- `runFormalVerification({ root, touchedFiles, allFiles, baseVerify, claimedTier, mutationControl, targetModules, timeoutMs, env }, ports)` → `{ applicable, ok, state, tier, satisfiesCodeVerification, files, formalProofs, targetModules, invariantRules, mutationControl, errors, notProvedReasons, advisory, summary }`.
+- `verifyFormalMutationControl({ root, targetFile, mutatedContent, formalFiles, baseVerify, timeoutMs, env }, ports)` → `{ executed, failedOnMutation, syntaxOnlyCrash, mutatedProductionCode, exitCode, summary }`.
+
+## Dependencies
+
+- [Repo hygiene and offline PDD lint](repo-hygiene-lint.prompt.md): `canonicalRepoPath`, `readSafeUtf8`, `scrubChildEnv`, and `formatTeachingDetail`.
+- [File owner lookup](file-owner.prompt.md): `isTestOwnedPath`.
