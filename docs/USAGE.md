@@ -308,7 +308,7 @@ The AI-call budget is a ceiling; you are charged only for calls that run. Check 
 
 After the table, `pdd test` prints one `Prompt tests` line for each Story that you can paste into a PR, for example `Prompt tests (place-order): ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`. With two or more Stories, the overall `Prompt tests:` line comes last.
 
-A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
+An unapproved (draft) prompt can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 
 | Exit | Result | What to do |
 |---|---|---|
@@ -325,11 +325,11 @@ Your agent reads [`skills/pdd/references/stories.md`](../skills/pdd/references/s
 
 The interpreter address is set in one place in pdd. You do not need to set it.
 
-Factories and method-bearing instances can bind through Runtime interface v2 handles and collections. Put injected I/O and callbacks behind ports, and use the declared SQL, blob and compute simulations. Preserve the public API and report native effects as unbound. See [Factories and simulated resources](runtime-boundaries.md#native-factories-and-json-operations).
+Factories and method-bearing instances can bind through opaque handles and collections (or explicit Runtime interface v2 blocks). Put injected I/O and callbacks behind ports, and use the declared SQL, blob and compute simulations. Preserve the public API and report native effects as unbound. See [Factories and simulated resources](runtime-boundaries.md#native-factories-and-json-operations).
 
 ### 7.1 Approve a prompt
 
-In interactive work, a person approves a prompt. Explicit Autopilot auto setup and start can delegate ordinary approval gates through the supported commands. Strict approvals and required human reviews still need a person. An agent never edits `"status": "approved"` directly.
+In interactive work, a person approves a prompt. Explicit Autopilot auto setup and start can delegate ordinary approval gates through the supported commands. Strict approvals and required human reviews still need a person. An agent never edits approval metadata directly.
 
 ```sh
 pdd approve prompts/place_order.prompt.md
@@ -479,7 +479,7 @@ and use reserved code 125. Calls can take a while because they run AI.
 Run `pdd simulate --save-last` to append the last command and its observed answer to the original test file.
 Review that recording before treating it as an expected answer. Stop the session with `pdd simulate --stop <story>`.
 
-For HTTP, give the prompt entry an input schema title such as `HTTP GET /api/books`, then run
+For HTTP, declare the route in the prompt (for example `HTTP GET /api/books`), then run
 `pdd simulate <story> --serve 8080`. Call `curl 'http://127.0.0.1:8080/api/books?read=false'`. The prompt returns the
 HTTP status, headers and body. Unknown routes return 404. The listener stays on loopback; Ctrl-C closes it.
 When the Story has an app map, open `http://127.0.0.1:8080/` to use its real Screen. Click **Open the app**
