@@ -97,6 +97,15 @@ and autopilotRegressionsPorts for tests. Validate the normal {exitCode,message}
 reply, print once to stdout on zero and stderr otherwise. An exception prints a
 finite safe failure and exits 1. Do not load the launcher or remote settings.
 
+Dispatch `autopilot-investigate` directly to
+[Autopilot core engine](autopilot-core.prompt.md)
+`runAutopilotInvestigate({cwd,env,date,json,writeIssues,maxIssues}, autopilotInvestigatePorts)`,
+with `json` true only for `--json`, `writeIssues` true only for `--write-issues`,
+`date` from `--date`, and `maxIssues` from `--max-issues`. Allow
+`dependencies.autopilotInvestigate` and `autopilotInvestigatePorts` for tests.
+Validate the `{exitCode,message}` reply, print once to stdout on zero and stderr
+otherwise, and catch unexpected errors with one finite stderr line and exit 1.
+
 ## Dependencies
 
 - [Compiled Story checker](compiled-test.prompt.md): required native generation and verification context for code-target dispatch.

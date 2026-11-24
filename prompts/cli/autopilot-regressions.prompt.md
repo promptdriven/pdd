@@ -184,16 +184,33 @@ each newly seen signal key once in `newlyDetected` (`{pr, issue, issues,
 mergeCommit, mergedAt, kind, code, at, url, detail}`, with `code` equal to
 `post-merge-reopen`, `post-merge-revert` or `post-merge-ci`).
 
-### Safety circuit-breaker and shard-flake helpers (#3484)
+### Safety circuit-breaker and shard-flake helpers (#3484, #3560)
 
 Export synchronous `selectCircuitBreakerRegression(newlyDetected, {now,
-clearedAfter}?)`. Ignore `reopened` (`post-merge-reopen`) and, when finite
-`clearedAfter` (epoch ms or ISO string) is supplied, ignore items with
-`at <= clearedAfter` (and `post-merge-ci` or undated items with
-`mergedAt <= clearedAfter`). Choose the first remaining `revert`/`reverted`
-(`post-merge-revert`) item, or else the first `ci`/`ci_broken`
-(`post-merge-ci`) item. Return `{active: true, kind, code, pr, issue, trippedAt,
-url, reason}` with redacted single-line detail, or `null` when none qualifies.
+clearedAfter, postMergeState, reopenClusterThreshold = 2, reopenWindowMs =
+86400000}?)`. When finite `clearedAfter` (epoch ms or ISO string) is supplied,
+ignore items with `at <= clearedAfter` (and `post-merge-ci` or undated items
+with `mergedAt <= clearedAfter`). Instant-brake priority comes first: choose
+the first qualifying `revert`/`reverted` (`post-merge-revert`) item, or else
+the first qualifying `ci`/`ci_broken` (`post-merge-ci`) item. Otherwise
+evaluate clustered reopens across both `newlyDetected` and optional rolling
+`postMergeState.merges` (persisted `post-merge.json` state): gather proven
+`reopened` (`post-merge-reopen`) events occurring within the rolling
+`reopenWindowMs` (default 24h) window `[nowMs - reopenWindowMs, nowMs]` and
+strictly after `clearedAfter` (requiring valid dated `at` on persisted
+`postMergeState` signals and ignoring undated reopens when `clearedAfter` is
+set unless `mergedAt > clearedAfter`), deduplicating by distinct merged issue
+(`issue:<N>`, falling back to `pr:<P>` only when `issue` is absent) so a
+single issue reopened twice or present in both `newlyDetected` and
+`postMergeState` counts once. A single reopened issue returns `null`; when at
+least `reopenClusterThreshold` (default `2`) distinct merged issues qualify,
+return `{active: true, kind: "reopened_cluster", code: "post-merge-reopen",
+pr, issue, issues, prs, count, windowHours, trippedAt, url, reason}` using the
+most recent qualifying reopen's `pr`/`issue`/`url`, sorted unique `issues` and
+`prs`, and a redacted single-line `reason` naming the count and affected
+issues/PRs. For `reverted` and `ci_broken`, return `{active: true, kind, code,
+pr, issue, trippedAt, url, reason}` with redacted single-line detail, or `null`
+when none qualifies.
 
 Export synchronous `evaluateShardFlakeRerun({checkRuns, statuses, headSha,
 flakeRerunHead})`. Reject check names over 300 characters and parse shard

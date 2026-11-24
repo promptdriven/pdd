@@ -270,7 +270,7 @@ function inspectLocalLintRepoFeatures(cwd) {
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
-  autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents, workflowAgentPorts = {}, setupSkills,
+  autopilotRegressions, autopilotRegressionsPorts = {}, autopilotInvestigate, autopilotInvestigatePorts = {}, issueGraph, issueGraphPorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents, workflowAgentPorts = {}, setupSkills,
   setupProject, initProject, projectStatus, localLint, localLintPorts = {}, proveRunner, proveRunnerPorts = {}, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic,
   readPackageVersion = defaultReadPackageVersion, findSkills, syncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
   let plan;
@@ -299,6 +299,21 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error();
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch { line(stderr, 'Regression scan failed.'); return 1; }
+    }
+    case 'autopilot-investigate': {
+      try {
+        const module = autopilotInvestigate ?? await import('./autopilot-core.mjs');
+        const result = await module.runAutopilotInvestigate({
+          cwd,
+          env,
+          date: plan.options['--date'] ?? null,
+          json: plan.options['--json'] === true,
+          writeIssues: plan.options['--write-issues'] === true,
+          ...(plan.options['--max-issues'] !== undefined ? { maxIssues: Number(plan.options['--max-issues']) } : {}),
+        }, autopilotInvestigatePorts);
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error();
+        line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
+      } catch { line(stderr, 'Autopilot investigation failed.'); return 1; }
     }
     case 'autopilot-logs': {
       const parseSelector = raw => {

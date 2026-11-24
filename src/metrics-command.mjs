@@ -11,6 +11,7 @@ import {
 import { regressionScan } from './autopilot-regressions.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import {
+  buildStandupInvestigationSummary,
   calculateAutopilotMetrics,
   formatMetricsText,
   isMetricsEnabled,
@@ -726,6 +727,46 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
     }
   }
 
+  let investigation = ports.investigation;
+  if (investigation === undefined) {
+    const allowedRepos = new Set(targetRepos.map(r => r.toLowerCase()));
+    const rawIncidents = Array.isArray(ports.investigationIncidents)
+      ? ports.investigationIncidents
+      : (Array.isArray(localState.incidents) ? localState.incidents : []);
+    const isHistoricalDate = Boolean(options['--date']);
+    const scopedIncidents = rawIncidents.filter(inc => {
+      if (!inc || typeof inc !== 'object') return false;
+      const repoMatch = inc.repo
+        ? allowedRepos.has(String(inc.repo).trim().toLowerCase())
+        : (!validatedRepo && targetRepos.length > 0);
+      if (!repoMatch) return false;
+      const rawAt = inc.at ?? inc.ts;
+      const atMs = typeof rawAt === 'number' && Number.isFinite(rawAt)
+        ? rawAt
+        : (typeof rawAt === 'string' ? Date.parse(rawAt) : NaN);
+      if (Number.isFinite(atMs)) {
+        return atMs >= sinceMs && atMs <= untilMs;
+      }
+      return !isHistoricalDate;
+    });
+    if (scopedIncidents.length > 0) {
+      try {
+        const standupInv = await buildStandupInvestigationSummary({
+          incidents: scopedIncidents,
+          repo: validatedRepo ?? (targetRepos.length === 1 ? targetRepos[0] : null),
+          date: options['--date'] ?? null,
+          timezone: resolvedTz,
+          now: nowFn,
+        });
+        if (standupInv?.report?.summary?.uniqueFindings > 0) {
+          investigation = standupInv.report;
+        }
+      } catch {
+        // Non-fatal: metrics remain usable even if investigation summary fails.
+      }
+    }
+  }
+
   const view = subcommand ?? 'overview';
   let report;
   try {
@@ -741,6 +782,7 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
       reopenedEvents,
       flakeEntries: ports.flakeEntries ?? localState.flakes,
       ...(ports.recurringFlakes !== undefined ? { recurringFlakes: ports.recurringFlakes } : {}),
+      ...(investigation ? { investigation } : {}),
       view,
       byRepo: Boolean(options['--repos']),
       repoFilter: validatedRepo,
