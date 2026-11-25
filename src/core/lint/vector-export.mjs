@@ -621,7 +621,7 @@ export function runVectorExport(
   const stdinPort = ports.stdin ?? process.stdin;
   const useStdin = inputPath === '-'
     || (!inputPath && ports.stdinText !== undefined)
-    || (!inputPath && ports.stdin !== undefined)
+    || (!inputPath && (typeof ports.stdin === 'string' || typeof ports.stdin?.readText === 'function'))
     || (!inputPath && !stdinPort?.isTTY);
   if (useStdin && (!inputPath || inputPath === '-')) {
     rawText = ports.stdinText !== undefined ? String(ports.stdinText) : readStreamSync(ports.stdin);

@@ -437,6 +437,21 @@ test('regression: story_path refuses ancestor symlink, patch/set without from ar
   assert.equal(portExit, 0, errBuf.join(''));
   assert.equal(JSON.parse(outBuf.join('')).ok, true);
 
+  // Interactive TTY stdin without inputPath must return usage exit 2 immediately without reading fd 0.
+  const ttyOut = [];
+  const ttyErr = [];
+  const ttyExit = runVectorExport(
+    { cwd: repo },
+    {
+      stdin: { isTTY: true },
+      stdout: { write: s => ttyOut.push(s) },
+      stderr: { write: s => ttyErr.push(s) },
+    },
+  );
+  assert.equal(ttyExit, 2);
+  assert.equal(ttyOut.join(''), '');
+  assert.match(ttyErr.join(''), /Provide an input JSON path/i);
+
   const badJsonCli = runCli(['vector', 'export', '--json'], { cwd: repo, home, input: '{broken json' });
   assert.equal(badJsonCli.status, 1);
   const badJsonPayload = JSON.parse(badJsonCli.stdout);
