@@ -4,8 +4,6 @@ on:
   pull_request:
     types: [closed]
     branches: [main]
-  issues:
-    types: [closed]
 
 permissions:
   contents: read
@@ -14,7 +12,7 @@ permissions:
 
 jobs:
   close-issues:
-    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -126,134 +124,3 @@ jobs:
             }
           }
           NODE
-
-  guard-non-pr-close:
-    if: github.event_name == 'issues' && github.event.action == 'closed' && !github.event.issue.pull_request
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Reopen non-PR closes lacking Proof or exceeding burst limit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          node --input-type=module <<'GUARD'
-          import { readFileSync } from 'node:fs';
-
-          const { issue, sender } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-          const repo = process.env.REPO, [owner, name] = repo.split('/');
-          const apiBase = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
-          const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${process.env.GH_TOKEN}`, 'X-GitHub-Api-Version': '2022-11-28' };
-          const GUARD_MARKER = '<!-- pdd:close-guard -->';
-          const BURST_LIMIT = 3, BURST_WINDOW_MS = 10 * 60_000, PR_WINDOW_MS = 120_000;
-
-          async function gh(path, options = {}) {
-            const res = await fetch(`${apiBase}${path}`, { ...options, headers: { ...headers, ...options.headers } });
-            if (res.status === 204 || res.status === 404 || res.status === 410) return { status: res.status, data: null };
-            const data = await res.json().catch(() => null);
-            if (!res.ok) throw new Error(`${options.method ?? 'GET'} ${path} -> ${res.status}`);
-            return { status: res.status, data };
-          }
-
-          async function listPages(pathBase, maxPages = 5) {
-            const out = [];
-            for (let page = 1; page <= maxPages; page++) {
-              const sep = pathBase.includes('?') ? '&' : '?';
-              const { data } = await gh(`${pathBase}${sep}per_page=100&page=${page}`);
-              if (!Array.isArray(data) || !data.length) break;
-              out.push(...data);
-              if (data.length < 100) break;
-            }
-            return out;
-          }
-
-          async function inspectClose(num, fallbackClosedAt, fallbackActor) {
-            const timeline = await listPages(`/repos/${repo}/issues/${num}/timeline`);
-            const latestClose = timeline.filter(e => e.event === 'closed').at(-1) ?? null;
-            if (!latestClose && !fallbackClosedAt) return { hasClose: false, prClosed: false, closedAtMs: 0, reopenedAtMs: 0, actor: '' };
-            const latestCloseMs = Date.parse(latestClose?.created_at ?? '') || 0;
-            const closedAtMs = Math.max(latestCloseMs, Date.parse(fallbackClosedAt ?? '') || 0) || Date.now();
-            const reopenedAtMs = timeline.filter(e => e.event === 'reopened' && Date.parse(e.created_at) <= closedAtMs)
-              .reduce((max, e) => Math.max(max, Date.parse(e.created_at) || 0), 0);
-            const currentClose = latestClose && latestCloseMs >= reopenedAtMs ? latestClose : null;
-            const actor = currentClose?.actor?.login ?? fallbackActor ?? '';
-            if (currentClose?.commit_id) return { hasClose: true, prClosed: true, closedAtMs, reopenedAtMs, actor };
-            const gql = await gh('/graphql', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                query: 'query($owner:String!,$name:String!,$num:Int!){repository(owner:$owner,name:$name){issue(number:$num){closedByPullRequestsReferences(first:10,includeClosedPrs:false){nodes{merged mergedAt}}}}}',
-                variables: { owner, name, num },
-              }),
-            }).catch(() => ({ data: null }));
-            const linkedPrs = gql.data?.data?.repository?.issue?.closedByPullRequestsReferences?.nodes;
-            if (Array.isArray(linkedPrs)) {
-              const prClosed = linkedPrs.some(p => {
-                const m = Date.parse(p?.mergedAt ?? '');
-                return p?.merged === true && Number.isFinite(m) && m >= reopenedAtMs && Math.abs(closedAtMs - m) <= PR_WINDOW_MS;
-              });
-              return { hasClose: true, prClosed, closedAtMs, reopenedAtMs, actor };
-            }
-            const xrefMerged = timeline.some(e => {
-              const src = e.source?.issue;
-              const m = Date.parse(src?.pull_request?.merged_at ?? '');
-              const same = String(src?.repository?.full_name ?? repo).toLowerCase() === repo.toLowerCase();
-              return e.event === 'cross-referenced' && same && Number.isFinite(m) && m >= reopenedAtMs && Math.abs(closedAtMs - m) <= PR_WINDOW_MS;
-            });
-            return { hasClose: true, prClosed: xrefMerged, closedAtMs, reopenedAtMs, actor };
-          }
-
-          function hasProofEvidence(body) {
-            const text = String(body ?? '');
-            if (text.includes(GUARD_MARKER)) return false;
-            const clean = text.replace(/<!--[\s\S]*?-->/g, '');
-            const m = /(?:^|\n)[ \t]*(?:[-*][ \t]+)?(?:\*\*|__)?Proof:(?:\*\*|__)?[ \t]*([\s\S]*)/i.exec(clean);
-            if (!m) return false;
-            const tail = m[1].trim(), firstLine = tail.split(/\r?\n/)[0].trim();
-            const hasBlock = /```[\s\S]+?```|`[^`\n]+`|https?:\/\/github\.com\/\S+\/pull\/\d+|\bexit\s*(?:code\s*)?[=:]?\s*\d+\b/i.test(tail);
-            const weakExcuse = /^(?:file deleted|deleted|obsolete|n\/a|none|done|fixed|fixed upstream|duplicate|stale|tbd)\.?!?$/i.test(firstLine);
-            return (!weakExcuse || hasBlock) && (hasBlock || firstLine.length >= 12);
-          }
-
-          const info = await inspectClose(issue.number, issue.closed_at, sender?.login);
-          if (info.prClosed) process.exit(0);
-
-          const comments = await listPages(`/repos/${repo}/issues/${issue.number}/comments`);
-          const validProof = comments.some(c => {
-            const ts = Date.parse(c.created_at ?? '');
-            return Number.isFinite(ts) && ts >= info.reopenedAtMs && ts <= info.closedAtMs && hasProofEvidence(c.body);
-          });
-
-          let burstCount = 1;
-          if (info.actor) {
-            const sinceIso = new Date(info.closedAtMs - BURST_WINDOW_MS).toISOString();
-            const { data: recent } = await gh(`/repos/${repo}/issues?state=all&sort=updated&direction=desc&since=${encodeURIComponent(sinceIso)}&per_page=50`);
-            for (const other of (Array.isArray(recent) ? recent : []).filter(x => !x.pull_request && x.number !== issue.number).slice(0, 15)) {
-              const otherInfo = await inspectClose(other.number, other.closed_at, '');
-              if (otherInfo.hasClose && !otherInfo.prClosed && otherInfo.actor.toLowerCase() === info.actor.toLowerCase()
-                && otherInfo.closedAtMs >= info.closedAtMs - BURST_WINDOW_MS && otherInfo.closedAtMs <= info.closedAtMs + 5000) {
-                burstCount += 1;
-                if (burstCount > BURST_LIMIT) break;
-              }
-            }
-          }
-
-          const reasons = [];
-          if (!validProof) reasons.push('no `Proof:` comment with real command/output evidence was posted before closing');
-          if (burstCount > BURST_LIMIT) reasons.push(`burst limit exceeded (${burstCount} non-PR closes by \`@${info.actor}\` within 10 minutes; max ${BURST_LIMIT})`);
-          if (!reasons.length) process.exit(0);
-
-          await gh(`/repos/${repo}/issues/${issue.number}/comments`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              body: `${GUARD_MARKER}\nReopened automatically: ${reasons.join('; ')}.\n\nTo close without a merged PR, post a \`Reason:\` + \`Proof:\` comment (real command and observed output on \`@latest\`) before closing, or add label \`needs-close-review\` for human review.`,
-            }),
-          });
-          await gh(`/repos/${repo}/issues/${issue.number}/labels`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ labels: ['close-needs-proof'] }),
-          });
-          await gh(`/repos/${repo}/issues/${issue.number}`, {
-            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ state: 'open', state_reason: 'reopened' }),
-          });
-          GUARD

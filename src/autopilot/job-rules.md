@@ -11,7 +11,6 @@ Do not self-spawn a Fresh Verifier subagent during build or repair: Autopilot ru
 - Write no new Story and no new prompt for a non-product file. A repair on a non-product-only PR stays non-product without adding a Story or prompt.
 - For product or prompt-owned code, use `bug` or `feature` mode and follow the 100% Truth Rule in `prompting.md` (update existing owning prompts before code; for unowned legacy code, either adopt/extract a clean PDD module with a `// Prompt:` header or apply a surgical brownfield fix verified with Red→Green TDD).
 - Protected policy, workflow, and package files (`pdd.json`, `package.json`, `.github/workflows/**`, `CODEOWNERS`, gate scripts) always hold for manual human review and merge on GitHub — Autopilot never auto-merges protected-path edits.
-- Never run `gh issue close`; to propose a non-PR close, post a 2-line comment (`Reason:` + `Proof:` command and observed output on `@latest`) and add label `needs-close-review` for a person.
 
 ## Changed scope
 
