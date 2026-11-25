@@ -39,6 +39,7 @@ In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned mo
 - Before writing implementation code, pause with a 1-screen plain-English Story/cases check unless the person said *"all the way"* (pure code bugs and `small-change` skip this pause). For UI work, recommend `pdd <PROMPT.md|STORY>` so the person can try the live screen first.
 - Prompt approvals happen directly in chat or GitHub PR review — never invent a person's decision or auto-merge without explicit permission (see [references/prompting.md §5](references/prompting.md#5-expected-values-approvals-and-merges)).
 - Deliver **1 PR** when authorized to open a PR (never 2 stacked PRs; the only exception is a multi-part product run using `Through: prompt-pr` / `pdd product start RUN --through prompt-pr`, which explicitly stages a prompt PR first). Never merge unless explicitly requested by the person.
+- **Never run `gh issue close`:** agents never close GitHub issues directly; to propose a non-PR close, post a 2-line comment (`Reason:` + `Proof:` command and observed output on `@latest`) and add label `needs-close-review` for a person.
 
 ## Step 4 — Build, prove the real user path, and verify
 
