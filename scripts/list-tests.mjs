@@ -7,12 +7,28 @@ const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 export const EXCLUDED_TEST_FILES = Object.freeze([]);
 
+// Timing-sensitive / signal-driven tests isolated into the sequential (`--test-concurrency=1`)
+// CI step (Area 4 audit: #3473 SIGTERM queue wait, late detached helper /tmp worktree,
+// STOPS-0129 hung-command watch, producer-default-reader-product; screen-door-readiness is
+// already sequential via BROWSER_TEST_RE, and CHAT2755 was removed in PR #3674).
+export const SERIAL_TEST_FILES = Object.freeze([
+  'test/agent-job.test.mjs',
+  'test/autopilot-gates-sigterm-repo-skip.test.mjs',
+  'test/product-saved-checks.test.mjs',
+]);
+
 const EXCLUDED_SET = new Set(EXCLUDED_TEST_FILES);
+const SERIAL_SET = new Set(SERIAL_TEST_FILES);
 const BROWSER_TEST_RE = /(?:^|\/)screen-[^/]+\.test\.mjs$/;
-const VALID_MODES = new Set(['all', 'unit', 'browser']);
+const VALID_MODES = new Set(['all', 'unit', 'browser', 'serial']);
 
 export function isBrowserTest(relPath) {
   return BROWSER_TEST_RE.test(String(relPath ?? '').replace(/\\/g, '/'));
+}
+
+export function isSerialTest(relPath) {
+  const normalized = String(relPath ?? '').replace(/\\/g, '/');
+  return isBrowserTest(normalized) || SERIAL_SET.has(normalized);
 }
 
 function diagnostic(location, invariant, fix, rerun) {
@@ -40,8 +56,8 @@ export function discoverTestFiles({ root = DEFAULT_ROOT, mode = 'all' } = {}) {
   if (!VALID_MODES.has(mode)) {
     throw new Error(diagnostic(
       `scripts/list-tests.mjs (mode=${JSON.stringify(mode)})`,
-      'Test discovery mode must be one of "all", "unit", or "browser".',
-      'Pass --all, --unit, or --browser (or omit the flag for all tests).',
+      'Test discovery mode must be one of "all", "unit", "serial", or "browser".',
+      'Pass --all, --unit, --serial, or --browser (or omit the flag for all tests).',
       'node scripts/list-tests.mjs --all',
     ));
   }
@@ -66,7 +82,8 @@ export function discoverTestFiles({ root = DEFAULT_ROOT, mode = 'all' } = {}) {
   walkTestDir(testDir, 'test', found);
   found.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
-  if (mode === 'unit') return found.filter(file => !isBrowserTest(file));
+  if (mode === 'unit') return found.filter(file => !isSerialTest(file));
+  if (mode === 'serial') return found.filter(file => isSerialTest(file));
   if (mode === 'browser') return found.filter(file => isBrowserTest(file));
   return found;
 }
@@ -81,7 +98,7 @@ export function parseListArgs(argv) {
     if (mode !== null && mode !== next) {
       throw new Error(diagnostic(
         `scripts/list-tests.mjs (--${mode} and --${next})`,
-        'Only one test filter mode (--all, --unit, or --browser) may be specified per invocation.',
+        'Only one test filter mode (--all, --unit, --serial, or --browser) may be specified per invocation.',
         `Remove either --${mode} or --${next}.`,
         `node scripts/list-tests.mjs --${next}`,
       ));
@@ -93,6 +110,7 @@ export function parseListArgs(argv) {
     const arg = argv[i];
     if (arg === '--all') setMode('all');
     else if (arg === '--unit') setMode('unit');
+    else if (arg === '--serial') setMode('serial');
     else if (arg === '--browser') setMode('browser');
     else if (arg === '--json') json = true;
     else if (arg === '-h' || arg === '--help') help = true;
@@ -122,7 +140,7 @@ export function parseListArgs(argv) {
       throw new Error(diagnostic(
         `scripts/list-tests.mjs (argument "${arg}")`,
         'Unsupported CLI flag passed to test manifest discovery.',
-        'Use only --all, --unit, --browser, --json, --root <dir>, or --help.',
+        'Use only --all, --unit, --serial, --browser, --json, --root <dir>, or --help.',
         'node scripts/list-tests.mjs --help',
       ));
     }
@@ -137,7 +155,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const opts = parseListArgs(process.argv.slice(2));
     if (opts.help) {
       process.stdout.write(
-        'Usage: node scripts/list-tests.mjs [--all|--unit|--browser] [--json] [--root <dir>]\n',
+        'Usage: node scripts/list-tests.mjs [--all|--unit|--serial|--browser] [--json] [--root <dir>]\n',
       );
       process.exit(0);
     }

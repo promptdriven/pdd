@@ -12,12 +12,14 @@ import {
   discoverTestFiles,
   EXCLUDED_TEST_FILES,
   isBrowserTest,
+  isSerialTest,
+  SERIAL_TEST_FILES,
 } from '../scripts/list-tests.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const listScript = join(root, 'scripts', 'list-tests.mjs');
 
-test('list-tests includes every top-level test file, keeps only valid .test.mjs paths, and excludes baseline fixture', () => {
+test('list-tests includes every top-level test file, partitions unit vs serial cleanly, and excludes baseline fixture', () => {
   const flat = readdirSync(join(root, 'test'), { withFileTypes: true })
     .filter(entry => entry.isFile() && entry.name.endsWith('.test.mjs'))
     .map(entry => `test/${entry.name}`)
@@ -25,8 +27,11 @@ test('list-tests includes every top-level test file, keeps only valid .test.mjs 
 
   const all = discoverTestFiles({ root, mode: 'all' });
   const unit = discoverTestFiles({ root, mode: 'unit' });
+  const serial = discoverTestFiles({ root, mode: 'serial' });
   const browser = discoverTestFiles({ root, mode: 'browser' });
   const allSet = new Set(all);
+  const serialSet = new Set(serial);
+  const unitSet = new Set(unit);
 
   assert.equal(allSet.size, all.length, 'discovered test paths must be unique');
   assert.deepEqual([...all].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), all, 'discovered test paths must be sorted');
@@ -39,16 +44,24 @@ test('list-tests includes every top-level test file, keeps only valid .test.mjs 
   }
   assert.ok(browser.length > 0, 'expected browser screen tests');
   assert.ok(browser.every(isBrowserTest));
-  assert.ok(unit.every(file => !isBrowserTest(file)));
-  assert.deepEqual([...unit, ...browser].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), all);
+  assert.ok(browser.every(file => serialSet.has(file)), 'all browser tests belong to --serial');
+  for (const serialFile of SERIAL_TEST_FILES) {
+    assert.equal(allSet.has(serialFile), true, `SERIAL_TEST_FILES entry must exist: ${serialFile}`);
+    assert.equal(serialSet.has(serialFile), true, `SERIAL_TEST_FILES entry must be in --serial: ${serialFile}`);
+    assert.equal(unitSet.has(serialFile), false, `SERIAL_TEST_FILES entry must not be in --unit: ${serialFile}`);
+  }
+  assert.ok(serial.every(isSerialTest));
+  assert.ok(unit.every(file => !isSerialTest(file)));
+  assert.deepEqual([...unit, ...serial].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), all);
 });
 
-test('list-tests discovers nested unit and browser tests recursively and omits non-test helpers', t => {
+test('list-tests discovers nested unit, serial, and browser tests recursively and omits non-test helpers', t => {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-list-tests-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
   const files = [
     'test/top.test.mjs',
+    'test/agent-job.test.mjs',
     'test/screen-top.test.mjs',
     'test/nested/core/unit-a.test.mjs',
     'test/nested/visual/screen-modal.test.mjs',
@@ -61,6 +74,7 @@ test('list-tests discovers nested unit and browser tests recursively and omits n
   }
 
   assert.deepEqual(discoverTestFiles({ root: dir, mode: 'all' }), [
+    'test/agent-job.test.mjs',
     'test/nested/core/unit-a.test.mjs',
     'test/nested/visual/screen-modal.test.mjs',
     'test/screen-top.test.mjs',
@@ -69,6 +83,11 @@ test('list-tests discovers nested unit and browser tests recursively and omits n
   assert.deepEqual(discoverTestFiles({ root: dir, mode: 'unit' }), [
     'test/nested/core/unit-a.test.mjs',
     'test/top.test.mjs',
+  ]);
+  assert.deepEqual(discoverTestFiles({ root: dir, mode: 'serial' }), [
+    'test/agent-job.test.mjs',
+    'test/nested/visual/screen-modal.test.mjs',
+    'test/screen-top.test.mjs',
   ]);
   assert.deepEqual(discoverTestFiles({ root: dir, mode: 'browser' }), [
     'test/nested/visual/screen-modal.test.mjs',
@@ -82,13 +101,17 @@ test('list-tests discovers nested unit and browser tests recursively and omits n
   const cliUnit = spawnSync(process.execPath, [listScript, '--unit'], { cwd: dir, encoding: 'utf8' });
   assert.equal(cliUnit.status, 0, cliUnit.stderr);
   assert.deepEqual(cliUnit.stdout.trim().split('\n'), discoverTestFiles({ root: dir, mode: 'unit' }));
+
+  const cliSerial = spawnSync(process.execPath, [listScript, '--serial'], { cwd: dir, encoding: 'utf8' });
+  assert.equal(cliSerial.status, 0, cliSerial.stderr);
+  assert.deepEqual(cliSerial.stdout.trim().split('\n'), discoverTestFiles({ root: dir, mode: 'serial' }));
 });
 
 test('list-tests emits 4-part agent-teaching diagnostics on invalid flags or missing test directory', t => {
   const emptyDir = mkdtempSync(join(tmpdir(), 'pdd-list-empty-'));
   t.after(() => rmSync(emptyDir, { recursive: true, force: true }));
 
-  for (const args of [['--bogus'], ['--unit', '--browser'], ['--root', emptyDir]]) {
+  for (const args of [['--bogus'], ['--unit', '--browser'], ['--unit', '--serial'], ['--root', emptyDir]]) {
     const res = spawnSync(process.execPath, [listScript, ...args], { encoding: 'utf8' });
     assert.equal(res.status, 2, `expected exit 2 for ${args.join(' ')}`);
     assert.match(res.stderr, /^Location: /m);
