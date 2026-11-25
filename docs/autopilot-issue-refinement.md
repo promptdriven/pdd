@@ -248,6 +248,75 @@ This prompt uses two proven methods:
 Answer every `[NEEDS CLARIFICATION]` before you add the issue to Autopilot. An open
 question makes Autopilot stop and ask you again.
 
+### Methods from top practitioners
+
+These methods come from people and teams who build with coding agents every day.
+Each one fits into a section of the template.
+
+**Lauren Tan: pstack.** Lauren Tan works on React Compiler on the React core team.
+[pstack](https://github.com/cursor/plugins/blob/main/pstack/README.md) is her skill
+pack for Cursor, Claude Code and Codex. It makes a task deeper, not bigger:
+
+- Write the goal, then a "Keep" line for behavior that must not change, then the
+  check. Two examples from a [pstack guide](https://flaviocopes.com/pstack/):
+  "Keep the text output unchanged. Verify both forms against the sample project."
+  and "Done means zero old callers, every parser fixture passes, and the old API is
+  deleted."
+- Before you rewrite a task, [`/sharpen`](https://github.com/backnotprop/pstack/blob/main/skills/sharpen/SKILL.md)
+  asks four things. What would a top professional do that you did not ask for? What
+  raw material would they start from? Which methods and tools would they use? What
+  outside check shows that the result is right?
+- Let an experiment settle every choice that it can. Leave product and preference
+  choices to a person.
+
+**Garry Tan: gstack `/spec`.** Its goal is an issue that an agent can do without a
+single follow-up question. [`/spec`](https://github.com/garrytan/gstack/blob/main/spec/SKILL.md)
+asks until five answers are clear:
+
+1. Who is affected?
+2. What is the current behavior (verified, not assumed)?
+3. What should the behavior be instead?
+4. Why now?
+5. How will we know it is done (an observable result)?
+
+Then it settles what is out of scope, the failure modes and the rollback.
+
+**GitHub Spec Kit: `/clarify` and `/specify`.**
+
+- [`/clarify`](https://github.com/github/spec-kit/blob/main/templates/commands/clarify.md)
+  asks at most 5 questions, one at a time. It picks the questions with the highest
+  impact and uncertainty, and it puts a recommended answer first. It writes each
+  answer back into the specification.
+- [`/specify`](https://github.com/github/spec-kit/blob/main/templates/commands/specify.md)
+  allows at most 3 `[NEEDS CLARIFICATION]` markers. For every other gap, it uses a
+  sensible default and lists it under Assumptions.
+
+Autopilot asks in the same shape: one question, two or three options, one marked
+"(recommended)".
+
+**Kiro: bugfix specs.** A [bugfix spec](https://kiro.dev/docs/specs/bugfix-specs/)
+has three parts in EARS form: the current behavior, the expected behavior, and the
+behavior that must stay. The third part has the form "WHEN `<condition>` THEN the
+system SHALL CONTINUE TO `<existing behavior>`". It gives the agent a clear
+regression boundary.
+
+**Addy Osmani: three tiers of boundaries.** Sort the rules into Always, Ask first and
+Never ([How to write a good spec](https://addyosmani.com/blog/good-spec/)). The agent
+then knows where it can act alone.
+
+**Kent Beck: watch for cheating.** Beck treats a disabled or deleted test as a sign
+that the agent cheated ([Augmented coding](https://newsletter.kentbeck.com/p/augmented-coding-beyond-the-vibes)).
+Say in the issue that existing tests must stay, and ask for a new test that fails
+without the fix.
+
+| Method | Template section |
+| --- | --- |
+| pstack "Keep" line, Kiro SHALL CONTINUE TO, Osmani "Never" tier | Out of scope |
+| pstack "Done means", Beck's failing test | How to verify |
+| gstack five questions | Goal, Context, Expected / Actual |
+| Spec Kit questions and assumptions | Context |
+| EARS and Given/When/Then | Acceptance criteria |
+
 ### Before and after
 
 A weak issue:
