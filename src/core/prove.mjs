@@ -13,7 +13,7 @@ import { lintRepoProject } from './lint/project-lint.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
 import { detectShadowBinaries, runDiffSpotlight } from './lint/test-inventory.mjs';
 import { runFormalVerification } from './formal-verify.mjs';
-import { detectHostCapabilities, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths } from './verify-paths.mjs';
+import { classifyVerifyPathTier, detectHostCapabilities, formatProofTiersLine, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths, summarizeProofTiers } from './verify-paths.mjs';
 
 export const OUTCOME_PROVED = 'Proved';
 export const OUTCOME_FAILED = 'Failed';
@@ -560,19 +560,21 @@ export function runProve(
     const capState = detectHostCapabilities(matched.flatMap(r => r.needs), { env, capabilities, probe: ports.probeCapability, isTTY: ports.isTTY });
     for (const recipe of matched) {
       const { satisfied, missing } = matchCapabilities(recipe.needs, capState);
+      const tier = classifyVerifyPathTier(recipe);
+      const tierMeta = { ...(recipe.scope ? { scope: recipe.scope } : {}), tier };
       if (!satisfied) {
-        pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', missingCapabilities: missing, ok: false });
+        pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', missingCapabilities: missing, ok: false });
         notProvedReasons.push(`Recipe "${recipe.id}" (${recipe.name}) skipped: missing required capability [${missing.join(', ')}].`);
         continue;
       }
       const recipeEnv = resolveStepEnv('path', recipe.id, recipe.run);
       const r = execShellCommand(recipe.run, { cwd: root, env: recipeEnv, timeoutMs, preScrubbed: true }, ports);
       if (r.timedOut) {
-        pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', timedOut: true, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary });
+        pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', timedOut: true, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary });
         notProvedReasons.push(`Verify path "${recipe.id}" timed out after ${timeoutMinutes} min (\`${recipe.run}\`); rerun with --timeout MIN.`);
         continue;
       }
-      pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', timedOut: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
+      pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', timedOut: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
     }
 
     const formalEnv = resolveStepEnv('formal', null, baseVerify.formalCommand || '');
@@ -642,13 +644,15 @@ export function runProve(
 
   const outcome = failedErrors.length > 0 ? OUTCOME_FAILED : (notProvedReasons.length > 0 ? OUTCOME_NOT_PROVED : OUTCOME_PROVED);
   const exitCode = outcome === OUTCOME_FAILED ? EXIT_FAILED : (outcome === OUTCOME_NOT_PROVED ? EXIT_NOT_PROVED : EXIT_PROVED);
+  const proofTiers = summarizeProofTiers({ testResult, pathResults });
+  const proofTiersLine = formatProofTiersLine(proofTiers);
   const receipt = {
     schema_version: 'pdd.prove.v1', mode: 'verify', outcome, exit_code: exitCode, baseRef, baseSha, headSha,
     dirty, proofScope, ...(dirtyFiles.length ? { dirtyFiles: dirtyFiles.slice(0, 12) } : {}),
     configSource: baseVerify.configured ? baseVerify.source : (testCommand ? 'auto-detected' : null), touchedFiles: diff.touchedFiles, changedSurfaces,
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
-    test: testResult, formal: formalResult, paths: pathResults, notProvedReasons,
+    test: testResult, formal: formalResult, paths: pathResults, proofTiers, notProvedReasons,
   };
 
   const scopeSuffix = statusFailed
@@ -656,8 +660,8 @@ export function runProve(
     : (dirty ? ` (working tree, uncommitted changes: ${dirtyFiles.slice(0, 4).join(', ')})` : '');
   const formalLine = formalResult?.summary || 'Formal: not-applicable';
   if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
-  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.\n`);
-  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
-  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.\n`); }
+  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.\n${proofTiersLine}\n`);
+  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n${proofTiersLine}\n`);
+  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.\n${proofTiersLine}\n`); }
   return { exitCode, outcome, receipt };
 }

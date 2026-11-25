@@ -12,6 +12,7 @@ import { compileGlobMatcher } from './lint/regex-safety.mjs';
 import { SHARED_SURFACE_COLS, clean, csv, findSectionLines, isSeparatorRow, tableCells } from './product/markdown-utils.mjs';
 
 const MAX_VERIFY_PATHS = 100;
+const PROOF_TIERS = new Set(['simulated', 'real-host', 'adversarial']);
 const PATH_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
 const CAPABILITY_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
 const NON_SURFACE_PATH_RE = /^(?:docs|prompts|user_stories|pdd\/stories|contracts)\/|\.prompt\.md$|\.mdx?$|^(?:README|CHANGELOG|LICENSE|AGENTS|CLAUDE)(?:\.[^/]+)?$|^(?:pdd|pdd-workspace|pdd-bindings)\.json$|(?:^|\/)(?:__pycache__|\.pytest_cache|node_modules)\/|\.(?:pyc|pyo)$|(?:^|\/)\.DS_Store$/i;
@@ -83,6 +84,15 @@ export function parseVerifyConfig(raw, { sourcePath = 'pdd.json' } = {}) {
           }
           scope = item.scope.trim().toLowerCase();
         }
+        let tier = null;
+        if (item.tier !== undefined) {
+          const normTier = typeof item.tier === 'string' ? item.tier.trim().toLowerCase() : '';
+          if (!PROOF_TIERS.has(normTier)) {
+            errors.push(`${sourcePath}: verify.paths["${id}"].tier must be one of "simulated", "real-host", or "adversarial".`);
+            continue;
+          }
+          tier = normTier;
+        }
         let needs = [];
         if (item.needs !== undefined) {
           const rawNeeds = typeof item.needs === 'string' ? [item.needs] : item.needs;
@@ -92,7 +102,7 @@ export function parseVerifyConfig(raw, { sourcePath = 'pdd.json' } = {}) {
           }
           needs = [...new Set(rawNeeds.map(c => c.trim()))];
         }
-        paths.push({ id, name, ...(scope ? { scope } : {}), when: rawWhen, matchers, run, needs });
+        paths.push({ id, name, ...(scope ? { scope } : {}), ...(tier ? { tier } : {}), when: rawWhen, matchers, run, needs });
       }
     }
   }
@@ -469,4 +479,59 @@ export function inspectMultiPartIntegrationGuard(root, verifyConfig, { executedP
     }
   }
   return { applicable: true, parts, covered: true, reason: null };
+}
+
+export function classifyVerifyPathTier(recipe) {
+  const explicit = typeof recipe?.tier === 'string' ? recipe.tier.trim().toLowerCase() : '';
+  if (PROOF_TIERS.has(explicit)) return explicit;
+  const scope = typeof recipe?.scope === 'string' ? recipe.scope.trim().toLowerCase() : '';
+  if (scope === 'adversarial' || scope === 'break-it') return 'adversarial';
+  if (scope === 'simulated' || scope === 'unit') return 'simulated';
+  return 'real-host';
+}
+
+function summarizeTierGroup(label, { testResult = null, paths = [] } = {}) {
+  const runs = [];
+  let hasFailed = false;
+  let hasProved = false;
+  let hasNotProved = false;
+
+  if (testResult) {
+    runs.push(testResult.command);
+    if (testResult.timedOut) hasNotProved = true;
+    else if (testResult.ok) hasProved = true;
+    else hasFailed = true;
+  }
+  for (const entry of paths) {
+    runs.push(entry.id);
+    if (entry.status === 'failed') hasFailed = true;
+    else if (entry.status === 'proved') hasProved = true;
+    else hasNotProved = true;
+  }
+
+  const status = hasFailed ? 'Failed' : (hasProved && !hasNotProved ? 'Proved' : 'Not proved');
+  return { label, status, runs };
+}
+
+export function summarizeProofTiers({ testResult = null, pathResults = [] } = {}) {
+  const list = Array.isArray(pathResults) ? pathResults : [];
+  const simulatedPaths = [];
+  const realHostPaths = [];
+  const adversarialPaths = [];
+  for (const entry of list) {
+    const tier = classifyVerifyPathTier(entry);
+    if (tier === 'adversarial') adversarialPaths.push(entry);
+    else if (tier === 'simulated') simulatedPaths.push(entry);
+    else realHostPaths.push(entry);
+  }
+  return {
+    simulated: summarizeTierGroup('simulated', { testResult, paths: simulatedPaths }),
+    realHost: summarizeTierGroup('real-host run', { paths: realHostPaths }),
+    adversarial: summarizeTierGroup('adversarial run', { paths: adversarialPaths }),
+  };
+}
+
+export function formatProofTiersLine(proofTiers) {
+  const tiers = proofTiers || summarizeProofTiers();
+  return `Proof tiers: ${tiers.simulated.label}=${tiers.simulated.status}, ${tiers.realHost.label}=${tiers.realHost.status}, ${tiers.adversarial.label}=${tiers.adversarial.status}`;
 }
