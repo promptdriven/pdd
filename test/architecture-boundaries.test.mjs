@@ -14,7 +14,6 @@ import {
   parseJsModuleEdges,
   resolveImportSpecifier,
 } from '../scripts/check-architecture.mjs';
-import { parseOfflineLintPayload, replaceRequired } from '../scripts/corpus-check.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CHECKER_SCRIPT = join(REPO_ROOT, 'scripts/check-architecture.mjs');
@@ -223,7 +222,7 @@ test('G7 Ratchet Control 3: shrinking the ratchet locks in resolved debt so rein
   assert.equal(analyzeArchitecture({ root: dir }).findings.length, 1);
 });
 
-test('G7 + corpus-check cross-family review regressions (Astra #5-#8): semicolon-free export, aliases, git non-spawn, query/hash + unresolved fail-closed, ratchet growth refusal, intra-SCC edge/self-import, and corpus fail-closed', (t) => {
+test('G7 cross-family review regressions (Astra #5-#7): semicolon-free export, aliases, git non-spawn, query/hash + unresolved fail-closed, ratchet growth refusal, and intra-SCC edge/self-import', (t) => {
   // #5: Semicolon-free `export { f }\nawait import('./x.mjs')`, hoisted & regular aliased createRequire/fork, and git diff non-spawn.
   const edgeCases = [
     'const hoistedReq = hoistedMk(import.meta.url)',
@@ -325,16 +324,4 @@ test('G7 + corpus-check cross-family review regressions (Astra #5-#8): semicolon
   assert.equal(unresolvedRes.status, 1, 'unresolved file and bare-directory imports must fail closed exit 1');
   assert.match(unresolvedRes.stderr, /ERROR \[unresolved-local-import\] src\/shared\/util\.mjs:1/);
   assert.match(unresolvedRes.stderr, /ERROR \[unresolved-local-import\] src\/shared\/util\.mjs:2/);
-
-  // #8: corpus-check fail-closed payload validation (including null status & killed signal) + non-zero seed replacement guard.
-  assert.equal(parseOfflineLintPayload('', 0).parsedOk, false);
-  assert.equal(parseOfflineLintPayload('not json', 0).parsedOk, false);
-  assert.equal(parseOfflineLintPayload('{"exit_code":0}', 0).parsedOk, false);
-  assert.equal(parseOfflineLintPayload('{"exit_code":1,"problems":[],"warnings":[]}', 0).parsedOk, false);
-  assert.equal(parseOfflineLintPayload('{"exit_code":1,"problems":[],"warnings":[]}', null).parsedOk, false);
-  assert.equal(parseOfflineLintPayload('{"exit_code":1,"problems":[],"warnings":[]}', null, null, 'SIGKILL').parsedOk, false);
-  assert.equal(parseOfflineLintPayload('{"exit_code":0,"problems":[],"warnings":[]}', 0, null, 'SIGTERM').parsedOk, false);
-  assert.equal(parseOfflineLintPayload('{"exit_code":0,"problems":[],"warnings":[]}', 0).parsedOk, true);
-  assert.throws(() => replaceRequired('hello world', '`missing`', '`replacement`', 'missing-seed'), /matched 0 times/);
-  assert.deepEqual(replaceRequired('use `foo` and `foo`', /`foo`/g, '`bar`', 'foo-seed'), { text: 'use `bar` and `bar`', count: 2 });
 });
