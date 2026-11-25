@@ -1,6 +1,6 @@
 # PDD usage guide
 
-This guide is for people who install pdd 0.1.52 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install pdd 0.1.53 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Autopilot agents run with full access.** When running headless Autopilot jobs, PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`, Gemini CLI with `--yolo`, and Antigravity CLI with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use Autopilot only in projects and on machines where you accept this.
@@ -67,7 +67,7 @@ You need the pdd command for offline repo tools (`pdd init`, `pdd status`, `pdd 
 ```sh
 npm install -g @promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" --version  # reports PATH conflicts without changing files
-pdd --version   # prints 0.1.52
+pdd --version   # prints 0.1.53
 which -a pdd    # the first line must be in your global npm or Volta bin folder
 ```
 
@@ -124,7 +124,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # this pdd prints 0.1.52
+pdd --version   # this pdd prints 0.1.53
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -184,7 +184,7 @@ Where the skill goes:
 
 Each copy that pdd writes carries a marker file, `.pdd-skill.json`. `pdd setup` upgrades any PDD-managed user copy (`.pdd-skill.json`-marked or `SKILL.md` with `pdd-skills:` frontmatter) when its version is older, when the same version has different files, or when its marker is invalid, and keeps a copy with a newer version. It removes PDD-managed user copies of retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`, `pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`) and unlinks retired symlinks that are dangling or target another PDD-managed agent skill folder, including when Claude Code has the PDD plugin installed. It never touches unrelated custom skills, unmarked folders without `pdd-skills:` frontmatter, or symlinks pointing into a local git checkout.
 
-`npx skills add promptdriven/pdd --skill pdd` installs the skill directly. `npx skills list` shows what you have. The `pdd-skills:` line at the top of `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.52`.
+`npx skills add promptdriven/pdd --skill pdd` installs the skill directly. `npx skills list` shows what you have. The `pdd-skills:` line at the top of `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.53`.
 
 Do not edit the installed skill folders: an update replaces your edits. The skill works in any Codex, Claude Code, Gemini CLI, or Antigravity chat.
 
@@ -435,7 +435,7 @@ If setup added MCP registration, remove only its `pdd` entry from `$CODEX_HOME/c
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.52` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.53` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says an agent is not installed or signed in | Install the agent and sign in, or use another agent with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
