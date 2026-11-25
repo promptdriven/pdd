@@ -23,6 +23,7 @@ import { dirname, join, posix, relative, sep } from 'node:path';
 import { isTestOwnedPath } from '../file-owner.mjs';
 import { gitFiles } from '../shared/git-context.mjs';
 import { causeText } from '../shared/safe-read.mjs';
+import { TEST_DIR_WITH_SPEC_PATTERN } from '../shared/test-paths.mjs';
 import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, scrubChildEnv } from './lint/diagnostics.mjs';
 import {
   buildRunnerEnv,
@@ -43,7 +44,7 @@ export { resolvePytestBinary };
 
 export const FORMAL_TEST_FILE_RE = /(?:\.formal\.test\.[^/]+$|(?:^|\/)(?:test_formal_[^/]+|[^/]+_formal_test)\.py$|(?:^|\/)formal\/test_[^/]+\.py$|_formal_test\.go$|(?:^|\/)tests\/[^/]*formal[^/]*\.rs$)/i;
 export const PRODUCTION_CODE_FILE_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|go|rs|java|kt|rb|c|cc|cpp|h|hpp|cs|swift|scala|php|sh)$/i;
-export const NON_PRODUCTION_PROOF_PATH_RE = /(?:^(?:prompts|docs|user_stories|pdd\/stories|contracts|specs?|models?|fixtures|examples)\/|\.prompt\.md$|\.mdx?$|^(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$|(?:^|\/)(?:__pycache__|\.pytest_cache|node_modules)\/)/i;
+export const NON_PRODUCTION_PROOF_PATH_RE = new RegExp(`(?:^(?:prompts|docs|user_stories|pdd/stories|contracts|specs?|models?|fixtures|examples)/|\\.prompt\\.md$|\\.mdx?$|^(?:${TEST_DIR_WITH_SPEC_PATTERN})/|\\.(?:test|spec)\\.[a-z0-9]+$|_test\\.(?:go|rs|py)$|(?:^|/)test_[^/]+\\.py$|(?:^|/)(?:__pycache__|\\.pytest_cache|node_modules)/)`, 'i');
 
 const STORY_PATH_RE = /(?:^(?:user_stories|pdd\/stories)\/[^/].*\.md$)/i;
 const INVARIANT_DOMAIN_KEYWORD_RE = /\b(?:invariant|state\s+transition|state\s+machine|parser|validator|serializer|deserializer|auth(?:entication|orization)?|permission|trust\s+boundar|money|minor\s+unit|rounding|metric|quota|lock(?:ing)?|dedup(?:licat)?|schedul(?:e|er|ing)|bound(?:ed|s)?|fail[- ]closed|monoton(?:ic|icity)|concurren(?:t|cy)|idempoten(?:t|cy)|conservation|ordering|precedence)\b/i;

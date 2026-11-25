@@ -3,10 +3,11 @@
 // Layer-1 core check: verify every Story acceptance criterion has >=1 check in paired runtime JSON scenario(s).
 import { posix } from 'node:path';
 import { V1_SCENARIO_SCHEMA, criterionContentId, extractStoryCriteria } from '../../scenario-compile.mjs';
+import { TEST_SCENARIO_JSON_RE } from '../../shared/test-paths.mjs';
 import { formatTeachingDetail, readSafeUtf8 } from './diagnostics.mjs';
 
 const NON_SCENARIO_TEST_SUBDIR_RE = /(?:^|\/)(?:fixtures|__fixtures__|mocks|__mocks__|snapshots|__snapshots__|data|testdata|golden|cassettes)\//i;
-const TEST_JSON_RE = /(?:^|\/)(?:tests?|__tests__)\/.*\.json$/i;
+const TEST_JSON_RE = TEST_SCENARIO_JSON_RE;
 const TOOLING_CONFIG_JSON = new Set([
   'jsconfig.json', 'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'composer.json',
   'biome.json', 'deno.json', 'jsr.json', 'eslint.json', 'prettier.json', 'vitest.json', 'jest.json', 'babel.json',
