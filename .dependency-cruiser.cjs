@@ -1,4 +1,4 @@
-// Standard dependency-cruiser architecture rules replacing scripts/check-architecture.mjs (895 LOC).
+// Standard dependency-cruiser architecture rules for src/ and bin/.
 // Enforces circular-import freedom, unresolved/undeclared import checks, and PDD's 6 layers:
 //   cli -> {cli, setup, core, accounts, autopilot, shared}
 //   autopilot -> {autopilot, core, accounts, shared}

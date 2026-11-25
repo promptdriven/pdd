@@ -99,8 +99,9 @@
         "id": "architecture",
         "name": "Module layering and dependency boundary rules",
         "when": [
-          "scripts/check-architecture.mjs",
-          "scripts/architecture-ratchet.json"
+          ".oxlintrc.json",
+          ".dependency-cruiser.cjs",
+          ".dependency-cruiser-known-violations.json"
         ],
         "run": "npm run check:arch"
       }
