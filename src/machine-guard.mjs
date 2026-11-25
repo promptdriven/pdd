@@ -1,4 +1,4 @@
-// Generated from prompts/cli/machine-guard.prompt.md (sha256: 4b135059b8109eee316cfd71acb48d698d73a340fd34baf3fe295bd37334958b).
+// Prompt: prompts/cli/machine-guard.prompt.md
 // The small resource governor of the Autopilot core (#3231): Autopilot may use a share of this machine's CPU and
 // memory (default 50%, `pdd autopilot start --share N`), for all repositories together. The share of the real limits
 // gives the slots; the room for new work compares what all Autopilot jobs on this machine use now with that share; the

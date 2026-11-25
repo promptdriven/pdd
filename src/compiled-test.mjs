@@ -1,4 +1,4 @@
-// Generated from prompts/cli/compiled-test.prompt.md (sha256: 5bb7d5b40a403efdb885d7238636738734435e758cea04c9125226be62997519).
+// Prompt: prompts/cli/compiled-test.prompt.md
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, lstatSync, statSync, realpathSync } from 'node:fs';
 import { join, resolve, relative, sep } from 'node:path';

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 0ff0081adb287056f3b443b516d614b56dca97c4622b92ec4e1b74451f41d56d).
+// Prompt: prompts/cli/approval-evidence.prompt.md
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';

@@ -1,4 +1,3 @@
-// Generated from prompts/cli/process-lifecycle.prompt.md (sha256: f10e28afdb2daa82da7c1031962649dbbd805441f9a9389f5b6a71c9654f9405).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { descendants, parseProcessTable, terminateCaptured } from '../src/process-lifecycle.mjs';
