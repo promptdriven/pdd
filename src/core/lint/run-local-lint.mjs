@@ -9,6 +9,7 @@ import { resolveLintScope } from './lint-scope.mjs';
 import { loadBaseTrustedLintCommands } from './project-config.mjs';
 import { lintRepoProject, runConfiguredLintCommands } from './project-lint.mjs';
 import { runDiffSpotlight } from './test-inventory.mjs';
+import { formatUpstreamLinterReport, runUpstreamLinters } from './upstream-linters.mjs';
 
 function resolveGitRoot(cwd) {
   try {
@@ -38,6 +39,7 @@ export function runLocalLint(
     runCommands = false,
     trustWorkingTree = false,
     includeSvg = true,
+    includeUpstream = true,
     config,
     workspaceRoot,
     workspacePolicy,
@@ -210,11 +212,16 @@ export function runLocalLint(
     }
   }
 
+  const upstreamResult = (includeUpstream && scope.fullRepo)
+    ? (ports.runUpstreamLinters ?? runUpstreamLinters)(root, { env }, ports)
+    : null;
+
   const problems = [
     ...project.errors,
     ...scenarioErrors,
     ...(diffResult ? diffResult.errors.map(e => e.formatted) : []),
     ...(commandResult ? commandResult.errors : []),
+    ...(upstreamResult ? upstreamResult.errors : []),
   ];
   const warnings = [
     ...new Set([
@@ -241,6 +248,7 @@ export function runLocalLint(
     findings: project.findings,
     ...(diffResult ? { diff: diffResult } : {}),
     ...(commandResult ? { commands: commandResult.results } : {}),
+    ...(upstreamResult && upstreamResult.results.length ? { upstream_linters: upstreamResult.results } : {}),
   };
 
   if (json) {
@@ -248,6 +256,9 @@ export function runLocalLint(
     return exitCode;
   }
 
+  if (upstreamResult && upstreamResult.results.length > 0) {
+    stdout.write(formatUpstreamLinterReport(upstreamResult.results));
+  }
   for (const warn of warnings) stdout.write(`${warn}\n`);
   for (const err of problems) stderr.write(`${err}\n`);
   stdout.write(`${summaryLine}\n`);
