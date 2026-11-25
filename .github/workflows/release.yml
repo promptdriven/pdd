@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'GitHub Release tag to verify and publish (for example alpha-v0.1.53-rc.1 or alpha-v0.1.53)'
+        description: 'Optional GitHub Release tag to verify parity against (select the tag/branch via workflow ref)'
         required: false
         default: ''
         type: string
@@ -34,7 +34,6 @@ jobs:
       py_version: ${{ steps.meta.outputs.py_version }}
       dist_tag: ${{ steps.meta.outputs.dist_tag }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
-      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
     steps:
       - name: Resolve target GitHub Release tag
         id: target
@@ -72,15 +71,12 @@ jobs:
               fi
             fi
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
-            echo "checkout_ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
           else
             echo "tag=" >> "$GITHUB_OUTPUT"
-            echo "checkout_ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/checkout@v7
         with:
-          ref: ${{ steps.target.outputs.checkout_ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@v7
@@ -98,7 +94,6 @@ jobs:
         id: meta
         env:
           TARGET_TAG: ${{ steps.target.outputs.tag }}
-          CHECKOUT_REF: ${{ steps.target.outputs.checkout_ref }}
         run: |
           set -euo pipefail
           if [ -n "$TARGET_TAG" ]; then
@@ -106,7 +101,7 @@ jobs:
           else
             node scripts/sync-pypi-version.mjs --check
           fi
-          node --input-type=module - "$TARGET_TAG" "$CHECKOUT_REF" >> "$GITHUB_OUTPUT" <<'NODE'
+          node --input-type=module - "$TARGET_TAG" >> "$GITHUB_OUTPUT" <<'NODE'
           import { readFileSync } from 'node:fs';
           import { toPep440Version } from './scripts/sync-pypi-version.mjs';
           import { npmDistTagForVersion } from './scripts/publish-release.mjs';
@@ -119,7 +114,6 @@ jobs:
           console.log(`dist_tag=${distTag}`);
           console.log(`is_prerelease=${isPrerelease}`);
           console.log(`tag=${process.argv[2]}`);
-          console.log(`checkout_ref=${process.argv[3]}`);
           NODE
 
       - name: Build npm tarball, Python wheel, and sdist once
@@ -148,7 +142,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.build.outputs.checkout_ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@v7
@@ -284,7 +277,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.build.outputs.checkout_ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@v7
