@@ -1,7 +1,9 @@
-// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 691dd6196bed4cd3f73c6e54357b81dbbd926f01249066f198c14749055ad53b).
+// Prompt: prompts/cli/autopilot-validator.prompt.md
+
 // ZERO LLM numeric confidence scores, ZERO hardcoded model names, ZERO hardcoded capability names.
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
+import { TEST_DIR_WITH_SPEC_PATTERN, TEST_FILE_PATH_RE } from '../../shared/test-paths.mjs';
 
 export const GAP_CHECK_FLAGS = Object.freeze(['UNMAPPED_CHANGE', 'INSUFFICIENT_SCOPE']);
 export const FORMAL_PROOF_TIERS = Object.freeze(['proved_solver_code', 'proved_spec_model']);
@@ -27,8 +29,7 @@ const DEFAULT_PROTECTED_BASENAMES = new Set(['pdd.json', 'pdd-workspace.json', '
 const DEFAULT_PROTECTED_EXACT = new Set(['src/autopilot-core.mjs', 'src/autopilot-validator.mjs']);
 const DEFAULT_PROTECTED_PREFIXES = ['.github/workflows/', '.github/actions/', 'rules/lint/', 'src/autopilot/core/', 'src/autopilot/gates/', 'src/autopilot/validator/', '.venv/', 'venv/'];
 const DEFAULT_PROTECTED_SCRIPT_RE = /^scripts\/(?:.*\/)?(?:check-[^/]+|verify-[^/]+|[^/]*gate[^/]*)\.(?:[cm]?js|ts|sh|py|rb)$/i;
-const TEST_FILE_PATH_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
-const NON_PRODUCTION_PROOF_PATH_RE = /(?:^(?:prompts|docs|user_stories|specs?|models?)\/|\.prompt\.md$|\.mdx?$|^(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
+const NON_PRODUCTION_PROOF_PATH_RE = new RegExp(`(?:^(?:prompts|docs|user_stories|specs?|models?)/|\\.prompt\\.md$|\\.mdx?$|^(?:${TEST_DIR_WITH_SPEC_PATTERN})/|\\.(?:test|spec)\\.[a-z0-9]+$|_test\\.(?:go|rs|py)$|(?:^|/)test_[^/]+\\.py$)`, 'i');
 const HOLD_PRIORITY = ['protected_path', 'malformed_output', 'stale_evidence', 'service_failure', 'abstention', 'missing_capability', 'unmapped_change', 'insufficient_scope'];
 
 const isPlainObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);

@@ -11,7 +11,7 @@ so that broken or unverified pull requests are never merged or marked ready to m
 3. When an external tool or login is expired or unavailable, or no live runtime binding is available, validation stops with zero repair attempts, keeps the pull request open, parks it waiting for a person with the tool name and exact check command, frees the worker slot, and places that tool on cooldown.
 4. While a tool is on cooldown, Autopilot skips claiming other issues that require that tool while still claiming unrelated issues, and once a health check succeeds or a person clears the wait, Autopilot resumes only the missing validation on the saved pull request head without rebuilding code.
 5. When a change needs live human interaction or has no runnable end-to-end check, Autopilot stops and parks the pull request for a person in both auto and observe modes, frees the worker slot, and emits a three-line human verification card.
-6. Validation linting flags silent validation skips and mock-only tests covering runtime boundaries, while passing boundary tests paired with real end-to-end coverage.
+6. Validation linting flags silent validation skips in code or tests, while passing clean tests without silent skips.
 
 ## Rules to check
 

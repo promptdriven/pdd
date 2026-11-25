@@ -1,7 +1,8 @@
-// Generated from prompts/cli/test-selection.prompt.md (sha256: 573f1d627ad2beec74e9bb767e3a1c7e915f54e40a8270ac217f54f2d832feaa).
+// Prompt: prompts/cli/test-selection.prompt.md
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
+import { TEST_DIR_PREFIX_RE, TEST_HELPER_SUBDIR_RE, TEST_SETUP_FILE_RE } from './shared/test-paths.mjs';
 
 const AC_HEADING = /(?<![^\n])##[ \t]+Acceptance(?:[ \t]+Criteria)?[ \t]*(?![^\n])/i;
 const storyName = path => basename(path).replace(/\.md$/, '');
@@ -259,8 +260,8 @@ export function classifyGlobalSuiteTrigger(changedFiles, { coreInfrastructure = 
     }
     const file = normalizeRepoPath(stripped);
     if (
-      /^(?:test|tests|__tests__)\/(?:helpers|fixtures)(?:\/|$)/i.test(file) ||
-      /^(?:test|tests|__tests__)\/(?:setup|preload|register|global-setup)\.[^/]+$/i.test(file)
+      TEST_HELPER_SUBDIR_RE.test(file) ||
+      TEST_SETUP_FILE_RE.test(file)
     ) {
       return { fallback: true, category: 'global-test-helper', file, reason: `global test helper changed (${file})` };
     }
@@ -886,11 +887,11 @@ export function selectAffectedTests(options = {}, ports = {}) {
     if (!CODE_EXTENSIONS.test(basename(path))) return false;
     const parts = folders(path);
     if (parts.some(p => SKIP_WALK_DIRS.has(p) || p === 'fixtures' || p === 'helpers' || p === 'examples')) return false;
-    return /^(?:src|lib|app|test|tests|__tests__)\//i.test(path);
+    return /^(?:src|lib|app)\//i.test(path) || TEST_DIR_PREFIX_RE.test(path);
   };
   const isProductionPath = path => /^(?:src|lib|app)\//i.test(path);
   const isProductionCodeFile = path => isProductionPath(path) && CODE_EXTENSIONS.test(basename(path));
-  const isLocalTestHelper = path => !totalTestSet.has(path) && /^(?:test|tests|__tests__)\//i.test(path) && isGraphCodeFile(path);
+  const isLocalTestHelper = path => !totalTestSet.has(path) && TEST_DIR_PREFIX_RE.test(path) && isGraphCodeFile(path);
 
   if (fileSet.has('pdd-bindings.json')) {
     try {
@@ -1045,7 +1046,7 @@ export function selectAffectedTests(options = {}, ports = {}) {
       continue;
     }
 
-    if (/^(?:test|tests|__tests__)\//i.test(file) && CODE_EXTENSIONS.test(basename(file))) {
+    if (TEST_DIR_PREFIX_RE.test(file) && CODE_EXTENSIONS.test(basename(file))) {
       addSeedModule(file, `test-module:${file}`);
       continue;
     }

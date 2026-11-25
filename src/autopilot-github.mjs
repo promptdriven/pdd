@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-github.prompt.md (sha256: c3a04c94ba4680979de2771a4506e1f1fb562044c8352af28b9ecc91e5d3c1a3).
+// Prompt: prompts/cli/autopilot-github.prompt.md
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';

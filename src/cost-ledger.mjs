@@ -1,4 +1,4 @@
-// Generated from prompts/cli/cost-ledger.prompt.md (sha256: 4f8eecedef118d2fefe13b38f836821bc8455ab1466d2e40861b3cd185cbe94c).
+// Prompt: prompts/cli/cost-ledger.prompt.md
 import * as nativeFs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';

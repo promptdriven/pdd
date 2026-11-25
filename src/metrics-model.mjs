@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-model.prompt.md (sha256: 965e27a4c6b5c07204070f858cb6848c0a92c8267ff0ffd4008e02f35eb3193c).
+// Prompt: prompts/cli/metrics-model.prompt.md
 import {
   buildFunnelSummary,
   computeStageFunnel,

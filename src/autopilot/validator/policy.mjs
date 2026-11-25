@@ -1,4 +1,5 @@
-// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 691dd6196bed4cd3f73c6e54357b81dbbd926f01249066f198c14749055ad53b).
+// Prompt: prompts/cli/autopilot-validator.prompt.md
+
 import {
   MIN_REALISTIC_PAYLOAD_BYTES,
   REAL_E2E_KINDS,
@@ -274,6 +275,9 @@ export function evaluateValidationOutcome({
 
   if (offlinePassed === false && hasExecutedFailure) {
     return bucket1Failure({ repairAttempts: attempts, message: 'Executed validation or offline suite failed; repair before retrying real-host verification.' });
+  }
+  if (isBugFix === true && bugFixBaseControl === 'passed-on-base') {
+    return bucket1Failure({ repairAttempts: attempts, message: 'Bug-fix regression check passed on base; repair test or fix.' });
   }
   if (needsRealHostSmoke && executedRealHostChecks.length === 0) {
     const gap = describeRealHostGap({ nativeOnlyFiles: surfaceInfo.nativeOnlyFiles, runtimeSurfaces: surfaceInfo.runtimeSurfaces, missingClasses: requiredClasses, mockOnlyDetected });

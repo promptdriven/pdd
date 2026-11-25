@@ -1,0 +1,12 @@
+diff --git a/prompts/worker.prompt.md b/prompts/worker.prompt.md
+--- a/prompts/worker.prompt.md
++++ b/prompts/worker.prompt.md
+@@ -9,7 +9,7 @@ Thin native-only adapter implemented in `src/worker.mjs` that wires the vault an
+ 
+ ## Port bindings
+ 
+-- Bind `vault.read`, `vault.write`, and `audit.append` to the isolated worker runtime.
++- Bind `vault.raed_typo`, `vault.write`, and `audit.append` to the isolated worker runtime.
+ 
+ ## Boundary and runtime contract
+ 

@@ -12,9 +12,12 @@ import {
   readPyprojectVersion,
   readPythonInitVersion,
   resolveProductionDependencies,
+  setReleaseVersion,
   stagePypiBundle,
   syncPypiVersion,
+  toPep440Version,
 } from '../scripts/sync-pypi-version.mjs';
+import { npmDistTagForVersion } from '../scripts/publish-release.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const syncScript = join(root, 'scripts', 'sync-pypi-version.mjs');
@@ -95,7 +98,7 @@ test('#3498 sync-pypi-version updates pyproject.toml + __init__.py on version bu
   }
 });
 
-test('#3498 release workflow validates release tags, smoke-tests offline PyPI pdd with empty stderr + lint --local, and sets attestations: false on token fallback', () => {
+test('#3498 + #3677 release workflow builds once, verifies exact artifacts, publishes npm + PyPI behind one approval, and verifies live registries on Ubuntu + macOS', () => {
   const workflow = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8');
   assert.match(workflow, /^\s*release:\s*\n\s*types:\s*\[published\]/m);
   assert.match(workflow, /^\s*workflow_dispatch:/m);
@@ -103,19 +106,93 @@ test('#3498 release workflow validates release tags, smoke-tests offline PyPI pd
   assert.match(workflow, /\^\[A-Za-z0-9\._-\]\+\$/);
   assert.match(workflow, /sync-pypi-version\.mjs --check/);
   assert.match(workflow, /sync-pypi-version\.mjs --stage-bundle/);
-  const mkdirIdx = workflow.indexOf('mkdir -p') >= 0 ? workflow.search(/mkdir -p [^\n]*"\$smoke_dir\/npm-dist"/) : -1;
-  const npmPackIdx = workflow.indexOf('npm pack --ignore-scripts --pack-destination "$smoke_dir/npm-dist"');
-  assert.equal(mkdirIdx >= 0 && mkdirIdx < npmPackIdx, true, 'verify-release creates $smoke_dir/npm-dist before npm pack --pack-destination');
+  assert.match(workflow, /mkdir -p dist\/npm dist\/pypi[\s\S]*npm pack --ignore-scripts --pack-destination dist\/npm/);
+  assert.match(workflow, /actions\/upload-artifact@v4/);
+  assert.match(workflow, /actions\/download-artifact@v4/);
+  assert.match(workflow, /evidence-run\.mjs --suite scripts\/evidence\/public\.suite\.mjs/);
+  assert.match(workflow, /evidence-run\.mjs --suite scripts\/evidence\/wheel\.suite\.mjs/);
   assert.match(workflow, /test ! -s "\$smoke_dir\/ver\.err"/);
   assert.match(workflow, /pdd-codex" --pdd-help/);
   assert.match(workflow, /pdd-claude" --pdd-help/);
   assert.match(workflow, /lint --local/);
-  assert.match(workflow, /npm publish[\s\S]*--access public --provenance/);
-  assert.match(workflow, /environment:\s*pypi-publish/);
+  // Separate `publish-npm` (automatic after verify) and `publish-pypi` (behind `environment: pypi-publish`), both using exact tested artifacts.
+  assert.match(workflow, /^\s*publish-npm:\s*\n/m);
+  assert.match(workflow, /^\s*publish-pypi:\s*\n[\s\S]*?environment:\s*pypi-publish/m);
+  assert.match(workflow, /npm publish "\$tarball"[\s\S]*--access public --provenance --tag "\$DIST_TAG"/);
   assert.match(workflow, /npm ci --ignore-scripts/);
   assert.doesNotMatch(workflow, /ci-install\.mjs/);
   assert.match(workflow, /pypa\/gh-action-pypi-publish@release\/v1/);
+  assert.match(workflow, /packages-dir:\s*dist\/pypi\//);
   assert.match(workflow, /password:\s*\$\{\{\s*secrets\.PYPI_API_TOKEN\s*\}\}[\s\S]*?attestations:\s*false/);
+  assert.match(workflow, /verify-published-npm:/);
+  assert.match(workflow, /verify-published-pypi:/);
+  assert.match(workflow, /os:\s*\[ubuntu-latest,\s*macos-latest\]/);
+  assert.doesNotMatch(workflow, /uses:\s*[^\s@]+@[0-9a-f]{40}/, 'no new action SHA hash pins');
+});
+
+test('#3677 rc -> @next parity and 1-commit release/X.Y.Z promotion touch only version metadata', t => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'pdd-release-promote-'));
+  t.after(() => rmSync(sandbox, { recursive: true, force: true }));
+
+  mkdirSync(join(sandbox, 'python', 'pdd_cli'), { recursive: true });
+  mkdirSync(join(sandbox, 'skills', 'pdd'), { recursive: true });
+  mkdirSync(join(sandbox, 'src'), { recursive: true });
+  writeFileSync(join(sandbox, 'package.json'), `${JSON.stringify({ name: '@promptdriven/pdd', version: '0.1.52' }, null, 2)}\n`);
+  writeFileSync(join(sandbox, 'package-lock.json'), `${JSON.stringify({ name: '@promptdriven/pdd', version: '0.1.52', lockfileVersion: 3, packages: { '': { name: '@promptdriven/pdd', version: '0.1.52' } } }, null, 2)}\n`);
+  cpSync(join(root, 'python', 'pyproject.toml'), join(sandbox, 'python', 'pyproject.toml'));
+  cpSync(join(root, 'python', 'pdd_cli', '__init__.py'), join(sandbox, 'python', 'pdd_cli', '__init__.py'));
+  writeFileSync(join(sandbox, 'skills', 'pdd', 'SKILL.md'), '---\nname: pdd\nmetadata:\n  pdd-skills: 0.1.52\n---\nbody\n');
+  writeFileSync(join(sandbox, 'src', 'app.mjs'), 'export const shipped = "soaked-code";\n');
+
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Release Bot',
+    GIT_AUTHOR_EMAIL: 'release@example.test',
+    GIT_COMMITTER_NAME: 'Release Bot',
+    GIT_COMMITTER_EMAIL: 'release@example.test',
+  };
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: sandbox, env: gitEnv });
+  execFileSync('git', ['add', '.'], { cwd: sandbox, env: gitEnv });
+  execFileSync('git', ['commit', '-qm', 'base 0.1.52'], { cwd: sandbox, env: gitEnv });
+
+  // Step 1: Cut 0.1.53-rc.1 for @next soak.
+  const rcSet = spawnSync(process.execPath, [syncScript, '--set', '0.1.53-rc.1', '--root', sandbox], { encoding: 'utf8' });
+  assert.equal(rcSet.status, 0, rcSet.stderr);
+  assert.equal(toPep440Version('0.1.53-rc.1'), '0.1.53rc1');
+  assert.equal(npmDistTagForVersion('0.1.53-rc.1'), 'next');
+  assert.equal(readPyprojectVersion(readFileSync(join(sandbox, 'python', 'pyproject.toml'), 'utf8')), '0.1.53rc1');
+  assert.equal(readPythonInitVersion(readFileSync(join(sandbox, 'python', 'pdd_cli', '__init__.py'), 'utf8')), '0.1.53rc1');
+  assert.match(readFileSync(join(sandbox, 'skills', 'pdd', 'SKILL.md'), 'utf8'), /pdd-skills: 0\.1\.53-rc\.1/);
+  const rcCheck = spawnSync(process.execPath, [syncScript, '--check', '--root', sandbox, '--tag', 'alpha-v0.1.53-rc.1'], { encoding: 'utf8' });
+  assert.equal(rcCheck.status, 0, rcCheck.stderr);
+  execFileSync('git', ['add', '.'], { cwd: sandbox, env: gitEnv });
+  execFileSync('git', ['commit', '-qm', 'chore: release 0.1.53-rc.1'], { cwd: sandbox, env: gitEnv });
+  execFileSync('git', ['tag', 'alpha-v0.1.53-rc.1'], { cwd: sandbox, env: gitEnv });
+
+  // Step 2: Promote from soaked rc tag on `release/0.1.53` branch (1 version-only commit).
+  execFileSync('git', ['checkout', '-q', '-b', 'release/0.1.53', 'alpha-v0.1.53-rc.1'], { cwd: sandbox, env: gitEnv });
+  const promoted = setReleaseVersion({ root: sandbox, version: '0.1.53' });
+  assert.equal(promoted.version, '0.1.53');
+  assert.equal(promoted.pyVersion, '0.1.53');
+  assert.equal(npmDistTagForVersion('0.1.53'), 'latest');
+  const stableCheck = spawnSync(process.execPath, [syncScript, '--check', '--root', sandbox, '--tag', 'alpha-v0.1.53'], { encoding: 'utf8' });
+  assert.equal(stableCheck.status, 0, stableCheck.stderr);
+  execFileSync('git', ['add', '.'], { cwd: sandbox, env: gitEnv });
+  execFileSync('git', ['commit', '-qm', 'chore: promote 0.1.53 from alpha-v0.1.53-rc.1'], { cwd: sandbox, env: gitEnv });
+
+  assert.equal(execFileSync('git', ['rev-list', '--count', 'alpha-v0.1.53-rc.1..HEAD'], { cwd: sandbox, env: gitEnv, encoding: 'utf8' }).trim(), '1');
+  const changed = execFileSync('git', ['diff', '--name-only', 'alpha-v0.1.53-rc.1..HEAD'], { cwd: sandbox, env: gitEnv, encoding: 'utf8' }).trim().split('\n').sort();
+  assert.deepEqual(changed, [
+    'package-lock.json',
+    'package.json',
+    'python/pdd_cli/__init__.py',
+    'python/pyproject.toml',
+    'skills/pdd/SKILL.md',
+  ]);
+  assert.equal(readFileSync(join(sandbox, 'src', 'app.mjs'), 'utf8'), 'export const shipped = "soaked-code";\n');
+
+  // Invalid versions fail closed.
+  assert.throws(() => setReleaseVersion({ root: sandbox, version: 'not-a-version' }), /Invalid release version/);
 });
 
 test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stderr, preserve real PATH shadowing warnings, support Windows pdd.cmd + signals, and write no repo __pycache__', t => {

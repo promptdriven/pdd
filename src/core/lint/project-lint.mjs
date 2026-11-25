@@ -9,6 +9,7 @@ import { auditProductPlan } from '../../product-documents.mjs';
 import { isLintableStoryPath, lintStory } from '../../story-lint.mjs';
 import { gitFiles } from '../../shared/git-context.mjs';
 import { causeText, isSecretPath } from '../../shared/safe-read.mjs';
+import { ROOT_TEST_SCENARIO_JSON_RE } from '../../shared/test-paths.mjs';
 import { workspace } from '../../shared/workspace-policy.mjs';
 import { HEAD_BYTES, canonicalRepoPath, formatDiagnosticLine, formatTeachingDetail, readSafeHeadUtf8, readSafeUtf8, scrubChildEnv } from './diagnostics.mjs';
 import {
@@ -20,7 +21,6 @@ import {
   isEligibleProductionCodeFile,
   scenarioPromptRefs,
 } from './lint-scope.mjs';
-import { collectNativeOnlyContractFindings } from './native-only-contract.mjs';
 import { collectNativeOnlyPortParityFindings } from './native-port-parity.mjs';
 import { evaluateCustomRulesOnFile, loadBaseTrustedLintCommands, loadBaseTrustedLintOverrides, loadProjectLintConfig, matchesAnyCustomRule } from './project-config.mjs';
 import { extractDependencyLinkTargets, isNativeOnlyPrompt } from './prompt-metadata.mjs';
@@ -62,7 +62,7 @@ function resolveTargetStories({ realRoot, scopedFiles, scopedSet, promptPaths, t
     }
   } else if (Array.isArray(promptPaths) && targetPrompts.length > 0) {
     const pSet = new Set(targetPrompts);
-    for (const sc of scopedFiles.filter(p => /^(?:tests?|__tests__)\/.*\.json$/i.test(p))) {
+    for (const sc of scopedFiles.filter(p => ROOT_TEST_SCENARIO_JSON_RE.test(p))) {
       const raw = readSafeUtf8(realRoot, sc);
       if (!raw) continue;
       try { const doc = JSON.parse(raw), s = inferStory(doc, sc); if (s && scenarioPromptRefs(doc).some(r => pSet.has(r))) candidates.add(s); } catch {}
@@ -293,7 +293,6 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
       ...collectPromptSizeFindings(content, ownedCode, { path: promptPath, minCodeLines: PROMPT_SIZE_MIN_CODE_LINES }),
     );
     if (isNativeOnlyPrompt(content)) {
-      rawFindings.push(...collectNativeOnlyContractFindings(content, { path: promptPath }));
       const direct = extractDependencyLinkTargets(content, promptPath).filter(p => scopedSet.has(p));
       const directCheckable = direct.filter(t => t.endsWith('.prompt.md') && typeof getPrompt(t) === 'string' && !isNativeOnlyPrompt(getPrompt(t)));
       const directNativePeers = direct.filter(t => t.endsWith('.prompt.md') && typeof getPrompt(t) === 'string' && isNativeOnlyPrompt(getPrompt(t)));

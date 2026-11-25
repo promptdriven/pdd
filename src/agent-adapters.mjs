@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: f0f36d7410276dbd2dc8f7ce98a5bb01d82eae46dc2f3277912fc8d3806d123c).
+// Prompt: prompts/cli/agent-adapters.prompt.md
 // Thin compatibility adapter composing Layer-0 agent discovery/process helpers with
 // local agent config and re-exporting Layer-2 Autopilot step launch helpers.
 import { loadAgentDefinitions } from './agent-config.mjs';

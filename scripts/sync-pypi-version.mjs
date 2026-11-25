@@ -135,6 +135,49 @@ export function syncPypiVersion({ root = DEFAULT_ROOT } = {}) {
   return pyVersion;
 }
 
+const STRICT_SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** Atomically update version strings across npm, lockfile, PyPI wrapper, and bundled skill metadata
+ *  for a clean 1-commit `X.Y.Z-rc.N` cut or `release/X.Y.Z` promotion commit. */
+export function setReleaseVersion({ root = DEFAULT_ROOT, version } = {}) {
+  const next = String(version ?? '').trim();
+  if (!STRICT_SEMVER_RE.test(next)) {
+    throw new Error(`Invalid release version "${version}". Expected SemVer such as 0.1.53-rc.1 or 0.1.53.`);
+  }
+  const updatedFiles = [];
+
+  const pkgPath = join(root, 'package.json');
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  pkg.version = next;
+  writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+  updatedFiles.push('package.json');
+
+  const lockPath = join(root, 'package-lock.json');
+  if (existsSync(lockPath)) {
+    const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+    lock.version = next;
+    if (lock.packages && typeof lock.packages[''] === 'object' && lock.packages[''] !== null) {
+      lock.packages[''].version = next;
+    }
+    writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+    updatedFiles.push('package-lock.json');
+  }
+
+  const pyVersion = syncPypiVersion({ root });
+  updatedFiles.push('python/pyproject.toml', 'python/pdd_cli/__init__.py');
+
+  const skillPath = join(root, 'skills', 'pdd', 'SKILL.md');
+  if (existsSync(skillPath)) {
+    const rawSkill = readFileSync(skillPath, 'utf8');
+    if (/^(\s*pdd-skills:\s*).+$/m.test(rawSkill)) {
+      writeFileSync(skillPath, rawSkill.replace(/^(\s*pdd-skills:\s*).+$/m, `$1${next}`));
+      updatedFiles.push('skills/pdd/SKILL.md');
+    }
+  }
+
+  return { version: next, pyVersion, updatedFiles };
+}
+
 const STAGE_SCRUB_EXACT_KEYS = new Set([
   'NPM_TOKEN',
   'NODE_AUTH_TOKEN',
@@ -284,6 +327,7 @@ function parseCliArgs(argv) {
   let check = false;
   let stageBundle = false;
   let cleanBundle = false;
+  let setVersion = null;
   let tag = null;
   let root = DEFAULT_ROOT;
 
@@ -292,19 +336,24 @@ function parseCliArgs(argv) {
     if (arg === '--check') check = true;
     else if (arg === '--stage-bundle') stageBundle = true;
     else if (arg === '--clean-bundle') cleanBundle = true;
+    else if (arg === '--set') setVersion = argv[++i] ?? '';
+    else if (arg.startsWith('--set=')) setVersion = arg.slice('--set='.length);
     else if (arg === '--tag') tag = argv[++i] ?? '';
     else if (arg.startsWith('--tag=')) tag = arg.slice('--tag='.length);
     else if (arg === '--root') root = resolve(argv[++i] ?? '.');
     else if (arg.startsWith('--root=')) root = resolve(arg.slice('--root='.length));
     else throw new Error(`Unknown argument: ${arg}`);
   }
-  return { check, stageBundle, cleanBundle, tag, root };
+  return { check, stageBundle, cleanBundle, setVersion, tag, root };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const opts = parseCliArgs(process.argv.slice(2));
-    if (opts.cleanBundle) {
+    if (opts.setVersion !== null) {
+      const res = setReleaseVersion({ root: opts.root, version: opts.setVersion });
+      console.log(`Set release version to ${res.version} (PyPI: ${res.pyVersion}) in: ${res.updatedFiles.join(', ')}.`);
+    } else if (opts.cleanBundle) {
       rmSync(join(opts.root, 'python', 'pdd_cli', '_bundled'), { recursive: true, force: true });
       console.log('Removed python/pdd_cli/_bundled.');
     } else if (opts.stageBundle) {
