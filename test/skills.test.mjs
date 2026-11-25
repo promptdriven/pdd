@@ -11,6 +11,9 @@ const read = rel => readFileSync(join(skills, rel), 'utf8');
 
 const RETIRED_SKILLS = ['pdd-setup', 'pdd-bug', 'pdd-feature', 'pdd-graph', 'pdd-product', 'pdd-prompting', 'pdd-small-change'];
 const EXPECTED_REFERENCES = [
+  'BREAK-IT.md',
+  'PROMPT-REVIEW-RULES.md',
+  'SOLVE.md',
   'formal.md',
   'ports-and-cli.md',
   'product.md',
