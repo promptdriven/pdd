@@ -32,7 +32,9 @@ import {
   withLeftPercentActiveMap,
   withLeftPercentFields,
 } from './cli-format.mjs';
+import { summarizeCodexRuntimeStatus } from './codex-seat-visibility.mjs';
 import { applyMaterializedLease, hasLocalMaterializedFile } from './enroll-login.mjs';
+import { readLiveCodexRuntimeLeases } from './runtime-session.mjs';
 import { fetchAccountsList } from './share-helpers.mjs';
 
 export async function runSyncCommand({ provider: requestedProvider, quiet = false, printCodexHome = false, timeoutMs = 1200, cwd, env }, ports = {}) {
@@ -190,6 +192,12 @@ export async function runStatusCommand({ json = false, cwd, env }, ports = {}) {
   try { codexAuthPresent = Boolean(fs.statSync(managedCodexAuthPath(env))?.isFile()); } catch {}
   try { codexConfigPresent = Boolean(fs.statSync(managedCodexConfigPath(env))?.isFile()); } catch {}
   const activeAutoProfiles = shellProfileEntries(env).filter(e => { try { return fs.readFileSync(e.path, 'utf8').includes(AUTO_BEGIN); } catch { return false; } }).map(e => e.path);
+  const runtimeLeases = readLiveCodexRuntimeLeases({ env, tmpRoot: ports.tmpRoot, uid: ports.uid }, ports);
+  const { codex_runtime: codexRuntime, lines: codexRuntimeLines } = summarizeCodexRuntimeStatus({
+    runtimeLeases,
+    accounts: accessible,
+    cachedActiveCodex: current.active?.codex ?? null,
+  });
 
   const reauthRequired = accessible
     .filter(a => accountDisplayState(a, current.active?.[a.provider], current.reauth) === 'reauth_required')
@@ -207,6 +215,7 @@ export async function runStatusCommand({ json = false, cwd, env }, ports = {}) {
         enrolled: current.enrolled, cloud_reachable: cloudReachable, providers: current.providers,
         codex_home: { path: codexHomePath, materialized: codexAuthPresent && codexConfigPresent, auth_present: codexAuthPresent, config_present: codexConfigPresent },
         auto_switch: { enabled: activeAutoProfiles.length > 0, profiles: activeAutoProfiles },
+        codex_runtime: codexRuntime,
         active: withLeftPercentActiveMap(current.active), cooling: current.cooling, reauth_required: reauthRequired,
         accounts: accessible.map(a => withLeftPercentFields({ ...a, state: accountDisplayState(a, current.active?.[a.provider], current.reauth) })),
         pending_invites: pendingInvites,
@@ -228,6 +237,7 @@ export async function runStatusCommand({ json = false, cwd, env }, ports = {}) {
     const sevenD = formatWindow(liveAcc?.weekly_used_percent ?? entry.weekly_used_percent, liveAcc?.weekly_reset_at ?? entry.weekly_reset_at);
     lines.push(`Active ${prov}: ${entry.label} [${dispState}] (mode: ${entry.delivery_mode ?? 'default'}, 5h: ${fiveH}, 7d: ${sevenD}, last refresh: ${refreshStr}, lease: ${expStr})`);
   }
+  lines.push(...codexRuntimeLines);
   for (const item of reauthRequired) lines.push(`Re-authentication required: "${item.label}" — run pdd accounts add --provider ${item.provider ?? 'codex'} --label ${item.label}`);
   return { exitCode: 0, message: redactSecrets(lines.join('\n')) };
 }

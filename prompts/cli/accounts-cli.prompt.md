@@ -38,7 +38,7 @@ or calls exist.
   local `accounts-state.json` when offline), reporting enrollment count, `pddManagedCodexHome(env)`
   isolation status, `zsh`/`bash`/`fish` `auto` wrapper status, per-provider active account
   (`label`, `delivery_mode`, `state`, `5h`/`7d` remaining `XX% left` with reset time, `last_refresh_at`, token/lease
-  `expires_at` remaining time), and any `reauth_required` accounts (with `five_hour_left_percent` and `weekly_left_percent` in `--json`).
+  `expires_at` remaining time), any live `pdd-codex` runtime lease(s) read strictly read-only via `readLiveCodexRuntimeLeases` and normalized/formatted via `summarizeCodexRuntimeStatus` (label, access type, auto-rotate flag, and live session count in human output while any `pdd-codex` process is running, plus structured `codex_runtime` in `--json` with zero secrets), and any `reauth_required` accounts (with `five_hour_left_percent` and `weekly_left_percent` in `--json`).
 - `pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER|ORG/TEAM[,...]]`:
   Reject `--device-auth` for Claude with `exitCode: 2` before starting `claude`, and validate
   `--with` targets before sign-in. Run `codex login -c 'cli_auth_credentials_store="file"'`
@@ -103,6 +103,8 @@ or calls exist.
 
 ## Dependencies
 
+- [Codex active seat visibility](codex-seat-visibility.prompt.md) supplies `summarizeCodexRuntimeStatus` for normalizing and formatting live `pdd-codex` runtime leases in `pdd accounts status`.
+- [PDD Codex launcher](pdd-codex.prompt.md) supplies read-only `readLiveCodexRuntimeLeases`.
 - [Cloud accounts and login pool](login-pool.prompt.md) supplies `/v1/accounts*`
   transport, `accounts-state.json` persistence, `pddManagedCodexHome(env)`, and `0600` auth materializers.
 - [Secret redaction](secret-redaction.prompt.md) supplies `redactSecrets` and
