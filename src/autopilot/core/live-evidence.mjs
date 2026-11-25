@@ -22,6 +22,7 @@ import {
   summarizeTestEnvMetadata,
 } from '../gates/test-env.mjs';
 import { diffTestReports, parseStandardTestReport, runBaseOwnedTestOracle } from './report-diff.mjs';
+import { PYTEST_FILENAME_RE, TEST_DIR_WITH_SPEC_NAMES, TEST_FILE_PATH_RE } from '../../shared/test-paths.mjs';
 import {
   buildRunnerEnv,
   buildRunnerInvocation,
@@ -33,9 +34,9 @@ import {
 } from './test-runners.mjs';
 
 const execFileAsync = promisify(cbExecFile);
-const TEST_FILE_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
+const TEST_FILE_RE = TEST_FILE_PATH_RE;
 const JS_TEST_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx)$/i;
-const PY_TEST_RE = /(?:(?:^|\/)test_[^/]+\.py$|_test\.py$)/i;
+const PY_TEST_RE = PYTEST_FILENAME_RE;
 const PY_FORMAL_TEST_RE = /(?:(?:^|\/)(?:test_formal_[^/]+|[^/]+_formal_test)\.py$|(?:^|\/)formal\/test_[^/]+\.py$)/i;
 const GO_TEST_RE = /_test\.go$/i;
 const RUST_TEST_RE = /(?:(?:^|\/)tests\/[^/]+\.rs$|_test\.rs$)/i;
@@ -78,7 +79,7 @@ function readGitTreeSha(cwd, ref = 'HEAD') {
 
 const SKIP_WALK_DIRS = new Set([
   '.git', 'node_modules', 'dist', 'build', '.venv', 'venv', 'target', 'vendor', '.pdd', '__pycache__',
-  'test', 'tests', '__tests__', 'spec', 'docs', 'doc', 'fixtures', '__fixtures__', 'examples', 'prompts', 'user_stories',
+  ...TEST_DIR_WITH_SPEC_NAMES, 'docs', 'doc', 'fixtures', '__fixtures__', 'examples', 'prompts', 'user_stories',
 ]);
 
 function hasAnyProductionCodeFile(root, fs = nativeFs) {

@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { isTestOwnedPath, isTestPromptPath } from '../../file-owner.mjs';
+import { isJsTestPath } from '../../shared/test-paths.mjs';
 import { causeText } from '../../shared/safe-read.mjs';
 import { buildLineStarts, formatTeachingDetail, lineNumberAt, readSafeUtf8, resolveDefaultBaseRef } from './diagnostics.mjs';
 
@@ -48,7 +49,7 @@ function hasExpectAssertionChain(tail) {
 export function detectTestLanguage(path, source = '') {
   if (!path || UTILITY_TEST_DIR.test(path)) return null;
   const base = path.split('/').at(-1);
-  if (/\.(?:[cm]?[jt]s|[jt]sx)$/.test(base) && (/\.(?:test|spec)\./.test(base) || path.split('/').some(p => ['test', 'tests', '__tests__'].includes(p)))) return 'js';
+  if (isJsTestPath(path)) return 'js';
   if (/^(?:test_.*|.*_test)\.py$/.test(base)) return 'py';
   if (/_test\.go$/.test(base)) return 'go';
   if (/\.rs$/.test(base)) {

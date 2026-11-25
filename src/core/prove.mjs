@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { isTestOwnedPath } from '../file-owner.mjs';
 import { causeText } from '../shared/safe-read.mjs';
+import { COLOCATED_TEST_PATH_RE, TEST_SCENARIO_JSON_RE, TEST_TARGET_FILE_RE } from '../shared/test-paths.mjs';
 import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBaseRef, scrubChildEnv } from './lint/diagnostics.mjs';
 import { lintRepoProject } from './lint/project-lint.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
@@ -25,7 +26,7 @@ export const EXIT_NOT_PROVED = 3;
 const SETUP_FAILURE_LINE_RE = /^(?:(?:Error:\s*Cannot find module\b|Error \[ERR_MODULE_NOT_FOUND\]|ERR_MODULE_NOT_FOUND\b|Cannot find package\b|ModuleNotFoundError:|ImportError:|No module named\b|SyntaxError:|FileNotFoundError:|Error:\s*ENOENT\b|ENOENT:|ERROR collecting\b|command not found\b|not recognized as an internal\b|cannot find package\b|no Go files\b|error\[E\d+\]:|failed to compile\b)|.*\[build failed\])/i;
 const DIAG_PREFIX_RE = /^\s*(?:#\s*|E\s+)?/;
 const TARGETABLE_ERROR_CLASS_RE = /^(SyntaxError|ImportError|FileNotFoundError):/i;
-const COLOCATED_TEST_RE = /(?:\.(?:test|spec)\.(?:[cm]?[jt]s|[jt]sx)|(?:^|\/)test_[^/]+\.py$|_test\.(?:py|go|rs)$|^(?:test|tests|__tests__|fixtures)\/)/i;
+const COLOCATED_TEST_RE = COLOCATED_TEST_PATH_RE;
 
 function findSetupFailureLine(stderr, stdout) {
   // Scan stderr first so an actual diagnostic on stderr is NEVER shadowed by an arbitrary stdout banner.
@@ -233,7 +234,6 @@ function extractReferencedNpmScripts(commands = []) {
   return [...names];
 }
 
-const TEST_TARGET_FILE_RE = /(?:(?:\.(?:test|spec)\.[a-z0-9]+$)|(?:_test\.(?:py|go|rs)$)|(?:(?:^|\/)test_[^/]+\.py$))/i;
 const SCRIPT_TOKEN_EXT_RE = /\.(?:[cm]?js|[cm]?ts|sh|bash|py|rb|pl)$/i;
 
 function extractReferencedRepoScripts(commands = []) {
@@ -597,7 +597,7 @@ export function runProve(
     } else if (finding.code === 'story-unbound-criteria') {
       const slug = finding.path.split('/').at(-1).replace(/\.md$/i, '');
       const touched = touchedSet.has(finding.path)
-        || diff.touchedFiles.some(tf => /(?:^|\/)(?:tests?|__tests__)\/.*\.json$/i.test(tf) && (tf.endsWith(`/${slug}.json`) || tf.includes(`/${slug}.`)));
+        || diff.touchedFiles.some(tf => TEST_SCENARIO_JSON_RE.test(tf) && (tf.endsWith(`/${slug}.json`) || tf.includes(`/${slug}.`)));
       if (touched) notProvedReasons.push(`${finding.path}:${finding.line} [story-unbound-criteria] ${finding.message}`);
     }
   }
