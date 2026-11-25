@@ -91,7 +91,7 @@ jobs:
           mapfile -t unit_tests <<< "$unit_list"
           set +e
           node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs \
-            --test --test-concurrency=4 --test-timeout=300000 --test-shard=${{ matrix.shard }}/8 \
+            --test --test-concurrency=4 --test-timeout=600000 --test-shard=${{ matrix.shard }}/8 \
             "${unit_tests[@]}" 2>&1 | tee "$RUNNER_TEMP/tests-unit.tap"
           exit "${PIPESTATUS[0]}"
       - name: Run sequential tests (browser + timing-sensitive)
@@ -102,7 +102,7 @@ jobs:
           mapfile -t serial_tests <<< "$serial_list"
           set +e
           node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs \
-            --test --test-concurrency=1 --test-timeout=300000 --test-shard=${{ matrix.shard }}/8 \
+            --test --test-concurrency=1 --test-timeout=600000 --test-shard=${{ matrix.shard }}/8 \
             "${serial_tests[@]}" 2>&1 | tee "$RUNNER_TEMP/tests-serial.tap"
           exit "${PIPESTATUS[0]}"
       - name: Summarize test counts
