@@ -162,7 +162,7 @@ test('3578 pdd lint --local enforces default-on structural errors without pdd.js
   );
   writeFileSync(
     join(repo, 'prompts/trust/service.prompt.md'),
-    '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Service\n\nWire `store.load` and `access.commit`.\n\n## Dependencies\n\n- [access](access.prompt.md)\n',
+    '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Service\n\n## Ports\n\n- `store.load`\n- `access.commit`\n\n## Dependencies\n\n- [access](access.prompt.md)\n',
   );
   execFileSync('git', ['init', '-q'], { cwd: repo });
   execFileSync('git', ['add', '.'], { cwd: repo });
@@ -176,7 +176,7 @@ test('3578 pdd lint --local enforces default-on structural errors without pdd.js
 
   writeFileSync(
     join(repo, 'prompts/trust/service.prompt.md'),
-    '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Service\n\nWire `store.load` and `store.save`.\n\n## Dependencies\n\n- [access](access.prompt.md)\n',
+    '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Service\n\n## Ports\n\n- `store.load`\n- `store.save`\n\n## Dependencies\n\n- [access](access.prompt.md)\n',
   );
   const okOut = capture(), okErr = capture();
   const okCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: okOut, stderr: okErr });
