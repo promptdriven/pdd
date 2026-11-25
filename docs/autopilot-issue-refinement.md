@@ -39,7 +39,9 @@ flowchart TD
   C -- "ready, confidence ≥ 0.75" --> R[Ready for a build job]
   C -- "ready, confidence < 0.75" --> D
   C -- improve --> I[Refiner job<br/>read-only repository inspection]
-  C -- "person, duplicate, blocked,<br/>held, fixed, elsewhere" --> X[Comment why. Do not start.]
+  C -- person --> D
+  C -- elsewhere --> E
+  C -- "duplicate, blocked,<br/>held, fixed" --> X[Comment why. Do not start.]
   I -- ready --> S[Post the refined specification<br/>and promote the card to ready]
   I -- person --> D
   I -- elsewhere --> E
@@ -54,8 +56,9 @@ blocked-by link, open sub-issues, a park label (`pdd:stuck`, `pdd:needs-decision
 `pdd:would-merge`) or an author that Autopilot does not trust.
 
 Next, a rule-based preflight reads the issue text. It looks for paths that are not
-in this repository, and for words that show a person must decide first. When it
-finds one, it labels the issue and does not start an AI card.
+in this repository, for words that show a person must decide first, for checks that
+need a live service or manual QA, and for draft or empty issues. When it finds one,
+it labels the issue and does not start an AI card.
 
 ### Step 2: The intake card
 
@@ -73,7 +76,8 @@ Two classes matter for refinement:
 | `ready` | The task is clear, technically sound, small enough for one PR, and has an obvious local check. |
 | `improve` | The goal is clear, but the acceptance criteria, the reproduction or the scope are missing or too broad. |
 
-A `ready` card needs a confidence of at least 0.75. With a lower score, Autopilot
+A `ready` card needs a confidence of at least 0.75. This is the default; set
+`autopilot.minIntakeConfidence` in `pdd.json` to change it. With a lower score, Autopilot
 asks a person to clarify the scope, the expected behavior and the local check.
 
 ### Step 3: The refiner job
@@ -147,9 +151,9 @@ and rates the issue again.
 The refiner is a safety net. It costs time and an agent run, and it can still end in
 a question for you. An issue that is strong from the start goes straight to `ready`.
 
-Research on coding agents gives the same message again and again. OpenAI removed
-38.3% of SWE-bench samples from SWE-bench Verified because the problem statement was
-underspecified. In another study, agents seldom noticed missing details, but did up
+Research on coding agents gives the same message again and again. When OpenAI built
+SWE-bench Verified, its annotators flagged 38.3% of the SWE-bench samples they checked
+for an underspecified problem statement. In another study, agents seldom noticed missing details, but did up
 to 74% better when they got them. Maintainers would reject about half of the
 benchmark PRs that passed the tests. The issue text is the agent's main input, so
 make it complete.
@@ -192,26 +196,6 @@ Why this matters. Links to related issues, logs or designs. Decisions already ma
 `<exact test command>` passes on this machine, with no network and no live account.
 ```
 
-### The practices behind the template
-
-| # | Practice | Why it works | Source |
-| --- | --- | --- | --- |
-| 1 | Write the issue as the agent's whole prompt. | The agent reads the issue as its main instruction. A clear issue gives a better PR. | [GitHub Copilot coding agent](https://docs.github.com/en/copilot/how-tos/agents/copilot-coding-agent/best-practices-for-using-copilot-to-work-on-tasks) |
-| 2 | Use four parts: goal, context, constraints, "done when". | It keeps the agent in scope and makes it guess less. | [OpenAI Codex best practices](https://learn.chatgpt.com/guides/best-practices) |
-| 3 | Make the key decisions yourself, before you file. | Underspecified issues are the main reason good agents fail. | [SWE-bench Verified](https://openai.com/index/introducing-swe-bench-verified/), [Ambiguity study](https://arxiv.org/abs/2502.13069) |
-| 4 | Name the files and functions. Give a pattern to copy. | Issues that name the location have the highest solve rates. | [Agentless](https://arxiv.org/html/2407.01489) |
-| 5 | Write criteria that each pass or fail on their own. | "Better" or "make sure it works" gives the agent no target. | [Given/When/Then](https://martinfowler.com/bliki/GivenWhenThen.html), [Devin guide](https://docs.devin.ai/essential-guidelines/good-vs-bad-instructions) |
-| 6 | Check an output that a person can see, not a hidden record. | Weak checks let wrong patches pass. | [Gherkin reference](https://cucumber.io/docs/gherkin/reference/), [SWE-Bench+](https://arxiv.org/abs/2410.06992) |
-| 7 | Write down every exact name, flag and message text you need. | Tests often fail on details that the issue never stated. | [OpenAI audit](https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/) |
-| 8 | Give one command that proves the work is done. | With a pass/fail check, the agent can fix its own work. | [Claude Code best practices](https://code.claude.com/docs/en/best-practices) |
-| 9 | For a bug, give a minimal reproduction that you ran. | Steps to reproduce are the most important part of a bug report. | [Minimal reproducible example](https://stackoverflow.com/help/minimal-reproducible-example), [Mozilla](https://bugzilla.mozilla.org/page.cgi?id=bug-writing.html) |
-| 10 | Write expected and actual apart. Paste the exact error. | Stack traces are a strong clue to the location. | [Simon Tatham](https://www.chiark.greenend.org.uk/~sgtatham/bugs.html) |
-| 11 | Give versions, OS and config. Mark guesses as guesses. | A diagnosis is an extra, not a replacement for the symptoms. | [Simon Tatham](https://www.chiark.greenend.org.uk/~sgtatham/bugs.html), [Chromium](https://www.chromium.org/for-testers/bug-reporting-guidelines/) |
-| 12 | Keep one issue to one PR. | Agent PRs that do not merge are usually larger and touch more files. | [How OpenAI uses Codex](https://cdn.openai.com/pdf/6a2631dc-783e-479b-b1a4-af0cfbd38630/how-openai-uses-codex.pdf), [Google small CLs](https://google.github.io/eng-practices/review/developer/small-cls.html) |
-| 13 | Split large work into sub-issues that each keep the build green. | Each part gets its own check and its own review. | [Devin guide](https://docs.devin.ai/essential-guidelines/instructing-devin-effectively), [INVEST](https://www.agilealliance.org/glossary/invest/) |
-| 14 | List what is out of scope and must not change. | Unrelated edits are a top reason that maintainers reject agent PRs. | [METR](https://metr.org/notes/2026-03-10-many-swe-bench-passing-prs-would-not-be-merged-into-main/) |
-| 15 | Keep repository-wide rules in `AGENTS.md`, not in each issue. | The issue can then stay short and focused on one task. | [Definition of Ready](https://www.agilealliance.org/glossary/definition-of-ready/) |
-
 ### Write acceptance criteria that a test can check
 
 Two formats work well. Pick one for each criterion.
@@ -235,7 +219,7 @@ Then the command exits with code 1
 And the message names pdd.json and the line number
 ```
 
-Sources: [EARS](https://alistairmavin.com/ears/), [Kiro specs](https://kiro.dev/docs/specs/),
+Sources: [EARS](https://alistairmavin.com/ears/), [Kiro specs](https://kiro.dev/docs/specs/feature-specs/),
 [Gherkin reference](https://cucumber.io/docs/gherkin/reference/).
 
 ### Strengthen a weak issue yourself, with an agent
@@ -248,21 +232,16 @@ Read GitHub issue #N with `gh issue view N --comments`. Do not change any files.
 
 1. Read the code that the issue touches. Name the exact files and functions.
 2. For a bug, find the root cause or a minimal reproduction.
-3. Ask me one question at a time about anything the code cannot answer.
-   Stop when you have no more questions.
-4. Mark anything still open as [NEEDS CLARIFICATION: <question>].
-5. Rewrite the issue with these sections: Goal, Context, Where, Reproduction,
+3. Mark anything still open as [NEEDS CLARIFICATION: <question>].
+4. Rewrite the issue with these sections: Goal, Context, Where, Reproduction,
    Expected / Actual, Acceptance criteria, Out of scope, How to verify.
-6. Write each acceptance criterion so it passes or fails on its own.
-7. If the work needs more than one PR, propose sub-issues instead.
+5. Write each acceptance criterion so it passes or fails on its own.
 ```
 
-This prompt uses three proven methods:
+This prompt uses two proven methods:
 
 - **Explore first, then plan.** The agent reads the code before it writes the
   specification ([Claude Code best practices](https://code.claude.com/docs/en/best-practices)).
-- **One question at a time.** Short questions get clear answers
-  ([Harper Reed's LLM codegen workflow](https://harper.blog/2025/02/16/my-llm-codegen-workflow-atm/)).
 - **Mark the unknowns.** A `[NEEDS CLARIFICATION]` marker stops a guess from
   entering the specification ([GitHub Spec Kit](https://github.com/github/spec-kit)).
 
@@ -279,8 +258,9 @@ Config errors are confusing
 When the config is broken pdd does weird stuff. Please fix.
 ```
 
-The intake card gives this issue `improve` at best. The goal is unclear, and there is
-no reproduction and no check.
+The intake card most likely gives this issue `person` (`unclear_or_unsound`), because
+`improve` needs a clear goal. The goal is unclear, and there is no reproduction and no
+check.
 
 The same issue, strengthened:
 
