@@ -1,0 +1,9 @@
+diff --git a/src/worker.mjs b/src/worker.mjs
+--- a/src/worker.mjs
++++ b/src/worker.mjs
+@@ -1,4 +1,4 @@
+-// Prompt: prompts/worker.prompt.md
++// Prompt: prompts/does-not-exist.prompt.md
+ export function runWorker(vault, audit, key, nextValue) {
+   const existing = vault.read(key);
+   if (nextValue !== undefined) vault.write(key, nextValue);
