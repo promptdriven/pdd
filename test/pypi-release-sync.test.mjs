@@ -115,17 +115,17 @@ test('#3498 + #3677 release workflow builds once, verifies exact artifacts, publ
   assert.match(workflow, /pdd-codex" --pdd-help/);
   assert.match(workflow, /pdd-claude" --pdd-help/);
   assert.match(workflow, /lint --local/);
-  // Single shared `publish` job behind `environment: pypi-publish` publishing exact tested tarball + wheel.
-  assert.match(workflow, /^\s*publish:\s*\n[\s\S]*?environment:\s*pypi-publish/m);
-  assert.doesNotMatch(workflow, /^\s*publish-npm:/m);
-  assert.doesNotMatch(workflow, /^\s*publish-pypi:/m);
+  // Separate `publish-npm` (automatic after verify) and `publish-pypi` (behind `environment: pypi-publish`), both using exact tested artifacts.
+  assert.match(workflow, /^\s*publish-npm:\s*\n/m);
+  assert.match(workflow, /^\s*publish-pypi:\s*\n[\s\S]*?environment:\s*pypi-publish/m);
   assert.match(workflow, /npm publish "\$tarball"[\s\S]*--access public --provenance --tag "\$DIST_TAG"/);
   assert.match(workflow, /npm ci --ignore-scripts/);
   assert.doesNotMatch(workflow, /ci-install\.mjs/);
   assert.match(workflow, /pypa\/gh-action-pypi-publish@release\/v1/);
   assert.match(workflow, /packages-dir:\s*dist\/pypi\//);
   assert.match(workflow, /password:\s*\$\{\{\s*secrets\.PYPI_API_TOKEN\s*\}\}[\s\S]*?attestations:\s*false/);
-  assert.match(workflow, /verify-published:/);
+  assert.match(workflow, /verify-published-npm:/);
+  assert.match(workflow, /verify-published-pypi:/);
   assert.match(workflow, /os:\s*\[ubuntu-latest,\s*macos-latest\]/);
   assert.doesNotMatch(workflow, /uses:\s*[^\s@]+@[0-9a-f]{40}/, 'no new action SHA hash pins');
 });
