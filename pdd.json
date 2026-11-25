@@ -26,13 +26,15 @@
         "when": [
           "src/core/lint/**",
           "src/core/prove.mjs",
+          "src/core/prove-coverage.mjs",
+          "src/core/prove-mutation.mjs",
           "src/core/verify-paths.mjs",
           "src/core/formal-verify.mjs",
           "src/core/polyglot-runners.mjs",
           "src/repo-hygiene-lint.mjs",
           "src/story-lint.mjs"
         ],
-        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/core/lint/*.test.mjs test/core/prove.test.mjs test/core/formal-verify.test.mjs"
+        "run": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/core/lint/*.test.mjs test/core/prove.test.mjs test/core/formal-verify.test.mjs test/core/prove-coverage.test.mjs test/core/prove-mutation.test.mjs test/core/prove-coverage-mutation.formal.test.mjs"
       },
       {
         "id": "accounts",

@@ -117,9 +117,11 @@ const routes = [
       form(`pdd ${lint} --emit-v1 [STORY...] [--write] [--json]`, 'Expand compact scenario JSON files to full scenario JSON offline (--write updates each selected test file on disk).'),
       form(`pdd ${lint} --bind-criteria [STORY...] [--json]`, 'Bind matching Story acceptance criteria in selected test files to current content-hash IDs on disk; 0 AI/network calls.')] },
   { id: 'prove', prefix: ['prove'], local: 'prove', operands: [],
-    options: [{ name: '--base', kind: 'text' }, { name: '--test', kind: 'text' }, { name: '--expect', kind: 'text' }, { name: '--overlay', kind: 'text' }, { name: '--setup', kind: 'text' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--json', kind: 'flag' }],
+    options: [{ name: '--base', kind: 'text' }, { name: '--test', kind: 'text' }, { name: '--expect', kind: 'text' }, { name: '--overlay', kind: 'text' }, { name: '--setup', kind: 'text' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--coverage', kind: 'flag' }, { name: '--mutation-check', kind: 'flag' }, { name: '--json', kind: 'flag' }],
     forms: [
       form('pdd prove [--base REF] [--timeout MIN] [--json]', 'Run offline lint, diff checks, repository tests, and merge-base trusted verify.paths recipes against REF (default timeout: 10 min per step). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
+      form('pdd prove --coverage [--base REF] [--timeout MIN] [--json]', 'Measure per-file and PR diff-line coverage split across formal, vectors, and all suites using real repository coverage tools (Node/V8, coverage.py, or go test -cover) without modifying the working tree. May be combined with --mutation-check.'),
+      form('pdd prove --mutation-check [--base REF] [--timeout MIN] [--json]', 'Apply 1 to 3 deterministic conditional/return guard mutations on touched production files inside an isolated temporary copy, run the formal suite, ignore syntax-only crashes, and return Not proved (exit 3) if a formal-covered guard mutation survives. May be combined with --coverage.'),
       form('pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]', 'Run isolated base-vs-head bug-contrast proof in temporary worktrees: proves CMD fails on base with TEXT and passes on head (default timeout: 10 min per phase; --overlay adds extra files alongside changed tests). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
     ] },
   // Direct Prompt Interpreter execution (empty prefix): pdd [OPTIONS] <PROMPT.md|STORY|.> [ARGS...]

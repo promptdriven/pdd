@@ -5,7 +5,7 @@ Own `src/core/formal-verify.mjs` and `src/core/polyglot-runners.mjs` (Layer-1 Co
 ## Domain decisions
 
 - **Formal file discovery & invariant triggers (`discoverFormalScope`):**
-  - Discover formal test files matching `FORMAL_TEST_FILE_RE`: `*.formal.test.*`, `test_formal_*.py`, `*_formal_test.py`, `formal/test_*.py`, `*_formal_test.go`, and `tests/*formal*.rs` (strictly canonical repo-relative regular files; symlinks refused).
+  - Discover formal test files matching `FORMAL_TEST_FILE_RE`: `*.formal.test.*`, `test_formal_*.py`, `*_formal_test.py`, `formal/test_*.py`, `formal/*_test.py`, `*_formal_test.go`, and `tests/*formal*.rs` (strictly canonical repo-relative regular files; symlinks refused).
   - Identify touched production modules (`PRODUCTION_CODE_FILE_RE` excluding tests, fixtures, docs, prompts, Stories, specs, and standalone models), touched formal files, and existing repo formal files that statically import/reference any touched production module (`linkedFormalFiles`).
   - Inspect touched `.prompt.md` and Story `.md` files for explicit invariant rules (`## Rules to check` in Stories and invariant-related `## Domain decisions` matching `INVARIANT_DOMAIN_KEYWORD_RE` in prompts) (`invariantRules`, `invariantSources`).
   - When zero formal files apply, zero explicit invariant rules were touched, and no merge-base `verify.formal_command` is configured, return `applicable: false` (`state: "not-applicable"`, `tier: "not-applicable"`, `summary: "Formal: not-applicable"`) so UI, docs, and glue PRs incur zero busywork.
@@ -21,18 +21,27 @@ Own `src/core/formal-verify.mjs` and `src/core/polyglot-runners.mjs` (Layer-1 Co
   - Dispatch polyglot runners cleanly with `--` operand separators and `--no-install` for `npx`: JS `node:test` (`node --test-reporter=tap -- <file>`), Vitest (`npx --no-install vitest run --reporter=junit --outputFile=<tmp> -- <file>`), Python (`<untracked .venv/bin/pytest or pytest> -v --junitxml=<tmp> -- <file>` with `PYTHONPATH=src` when `src/` exists and `PYTHONDONTWRITEBYTECODE=1`; git-tracked `.venv`/`venv` binaries are strictly refused), Go (`go test -json`), Rust (`cargo test`), and optional merge-base trusted `verify.formal_command` (with `PDD_FORMAL_FILE` set per file so CrossHair, Kani, Dafny, C++/Java/Ruby/Swift tools work seamlessly).
   - Parse real structured test output (TAP v13, JUnit XML, `go test -json`, Cargo, or verbose fallback). Fail closed on non-zero exit codes, failing assertions, zero executed tests, skipped/todo tests, timeouts, or missing runner binaries.
 - **Tier classification & formal mutation control (`verifyFormalMutationControl`):**
-  - `proved_solver_code` requires: (1) all formal files pass with `> 0` executed tests and `0` skipped, (2) production modules imported/referenced covering required `targetModules`, (3) code-bound solver evidence or verified `verify.formal_command`, AND (4) a verified failing production-code mutation control (`failedOnMutation: true`, rejecting syntax/import/compile-only crashes and never substituting scenario `test_vectors`).
-  - `bounded` applies when passing formal/property tests import real production modules (Tier 1 PBT / bounded grid) without solver+mutation-control `proved_solver_code` evidence.
-  - `proved_spec_model` applies whenever passing formal files import zero production modules; it NEVER satisfies code verification (`satisfiesCodeVerification: false`) and REFUSES any `proved_solver_code` or `proved` claim.
+
+| Formal tier | Condition | Satisfies code verification? |
+| --- | --- | --- |
+| `proved_solver_code` | Passing (`>0` tests, `0` skipped) + code-bound covering targets + code-bound solver/`formal_command` + failing non-syntax production-code mutation control | Yes |
+| `bounded` | Passing (`>0` tests, `0` skipped) + code-bound importing real production modules (Tier 1 PBT / seeded PRNG / finite grid) | Yes |
+| `proved_spec_model` | Passing formal file imports zero production modules (including standalone Z3 models) | No (refuses `proved_solver_code` / `proved`) |
+| `missing` | Invariant rules touched with 0 formal files and no positive claim | No (non-blocking advisory) |
+| `not-applicable` | 0 formal files, 0 invariant rules, no `verify.formal_command` | Yes (zero busywork) |
+
   - `verifyFormalMutationControl` executes the formal suite in a disposable temp copy (never mutating the caller checkout, rejecting symlinks and non-regular files, skipping bytecode/cache directories and files such as `__pycache__`, `.pytest_cache`, and `*.pyc` so same-second same-length mutations never execute stale cached bytecode, and resolving repo `.venv/bin/pytest` from the uncopied real root without symlinking `.venv`) with an injected production-code mutation and verifies at least one assertion fails cleanly (rejecting syntax/import/build-only crashes).
 
 ## Public contract
 
 - `FORMAL_TEST_FILE_RE`, `PRODUCTION_CODE_FILE_RE`, `NON_PRODUCTION_PROOF_PATH_RE`.
 - `resolvePytestBinary(root)` → repo-local non-symlink, non-git-tracked `.venv/bin/pytest` (or `venv/bin/pytest`) when present, else `"pytest"`.
+- `resolvePythonBinary(root)` → repo-local untracked `.venv/bin/python3` / `.venv/bin/python` (or `venv/bin/...`) inside non-symlink `.venv`/`venv` directories (allowing standard venv interpreter symlinks to system Python while refusing symlinked venv directories and git-tracked binaries), else `"python3"`.
+- `lexCStyleSource(source, { rust, go })`, `lexPythonSource(source)` → comment-stripped, string-isolated (and JS regex-isolated when `!rust && !go`) `{ codeOnly, sentinelCode, strings }` views preserving exact character length (`codeOnly.length === source.length`) so byte/UTF-16 offsets remain aligned.
+- `chooseRunnerForFormalFile(root, filePath)`, `execChildAsync(command, args, opts, signalCtrl)`, `detectSignalInterruption(proc)`, `killProcessTree(child, sig)`, `runIsolatedFormalFile({ root, runnerRoot, filePath, formalCommand, timeoutMs, env }, ports)`, `runIsolatedFormalFileAsync(input, ports, signalCtrl)` → isolated per-file formal runner helpers shared with `prove-coverage.mjs` and `prove-mutation.mjs`.
 - `discoverFormalScope({ root, touchedFiles, allFiles, formalCommand })` → `{ applicable, touchedFormalFiles, linkedFormalFiles, formalFiles, touchedProdFiles, invariantRules, invariantSources, allRepoFiles }`.
 - `inspectFormalFileBinding({ root, filePath, targetModules, allRepoFiles })` → `{ file, language, importedProductionModules, coversTargets, codeBound, hasSolverImport, hasCodeBoundSolver, hasPropertyTesting, isStandaloneZ3, tier, satisfiesCodeVerification, reason }`.
-- `runFormalVerification({ root, touchedFiles, allFiles, baseVerify, claimedTier, mutationControl, targetModules, timeoutMs, env }, ports)` → `{ applicable, ok, state, tier, satisfiesCodeVerification, files, formalProofs, targetModules, invariantRules, mutationControl, errors, notProvedReasons, advisory, summary }`.
+- `runFormalVerification({ root, touchedFiles, allFiles, baseVerify, claimedTier, mutationControl, targetModules, timeoutMs, env }, ports)` and async `runFormalVerificationAsync(input, ports, signalCtrl)` → `{ applicable, ok, state, tier, satisfiesCodeVerification, files, formalProofs, targetModules, invariantRules, mutationControl, errors, notProvedReasons, advisory, summary }`.
 - `verifyFormalMutationControl({ root, targetFile, mutatedContent, formalFiles, baseVerify, timeoutMs, env }, ports)` → `{ executed, failedOnMutation, syntaxOnlyCrash, mutatedProductionCode, exitCode, summary }`.
 
 ## Dependencies

@@ -1,0 +1,310 @@
+{
+  "entry_path": "prompts/cli/prove-coverage.prompt.md",
+  "initial_world": {},
+  "simulation": {},
+  "steps": [
+    {
+      "id": "parse-diff-hunks-and-ignore-deletions",
+      "entry_path": "prompts/cli/prove-coverage.prompt.md",
+      "op": "parseUnifiedDiffAddedLines",
+      "input": {
+        "diffText": "diff --git a/src/ledger.mjs b/src/ledger.mjs\n--- a/src/ledger.mjs\n+++ b/src/ledger.mjs\n@@ -1,0 +2,2 @@\n+  if (amount < 0) return false;\n+  if (amount > limit) return false;\n@@ -10,2 +12,0 @@\n@@ -14,1 +14,1 @@\n+  return true;\n"
+      },
+      "checks": {
+        "2": [
+          ["result", "/files/src~1ledger.mjs", "=", [2, 3, 14]]
+        ]
+      }
+    },
+    {
+      "id": "coverage-split-exposes-uncovered-and-unimported-diff-lines",
+      "entry_path": "prompts/cli/prove-coverage.prompt.md",
+      "op": "aggregateCoverageSplit",
+      "input": {
+        "tool": "node-v8",
+        "diffLinesByFile": {
+          "src/ledger.mjs": [2, 3, 5],
+          "src/untested.mjs": [1, 2]
+        },
+        "fallbackExecutableLinesByFile": {
+          "src/untested.mjs": [1, 2]
+        },
+        "suites": {
+          "formal": {
+            "status": "ok",
+            "testFiles": ["test/ledger.formal.test.mjs"],
+            "command": "node --test test/ledger.formal.test.mjs",
+            "files": {
+              "src/ledger.mjs": {
+                "executedLines": [1, 2, 5],
+                "missedLines": [3, 4],
+                "executableLines": [1, 2, 3, 4, 5],
+                "totalBranches": 2,
+                "coveredBranches": 1
+              }
+            }
+          },
+          "vectors": {
+            "status": "ok",
+            "testFiles": ["test/ledger.vectors.test.mjs"],
+            "command": "node --test test/ledger.vectors.test.mjs",
+            "files": {
+              "src/ledger.mjs": {
+                "executedLines": [1, 2, 4],
+                "missedLines": [3, 5],
+                "executableLines": [1, 2, 3, 4, 5],
+                "totalBranches": 2,
+                "coveredBranches": 1
+              }
+            }
+          },
+          "all": {
+            "status": "ok",
+            "testFiles": [],
+            "command": "npm test",
+            "files": {
+              "src/ledger.mjs": {
+                "executedLines": [1, 2, 4, 5],
+                "missedLines": [3],
+                "executableLines": [1, 2, 3, 4, 5],
+                "totalBranches": 2,
+                "coveredBranches": 1
+              }
+            }
+          }
+        }
+      },
+      "checks": {
+        "1": [
+          ["result", "/status", "=", "ok"],
+          ["result", "/suites/formal/diff/covered", "=", 2],
+          ["result", "/suites/formal/diff/missed", "=", 3],
+          ["result", "/suites/vectors/diff/covered", "=", 1],
+          ["result", "/suites/all/diff/covered", "=", 2],
+          ["result", "/unionFormalVectors/formalOnlyLines", "=", 1],
+          ["result", "/unionFormalVectors/vectorsOnlyLines", "=", 1],
+          ["result", "/uncoveredDiffLines/0/file", "=", "src/ledger.mjs"],
+          ["result", "/uncoveredDiffLines/0/lines", "=", [3]]
+        ],
+        "2": [
+          ["result", "/suites/all/files/src~1untested.mjs/diffPct", "=", 0],
+          ["result", "/suites/all/files/src~1untested.mjs/diffMissedLines", "=", [1, 2]],
+          ["result", "/uncoveredDiffLines/1/file", "=", "src/untested.mjs"],
+          ["result", "/uncoveredDiffLines/1/lines", "=", [1, 2]]
+        ]
+      }
+    },
+    {
+      "id": "mutation-selects-formal-covered-guards-deterministically",
+      "entry_path": "prompts/cli/prove-mutation.prompt.md",
+      "op": "selectGuardMutations",
+      "input": {
+        "maxMutations": 3,
+        "formalCoveredLines": {
+          "src/ledger.mjs": [2, 5],
+          "src/tax.mjs": [4]
+        },
+        "candidates": [
+          {
+            "id": "C1",
+            "file": "src/ledger.mjs",
+            "line": 9,
+            "kind": "comparison-flip",
+            "description": "Flip `<` to `>=` at src/ledger.mjs:9",
+            "original": "if (x < 1) return 0;",
+            "mutated": "if (x >= 1) return 0;",
+            "mutatedContent": "m1"
+          },
+          {
+            "id": "C2",
+            "file": "src/ledger.mjs",
+            "line": 2,
+            "kind": "comparison-flip",
+            "description": "Flip `<` to `>=` at src/ledger.mjs:2",
+            "original": "if (amount < 0) return false;",
+            "mutated": "if (amount >= 0) return false;",
+            "mutatedContent": "m2"
+          },
+          {
+            "id": "C3",
+            "file": "src/ledger.mjs",
+            "line": 5,
+            "kind": "return-flip",
+            "description": "Flip `return true` to `return false` at src/ledger.mjs:5",
+            "original": "return true;",
+            "mutated": "return false;",
+            "mutatedContent": "m3"
+          },
+          {
+            "id": "C4",
+            "file": "src/tax.mjs",
+            "line": 4,
+            "kind": "comparison-flip",
+            "description": "Flip `>` to `<=` at src/tax.mjs:4",
+            "original": "if (rate > 100) throw new Error();",
+            "mutated": "if (rate <= 100) throw new Error();",
+            "mutatedContent": "m4"
+          }
+        ]
+      },
+      "checks": {
+        "3": [
+          ["result", "/selected", "count", 3],
+          ["result", "/selected/0/file", "=", "src/ledger.mjs"],
+          ["result", "/selected/0/line", "=", 2],
+          ["result", "/selected/0/formalCovered", "=", true],
+          ["result", "/selected/1/file", "=", "src/tax.mjs"],
+          ["result", "/selected/1/line", "=", 4],
+          ["result", "/selected/1/formalCovered", "=", true],
+          ["result", "/selected/2/file", "=", "src/ledger.mjs"],
+          ["result", "/selected/2/line", "=", 5]
+        ]
+      }
+    },
+    {
+      "id": "mutation-killed-proves-cleanly-and-stays-isolated",
+      "entry_path": "prompts/cli/prove-mutation.prompt.md",
+      "op": "evaluateMutationOutcome",
+      "input": {
+        "formalFiles": ["test/ledger.formal.test.mjs"],
+        "results": [
+          {
+            "id": "M1",
+            "file": "src/ledger.mjs",
+            "line": 2,
+            "kind": "comparison-flip",
+            "description": "Flip `<` to `>=` at src/ledger.mjs:2",
+            "original": "if (amount < 0) return false;",
+            "mutated": "if (amount >= 0) return false;",
+            "formalCovered": true,
+            "executed": true,
+            "failedOnMutation": true,
+            "syntaxOnlyCrash": false,
+            "exitCode": 1,
+            "failedFile": "test/ledger.formal.test.mjs",
+            "summary": "0/1 passed, 1 failed"
+          },
+          {
+            "id": "M2",
+            "file": "src/ledger.mjs",
+            "line": 5,
+            "kind": "return-flip",
+            "description": "Flip `return true` to `return false` at src/ledger.mjs:5",
+            "original": "return true;",
+            "mutated": "return false;",
+            "formalCovered": true,
+            "executed": true,
+            "failedOnMutation": true,
+            "syntaxOnlyCrash": false,
+            "exitCode": 1,
+            "failedFile": "test/ledger.formal.test.mjs",
+            "summary": "0/1 passed, 1 failed"
+          }
+        ]
+      },
+      "checks": {
+        "3": [
+          ["result", "/status", "=", "proved"],
+          ["result", "/ok", "=", true],
+          ["result", "/attempted", "=", 2],
+          ["result", "/killed", "=", 2],
+          ["result", "/survived", "=", 0],
+          ["result", "/killRate", "=", 100]
+        ],
+        "5": [
+          ["result", "/isolated", "=", true],
+          ["result", "/workingTreeMutated", "=", false]
+        ]
+      }
+    },
+    {
+      "id": "mutation-survived-and-syntax-crash-ignored",
+      "entry_path": "prompts/cli/prove-mutation.prompt.md",
+      "op": "evaluateMutationOutcome",
+      "input": {
+        "formalFiles": ["test/ledger.formal.test.mjs"],
+        "results": [
+          {
+            "id": "M1",
+            "file": "src/ledger.mjs",
+            "line": 4,
+            "kind": "comparison-flip",
+            "description": "Flip `>` to `<=` at src/ledger.mjs:4",
+            "original": "if (amount > limit) return false;",
+            "mutated": "if (amount <= limit) return false;",
+            "formalCovered": true,
+            "executed": true,
+            "failedOnMutation": false,
+            "syntaxOnlyCrash": false,
+            "exitCode": 0,
+            "failedFile": null,
+            "summary": "1/1 passed"
+          },
+          {
+            "id": "M2",
+            "file": "src/ledger.mjs",
+            "line": 6,
+            "kind": "guard-negate",
+            "description": "Negate guard at src/ledger.mjs:6",
+            "original": "if (ready) return true;",
+            "mutated": "if (!(ready) return true;",
+            "formalCovered": true,
+            "executed": true,
+            "failedOnMutation": false,
+            "syntaxOnlyCrash": true,
+            "exitCode": 1,
+            "failedFile": null,
+            "summary": "SyntaxError"
+          }
+        ]
+      },
+      "checks": {
+        "4": [
+          ["result", "/status", "=", "not-proved"],
+          ["result", "/ok", "=", false],
+          ["result", "/killed", "=", 0],
+          ["result", "/survived", "=", 1],
+          ["result", "/syntaxErrors", "=", 1],
+          ["result", "/killRate", "=", 0],
+          ["result", "/notProvedReasons/0", "contains", "[mutation-survived]"],
+          ["result", "/notProvedReasons/0", "contains", "src/ledger.mjs:4"]
+        ]
+      }
+    },
+    {
+      "id": "reject-opt-in-flags-with-bug-contrast",
+      "entry_path": "prompts/cli/prove-coverage.prompt.md",
+      "op": "validateProveOptInFlags",
+      "input": {
+        "coverage": true,
+        "mutationCheck": false,
+        "test": "npm test",
+        "expect": "ERR"
+      },
+      "checks": {
+        "6": [
+          ["result", "/ok", "=", false],
+          ["result", "/exitCode", "=", 2],
+          ["result", "/error", "contains", "--coverage"]
+        ]
+      }
+    },
+    {
+      "id": "reject-mutation-check-with-bug-contrast",
+      "entry_path": "prompts/cli/prove-coverage.prompt.md",
+      "op": "validateProveOptInFlags",
+      "input": {
+        "coverage": false,
+        "mutationCheck": true,
+        "test": "npm test"
+      },
+      "checks": {
+        "6": [
+          ["result", "/ok", "=", false],
+          ["result", "/exitCode", "=", 2],
+          ["result", "/error", "contains", "--mutation-check"]
+        ]
+      }
+    }
+  ]
+}

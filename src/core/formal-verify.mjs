@@ -4,7 +4,7 @@
 // discovery, static multi-language code-binding inspection, per-file subprocess isolation,
 // tier classification (proved_solver_code | bounded | proved_spec_model | not-applicable | missing),
 // and disposable-copy production-code mutation control.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -38,11 +38,12 @@ import {
   parseTestSummaryOutput,
   parseVitestVerboseReport,
   resolvePytestBinary,
+  resolvePythonBinary,
 } from './polyglot-runners.mjs';
 
-export { resolvePytestBinary };
+export { resolvePytestBinary, resolvePythonBinary };
 
-export const FORMAL_TEST_FILE_RE = /(?:\.formal\.test\.[^/]+$|(?:^|\/)(?:test_formal_[^/]+|[^/]+_formal_test)\.py$|(?:^|\/)formal\/test_[^/]+\.py$|_formal_test\.go$|(?:^|\/)tests\/[^/]*formal[^/]*\.rs$)/i;
+export const FORMAL_TEST_FILE_RE = /(?:\.formal\.test\.[^/]+$|(?:^|\/)(?:test_formal_[^/]+|[^/]+_formal_test)\.py$|(?:^|\/)formal\/(?:test_[^/]+|[^/]+_test)\.py$|_formal_test\.go$|(?:^|\/)tests\/[^/]*formal[^/]*\.rs$)/i;
 export const PRODUCTION_CODE_FILE_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|go|rs|java|kt|rb|c|cc|cpp|h|hpp|cs|swift|scala|php|sh)$/i;
 export const NON_PRODUCTION_PROOF_PATH_RE = new RegExp(`(?:^(?:prompts|docs|user_stories|pdd/stories|contracts|specs?|models?|fixtures|examples)/|\\.prompt\\.md$|\\.mdx?$|^(?:${TEST_DIR_WITH_SPEC_PATTERN})/|\\.(?:test|spec)\\.[a-z0-9]+$|_test\\.(?:go|rs|py)$|(?:^|/)test_[^/]+\\.py$|(?:^|/)(?:__pycache__|\\.pytest_cache|node_modules)/)`, 'i');
 
@@ -123,12 +124,15 @@ function listRepoFilesSafe(realRoot, providedFiles = null) {
  * Returns `codeOnly` (all string interiors blanked) and `sentinelCode` (quoted literals replaced
  * by `__PDD_STR_<idx>__` placeholders pointing into `strings[]`) so strings/comments can never spoof imports.
  */
-function lexCStyleSource(source, { rust = false, go = false } = {}) {
+export function lexCStyleSource(source, { rust = false, go = false } = {}) {
   const s = String(source ?? '');
   const strings = [];
   let codeOnly = '';
   let sentinelCode = '';
   let i = 0;
+  let prev = '';
+
+  const canStartJsRegex = () => !prev || '(=:,[!&|?{};+*%<>^~'.includes(prev) || /^(?:return|throw|case|in|of|typeof|void|delete|await|yield)$/.test(prev);
 
   const pushString = (rawText, value, quote) => {
     const idx = strings.length;
@@ -141,15 +145,18 @@ function lexCStyleSource(source, { rust = false, go = false } = {}) {
     } else {
       sentinelCode += nlMask;
     }
+    prev = 's';
   };
 
   while (i < s.length) {
     const ch = s[i], next = s[i + 1];
     if (ch === '/' && next === '/') {
       const end = s.indexOf('\n', i + 2);
+      const slice = end < 0 ? s.slice(i) : s.slice(i, end);
+      const pad = ' '.repeat(slice.length);
+      codeOnly += pad + (end < 0 ? '' : '\n');
+      sentinelCode += pad + (end < 0 ? '' : '\n');
       if (end < 0) break;
-      codeOnly += '\n';
-      sentinelCode += '\n';
       i = end + 1;
       continue;
     }
@@ -162,6 +169,28 @@ function lexCStyleSource(source, { rust = false, go = false } = {}) {
       if (end < 0) break;
       i = end + 2;
       continue;
+    }
+    // JS/TS regex literal (handled before string quotes so `/['"]/` never desynchronizes string lexing).
+    if (!rust && !go && ch === '/' && next !== '/' && next !== '*' && canStartJsRegex()) {
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (j < s.length && s[j] !== '\n') {
+        if (s[j] === '\\') { j += 2; continue; }
+        if (s[j] === '[') inClass = true;
+        else if (s[j] === ']') inClass = false;
+        else if (s[j] === '/' && !inClass) { closed = true; j += 1; break; }
+        j += 1;
+      }
+      if (closed) {
+        while (j < s.length && /[A-Za-z]/.test(s[j])) j += 1;
+        const pad = ' '.repeat(j - i);
+        codeOnly += pad;
+        sentinelCode += pad;
+        prev = 'r';
+        i = j;
+        continue;
+      }
     }
     // Rust raw string literals: r"...", r#"..."#, br#"..."#, cr#"..."#
     if (rust && (ch === 'r' || ((ch === 'b' || ch === 'c') && next === 'r'))) {
@@ -193,13 +222,19 @@ function lexCStyleSource(source, { rust = false, go = false } = {}) {
       }
       codeOnly += ch;
       sentinelCode += ch;
+      prev = ch;
       i += 1;
       continue;
     }
     if (ch === '\'' || ch === '"' || ch === '`') {
       let j = i + 1;
       while (j < s.length) {
-        if (s[j] === '\\' && !(go && ch === '`')) { j += 2; continue; }
+        if (s[j] === '\\' && !(go && ch === '`')) {
+          if (s[j + 1] === '\r' && s[j + 2] === '\n') { j += 3; continue; }
+          j += 2;
+          continue;
+        }
+        if (s[j] === '\n' && !rust && ch !== '`') break;
         if (s[j] === ch) { j += 1; break; }
         j += 1;
       }
@@ -209,8 +244,19 @@ function lexCStyleSource(source, { rust = false, go = false } = {}) {
       i = j;
       continue;
     }
+    if (!rust && !go && /[A-Za-z_$]/.test(ch)) {
+      let j = i + 1;
+      while (j < s.length && /[A-Za-z0-9_$]/.test(s[j])) j += 1;
+      const ident = s.slice(i, j);
+      codeOnly += ident;
+      sentinelCode += ident;
+      prev = ident;
+      i = j;
+      continue;
+    }
     codeOnly += ch;
     sentinelCode += ch;
+    if (!/\s/.test(ch)) prev = ch;
     i += 1;
   }
   return { codeOnly, sentinelCode, strings };
@@ -221,7 +267,7 @@ function lexCStyleSource(source, { rust = false, go = false } = {}) {
  * Properly handles `#` comments, triple-quoted strings/docstrings, and backslash line-continued strings
  * so commented-out imports, docstrings, and string literals can never spoof imports.
  */
-function lexPythonSource(source) {
+export function lexPythonSource(source) {
   const s = String(source ?? '');
   const strings = [];
   let codeOnly = '';
@@ -240,9 +286,11 @@ function lexPythonSource(source) {
     const ch = s[i];
     if (ch === '#') {
       const end = s.indexOf('\n', i + 1);
+      const slice = end < 0 ? s.slice(i) : s.slice(i, end);
+      const pad = ' '.repeat(slice.length);
+      codeOnly += pad + (end < 0 ? '' : '\n');
+      sentinelCode += pad + (end < 0 ? '' : '\n');
       if (end < 0) break;
-      codeOnly += '\n';
-      sentinelCode += '\n';
       i = end + 1;
       continue;
     }
@@ -748,7 +796,7 @@ export function discoverFormalScope({ root, touchedFiles = [], allFiles = null, 
   };
 }
 
-function chooseRunnerForFormalFile(root, filePath) {
+export function chooseRunnerForFormalFile(root, filePath) {
   if (PY_EXT_RE.test(filePath)) return 'pytest';
   if (GO_EXT_RE.test(filePath)) return 'go';
   if (RS_EXT_RE.test(filePath)) return 'cargo';
@@ -799,119 +847,278 @@ function parseFormalRunOutput({ kind, stdout, stderr, junitPath }) {
   return { ok: false, complete: false, format: kind ?? 'unknown', cases: [], counts: null, reason: 'unparsed_output' };
 }
 
-function runIsolatedFormalFile({ root, runnerRoot = null, filePath, formalCommand, timeoutMs, env }, ports = {}) {
-  const runner = ports.spawnSync ?? spawnSync;
+const INTERRUPT_SIGNALS = new Set(['SIGINT', 'SIGTERM', 'SIGHUP']);
+
+export function detectSignalInterruption(proc) {
+  if (!proc) return null;
+  if (proc.interruptedBy) return proc.interruptedBy;
+  if (!proc.timedOut && proc.signal && INTERRUPT_SIGNALS.has(proc.signal)) return proc.signal;
+  const code = typeof proc.exitCode === 'number' ? proc.exitCode : (typeof proc.status === 'number' ? proc.status : null);
+  if (!proc.timedOut && code === 130) return 'SIGINT';
+  if (!proc.timedOut && code === 143) return 'SIGTERM';
+  if (!proc.timedOut && code === 129) return 'SIGHUP';
+  return null;
+}
+
+export function killProcessTree(child, sig = 'SIGTERM') {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const pid = child.pid;
+  if (pid && process.platform !== 'win32') {
+    try { process.kill(-pid, sig); return; } catch {}
+  }
+  try { child.kill(sig); } catch {}
+}
+
+export function execChildAsync(command, args, opts = {}, signalCtrl = null) {
+  if (signalCtrl?.signal) {
+    return Promise.resolve({
+      status: null,
+      signal: signalCtrl.signal,
+      interruptedBy: signalCtrl.signal,
+      stdout: '',
+      stderr: '',
+      error: null,
+    });
+  }
+  return new Promise(resolve => {
+    const {
+      cwd,
+      env,
+      shell = false,
+      timeout = 0,
+      maxBuffer = 16 * 1024 * 1024,
+    } = opts ?? {};
+    const spawnOpts = {
+      cwd,
+      env,
+      shell,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    };
+    let child;
+    try {
+      child = Array.isArray(args) ? spawn(command, args, spawnOpts) : spawn(command, spawnOpts);
+    } catch (err) {
+      resolve({ status: null, signal: null, interruptedBy: null, stdout: '', stderr: '', error: err });
+      return;
+    }
+
+    signalCtrl?.activeChildren?.add(child);
+    let stdout = '';
+    let stderr = '';
+    let outBytes = 0;
+    let errBytes = 0;
+    let settled = false;
+    let timedOut = false;
+    let spawnError = null;
+    let timeoutTimer = null;
+    let killTimer = null;
+
+    const finish = (code, sig) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
+      signalCtrl?.activeChildren?.delete(child);
+      const error = timedOut
+        ? Object.assign(new Error(`Command timed out after ${timeout}ms`), { code: 'ETIMEDOUT' })
+        : spawnError;
+      const interruptedBy = !timedOut ? (signalCtrl?.signal ?? (sig && INTERRUPT_SIGNALS.has(sig) ? sig : null)) : null;
+      resolve({
+        status: typeof code === 'number' ? code : null,
+        signal: sig ?? null,
+        interruptedBy,
+        stdout,
+        stderr,
+        error,
+      });
+    };
+
+    if (child.stdout) {
+      child.stdout.on('data', chunk => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+        if (outBytes < maxBuffer) {
+          const slice = buf.subarray(0, maxBuffer - outBytes);
+          stdout += slice.toString('utf8');
+          outBytes += slice.length;
+        }
+      });
+    }
+    if (child.stderr) {
+      child.stderr.on('data', chunk => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+        if (errBytes < maxBuffer) {
+          const slice = buf.subarray(0, maxBuffer - errBytes);
+          stderr += slice.toString('utf8');
+          errBytes += slice.length;
+        }
+      });
+    }
+
+    if (timeout > 0) {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        killProcessTree(child, 'SIGTERM');
+        killTimer = setTimeout(() => killProcessTree(child, 'SIGKILL'), 200);
+        killTimer.unref?.();
+      }, timeout);
+      timeoutTimer.unref?.();
+    }
+
+    child.on('error', err => {
+      spawnError = err;
+      finish(null, null);
+    });
+    child.on('close', (code, sig) => finish(code, sig));
+  });
+}
+
+function prepareFormalInvocation({ root, runnerRoot = null, filePath, formalCommand, timeoutMs, env, tempDir }) {
   const scrubbedEnv = scrubChildEnv(env);
-  const started = Date.now();
-  const tempDir = mkdtempSync(join(tmpdir(), 'pdd-formal-run-'));
-  try {
-    let proc;
-    let commandDisplay = '';
-    let runnerKind = null;
-    let junitPath = null;
+  if (nonEmpty(formalCommand)) {
+    const commandDisplay = formalCommand.trim();
+    const cmdEnv = { ...scrubbedEnv, CI: 'true', ...(filePath ? { PDD_FORMAL_FILE: filePath } : {}) };
+    delete cmdEnv.NODE_TEST_CONTEXT;
+    delete cmdEnv.NODE_OPTIONS;
+    return {
+      ok: true,
+      runnerKind: 'formal-command',
+      commandDisplay,
+      junitPath: null,
+      bin: commandDisplay,
+      args: null,
+      spawnOpts: { cwd: root, env: cmdEnv, shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] },
+    };
+  }
+  const runnerKind = chooseRunnerForFormalFile(root, filePath);
+  if (!runnerKind) {
+    return {
+      ok: false,
+      earlyResult: {
+        file: filePath,
+        runnerKind: null,
+        command: null,
+        ok: false,
+        timedOut: false,
+        missingRunner: true,
+        exitCode: null,
+        signal: null,
+        interruptedBy: null,
+        durationMs: 0,
+        passed: 0,
+        failed: 0,
+        skipped: 0,
+        total: 0,
+        syntaxOnlyCrash: false,
+        summary: `No supported test runner found for "${filePath}".`,
+      },
+    };
+  }
+  const junitPath = (runnerKind === 'pytest' || runnerKind === 'vitest') ? join(tempDir, 'junit.xml') : null;
+  const pytestBin = runnerKind === 'pytest' ? resolvePytestBinary(runnerRoot ?? root) : null;
+  const inv = buildRunnerInvocation(runnerKind, { root, files: [filePath], junitPath, pytestBin });
+  const childEnv = buildRunnerEnv(runnerKind, root, { ...scrubbedEnv, CI: 'true' });
+  delete childEnv.NODE_TEST_CONTEXT;
+  delete childEnv.NODE_OPTIONS;
+  return {
+    ok: true,
+    runnerKind,
+    commandDisplay: `${inv.bin} ${inv.args.join(' ')}`,
+    junitPath,
+    bin: inv.bin,
+    args: inv.args,
+    spawnOpts: { cwd: root, env: childEnv, shell: false, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] },
+  };
+}
 
-    if (nonEmpty(formalCommand)) {
-      runnerKind = 'formal-command';
-      commandDisplay = formalCommand.trim();
-      const cmdEnv = { ...scrubbedEnv, CI: 'true', ...(filePath ? { PDD_FORMAL_FILE: filePath } : {}) };
-      delete cmdEnv.NODE_TEST_CONTEXT;
-      delete cmdEnv.NODE_OPTIONS;
-      proc = runner(commandDisplay, {
-        cwd: root,
-        env: cmdEnv,
-        shell: true,
-        encoding: 'utf8',
-        timeout: timeoutMs,
-        maxBuffer: 16 * 1024 * 1024,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    } else {
-      runnerKind = chooseRunnerForFormalFile(root, filePath);
-      if (!runnerKind) {
-        return {
-          file: filePath,
-          runnerKind: null,
-          command: null,
-          ok: false,
-          timedOut: false,
-          missingRunner: true,
-          exitCode: null,
-          durationMs: 0,
-          passed: 0,
-          failed: 0,
-          skipped: 0,
-          total: 0,
-          syntaxOnlyCrash: false,
-          summary: `No supported test runner found for "${filePath}".`,
-        };
-      }
-      if (runnerKind === 'pytest' || runnerKind === 'vitest') {
-        junitPath = join(tempDir, 'junit.xml');
-      }
-      const pytestBin = runnerKind === 'pytest' ? resolvePytestBinary(runnerRoot ?? root) : null;
-      const inv = buildRunnerInvocation(runnerKind, { root, files: [filePath], junitPath, pytestBin });
-      const childEnv = buildRunnerEnv(runnerKind, root, { ...scrubbedEnv, CI: 'true' });
-      delete childEnv.NODE_TEST_CONTEXT;
-      delete childEnv.NODE_OPTIONS;
-      commandDisplay = `${inv.bin} ${inv.args.join(' ')}`;
-      proc = runner(inv.bin, inv.args, {
-        cwd: root,
-        env: childEnv,
-        shell: false,
-        encoding: 'utf8',
-        timeout: timeoutMs,
-        maxBuffer: 16 * 1024 * 1024,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    }
-
-    const stdout = String(proc?.stdout ?? '');
-    const stderr = String(proc?.stderr ?? '');
-    const combined = `${stdout}\n${stderr}`;
-    const timedOut = proc?.error?.code === 'ETIMEDOUT';
-    const exitCode = typeof proc?.status === 'number' ? proc.status : null;
-    const signal = proc?.signal ?? null;
-    const missingRunner = Boolean(
-      !timedOut
-      && (proc?.error?.code === 'ENOENT' || exitCode === 127 || (exitCode !== 0 && MISSING_RUNNER_RE.test(proc?.error?.message ?? ''))),
-    );
-    const parsed = parseFormalRunOutput({ kind: runnerKind === 'formal-command' ? null : runnerKind, stdout, stderr, junitPath });
-    let total = parsed.ok && parsed.counts ? parsed.counts.total : 0;
-    let passed = parsed.ok && parsed.counts ? parsed.counts.passed : 0;
-    let failed = parsed.ok && parsed.counts ? parsed.counts.failed : 0;
-    let skipped = parsed.ok && parsed.counts ? parsed.counts.skipped : 0;
-    if (runnerKind === 'formal-command' && !parsed.ok) {
-      if (exitCode === 0 && !proc?.error && !signal) { total = 1; passed = 1; }
-      else if (!timedOut && !missingRunner) { total = 1; failed = 1; }
-    }
-    const hasAssertionFailure = /\b(?:AssertionError|ERR_ASSERTION|AssertionError:|assert\s+.*failed|FAILED\b.*assert)/i.test(combined);
-    const syntaxOnlyCrash = exitCode !== 0 && passed === 0 && !hasAssertionFailure && SYNTAX_CRASH_RE.test(combined);
-    const ok = exitCode === 0 && !proc?.error && !signal && !timedOut && !missingRunner && failed === 0 && skipped === 0 && total > 0;
-    const summaryText = causeText(
-      timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s`
+function finalizeFormalRun({ proc, filePath, runnerKind, commandDisplay, junitPath, timeoutMs, started }) {
+  const stdout = String(proc?.stdout ?? '');
+  const stderr = String(proc?.stderr ?? '');
+  const combined = `${stdout}\n${stderr}`;
+  const timedOut = proc?.error?.code === 'ETIMEDOUT';
+  const exitCode = typeof proc?.status === 'number' ? proc.status : null;
+  const signal = proc?.signal ?? null;
+  const interruptedBy = proc?.interruptedBy ?? detectSignalInterruption({ timedOut, signal, exitCode });
+  const missingRunner = Boolean(
+    !timedOut
+    && !interruptedBy
+    && (proc?.error?.code === 'ENOENT' || exitCode === 127 || (exitCode !== 0 && MISSING_RUNNER_RE.test(proc?.error?.message ?? ''))),
+  );
+  const parsed = parseFormalRunOutput({ kind: runnerKind === 'formal-command' ? null : runnerKind, stdout, stderr, junitPath });
+  let total = parsed.ok && parsed.counts ? parsed.counts.total : 0;
+  let passed = parsed.ok && parsed.counts ? parsed.counts.passed : 0;
+  let failed = parsed.ok && parsed.counts ? parsed.counts.failed : 0;
+  let skipped = parsed.ok && parsed.counts ? parsed.counts.skipped : 0;
+  if (runnerKind === 'formal-command' && !parsed.ok) {
+    if (exitCode === 0 && !proc?.error && !signal) { total = 1; passed = 1; }
+    else if (!timedOut && !missingRunner && !interruptedBy) { total = 1; failed = 1; }
+  }
+  const hasAssertionFailure = /\b(?:AssertionError|ERR_ASSERTION|AssertionError:|assert\s+.*failed|FAILED\b.*assert)/i.test(combined);
+  const syntaxOnlyCrash = exitCode !== 0 && !interruptedBy && passed === 0 && !hasAssertionFailure && SYNTAX_CRASH_RE.test(combined);
+  const ok = exitCode === 0 && !proc?.error && !signal && !interruptedBy && !timedOut && !missingRunner && failed === 0 && skipped === 0 && total > 0;
+  const summaryText = causeText(
+    interruptedBy ? `interrupted by signal ${interruptedBy}`
+      : timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s`
         : missingRunner ? (proc?.error?.message || `runner binary not found for ${runnerKind}`)
           : parsed.ok && parsed.counts ? `${passed}/${total} passed${failed ? `, ${failed} failed` : ''}${skipped ? `, ${skipped} skipped` : ''}`
             : (stderr.trim() || stdout.trim() || `exit ${exitCode ?? 'null'}`),
-    );
-    return {
-      file: filePath ?? '<formal_command>',
-      runnerKind,
-      command: commandDisplay,
-      ok,
-      timedOut,
-      missingRunner,
-      exitCode,
-      signal,
-      durationMs: Math.max(0, Date.now() - started),
-      passed,
-      failed,
-      skipped,
-      total,
-      syntaxOnlyCrash,
-      summary: summaryText,
-    };
+  );
+  return {
+    file: filePath ?? '<formal_command>',
+    runnerKind,
+    command: commandDisplay,
+    ok,
+    timedOut,
+    missingRunner,
+    exitCode,
+    signal,
+    interruptedBy,
+    durationMs: Math.max(0, Date.now() - started),
+    passed,
+    failed,
+    skipped,
+    total,
+    syntaxOnlyCrash,
+    summary: summaryText,
+  };
+}
+
+export function runIsolatedFormalFile({ root, runnerRoot = null, filePath, formalCommand, timeoutMs, env }, ports = {}) {
+  const runner = ports.spawnSync ?? spawnSync;
+  const started = Date.now();
+  const tempDir = mkdtempSync(join(tmpdir(), 'pdd-formal-run-'));
+  try {
+    const plan = prepareFormalInvocation({ root, runnerRoot, filePath, formalCommand, timeoutMs, env, tempDir });
+    if (!plan.ok) return plan.earlyResult;
+    const proc = Array.isArray(plan.args)
+      ? runner(plan.bin, plan.args, plan.spawnOpts)
+      : runner(plan.bin, plan.spawnOpts);
+    return finalizeFormalRun({ proc, filePath, runnerKind: plan.runnerKind, commandDisplay: plan.commandDisplay, junitPath: plan.junitPath, timeoutMs, started });
   } finally {
     try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+export async function runIsolatedFormalFileAsync({ root, runnerRoot = null, filePath, formalCommand, timeoutMs, env }, ports = {}, signalCtrl = null) {
+  const started = Date.now();
+  const tempDir = mkdtempSync(join(tmpdir(), 'pdd-formal-run-'));
+  const cleanup = () => { try { rmSync(tempDir, { recursive: true, force: true }); } catch {} };
+  signalCtrl?.cleanups?.add(cleanup);
+  try {
+    const plan = prepareFormalInvocation({ root, runnerRoot, filePath, formalCommand, timeoutMs, env, tempDir });
+    if (!plan.ok) return plan.earlyResult;
+    let proc;
+    if (typeof ports.spawnSync === 'function') {
+      proc = Array.isArray(plan.args)
+        ? ports.spawnSync(plan.bin, plan.args, plan.spawnOpts)
+        : ports.spawnSync(plan.bin, plan.spawnOpts);
+    } else {
+      proc = await execChildAsync(plan.bin, plan.args, plan.spawnOpts, signalCtrl);
+    }
+    return finalizeFormalRun({ proc, filePath, runnerKind: plan.runnerKind, commandDisplay: plan.commandDisplay, junitPath: plan.junitPath, timeoutMs, started });
+  } finally {
+    cleanup();
+    signalCtrl?.cleanups?.delete(cleanup);
   }
 }
 
@@ -1030,24 +1237,15 @@ export function verifyFormalMutationControl(
   }
 }
 
-/**
- * Shared Layer-1 code-bound formal verification orchestrator consumed by BOTH `pdd prove`
- * and Autopilot `collectLiveEvidenceContract`.
- */
-export function runFormalVerification(
-  {
-    root,
-    touchedFiles = [],
-    allFiles = null,
-    baseVerify = null,
-    claimedTier = null,
-    mutationControl = null,
-    targetModules = null,
-    timeoutMs = 120_000,
-    env = process.env,
-  } = {},
-  ports = {},
-) {
+function prepareFormalVerificationContext({
+  root,
+  touchedFiles = [],
+  allFiles = null,
+  baseVerify = null,
+  claimedTier = null,
+  mutationControl = null,
+  targetModules = null,
+}) {
   const formalCommand = nonEmpty(baseVerify?.formalCommand) ? baseVerify.formalCommand.trim() : null;
   const scope = discoverFormalScope({ root, touchedFiles, allFiles, formalCommand });
   const effectiveTargets = Array.isArray(targetModules) && targetModules.length > 0
@@ -1064,42 +1262,44 @@ export function runFormalVerification(
         rerun: 'pdd prove',
       });
       return {
-        applicable: true,
-        ok: false,
-        state: 'failed',
-        tier: 'failed',
-        satisfiesCodeVerification: false,
+        earlyResult: {
+          applicable: true,
+          ok: false,
+          state: 'failed',
+          tier: 'failed',
+          satisfiesCodeVerification: false,
+          files: [],
+          formalProofs: [],
+          targetModules: effectiveTargets,
+          invariantRules: [],
+          mutationControl: null,
+          errors: [`Error: formal verification: [formal-empty-claim] ${msg}`],
+          notProvedReasons: [],
+          advisory: null,
+          summary: `Formal: failed (claimed ${normClaim} with 0 formal test files)`,
+        },
+      };
+    }
+    return {
+      earlyResult: {
+        applicable: false,
+        ok: true,
+        state: 'not-applicable',
+        tier: 'not-applicable',
+        satisfiesCodeVerification: true,
         files: [],
         formalProofs: [],
         targetModules: effectiveTargets,
         invariantRules: [],
         mutationControl: null,
-        errors: [`Error: formal verification: [formal-empty-claim] ${msg}`],
+        errors: [],
         notProvedReasons: [],
         advisory: null,
-        summary: `Formal: failed (claimed ${normClaim} with 0 formal test files)`,
-      };
-    }
-    return {
-      applicable: false,
-      ok: true,
-      state: 'not-applicable',
-      tier: 'not-applicable',
-      satisfiesCodeVerification: true,
-      files: [],
-      formalProofs: [],
-      targetModules: effectiveTargets,
-      invariantRules: [],
-      mutationControl: null,
-      errors: [],
-      notProvedReasons: [],
-      advisory: null,
-      summary: 'Formal: not-applicable',
+        summary: 'Formal: not-applicable',
+      },
     };
   }
 
-  // Invariant rules touched in prompt/Story with zero formal files and no verify.formal_command:
-  // fail closed ONLY if a positive solver/proved claim was made; otherwise emit honest non-blocking advisory.
   if (scope.formalFiles.length === 0 && !formalCommand) {
     if (claimedPositiveCode) {
       const msg = formatTeachingDetail({
@@ -1108,54 +1308,77 @@ export function runFormalVerification(
         rerun: 'pdd prove',
       });
       return {
+        earlyResult: {
+          applicable: true,
+          ok: false,
+          state: 'failed',
+          tier: 'failed',
+          satisfiesCodeVerification: false,
+          files: [],
+          formalProofs: [],
+          targetModules: effectiveTargets,
+          invariantRules: scope.invariantRules,
+          mutationControl: null,
+          errors: [`Error: formal verification: [formal-empty-claim] ${msg}`],
+          notProvedReasons: [],
+          advisory: null,
+          summary: `Formal: failed (claimed ${normClaim} with 0 formal test files)`,
+        },
+      };
+    }
+    const sourcesLabel = scope.invariantSources.slice(0, 3).join(', ');
+    const advisory = `Formal: missing (advisory: ${scope.invariantRules.length} invariant rule(s) in ${sourcesLabel}; add a zero-install code-bound formal/property test or confirm not-applicable)`;
+    return {
+      earlyResult: {
         applicable: true,
-        ok: false,
-        state: 'failed',
-        tier: 'failed',
+        ok: true,
+        state: 'missing',
+        tier: 'missing',
         satisfiesCodeVerification: false,
         files: [],
         formalProofs: [],
         targetModules: effectiveTargets,
         invariantRules: scope.invariantRules,
         mutationControl: null,
-        errors: [`Error: formal verification: [formal-empty-claim] ${msg}`],
+        errors: [],
         notProvedReasons: [],
-        advisory: null,
-        summary: `Formal: failed (claimed ${normClaim} with 0 formal test files)`,
-      };
-    }
-    const sourcesLabel = scope.invariantSources.slice(0, 3).join(', ');
-    const advisory = `Formal: missing (advisory: ${scope.invariantRules.length} invariant rule(s) in ${sourcesLabel}; add a zero-install code-bound formal/property test or confirm not-applicable)`;
-    return {
-      applicable: true,
-      ok: true,
-      state: 'missing',
-      tier: 'missing',
-      satisfiesCodeVerification: false,
-      files: [],
-      formalProofs: [],
-      targetModules: effectiveTargets,
-      invariantRules: scope.invariantRules,
-      mutationControl: null,
-      errors: [],
-      notProvedReasons: [],
-      advisory,
-      summary: advisory,
+        advisory,
+        summary: advisory,
+      },
     };
   }
 
-  const realRoot = realpathSync(root);
-  const filesToRun = scope.formalFiles.length > 0 ? scope.formalFiles : [null];
+  return {
+    earlyResult: null,
+    realRoot: realpathSync(root),
+    formalCommand,
+    scope,
+    effectiveTargets,
+    normClaim,
+    claimedPositiveCode,
+    effectiveMutationControl: mutationControl ?? null,
+    mutationControlPassed: isFailingMutationControl(mutationControl ?? null),
+    filesToRun: scope.formalFiles.length > 0 ? scope.formalFiles : [null],
+  };
+}
+
+function finalizeFormalVerification(ctx, runsWithFiles) {
+  const {
+    realRoot,
+    formalCommand,
+    scope,
+    effectiveTargets,
+    normClaim,
+    claimedPositiveCode,
+    effectiveMutationControl,
+    mutationControlPassed,
+  } = ctx;
   const fileResults = [];
   const formalProofs = [];
   const errors = [];
   const notProvedReasons = [];
 
-  const effectiveMutationControl = mutationControl ?? null;
-  const mutationControlPassed = isFailingMutationControl(effectiveMutationControl);
-
-  for (const filePath of filesToRun) {
-    const run = runIsolatedFormalFile({ root: realRoot, filePath, formalCommand, timeoutMs, env }, ports);
+  for (const { filePath, run } of runsWithFiles) {
     const binding = filePath
       ? inspectFormalFileBinding({ root: realRoot, filePath, targetModules: effectiveTargets, allRepoFiles: scope.allRepoFiles })
       : {
@@ -1204,7 +1427,7 @@ export function runFormalVerification(
       tier: fileTier,
     });
 
-    const proofRecord = {
+    formalProofs.push({
       id: run.file,
       file: run.file,
       tier: fileTier === 'proved_solver_code'
@@ -1220,10 +1443,11 @@ export function runFormalVerification(
       passed: run.passed,
       total: run.total,
       skipped: run.skipped,
-    };
-    formalProofs.push(proofRecord);
+    });
 
-    if (run.timedOut) {
+    if (run.interruptedBy) {
+      notProvedReasons.push(`Formal verification of "${run.file}" was interrupted by signal ${run.interruptedBy}.`);
+    } else if (run.timedOut) {
       notProvedReasons.push(`Formal verification of "${run.file}" timed out (${run.summary}); rerun with --timeout MIN.`);
     } else if (run.missingRunner) {
       notProvedReasons.push(`Formal verification of "${run.file}" could not run: ${run.summary}.`);
@@ -1298,4 +1522,37 @@ export function runFormalVerification(
     advisory: null,
     summary,
   };
+}
+
+/**
+ * Shared Layer-1 code-bound formal verification orchestrator consumed by BOTH `pdd prove`
+ * and Autopilot `collectLiveEvidenceContract`.
+ */
+export function runFormalVerification(opts = {}, ports = {}) {
+  const ctx = prepareFormalVerificationContext(opts);
+  if (ctx.earlyResult) return ctx.earlyResult;
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const env = opts.env ?? process.env;
+  const runsWithFiles = [];
+  for (const filePath of ctx.filesToRun) {
+    const run = runIsolatedFormalFile({ root: ctx.realRoot, filePath, formalCommand: ctx.formalCommand, timeoutMs, env }, ports);
+    runsWithFiles.push({ filePath, run });
+    if (run.interruptedBy) break;
+  }
+  return finalizeFormalVerification(ctx, runsWithFiles);
+}
+
+export async function runFormalVerificationAsync(opts = {}, ports = {}, signalCtrl = null) {
+  const ctx = prepareFormalVerificationContext(opts);
+  if (ctx.earlyResult) return ctx.earlyResult;
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const env = opts.env ?? process.env;
+  const runsWithFiles = [];
+  for (const filePath of ctx.filesToRun) {
+    if (signalCtrl?.signal) break;
+    const run = await runIsolatedFormalFileAsync({ root: ctx.realRoot, filePath, formalCommand: ctx.formalCommand, timeoutMs, env }, ports, signalCtrl);
+    runsWithFiles.push({ filePath, run });
+    if (signalCtrl?.signal || run.interruptedBy) break;
+  }
+  return finalizeFormalVerification(ctx, runsWithFiles);
 }

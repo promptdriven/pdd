@@ -12,7 +12,9 @@ import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBa
 import { lintRepoProject } from './lint/project-lint.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
 import { detectShadowBinaries, runDiffSpotlight } from './lint/test-inventory.mjs';
-import { runFormalVerification } from './formal-verify.mjs';
+import { execChildAsync, runFormalVerification, runFormalVerificationAsync } from './formal-verify.mjs';
+import { createSignalController, runProveCoverage, runProveCoverageAsync, validateProveOptInFlags } from './prove-coverage.mjs';
+import { runProveMutationCheck, runProveMutationCheckAsync } from './prove-mutation.mjs';
 import { classifyVerifyPathTier, detectHostCapabilities, formatProofTiersLine, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths, summarizeProofTiers } from './verify-paths.mjs';
 
 export const OUTCOME_PROVED = 'Proved';
@@ -62,10 +64,7 @@ function summarizeTestOutput(stdout, stderr, setupError, timedOut) {
   return causeText(setupError || (timedOut ? 'command timed out' : ''));
 }
 
-function execShellCommand(command, { cwd, env, timeoutMs, preScrubbed = false }, ports = {}) {
-  const runner = ports.spawnSync ?? spawnSync;
-  const started = Date.now();
-  const proc = runner(command, { cwd, env: preScrubbed ? env : scrubChildEnv(env), shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+function formatShellCommandResult(command, proc, started) {
   const stdout = String(proc.stdout ?? ''), stderr = String(proc.stderr ?? '');
   const timedOut = proc.error?.code === 'ETIMEDOUT';
   const exitCode = typeof proc.status === 'number' ? proc.status : null;
@@ -89,6 +88,22 @@ function execShellCommand(command, { cwd, env, timeoutMs, preScrubbed = false },
     durationMs: Math.max(0, Date.now() - started), stdout, stderr, setupError, setupFailure, hardSetupFailure,
     summary: summarizeTestOutput(stdout, stderr, setupError, timedOut),
   };
+}
+
+function execShellCommand(command, { cwd, env, timeoutMs, preScrubbed = false }, ports = {}) {
+  const runner = ports.spawnSync ?? spawnSync;
+  const started = Date.now();
+  const proc = runner(command, { cwd, env: preScrubbed ? env : scrubChildEnv(env), shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  return formatShellCommandResult(command, proc, started);
+}
+
+async function execShellCommandAsync(command, { cwd, env, timeoutMs, preScrubbed = false }, ports = {}, signalCtrl = null) {
+  const started = Date.now();
+  const opts = { cwd, env: preScrubbed ? env : scrubChildEnv(env), shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] };
+  const proc = typeof ports.spawnSync === 'function'
+    ? ports.spawnSync(command, opts)
+    : await execChildAsync(command, null, opts, signalCtrl);
+  return formatShellCommandResult(command, proc, started);
 }
 
 export function detectRepoTestCommand(root) {
@@ -436,16 +451,23 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
   return { exitCode, outcome, receipt };
 }
 
-export function runProve(
-  { cwd = process.cwd(), base, test, expect, overlay, setup, timeoutMinutes = 10, json = false, capabilities, env = process.env } = {},
+function prepareProveVerifyContext(
+  { cwd = process.cwd(), base, test, expect, overlay, setup, timeoutMinutes = 10, coverage = false, mutationCheck = false, json = false, capabilities, env = process.env } = {},
   ports = {},
 ) {
   const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr;
+  const optInCheck = validateProveOptInFlags({ coverage, mutationCheck, test, expect });
+  if (!optInCheck.ok) {
+    stderr.write(`${optInCheck.error}\n`);
+    return { earlyResult: { exitCode: EXIT_USAGE, outcome: OUTCOME_FAILED, receipt: null } };
+  }
   const root = resolveGitRoot(cwd);
-  if (test !== undefined || expect !== undefined) return runBugContrastProve({ root, base, test, expect, overlay, setup, timeoutMinutes, json, env }, ports);
+  if (test !== undefined || expect !== undefined) {
+    return { earlyResult: runBugContrastProve({ root, base, test, expect, overlay, setup, timeoutMinutes, json, env }, ports) };
+  }
   if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 120) {
     stderr.write('pdd prove --timeout takes whole minutes from 1 to 120.\n');
-    return { exitCode: EXIT_USAGE, outcome: OUTCOME_FAILED, receipt: null };
+    return { earlyResult: { exitCode: EXIT_USAGE, outcome: OUTCOME_FAILED, receipt: null } };
   }
 
   const headSha = resolveCommit(root, 'HEAD');
@@ -470,10 +492,9 @@ export function runProve(
     };
     if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
     else stdout.write(`Not proved:\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
-    return { exitCode: EXIT_NOT_PROVED, outcome: OUTCOME_NOT_PROVED, receipt };
+    return { earlyResult: { exitCode: EXIT_NOT_PROVED, outcome: OUTCOME_NOT_PROVED, receipt } };
   }
 
-  // Always trust verify config strictly from git merge base (`baseSha:pdd.json`), NEVER from untrusted working-tree edits.
   const baseVerify = loadVerifyConfig(root, { gitRef: baseSha });
   const worktreeVerify = loadVerifyConfig(root);
   const baseRaw = gitExec(root, ['show', `${baseSha}:pdd.json`]);
@@ -522,8 +543,6 @@ export function runProve(
     }
   }
 
-  // Inspect checkout cleanliness BEFORE executing tests/recipes so generated reports don't falsely dirty a clean commit,
-  // and fail closed as `Not proved` if `git status` itself fails (NEVER certifying an uninspected checkout as clean).
   const statusRes = gitExec(root, ['status', '--porcelain']);
   const statusFailed = statusRes.status !== 0 || Boolean(statusRes.error);
   const dirtyFiles = !statusFailed && statusRes.stdout
@@ -535,63 +554,58 @@ export function runProve(
     notProvedReasons.push(`Could not inspect working-tree cleanliness (git status exited ${statusRes.status ?? 'error'}).`);
   }
 
-  let testResult = null;
-  let formalResult = null;
   const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, diff.touchedFiles, { root, baseSha });
-  const pathResults = [];
   const scrubbedBaseEnv = scrubChildEnv(env);
   const resolveStepEnv = (phase, recipeId, command) => (
     typeof ports.envForStep === 'function'
       ? ports.envForStep({ phase, recipeId, command, baseEnv: scrubbedBaseEnv })
       : scrubbedBaseEnv
   );
-  if (shadowBins.length === 0 && changedPkgScripts.length === 0 && changedReferencedScripts.length === 0 && changedPytestConfigs.length === 0) {
-    if (testCommand) {
-      const testEnv = resolveStepEnv('test', null, testCommand);
-      const r = execShellCommand(testCommand, { cwd: root, env: testEnv, timeoutMs, preScrubbed: true }, ports);
-      testResult = { command: testCommand, ok: r.ok, timedOut: r.timedOut, exitCode: r.exitCode, durationMs: r.durationMs, setupError: r.setupError, summary: r.summary };
-      if (r.timedOut) {
-        notProvedReasons.push(`Test suite timed out after ${timeoutMinutes} min (\`${testCommand}\`); rerun with --timeout MIN.`);
-      }
-    } else {
-      notProvedReasons.push('No verify.test command configured in merge-base pdd.json and no standard test runner detected.');
-    }
+  const canExecuteCommands = shadowBins.length === 0
+    && changedPkgScripts.length === 0
+    && changedReferencedScripts.length === 0
+    && changedPytestConfigs.length === 0;
 
-    const capState = detectHostCapabilities(matched.flatMap(r => r.needs), { env, capabilities, probe: ports.probeCapability, isTTY: ports.isTTY });
-    for (const recipe of matched) {
-      const { satisfied, missing } = matchCapabilities(recipe.needs, capState);
-      const tier = classifyVerifyPathTier(recipe);
-      const tierMeta = { ...(recipe.scope ? { scope: recipe.scope } : {}), tier };
-      if (!satisfied) {
-        pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', missingCapabilities: missing, ok: false });
-        notProvedReasons.push(`Recipe "${recipe.id}" (${recipe.name}) skipped: missing required capability [${missing.join(', ')}].`);
-        continue;
-      }
-      const recipeEnv = resolveStepEnv('path', recipe.id, recipe.run);
-      const r = execShellCommand(recipe.run, { cwd: root, env: recipeEnv, timeoutMs, preScrubbed: true }, ports);
-      if (r.timedOut) {
-        pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', timedOut: true, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary });
-        notProvedReasons.push(`Verify path "${recipe.id}" timed out after ${timeoutMinutes} min (\`${recipe.run}\`); rerun with --timeout MIN.`);
-        continue;
-      }
-      pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', timedOut: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
-    }
+  return {
+    earlyResult: null,
+    stdout,
+    stderr,
+    root,
+    headSha,
+    baseRef,
+    baseSha,
+    timeoutMinutes,
+    timeoutMs,
+    coverage,
+    mutationCheck,
+    json,
+    capabilities,
+    env,
+    lint,
+    diff,
+    notProvedReasons,
+    baseVerify,
+    testCommand,
+    extraShadowErrors,
+    statusFailed,
+    dirtyFiles,
+    dirty,
+    proofScope,
+    matched,
+    changedSurfaces,
+    unmappedSurfaces,
+    resolveStepEnv,
+    canExecuteCommands,
+  };
+}
 
-    const formalEnv = resolveStepEnv('formal', null, baseVerify.formalCommand || '');
-    formalResult = runFormalVerification(
-      {
-        root,
-        touchedFiles: diff.touchedFiles,
-        baseVerify,
-        timeoutMs,
-        env: formalEnv,
-      },
-      ports,
-    );
-    if (formalResult.notProvedReasons?.length) {
-      notProvedReasons.push(...formalResult.notProvedReasons);
-    }
-  }
+function finalizeProveVerify(ctx, { testResult, formalResult, coverageResult, mutationResult, pathResults }) {
+  const {
+    stdout, stderr, root, headSha, baseRef, baseSha, coverage, mutationCheck, json,
+    lint, diff, notProvedReasons, baseVerify, testCommand, extraShadowErrors,
+    statusFailed, dirtyFiles, dirty, proofScope, changedSurfaces, unmappedSurfaces,
+  } = ctx;
+
   if (unmappedSurfaces.length > 0) notProvedReasons.push(`No verify.paths recipe covers changed production surface(s): ${unmappedSurfaces.join(', ')}.`);
   const multiPartGuard = inspectMultiPartIntegrationGuard(root, baseVerify, { executedPathResults: pathResults, changedSurfaces });
   if (multiPartGuard.applicable && !multiPartGuard.covered && multiPartGuard.reason) {
@@ -640,6 +654,7 @@ export function runProve(
     ...(testResult && !testResult.ok && !testResult.timedOut ? [`Test suite failed (\`${testResult.command}\`, exit ${testResult.exitCode}): ${testResult.summary}`] : []),
     ...pathResults.filter(p => p.status === 'failed').map(p => `Verify path "${p.id}" failed (\`${p.run}\`, exit ${p.exitCode}): ${p.summary}`),
     ...(formalResult?.errors ?? []),
+    ...(coverageResult?.errors ?? []),
   ];
 
   const outcome = failedErrors.length > 0 ? OUTCOME_FAILED : (notProvedReasons.length > 0 ? OUTCOME_NOT_PROVED : OUTCOME_PROVED);
@@ -652,16 +667,174 @@ export function runProve(
     configSource: baseVerify.configured ? baseVerify.source : (testCommand ? 'auto-detected' : null), touchedFiles: diff.touchedFiles, changedSurfaces,
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
-    test: testResult, formal: formalResult, paths: pathResults, proofTiers, notProvedReasons,
+    test: testResult, formal: formalResult,
+    ...(coverage ? { coverage: coverageResult } : {}),
+    ...(mutationCheck ? { mutation: mutationResult } : {}),
+    paths: pathResults, proofTiers, notProvedReasons,
   };
 
   const scopeSuffix = statusFailed
     ? ' (unknown checkout cleanliness)'
     : (dirty ? ` (working tree, uncommitted changes: ${dirtyFiles.slice(0, 4).join(', ')})` : '');
   const formalLine = formalResult?.summary || 'Formal: not-applicable';
+  const extraLines = [
+    ...(coverageResult?.summary ? [coverageResult.summary] : []),
+    ...(mutationResult?.summary ? [mutationResult.summary] : []),
+  ];
+  const extraSuffix = extraLines.length > 0 ? `\n${extraLines.join('\n')}` : '';
   if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
-  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.\n${proofTiersLine}\n`);
-  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n${proofTiersLine}\n`);
-  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.\n${proofTiersLine}\n`); }
+  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.\n${proofTiersLine}${extraSuffix}\n`);
+  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n${proofTiersLine}${extraSuffix}\n`);
+  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.\n${proofTiersLine}${extraSuffix}\n`); }
   return { exitCode, outcome, receipt };
+}
+
+export function runProve(opts = {}, ports = {}) {
+  const ctx = prepareProveVerifyContext(opts, ports);
+  if (ctx.earlyResult) return ctx.earlyResult;
+  const {
+    root, baseRef, baseSha, timeoutMinutes, timeoutMs, coverage, mutationCheck, capabilities, env,
+    diff, notProvedReasons, baseVerify, testCommand, matched, resolveStepEnv, canExecuteCommands,
+  } = ctx;
+
+  let testResult = null;
+  let formalResult = null;
+  let coverageResult = null;
+  let mutationResult = null;
+  const pathResults = [];
+
+  if (canExecuteCommands) {
+    if (testCommand) {
+      const testEnv = resolveStepEnv('test', null, testCommand);
+      const r = execShellCommand(testCommand, { cwd: root, env: testEnv, timeoutMs, preScrubbed: true }, ports);
+      testResult = { command: testCommand, ok: r.ok, timedOut: r.timedOut, exitCode: r.exitCode, durationMs: r.durationMs, setupError: r.setupError, summary: r.summary };
+      if (r.timedOut) notProvedReasons.push(`Test suite timed out after ${timeoutMinutes} min (\`${testCommand}\`); rerun with --timeout MIN.`);
+    } else {
+      notProvedReasons.push('No verify.test command configured in merge-base pdd.json and no standard test runner detected.');
+    }
+
+    const capState = detectHostCapabilities(matched.flatMap(r => r.needs), { env, capabilities, probe: ports.probeCapability, isTTY: ports.isTTY });
+    for (const recipe of matched) {
+      const { satisfied, missing } = matchCapabilities(recipe.needs, capState);
+      const tier = classifyVerifyPathTier(recipe);
+      const tierMeta = { ...(recipe.scope ? { scope: recipe.scope } : {}), tier };
+      if (!satisfied) {
+        pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', missingCapabilities: missing, ok: false });
+        notProvedReasons.push(`Recipe "${recipe.id}" (${recipe.name}) skipped: missing required capability [${missing.join(', ')}].`);
+        continue;
+      }
+      const recipeEnv = resolveStepEnv('path', recipe.id, recipe.run);
+      const r = execShellCommand(recipe.run, { cwd: root, env: recipeEnv, timeoutMs, preScrubbed: true }, ports);
+      if (r.timedOut) {
+        pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', timedOut: true, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary });
+        notProvedReasons.push(`Verify path "${recipe.id}" timed out after ${timeoutMinutes} min (\`${recipe.run}\`); rerun with --timeout MIN.`);
+        continue;
+      }
+      pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', timedOut: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
+    }
+
+    const formalEnv = resolveStepEnv('formal', null, baseVerify.formalCommand || '');
+    formalResult = runFormalVerification({ root, touchedFiles: diff.touchedFiles, baseVerify, timeoutMs, env: formalEnv }, ports);
+    if (formalResult.notProvedReasons?.length) notProvedReasons.push(...formalResult.notProvedReasons);
+
+    if (coverage) {
+      const covEnv = resolveStepEnv('coverage', null, testCommand || '');
+      coverageResult = runProveCoverage({ root, baseSha, baseRef, touchedFiles: diff.touchedFiles, testCommand, timeoutMs, env: covEnv }, ports);
+      if (coverageResult.notProvedReasons?.length) notProvedReasons.push(...coverageResult.notProvedReasons);
+    }
+
+    if (mutationCheck) {
+      const mutEnv = resolveStepEnv('mutation', null, baseVerify.formalCommand || '');
+      mutationResult = runProveMutationCheck(
+        { root, baseSha, touchedFiles: diff.touchedFiles, formalResult, formalCoverageFiles: coverageResult?.suites?.formal?.status === 'ok' ? coverageResult.suites.formal.files : null, baseVerify, timeoutMs, env: mutEnv },
+        ports,
+      );
+      if (mutationResult.notProvedReasons?.length) notProvedReasons.push(...mutationResult.notProvedReasons);
+    }
+  }
+
+  return finalizeProveVerify(ctx, { testResult, formalResult, coverageResult, mutationResult, pathResults });
+}
+
+export async function runProveAsync(opts = {}, ports = {}) {
+  const ctx = prepareProveVerifyContext(opts, ports);
+  if (ctx.earlyResult) return ctx.earlyResult;
+  const {
+    root, baseRef, baseSha, timeoutMinutes, timeoutMs, coverage, mutationCheck, capabilities, env,
+    diff, notProvedReasons, baseVerify, testCommand, matched, resolveStepEnv, canExecuteCommands,
+  } = ctx;
+
+  let testResult = null;
+  let formalResult = null;
+  let coverageResult = null;
+  let mutationResult = null;
+  const pathResults = [];
+
+  const sigCtrl = createSignalController();
+  sigCtrl.install();
+  try {
+    if (canExecuteCommands) {
+      if (testCommand && !sigCtrl.signal) {
+        const testEnv = resolveStepEnv('test', null, testCommand);
+        const r = await execShellCommandAsync(testCommand, { cwd: root, env: testEnv, timeoutMs, preScrubbed: true }, ports, sigCtrl);
+        testResult = { command: testCommand, ok: r.ok, timedOut: r.timedOut, exitCode: r.exitCode, durationMs: r.durationMs, setupError: r.setupError, summary: r.summary };
+        if (r.timedOut) notProvedReasons.push(`Test suite timed out after ${timeoutMinutes} min (\`${testCommand}\`); rerun with --timeout MIN.`);
+      } else if (!testCommand) {
+        notProvedReasons.push('No verify.test command configured in merge-base pdd.json and no standard test runner detected.');
+      }
+
+      if (!sigCtrl.signal) {
+        const capState = detectHostCapabilities(matched.flatMap(r => r.needs), { env, capabilities, probe: ports.probeCapability, isTTY: ports.isTTY });
+        for (const recipe of matched) {
+          if (sigCtrl.signal) break;
+          const { satisfied, missing } = matchCapabilities(recipe.needs, capState);
+          const tier = classifyVerifyPathTier(recipe);
+          const tierMeta = { ...(recipe.scope ? { scope: recipe.scope } : {}), tier };
+          if (!satisfied) {
+            pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', missingCapabilities: missing, ok: false });
+            notProvedReasons.push(`Recipe "${recipe.id}" (${recipe.name}) skipped: missing required capability [${missing.join(', ')}].`);
+            continue;
+          }
+          const recipeEnv = resolveStepEnv('path', recipe.id, recipe.run);
+          const r = await execShellCommandAsync(recipe.run, { cwd: root, env: recipeEnv, timeoutMs, preScrubbed: true }, ports, sigCtrl);
+          if (sigCtrl.signal) break;
+          if (r.timedOut) {
+            pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', timedOut: true, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary });
+            notProvedReasons.push(`Verify path "${recipe.id}" timed out after ${timeoutMinutes} min (\`${recipe.run}\`); rerun with --timeout MIN.`);
+            continue;
+          }
+          pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', timedOut: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
+        }
+      }
+
+      if (!sigCtrl.signal) {
+        const formalEnv = resolveStepEnv('formal', null, baseVerify.formalCommand || '');
+        formalResult = await runFormalVerificationAsync({ root, touchedFiles: diff.touchedFiles, baseVerify, timeoutMs, env: formalEnv }, ports, sigCtrl);
+        if (formalResult.notProvedReasons?.length) notProvedReasons.push(...formalResult.notProvedReasons);
+      }
+
+      if (coverage && !sigCtrl.signal) {
+        const covEnv = resolveStepEnv('coverage', null, testCommand || '');
+        coverageResult = await runProveCoverageAsync({ root, baseSha, baseRef, touchedFiles: diff.touchedFiles, testCommand, timeoutMs, env: covEnv }, ports, sigCtrl);
+        if (coverageResult.notProvedReasons?.length) notProvedReasons.push(...coverageResult.notProvedReasons);
+      }
+
+      if (mutationCheck && !sigCtrl.signal) {
+        const mutEnv = resolveStepEnv('mutation', null, baseVerify.formalCommand || '');
+        mutationResult = await runProveMutationCheckAsync(
+          { root, baseSha, touchedFiles: diff.touchedFiles, formalResult, formalCoverageFiles: coverageResult?.suites?.formal?.status === 'ok' ? coverageResult.suites.formal.files : null, baseVerify, timeoutMs, env: mutEnv },
+          ports,
+          sigCtrl,
+        );
+        if (mutationResult.notProvedReasons?.length) notProvedReasons.push(...mutationResult.notProvedReasons);
+      }
+    }
+
+    if (sigCtrl.signal) {
+      return { exitCode: 128, outcome: OUTCOME_NOT_PROVED, receipt: null };
+    }
+    return finalizeProveVerify(ctx, { testResult, formalResult, coverageResult, mutationResult, pathResults });
+  } finally {
+    sigCtrl.reRaiseIfSignaled();
+  }
 }

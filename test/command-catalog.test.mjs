@@ -53,3 +53,21 @@ test('C1/S1 catalog exposes setup --skills-dir, --upgrade, init, status, direct 
   assert.throws(() => parseArgv(['sim', 'my-story']), /pdd sim was removed\. Run pdd <PROMPT\.md\|STORY> instead\./);
   assert.throws(() => parseArgv(['simulate', 'my-story']), /pdd simulate was removed\. Run pdd <PROMPT\.md\|STORY> instead\./);
 });
+
+test('3701 prove route exposes opt-in --coverage and --mutation-check flags in catalog, parser, and help', () => {
+  const proveRoute = PUBLIC_COMMAND_ROUTES.find(item => item.id === 'prove');
+  assert.ok(proveRoute);
+  assert.deepEqual(proveRoute.options.find(item => item.name === '--coverage'), { name: '--coverage', kind: 'flag' });
+  assert.deepEqual(proveRoute.options.find(item => item.name === '--mutation-check'), { name: '--mutation-check', kind: 'flag' });
+  assert.ok(PUBLIC_COMMAND_MANIFEST.some(({ form }) => form === 'pdd prove --coverage [--base REF] [--timeout MIN] [--json]'));
+  assert.ok(PUBLIC_COMMAND_MANIFEST.some(({ form }) => form === 'pdd prove --mutation-check [--base REF] [--timeout MIN] [--json]'));
+  const help = renderHelp(['prove']);
+  assert.match(help, /--coverage/);
+  assert.match(help, /--mutation-check/);
+  assert.deepEqual(parseArgv(['prove', '--coverage', '--mutation-check', '--base', 'main', '--json']), {
+    commandId: 'prove',
+    local: 'prove',
+    operands: [],
+    options: { '--coverage': true, '--mutation-check': true, '--base': 'main', '--json': true },
+  });
+});

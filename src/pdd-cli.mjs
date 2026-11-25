@@ -976,9 +976,17 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
     }
     case 'prove': {
+      const hasOptInProve = plan.options['--coverage'] === true || plan.options['--mutation-check'] === true;
+      if (hasOptInProve && (plan.options['--test'] !== undefined || plan.options['--expect'] !== undefined)) {
+        line(stderr, 'pdd prove --coverage and --mutation-check cannot be combined with bug-contrast --test/--expect mode.');
+        return 2;
+      }
       try {
         const mod = proveRunner ?? await import('./core/prove.mjs');
-        const res = await mod.runProve({
+        const proveFn = (!proveRunner && hasOptInProve && typeof mod.runProveAsync === 'function')
+          ? mod.runProveAsync
+          : mod.runProve;
+        const res = await proveFn({
           cwd,
           ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}),
           ...(plan.options['--test'] !== undefined ? { test: plan.options['--test'] } : {}),
@@ -986,6 +994,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           ...(plan.options['--overlay'] !== undefined ? { overlay: plan.options['--overlay'] } : {}),
           ...(plan.options['--setup'] !== undefined ? { setup: plan.options['--setup'] } : {}),
           ...(plan.options['--timeout'] !== undefined ? { timeoutMinutes: Number(plan.options['--timeout']) } : {}),
+          ...(plan.options['--coverage'] === true ? { coverage: true } : {}),
+          ...(plan.options['--mutation-check'] === true ? { mutationCheck: true } : {}),
           json: plan.options['--json'] === true,
           env,
         }, { stdout, stderr, ...proveRunnerPorts });

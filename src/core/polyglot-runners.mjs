@@ -4,7 +4,7 @@
 // auto-detection, invocation builders, strict summary parsing, and canonical test-case extraction for
 // node:test (TAP v13), vitest (JUnit XML / verbose CLI), pytest (JUnit XML / verbose CLI), cargo test, and go test -json.
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { readBoundedUtf8 } from '../shared/safe-read.mjs';
 
@@ -22,6 +22,50 @@ export function normalizeRunnerKind(kind) {
   if (['go', 'go test', 'go-test', 'go-json', 'go test -json'].includes(k)) return 'go';
   if (['junit', 'junit-xml', 'xml'].includes(k)) return 'junit';
   return null;
+}
+
+/**
+ * Resolve repo-local `.venv/bin/python3` / `.venv/bin/python` (or `venv/bin/...`) when present as an untracked
+ * executable inside non-symlink `.venv`/`venv` directories (allowing standard venv interpreter symlinks such as
+ * `.venv/bin/python3 -> /usr/bin/python3`), else fall back to `'python3'`. Rejects symlinked venv directories and
+ * git-tracked executables.
+ */
+export function resolvePythonBinary(root) {
+  if (typeof root !== 'string' || !root.trim()) return 'python3';
+  const inGitRepo = existsSync(join(root, '.git'));
+  for (const venvDir of ['.venv', 'venv']) {
+    const dirPath = join(root, venvDir);
+    const binDir = join(dirPath, 'bin');
+    try {
+      const dst = lstatSync(dirPath);
+      if (dst.isSymbolicLink() || !dst.isDirectory()) continue;
+      const bst = lstatSync(binDir);
+      if (bst.isSymbolicLink() || !bst.isDirectory()) continue;
+      for (const exe of ['python3', 'python']) {
+        const candidate = join(binDir, exe);
+        try {
+          lstatSync(candidate);
+          const fst = statSync(candidate);
+          if (!fst.isFile()) continue;
+          if (inGitRepo) {
+            const rel = `${venvDir}/bin/${exe}`;
+            const tracked = spawnSync('git', ['ls-files', '--error-unmatch', '--', rel], {
+              cwd: root,
+              stdio: ['ignore', 'ignore', 'ignore'],
+              timeout: 5000,
+            });
+            if (tracked.status !== 1) continue;
+          }
+          return candidate;
+        } catch {
+          // try next exe
+        }
+      }
+    } catch {
+      // absent or unreadable
+    }
+  }
+  return 'python3';
 }
 
 /**
