@@ -1,9 +1,12 @@
 // Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 691dd6196bed4cd3f73c6e54357b81dbbd926f01249066f198c14749055ad53b).
 // Backwards-compatible Layer-2 facade re-exporting all public validator symbols.
 export {
+  ADVERSARIAL_BOUNDARY_SURFACES,
+  ADVERSARIAL_SURFACE_CHECKLISTS,
   MIN_REALISTIC_PAYLOAD_BYTES,
   REAL_HOST_FAILURE_CLASSES,
   canonicalTargetPath,
+  classifyNativeOnlySurfaces,
   detectChangedSurfaces,
   detectNativeOnlyModules,
 } from './autopilot/validator/surfaces.mjs';
@@ -22,6 +25,7 @@ export {
   REAL_E2E_EXEC_RE,
   collectTestFixedSleepFindings,
   collectTestUnexcusedSkipFindings,
+  detectAdversarialProbesInTest,
   detectRealE2eKindsInTest,
   detectRealHostProbesInTest,
   inspectTestBoundaryTargets,

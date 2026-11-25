@@ -30,6 +30,7 @@ import { recordAutopilotMetric } from './autopilot-metrics.mjs';
 import {
   MAX_VALIDATION_REPAIRS,
   canonicalTargetPath,
+  classifyNativeOnlySurfaces,
   detectChangedSurfaces,
   detectNativeOnlyModules,
   detectRealE2eKindsInTest,
@@ -291,7 +292,7 @@ function publicText(text, machine, user) {
 const sentence = text => `${String(text ?? '').trim().replace(/[.\s]+$/, '')}.`;
 // Evidence for metrics: one fixed line, "Evidence: runtime=pass (11/11); vectors=not-run; formal=bounded; tests=pass (42/42)".
 // Only known fields and values are kept (an allowlist); a count is kept when it is "n/m" with n <= m.
-const EVIDENCE = { runtime: ['pass', 'fail', 'not-run'], vectors: ['pass', 'fail', 'not-run'], formal: ['proved', 'bounded', 'proved_solver_code', 'proved_spec_model', 'failed', 'not-run', 'not-applicable'], tests: ['pass', 'fail'] };
+const EVIDENCE = { runtime: ['pass', 'fail', 'not-run'], vectors: ['pass', 'fail', 'not-run'], formal: ['proved', 'bounded', 'proved_solver_code', 'proved_spec_model', 'failed', 'not-run', 'not-applicable'], adversarial_real_host: ['proved', 'missing-adversarial-probes', 'happy-path-only', 'failed', 'not-run', 'not-applicable'], tests: ['pass', 'fail'] };
 const POSITIVE_FORMAL_STATES = ['proved', 'bounded', 'proved_solver_code'];
 const normalEvidenceLine = line => line.replace(/[*`|]/g, ' ').replace(/(?<![a-z0-9])_+|_+(?![a-z0-9])/gi, ' ').replace(/^\s*(?:(?:#+|[-+>]|\d+[.)])\s*)*/, '').replace(/\s+/g, ' ').trim();
 function parseEvidence(text) {
@@ -300,7 +301,7 @@ function parseEvidence(text) {
     if (!/^evidence\s*:/i.test(line)) continue;
     const found = {};
     for (const part of line.replace(/^evidence\s*:/i, '').split(';')) {
-      const m = /^\s*([a-z]+)\s*=\s*([a-z_-]+)(?:\s*\(\s*(\d{1,9})\s*\/\s*(\d{1,9})\s*\))?\s*$/i.exec(part);
+      const m = /^\s*([a-z_]+)\s*=\s*([a-z_-]+)(?:\s*\(\s*(\d{1,9})\s*\/\s*(\d{1,9})\s*\))?\s*$/i.exec(part);
       const key = m?.[1].toLowerCase(), value = m?.[2].toLowerCase();
       if (!m || !EVIDENCE[key]?.includes(value) || found[key]) continue;
       found[key] = { state: value };
@@ -321,6 +322,7 @@ function evidenceReds(e, runtimeLine) {
     if (v?.state === 'pass' && v.total !== undefined && (v.total === 0 || v.passed < v.total)) bad.push(`${key}=pass (${v.passed}/${v.total})`);
   }
   if (e.formal?.state === 'failed') bad.push('formal=failed');
+  if (['failed', 'happy-path-only', 'missing-adversarial-probes'].includes(e.adversarial_real_host?.state)) bad.push(`adversarial_real_host=${e.adversarial_real_host.state}`);
   if (e.runtime && ['pass', 'not-run'].includes(runtimeLine) && e.runtime.state !== runtimeLine && e.runtime.state !== 'fail') bad.push(`runtime=${e.runtime.state} while the PR's Runtime line says ${runtimeLine === 'pass' ? 'PASS' : 'not run'}`);
   return bad.length ? [`The PR's Evidence line contradicts itself or the checks: ${bad.join(', ')}. Fix the cause, then write an Evidence line that matches what you ran.`] : [];
 }
@@ -7798,11 +7800,15 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
   const changedProdFiles = [];
   const changedBoundaryFiles = [];
   const changedRuntimeCodeFiles = [];
+  const nativePromptByModule = new Map((nativeCtx?.matches ?? []).map(m => [m.module, m.prompt]));
   for (const file of changed) {
     const info = detectChangedSurfaces({ changedFiles: [file], nativeOnlyFiles });
     if (!info.requiresRealE2e) continue;
     changedProdFiles.push(file);
     const target = canonicalTargetPath(file);
+    const reqAdvSurfaces = info.nativeOnlyFiles.includes(file) && headTree
+      ? classifyNativeOnlySurfaces({ modulePath: file, promptText: nativePromptByModule.has(file) ? (readCleanFileUtf8(ctx.fs, headTree, nativePromptByModule.get(file)) ?? '') : '', moduleSource: readCleanFileUtf8(ctx.fs, headTree, file) ?? '' })
+      : [];
     if (info.runtimeSurfaces.some(s => s !== 'runtime-code')) {
       changedBoundaryFiles.push({
         file,
@@ -7810,6 +7816,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
         runtimeSurfaces: info.runtimeSurfaces,
         requiredProofKinds: info.requiredProofKinds,
         requiredRealHostClasses: info.realHostBoundaryClasses,
+        requiredAdversarialSurfaces: reqAdvSurfaces,
       });
     } else {
       changedRuntimeCodeFiles.push({ file, target });
@@ -7902,6 +7909,8 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
       for (const f of matchBoundaryEntryTestsForKind(entry, reqKind)) entryMatched.add(f);
     }
     const classes = new Set();
+    const advSurfaces = new Set();
+    const advProbes = new Set();
     let turns = 0;
     let payload = null;
     let liveLocal = false;
@@ -7909,15 +7918,19 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
       const p = probesByTest.get(f);
       if (!p) continue;
       for (const c of p.classes ?? []) classes.add(c);
+      for (const s of p.adversarialSurfaces ?? []) advSurfaces.add(s);
+      for (const prb of p.adversarialProbes ?? []) advProbes.add(prb);
       if (Number.isInteger(p.detectedTurns) && p.detectedTurns > turns) turns = p.detectedTurns;
       if (Number.isFinite(p.maxDetectedPayloadBytes) && (payload === null || p.maxDetectedPayloadBytes > payload)) {
         payload = p.maxDetectedPayloadBytes;
       }
       if (p.liveLocal) liveLocal = true;
     }
-    entryAggByFile.set(entry.file, { classes, turns, payload, liveLocal });
+    entryAggByFile.set(entry.file, { classes, advSurfaces, advProbes, turns, payload, liveLocal });
   }
   const allRequiredClasses = new Set(changedBoundaryFiles.flatMap(e => e.requiredRealHostClasses));
+  const allRequiredAdvSurfaces = [...new Set(changedBoundaryFiles.flatMap(e => e.requiredAdversarialSurfaces ?? []))].sort();
+  const globallySatisfiedAdvSurfaces = new Set(allRequiredAdvSurfaces.filter(surf => { const req = changedBoundaryFiles.filter(e => (e.requiredAdversarialSurfaces ?? []).includes(surf)); return req.length > 0 && req.every(e => entryAggByFile.get(e.file)?.advSurfaces.has(surf)); }));
   const globallySatisfiedRequiredClasses = new Set();
   for (const cls of allRequiredClasses) {
     const requiring = changedBoundaryFiles.filter(e => e.requiredRealHostClasses.includes(cls));
@@ -8090,6 +8103,14 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
           check.payloadBytes = maxPayloadBytes;
         }
         if (anyLiveLocal) check.liveLocal = true;
+        if (kind === 'real-host-smoke' && needingKind.some(e => (e.requiredAdversarialSurfaces ?? []).length > 0)) {
+          const allAdvProbes = new Set();
+          for (const entry of needingKind) for (const prb of entryAggByFile.get(entry.file)?.advProbes ?? []) allAdvProbes.add(prb);
+          check.adversarialSurfaces = [...globallySatisfiedAdvSurfaces].sort();
+          check.adversarialProbes = [...allAdvProbes].sort();
+          check.happyPathOnly = allAdvProbes.size === 0;
+          check.coversAllNativeModules = needingKind.every(e => (e.requiredAdversarialSurfaces ?? []).every(s => entryAggByFile.get(e.file)?.advSurfaces.has(s)));
+        }
       }
       e2eChecks.push(check);
     } else if (!suiteClean) {
@@ -8112,6 +8133,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
     offlinePassed,
     offlineSummary: `${suiteCmd} passed`,
     e2eChecks,
+    requiredAdversarialSurfaces: allRequiredAdvSurfaces,
   };
 }
 
@@ -8347,6 +8369,7 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
     changedFiles: changed,
     nativeOnlyFiles: effectiveNativeOnlyFiles,
     realHostClasses: Array.isArray(base.realHostClasses) ? base.realHostClasses : [],
+    requiredAdversarialSurfaces: Array.isArray(base.requiredAdversarialSurfaces) ? base.requiredAdversarialSurfaces : [],
     requiredCapabilities,
     availableCapabilities,
     isBugFix: base.isBugFix === true,
@@ -8414,6 +8437,7 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
       baseOracleStatus: liveEvidence.oracleResult?.status ?? null,
       formalTier: liveEvidence.formalVerification?.tier ?? null,
       formalSatisfiesCode: liveEvidence.formalVerification?.satisfiesCodeVerification ?? null,
+      adversarialRealHostStatus: liveEvidence.proveReceipt?.evidence?.adversarial_real_host?.status ?? null,
       refactorEquivalenceStatus: liveEvidence.refactorEquivalence?.status ?? null,
     };
   }

@@ -1,7 +1,10 @@
 // Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 691dd6196bed4cd3f73c6e54357b81dbbd926f01249066f198c14749055ad53b).
 // Delegates prompt metadata & file-owner parsing to core modules.
 import { headerPrompts, promptClaims } from '../../file-owner.mjs';
+import { ADVERSARIAL_BOUNDARY_SURFACES, ADVERSARIAL_SURFACE_CHECKLISTS, classifyNativeOnlySurfaces } from '../../core/lint/adversarial-boundary.mjs';
 import { extractRuntimeInterfaceObjects, findFrontmatterRange } from '../../core/lint/prompt-metadata.mjs';
+
+export { ADVERSARIAL_BOUNDARY_SURFACES, ADVERSARIAL_SURFACE_CHECKLISTS, classifyNativeOnlySurfaces };
 
 export const MIN_REALISTIC_PAYLOAD_BYTES = 4096;
 export const REAL_HOST_FAILURE_CLASSES = Object.freeze([

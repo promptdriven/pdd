@@ -1,9 +1,12 @@
 // Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 691dd6196bed4cd3f73c6e54357b81dbbd926f01249066f198c14749055ad53b).
 import {
+  ADVERSARIAL_BOUNDARY_SURFACES,
+  ADVERSARIAL_SURFACE_CHECKLISTS,
   MIN_REALISTIC_PAYLOAD_BYTES,
   REAL_E2E_KINDS,
   REAL_HOST_CLASS_LABELS,
   REAL_HOST_CLASS_SET,
+  classifyNativeOnlySurfaces,
   cleanText,
   cleanTool,
   detectChangedSurfaces,
@@ -169,12 +172,14 @@ function evidencedRealHostClasses(executedRealHostChecks) {
   return [...classes].sort();
 }
 
-function describeRealHostGap({ nativeOnlyFiles, runtimeSurfaces, missingClasses, mockOnlyDetected }) {
+function describeRealHostGap({ nativeOnlyFiles, runtimeSurfaces, missingClasses, missingAdvSurfaces = [], happyPathOnlyDetected = false, mockOnlyDetected }) {
   const parts = [];
   if (nativeOnlyFiles.length) parts.push(`native-only module(s): ${nativeOnlyFiles.join(', ')}`);
   const nonNative = runtimeSurfaces.filter((s) => s !== 'native-only');
   if (nonNative.length) parts.push(`surface(s): ${nonNative.join(', ')}`);
   if (missingClasses.length) parts.push(`unexercised real-host class(es): ${missingClasses.map((c) => REAL_HOST_CLASS_LABELS[c] || c).join('; ')}`);
+  if (missingAdvSurfaces.length) parts.push(`missing adversarial boundary surface(s): ${missingAdvSurfaces.map((s) => `${s} (${ADVERSARIAL_SURFACE_CHECKLISTS[s] || s})`).join('; ')}`);
+  if (happyPathOnlyDetected) parts.push('only happy-path real-host smoke detected (zero adversarial negative/rejection probes)');
   if (mockOnlyDetected) parts.push('only mocked/stubbed or in-process unit checks detected');
   return parts.join('; ') || 'native-only / OS boundary real-host smoke';
 }
@@ -193,7 +198,7 @@ const bucket3Stop = ({ waitKind, repairAttempts, offlineSummary, unverifiedBound
  */
 export function evaluateValidationOutcome({
   mode = 'auto', changedFiles = [], nativeOnlyFiles = [], promptFiles = null, bindings = null, fileHeads = null,
-  realHostClasses = [], requiredCapabilities = [], availableCapabilities = [], isBugFix = false,
+  realHostClasses = [], requiredAdversarialSurfaces = [], requiredCapabilities = [], availableCapabilities = [], isBugFix = false,
   offlinePassed = false, offlineSummary = '', e2eChecks = [], bugFixBaseControl = 'not-applicable',
   diagnostics = [], realBindingUnavailable = false, needsHumanInteraction = false, humanBoundaryDetail = '',
   verifyCommand = '', toolHint = '', lintBlockingCodes = [], repairAttempts = 0,
@@ -204,17 +209,23 @@ export function evaluateValidationOutcome({
   const normalizedFiles = Array.isArray(changedFiles) ? changedFiles.map(normalizePath).filter(Boolean) : [];
   const detectedNative = (promptFiles || bindings || fileHeads)
     ? detectNativeOnlyModules({ changedFiles: normalizedFiles, promptFiles, bindings, fileHeads })
-    : { nativeOnlyModules: [] };
+    : { nativeOnlyModules: [], matches: [] };
   const resolvedNative = [...new Set([
     ...(Array.isArray(nativeOnlyFiles) ? nativeOnlyFiles.map(normalizePath).filter(Boolean) : []),
     ...detectedNative.nativeOnlyModules,
   ])].sort();
+  const explicitAdvSurfaces = Array.isArray(requiredAdversarialSurfaces) ? [...new Set(requiredAdversarialSurfaces.map(cleanTool).filter(Boolean))].sort() : [];
+  const promptTextByPath = new Map((Array.isArray(promptFiles) ? promptFiles : []).filter((p) => p?.path && typeof p.content === 'string').map((p) => [normalizePath(p.path).toLowerCase(), p.content]));
+  const headTextByPath = new Map((Array.isArray(fileHeads) ? fileHeads : []).filter((h) => h?.path && typeof h.content === 'string').map((h) => [normalizePath(h.path).toLowerCase(), h.content]));
+  const concreteAdvSet = new Set(ADVERSARIAL_BOUNDARY_SURFACES);
+  const inferredAdvSurfaces = resolvedNative.length ? [...new Set(resolvedNative.flatMap((mod) => { const m = (detectedNative.matches ?? []).find((x) => x.module === mod); const surfs = classifyNativeOnlySurfaces({ modulePath: mod, promptText: m ? (promptTextByPath.get(normalizePath(m.prompt).toLowerCase()) ?? '') : '', moduleSource: headTextByPath.get(mod.toLowerCase()) ?? '' }); return (promptFiles || fileHeads) ? surfs : surfs.filter((s) => concreteAdvSet.has(s)); }))].sort() : [];
+  const requiredAdvSurfaces = [...new Set([...explicitAdvSurfaces, ...inferredAdvSurfaces])].sort();
   const explicitClasses = Array.isArray(realHostClasses)
     ? [...new Set(realHostClasses.map(cleanTool).filter((c) => REAL_HOST_CLASS_SET.has(c)))].sort()
     : [];
   const surfaceInfo = detectChangedSurfaces({ changedFiles: normalizedFiles, nativeOnlyFiles: resolvedNative });
   const requiredClasses = [...new Set([...explicitClasses, ...surfaceInfo.realHostBoundaryClasses])].sort();
-  const needsRealHostSmoke = surfaceInfo.requiredProofKinds.includes('real-host-smoke') || explicitClasses.length > 0;
+  const needsRealHostSmoke = surfaceInfo.requiredProofKinds.includes('real-host-smoke') || explicitClasses.length > 0 || requiredAdvSurfaces.length > 0;
   const humanBlocker = needsHumanInteraction === true || diagLines.some((d) => HUMAN_INTERACTION_RE.test(d));
   const bucket2 = detectBucket2Blocker({ realBindingUnavailable, diagnostics: diagLines, toolHint, verifyCommand });
   const capCheck = checkCapabilityRequirements({ requiredCapabilities, availableCapabilities });
@@ -293,6 +304,17 @@ export function evaluateValidationOutcome({
         message: `Real-host boundary verification missed required host failure class(es) (${gap}).`,
       });
     }
+    const evidencedAdvSurfaces = [...new Set(executedClassChecks.flatMap((c) => [...(Array.isArray(c.adversarialSurfaces) ? c.adversarialSurfaces : []), ...(Array.isArray(c.realHostClasses) && c.realHostClasses.includes('multi-turn-cli-state') && (!Number.isInteger(c.turns) || c.turns >= 2) ? ['cli-day0'] : [])]))].sort();
+    const evidencedAdvProbes = [...new Set(executedClassChecks.flatMap((c) => (Array.isArray(c.adversarialProbes) ? c.adversarialProbes : [])))].sort();
+    const missingAdvSurfaces = requiredAdvSurfaces.filter((s) => !evidencedAdvSurfaces.includes(s));
+    const happyPathOnlyNative = surfaceInfo.nativeOnlyFiles.length > 0 && executedClassChecks.some((c) => c.happyPathOnly === true || Array.isArray(c.adversarialProbes) || Array.isArray(c.adversarialSurfaces)) && evidencedAdvProbes.length === 0;
+    const advChecks = executedClassChecks.filter((c) => (Array.isArray(c.adversarialProbes) && c.adversarialProbes.length > 0) || (Array.isArray(c.adversarialSurfaces) && c.adversarialSurfaces.length > 0));
+    const explicitCoveredMods = new Set(advChecks.flatMap((c) => (Array.isArray(c.coveredModules) ? c.coveredModules.map(normalizePath) : [])));
+    const uncoveredNativeMods = surfaceInfo.nativeOnlyFiles.length >= 2 && (explicitCoveredMods.size ? surfaceInfo.nativeOnlyFiles.filter((m) => !explicitCoveredMods.has(m)) : (advChecks.length < surfaceInfo.nativeOnlyFiles.length && !advChecks.some((c) => c.coversAllNativeModules === true) ? surfaceInfo.nativeOnlyFiles : []));
+    if (missingAdvSurfaces.length || happyPathOnlyNative || uncoveredNativeMods.length) {
+      const gap = describeRealHostGap({ nativeOnlyFiles: uncoveredNativeMods.length ? uncoveredNativeMods : surfaceInfo.nativeOnlyFiles, runtimeSurfaces: surfaceInfo.runtimeSurfaces, missingClasses: [], missingAdvSurfaces, happyPathOnlyDetected: happyPathOnlyNative, mockOnlyDetected });
+      return bucket3Stop({ waitKind: 'needs-real-host-smoke', repairAttempts: attempts, offlineSummary, verifyCommand: defaultVerifyCmd, unverifiedBoundary: cleanText(humanBoundaryDetail) || gap, message: `Adversarial real-host boundary verification required for native-only boundary (${gap}).` });
+    }
   }
   if (surfaceInfo.requiresRealE2e && executedRealChecks.length === 0) {
     return bucket3Stop({
@@ -314,6 +336,8 @@ export function evaluateValidationOutcome({
   const bugFixControlOk = isBugFix !== true || bugFixBaseControl === 'ran-and-failed-on-base';
 
   if (offlinePassed === true && lintErrors.length === 0 && allRealPassed && coveredSurfaces && bugFixControlOk) {
+    const advSurfaces = [...new Set(executedClassChecks.flatMap((c) => (Array.isArray(c.adversarialSurfaces) ? c.adversarialSurfaces : [])))].sort();
+    const advProbes = [...new Set(executedClassChecks.flatMap((c) => (Array.isArray(c.adversarialProbes) ? c.adversarialProbes : [])))].sort();
     return makeOutcome({
       bucket: 1, decision: allowDecision, eligible: true, keepPr: false, repairAttemptsNext: attempts,
       message: 'All offline, lint, and real end-to-end checks passed 100%.',
@@ -322,6 +346,9 @@ export function evaluateValidationOutcome({
         commands: executedRealChecks.map((c) => cleanText(c.command)),
         exitCodes: executedRealChecks.map((c) => c.exitCode),
         ...(needsRealHostSmoke ? { realHostClasses: evidencedRealHostClasses(executedClassChecks) } : {}),
+        ...(surfaceInfo.nativeOnlyFiles.length > 0 || requiredAdvSurfaces.length > 0
+          ? { evidenceSplit: { simulated_vectors: { executesNativeOnlyBoundaries: false }, adversarial_real_host: { surfaces: advSurfaces, probes: advProbes } } }
+          : {}),
       },
     });
   }

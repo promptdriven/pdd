@@ -1,5 +1,6 @@
 // Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 691dd6196bed4cd3f73c6e54357b81dbbd926f01249066f198c14749055ad53b).
 import { execFileSync } from 'node:child_process';
+import { detectAdversarialProbesInTest } from '../../core/lint/adversarial-boundary.mjs';
 import { readSafeUtf8 } from '../../core/lint/diagnostics.mjs';
 import { loadProjectLintConfig } from '../../core/lint/project-config.mjs';
 import { collectTestFixedSleepFindings, collectTestUnexcusedSkipFindings, lintAutopilotTestHygiene, lintTestFixedSleeps, lintTestUnexcusedSkips } from '../lint-sleep-skip.mjs';
@@ -11,7 +12,7 @@ import {
   detectJsTty, detectLang, extractCallArgsSlice, hasLeadingDot, resolveAuthenticCall, resolveLeadingMemberReceiver, splitLinesWithOffsets,
 } from './real-host-probes.mjs';
 
-export { MOCK_USAGE_RE, REAL_E2E_EXEC_RE, collectTestFixedSleepFindings, collectTestUnexcusedSkipFindings, lintAutopilotTestHygiene, lintTestFixedSleeps, lintTestUnexcusedSkips };
+export { MOCK_USAGE_RE, REAL_E2E_EXEC_RE, collectTestFixedSleepFindings, collectTestUnexcusedSkipFindings, detectAdversarialProbesInTest, lintAutopilotTestHygiene, lintTestFixedSleeps, lintTestUnexcusedSkips };
 
 const PROD_PATH_LITERAL_RE = /['"`]((?:\.\.\/|\.\/)?(?:bin|cli|cmd|scripts|api|server|routes|handlers|controllers|db|database|migrations|prisma|sql|web|ui|frontend|pages|components|views|app|os|sandbox|tty|pty|subprocess|src)\/[A-Za-z0-9._/-]+)['"`]/g;
 const LOOP_START_ALL_RE = /(?<![.\w$])(for|while)[ \t]*\(|\.[ \t]*(forEach|map)[ \t]*\(/g;
@@ -25,6 +26,7 @@ const BACKSIDE_TEST_FILE_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:t
 const decodeEsc = (c) => (c === 'n' ? '\n' : c === 'r' ? '\r' : c === 't' ? '\t' : c);
 const isRegexStart = (p) => !p || '([{:;,=!?&|+-*%^~<>}'.includes(p) || /^(?:return|case|throw|in|of|typeof|void|delete|new|else|do|yield|await)$/.test(p);
 const hasMockUsage = (code, lang) => MOCK_USAGE_RE.test(code) || (lang !== 'js' && POLYGLOT_MOCK_USAGE_RE.test(code));
+const isTrivShell = (base, raw, lits) => SHELL_RUNTIME_RE.test(base) && (/^\s*(?:true|false|echo\b|pwd\b|printf\b|sleep\b|exit(?:\s+\d+)?|:)\s*$/i.test(lits.find((_, i) => i > 0 && lits[i - 1]?.value.trim() === '-c')?.value ?? '') || /\s-c\s+['"]?\s*(?:true|false|echo\b|pwd\b|exit(?:\s+\d+)?|:)\s*['"]?\s*$/i.test(raw));
 
 function scanSourceWithMetrics(source, lang = 'js') {
   const text = String(source ?? ''), nc = [], ns = [], tpl = [], repUnits = new Map(), lits = new Map();
@@ -160,7 +162,7 @@ function analyzeJsSubprocessCalls(code, auth, litMap) {
           if (!rawCmd) { if (!after.startsWith('+')) continue; }
           else {
             const base = (rawCmd.split(/\s+/)[0] ?? '').split(/[\\/]/).pop() ?? '';
-            if (!base || TRIVIAL_SUBPROCESS_BIN_RE.test(base)) continue;
+            if (!base || TRIVIAL_SUBPROCESS_BIN_RE.test(base) || isTrivShell(base, rawCmd, lits)) continue;
             if (EXTERNAL_TOOL_EXEC_RE.test(rawCmd) || (SHELL_RUNTIME_RE.test(base) && EXTERNAL_TOOL_EXEC_RE.test(combined))) hasExternalToolSubprocess = true;
             if (SANDBOX_EXEC_RE.test(rawCmd)) hasSandboxSubprocess = true;
           }
@@ -193,11 +195,11 @@ function detectPolyglotSignals(lang, code, litMap) {
     const { slice, startIdx } = extractCallArgsSlice(code, openIdx, 240), tr = slice.trim();
     if (!tr) return false;
     const lits = collectLiteralsInMaskedSlice(slice, startIdx, litMap), all = `${slice} ${lits.map((x) => x.value).join(' ')}`;
-    const lead = tr[0] === '"' && lits.length && !slice.slice(0, lits[0].sliceStart).trim() ? lits[0].value.trim() : null;
+    const lead = (tr[0] === '"' || (tr[0] === '[' && tr.slice(1).trimStart()[0] === '"')) && lits.length && !slice.slice(0, lits[0].sliceStart).replace(/^\s*\[\s*/, '').trim() ? lits[0].value.trim() : null;
     if (lead !== null) {
       if (!lead && !tr.slice(tr.indexOf('"', 1) + 1).trimStart().startsWith('+')) return false;
       const base = (lead.split(/\s+/)[0] ?? '').split(/[\\/]/).pop() ?? '';
-      if (lead && (!base || TRIVIAL_SUBPROCESS_BIN_RE.test(base))) return false;
+      if (lead && (!base || TRIVIAL_SUBPROCESS_BIN_RE.test(base) || isTrivShell(base, lead, lits))) return false;
       if (EXTERNAL_TOOL_EXEC_RE.test(lead) || (SHELL_RUNTIME_RE.test(base) && EXTERNAL_TOOL_EXEC_RE.test(all))) hasExtSub = true;
     } else if (EXTERNAL_TOOL_EXEC_RE.test(all)) hasExtSub = true;
     hasRealSub = true; subCount += 1;
@@ -210,7 +212,8 @@ function detectPolyglotSignals(lang, code, litMap) {
     if (!stubbed && /\b(?:import\s+subprocess|from\s+subprocess\s+import)\b/.test(code)) for (const m of code.matchAll(/\bsubprocess\.(?:run|Popen|check_output|check_call)\s*\(/g)) inspectCmd((m.index ?? 0) + m[0].length - 1);
     hasLoop = hasRealSub && /\b(?:for|while)\s+[^:\n]+:\s*\n?[ \t]+[^\n]*subprocess\./.test(code);
     hasBrowser = /\bplaywright\b/.test(code) && /\.(?:goto|launch)\s*\(/.test(code) && !hasMock;
-    hasServerOrDb = /\b(?:requests\.(?:get|post|put|delete|request)|httpx\.(?:get|post|Client)|urllib\.request\.urlopen|HTTPServer|sqlite3\.connect|psycopg2?\.connect|TestClient)\s*\(/.test(code) && !hasMock;
+    const httpShadowed = /\b(?:TestClient|sqlite3\.connect|requests\.\w+|httpx\.\w+)\s*=(?!=)|\b(?:requests|httpx)\s*=(?!\s*(?:=|\[|\d|\{|None\b))|\b(?:class|def)\s+(?:TestClient|requests|httpx|sqlite3)\b|\bas\s+(?:TestClient|requests|httpx|sqlite3)\b|\bMockTransport\b|\b(?:patch|monkeypatch\.setattr)\s*\([^)]*(?:TestClient|sqlite3|httpx|requests)/.test(code);
+    hasServerOrDb = !httpShadowed && /\b(?:requests\.(?:get|post|put|delete|request)|httpx\.(?:get|post|Client)|urllib\.request\.urlopen|HTTPServer|sqlite3\.connect|psycopg2?\.connect|TestClient)\s*\(/.test(code) && !hasMock;
     hasTty = (/\b(?:pty\.openpty|termios\.tcgetattr|os\.isatty)\s*\(/.test(code) || (/\b(?:open|os\.stat)\s*\(/.test(code) && litValues.some((v) => REAL_DEVICE_PATH_RE.test(v)))) && !hasMock;
     hasFs = /\b(?:tempfile\.mkdtemp|TemporaryDirectory|os\.listdir|Path\(|tmp_path)\b/.test(code);
   } else if (lang === 'go') {
@@ -299,12 +302,14 @@ function detectMaxPayloadBytes(code, { maxInlineStringBytes = 0, repeatLiteralUn
 }
 
 export function detectRealHostProbesInTest(testPath, text) {
-  if (lintValidationCode({ path: testPath, kind: 'test', text, hasRealE2eCoverage: true }).codes.includes('silent-validation-skip')) return { hasRealHostSmoke: false, mockOnly: false, classes: [], maxDetectedPayloadBytes: null, detectedTurns: 0, liveLocal: false };
+  if (lintValidationCode({ path: testPath, kind: 'test', text, hasRealE2eCoverage: true }).codes.includes('silent-validation-skip')) return { hasRealHostSmoke: false, hasAdversarialProbes: false, happyPathOnly: false, adversarialSurfaces: [], adversarialProbes: [], mockOnly: false, classes: [], maxDetectedPayloadBytes: null, detectedTurns: 0, liveLocal: false };
   const lang = detectLang(testPath), { codeNoStrings, maxInlineStringBytes, repeatLiteralUnits, stringLiteralsByOpenPos } = scanSourceWithMetrics(text, lang);
   const s = detectRealExecutionSignals(testPath, codeNoStrings, stringLiteralsByOpenPos), maxBytes = detectMaxPayloadBytes(codeNoStrings, { maxInlineStringBytes, repeatLiteralUnits, lang });
   const turns = !s.hasRealSubprocess ? 0 : (s.hasLoopedSubprocess ? Math.max(2, s.subprocessCallCount) : s.subprocessCallCount);
   const classes = [...(s.hasRealSubprocess && s.hasSandboxSubprocess ? ['nested-sandbox'] : []), ...(s.hasRealDeviceOrTtyProbe ? ['host-tty-ownership'] : []), ...(s.hasRealSubprocess && turns >= 2 && s.hasRealFsState ? ['multi-turn-cli-state'] : []), ...(s.hasRealHostSmoke && maxBytes !== null && maxBytes > MIN_REALISTIC_PAYLOAD_BYTES ? ['full-size-payload'] : [])].sort();
-  return { hasRealHostSmoke: s.hasRealHostSmoke, mockOnly: hasMockUsage(codeNoStrings, lang) && !s.hasRealHostSmoke, classes, maxDetectedPayloadBytes: maxBytes, detectedTurns: turns, liveLocal: s.hasLiveLocal };
+  const mockOnly = hasMockUsage(codeNoStrings, lang) && !s.hasRealHostSmoke;
+  const adv = detectAdversarialProbesInTest(testPath, text, { hasRealHostSmoke: s.hasRealHostSmoke, hasMock: mockOnly });
+  return { hasRealHostSmoke: s.hasRealHostSmoke, hasAdversarialProbes: adv.hasAdversarialProbes, happyPathOnly: adv.happyPathOnly, adversarialSurfaces: adv.surfaces, adversarialProbes: adv.probes, mockOnly, classes, maxDetectedPayloadBytes: maxBytes, detectedTurns: turns, liveLocal: s.hasLiveLocal };
 }
 
 export function detectRealE2eKindsInTest(testPath, text) {

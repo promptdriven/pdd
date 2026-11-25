@@ -11,6 +11,7 @@ import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBa
 import { lintRepoProject } from './lint/project-lint.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
 import { detectShadowBinaries, runDiffSpotlight } from './lint/test-inventory.mjs';
+import { inspectAdversarialBoundaryEvidence } from './lint/adversarial-boundary.mjs';
 import { runFormalVerification } from './formal-verify.mjs';
 import { detectHostCapabilities, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths } from './verify-paths.mjs';
 
@@ -465,7 +466,7 @@ export function runProve(
       baseRef: baseRef ?? null, baseSha: null, headSha, configSource: null, touchedFiles: [], changedSurfaces: [],
       lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
       diff: { ok: false, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
-      test: null, formal: null, paths: [], notProvedReasons,
+      test: null, formal: null, evidence: null, paths: [], notProvedReasons,
     };
     if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
     else stdout.write(`Not proved:\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
@@ -624,6 +625,11 @@ export function runProve(
     }
   }
 
+  const evidence = inspectAdversarialBoundaryEvidence({ root, touchedFiles: diff.touchedFiles, testResult, pathResults });
+  if (evidence.adversarial_real_host.notProvedReasons?.length) notProvedReasons.push(...evidence.adversarial_real_host.notProvedReasons);
+  const { notProvedReasons: _omitAdvReasons, ...adversarialReceipt } = evidence.adversarial_real_host;
+  const evidenceReceipt = { simulated_vectors: evidence.simulated_vectors, adversarial_real_host: adversarialReceipt };
+
   const failedErrors = [
     ...baseVerify.errors.map(e => formatTeachingDetail({ invariant: e, fix: 'Fix the invalid "verify" block in pdd.json', rerun: 'pdd prove' })),
     ...lint.errors,
@@ -642,16 +648,19 @@ export function runProve(
     configSource: baseVerify.configured ? baseVerify.source : (testCommand ? 'auto-detected' : null), touchedFiles: diff.touchedFiles, changedSurfaces,
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
-    test: testResult, formal: formalResult, paths: pathResults, notProvedReasons,
+    test: testResult, formal: formalResult, evidence: evidenceReceipt, paths: pathResults, notProvedReasons,
   };
 
   const scopeSuffix = statusFailed
     ? ' (unknown checkout cleanliness)'
     : (dirty ? ` (working tree, uncommitted changes: ${dirtyFiles.slice(0, 4).join(', ')})` : '');
   const formalLine = formalResult?.summary || 'Formal: not-applicable';
+  const advSuffix = adversarialReceipt.applicable
+    ? ` Evidence: simulated_vectors=${evidence.simulated_vectors.totalFiles} (simulated ports only); ${adversarialReceipt.summary}.`
+    : '';
   if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
-  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.\n`);
-  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
-  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.\n`); }
+  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.${advSuffix}\n`);
+  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):${advSuffix}\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
+  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.${advSuffix}\n`); }
   return { exitCode, outcome, receipt };
 }

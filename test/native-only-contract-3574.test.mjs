@@ -1698,17 +1698,18 @@ test('R1 Finding #2 integration: autopilot-core runValidatorV2Gate enforces nati
     'human verification card names the unverified native-only module',
   );
 
-  // Now verify a second PR on the same kind: native-only module (discovered via base pdd-bindings.json) WITH a real executed SQLite smoke test PASSES and merges!
-  const w2 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
-  w2.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
-  w2.baseCommit('pdd-bindings.json', JSON.stringify({
+  // Now verify a second PR on the same kind: native-only module (discovered via base pdd-bindings.json):
+  // happy-path-only SQLite smoke FAILS CLOSED (#3633), while a real adversarial SQLite DR probe PASSES and merges!
+  const w2Happy = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w2Happy.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  w2Happy.baseCommit('pdd-bindings.json', JSON.stringify({
     schema_version: 'pdd.bindings.v1',
     modules: [{ module: 'src/trust/store.mjs', prompt: 'prompts/trust/store.prompt.md' }],
   }, null, 2));
-  w2.issue(102, { title: 'Add real SQLite smoke for native-only trust store' });
-  await w2.tick();
-  const buildCwd2 = w2.job(102, 'build').cwd;
-  writeFile(buildCwd2, 'prompts/trust/store.prompt.md', [
+  w2Happy.issue(112, { title: 'Happy-path-only SQLite smoke for native-only trust store' });
+  await w2Happy.tick();
+  const buildCwd2Happy = w2Happy.job(112, 'build').cwd;
+  const trustStorePrompt = [
     '---',
     'kind: native-only',
     'reason: Real SQLite adapter on host filesystem.',
@@ -1719,15 +1720,55 @@ test('R1 Finding #2 integration: autopilot-core runValidatorV2Gate enforces nati
     '## Error mapping',
     'Maps SQLITE_BUSY to HTTP 503.',
     '## Real-host verification',
-    'Runs real SQLite smoke test.',
+    'Runs real SQLite adversarial DR probe.',
     '## Dependencies',
     'None.',
-  ].join('\n'));
+  ].join('\n');
+  writeFile(buildCwd2Happy, 'prompts/trust/store.prompt.md', trustStorePrompt);
+  writeFile(buildCwd2Happy, 'src/trust/store.mjs', 'export function openTrustStore(db) { return db; }\n');
+  writeFile(
+    buildCwd2Happy,
+    'test/trust-store-smoke.test.mjs',
+    "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { DatabaseSync } from 'node:sqlite';\nimport { openTrustStore } from '../src/trust/store.mjs';\ntest('real sqlite', () => { const db = new DatabaseSync(':memory:'); assert.ok(openTrustStore(db)); db.close(); });\n",
+  );
+  const { pr: pr2Happy } = w2Happy.build(112, {
+    write: false,
+    body: 'Fixes #112\n\nRuntime: not run (native-only prompt)\nPath: d — src/trust/store.mjs, test/trust-store-smoke.test.mjs — owned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w2Happy.tick();
+  w2Happy.review(112, 'PASS');
+  w2Happy.suite(112, 0);
+  await w2Happy.tick();
+  assert.equal(pr2Happy.merged, false, 'happy-path-only SQLite smoke on native-only store must fail closed under #3633');
+  assert.ok(w2Happy.labels(112).includes('pdd:needs-decision'));
+
+  const w2 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w2.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  w2.baseCommit('pdd-bindings.json', JSON.stringify({
+    schema_version: 'pdd.bindings.v1',
+    modules: [{ module: 'src/trust/store.mjs', prompt: 'prompts/trust/store.prompt.md' }],
+  }, null, 2));
+  w2.issue(102, { title: 'Add real adversarial SQLite DR probe for native-only trust store' });
+  await w2.tick();
+  const buildCwd2 = w2.job(102, 'build').cwd;
+  writeFile(buildCwd2, 'prompts/trust/store.prompt.md', trustStorePrompt);
   writeFile(buildCwd2, 'src/trust/store.mjs', 'export function openTrustStore(db) { return db; }\n');
   writeFile(
     buildCwd2,
     'test/trust-store-smoke.test.mjs',
-    "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { DatabaseSync } from 'node:sqlite';\nimport { openTrustStore } from '../src/trust/store.mjs';\ntest('real sqlite', () => { const db = new DatabaseSync(':memory:'); assert.ok(openTrustStore(db)); db.close(); });\n",
+    [
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { writeFileSync } from 'node:fs';",
+      "import { DatabaseSync } from 'node:sqlite';",
+      "import { openTrustStore } from '../src/trust/store.mjs';",
+      "test('real sqlite adversarial corrupt-db recovery', () => {",
+      "  const dbPath = '/tmp/trust-corrupt.sqlite';",
+      "  writeFileSync(dbPath, 'CORRUPT_SQLITE_BYTES');",
+      "  assert.throws(() => { const db = new DatabaseSync(dbPath); openTrustStore(db); db.exec('SELECT 1'); });",
+      '});',
+    ].join('\n') + '\n',
   );
   const { pr: pr2 } = w2.build(102, {
     write: false,
@@ -1739,7 +1780,7 @@ test('R1 Finding #2 integration: autopilot-core runValidatorV2Gate enforces nati
   w2.suite(102, 0);
   await w2.tick();
 
-  assert.equal(pr2.merged, true, 'native-only PR with real executed SQLite smoke test must pass runValidatorV2Gate and merge');
+  assert.equal(pr2.merged, true, 'native-only PR with real executed adversarial SQLite DR probe must pass runValidatorV2Gate and merge');
 
   // 2. Unrelated test exercising `nested-sandbox` for a DIFFERENT file MUST NOT satisfy changed `src/os-sandbox.mjs`,
   //    while a targeted `sandbox-exec` smoke test for `src/os-sandbox.mjs` PASSES and merges!
