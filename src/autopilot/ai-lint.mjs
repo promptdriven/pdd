@@ -6,6 +6,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { gitFiles } from '../shared/git-context.mjs';
 import { READONLY_PROVIDERS, normalizeReadonlyProvider, runReadonlyAgent } from '../shared/readonly-agent.mjs';
 import { causeText, isSecretPath } from '../shared/safe-read.mjs';
+import { ROOT_TEST_SCENARIO_JSON_RE } from '../shared/test-paths.mjs';
 import { workspace } from '../shared/workspace-policy.mjs';
 import { lintRepoProject, stripPromptMetadata } from '../repo-hygiene-lint.mjs';
 import { knownSecretValues, redactSecrets } from '../secret-redaction.mjs';
@@ -14,7 +15,7 @@ import { runStepAgentProcess } from './step-runner.mjs';
 
 const LIM = Object.freeze({ fileBytes: 512 * 1024, issueBytes: 128 * 1024, issueChars: 16_000, scenarioChars: 4_000, scenarioTotal: 12_000, outlineChars: 1_000, outlineTotal: 12_000, promptChars: 24_000, batchFiles: 6, defaultTimeoutMs: 120_000, ghTimeoutMs: 15_000, minMin: 0.1, maxMin: 120, maxTimer: 2_147_483_647 });
 const FIXTURE_DIR = /(?:^|\/)fixtures(?:\/|$)/i;
-const SCENARIO_JSON = /^(?:tests?|__tests__)\/.*\.json$/i;
+const SCENARIO_JSON = ROOT_TEST_SCENARIO_JSON_RE;
 const LABELS = Object.freeze({ codex: 'Codex', claude: 'Claude', gemini: 'Gemini', agy: 'Agy' });
 const canonicalRepoPath = v => typeof v === 'string' && v.trim().length > 0 && v.length <= 1000 && !isAbsolute(v) && !/[\\\x00-\x1f\x7f]/.test(v) && !v.split('/').some(p => !p || p === '.' || p === '..' || p.toLowerCase() === '.git');
 

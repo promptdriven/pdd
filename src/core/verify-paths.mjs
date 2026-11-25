@@ -6,6 +6,7 @@ import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isTestOwnedPath } from '../file-owner.mjs';
+import { isConfiguredTestPath, isNonProductionPyprojectEdit, readPytestTestpaths } from '../shared/test-paths.mjs';
 import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8 } from './lint/diagnostics.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
 import { SHARED_SURFACE_COLS, clean, csv, findSectionLines, isSeparatorRow, tableCells } from './product/markdown-utils.mjs';
@@ -142,7 +143,7 @@ export function loadVerifyConfig(rootOrObject, { gitRef } = {}) {
   }
 }
 
-export function matchVerifyPaths(verifyConfig, touchedFiles = []) {
+export function matchVerifyPaths(verifyConfig, touchedFiles = [], { root = null, baseSha = null, baseRoot = null, testpaths = null } = {}) {
   const cleanFiles = [...new Set((touchedFiles ?? []).filter(f => typeof f === 'string' && f.trim()).map(f => f.replace(/^\.\//, '')))].sort();
   const matched = [];
   const coveredFiles = new Set();
@@ -153,7 +154,21 @@ export function matchVerifyPaths(verifyConfig, touchedFiles = []) {
       for (const f of matchedFiles) coveredFiles.add(f);
     }
   }
-  const changedSurfaces = cleanFiles.filter(isProductionSurfaceFile);
+  const extraTestDirs = Array.isArray(testpaths)
+    ? testpaths
+    : (baseSha && root ? readPytestTestpaths(root, { gitRef: baseSha }) : (baseRoot ? readPytestTestpaths(baseRoot) : (root ? readPytestTestpaths(root) : [])));
+  const isExemptManifest = f => {
+    if (f !== 'pyproject.toml' || !root || (!baseSha && !baseRoot)) return false;
+    let baseRaw = null;
+    if (baseSha) {
+      const baseRes = spawnSync('git', ['show', `${baseSha}:pyproject.toml`], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      baseRaw = baseRes.status === 0 ? baseRes.stdout : null;
+    } else if (baseRoot) {
+      baseRaw = readSafeUtf8(baseRoot, 'pyproject.toml');
+    }
+    return isNonProductionPyprojectEdit(baseRaw, readSafeUtf8(root, 'pyproject.toml'));
+  };
+  const changedSurfaces = cleanFiles.filter(f => isProductionSurfaceFile(f) && !isConfiguredTestPath(f, extraTestDirs) && !isExemptManifest(f));
   return { matched, changedSurfaces, unmappedSurfaces: changedSurfaces.filter(f => !coveredFiles.has(f)) };
 }
 

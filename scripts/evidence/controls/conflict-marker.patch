@@ -1,0 +1,13 @@
+diff --git a/src/worker.mjs b/src/worker.mjs
+--- a/src/worker.mjs
++++ b/src/worker.mjs
+@@ -5,3 +5,9 @@ export function runWorker(vault, audit, key, nextValue) {
+   audit.append({ key, hadExisting: Boolean(existing?.found) });
+   return existing;
+ }
++
++<<<<<<< HEAD
++export const conflictA = 1;
++=======
++export const conflictB = 2;
++>>>>>>> branch

@@ -2177,7 +2177,7 @@ test('3574 reopened CLI parity: pdd lint --local passes <stem>.<op> public expor
     '',
     'Route tool requests to `access.invoke_tool` and browser redemptions to `access.redeem_view`.',
     '',
-    '## Domain decisions',
+    '## Port bindings',
     '- Wire `access.invoke_tool` and `access.redeem_view` to `tokens.verify` and `audit_log.append`.',
     '- Invoke `governance.register_client`, `governance.manage_grant`, and `governance.rotate_token` wired to `grant_store.save`.',
     '',
@@ -2210,7 +2210,7 @@ test('3574 reopened CLI parity: pdd lint --local passes <stem>.<op> public expor
     repo,
     'prompts/connector/mcp-server.prompt.md',
     cleanServer
-      .replace('`access.invoke_tool`', '`access.invoke_tools`')
+      .replaceAll('`access.invoke_tool`', '`access.invoke_tools`')
       .replace('`tokens.verify`', '`fake_tokens.verify`'),
   );
   const badOut = sink(), badErr = sink();
