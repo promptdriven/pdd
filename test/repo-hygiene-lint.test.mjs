@@ -16,6 +16,7 @@ import {
   loadProjectLintConfig,
   stripPromptMetadata,
 } from '../src/repo-hygiene-lint.mjs';
+import { collectNativeOnlyPortParityFindings } from '../src/core/lint/native-port-parity.mjs';
 import { lintTestFixedSleeps } from '../src/autopilot/lint-sleep-skip.mjs';
 import { lint as seamLint, runCheck } from '../src/runtime-seam.mjs';
 import { lintStories, lintStory } from '../src/story-lint.mjs';
@@ -1574,13 +1575,13 @@ test('3574 adversarial review fixes: linear ReDoS safety, scoped table/prose ext
     [],
   );
 
-  // High-signal <declaredPrefix>.<unknownOp> in general prose + dead port on SQL table name are still caught!
+  // Option B (#3675): general prose outside ## Ports is ignored (zero prose false positives), while dead ports inside ## Bound ports are still caught!
   const adapterWithDeadOps = [
     cleanAdapter,
     '',
     '## Background maintenance',
     '',
-    'Nightly cleanup calls `store.purge(cutoff)` in general prose.',
+    'Nightly cleanup calls `store.purge(cutoff)` and `actor.identity_kind` in general prose.',
     '',
     '## Bound ports',
     '',
@@ -1589,9 +1590,10 @@ test('3574 adversarial review fixes: linear ReDoS safety, scoped table/prose ext
   const deadOpErrors = lintNativeOnlyPortParity(adapterWithDeadOps, [{ path: 'prompts/ledger.prompt.md', text: structuredDep }], {
     path: 'prompts/ledger-adapter.prompt.md',
   });
-  assert.equal(deadOpErrors.length, 2, deadOpErrors.join('\n'));
-  assert.ok(deadOpErrors.some(e => e.includes('"store.purge"')));
+  assert.equal(deadOpErrors.length, 1, deadOpErrors.join('\n'));
   assert.ok(deadOpErrors.some(e => e.includes('"search_idx.query"')));
+  assert.ok(!deadOpErrors.some(e => e.includes('"store.purge"')));
+  assert.ok(!deadOpErrors.some(e => e.includes('"actor.identity_kind"')));
 
   // P1-2: `## Runtime interface` heading extraction (both mid-file and EOF) works for stripPromptMetadata, dependency resources, and native-only classification.
   const headingResourceDep = [
@@ -1870,11 +1872,19 @@ test('3574 + 3578 Round 2 regressions: Story-scoped sibling isolation (P1-A), ##
     [],
   );
 
-  // ASCII ` - ` separator still catches declared-prefix undeclared op on RHS while ignoring `cursor.execute`.
+  // Option B (#3675): RHS description prose after ASCII ` - ` separator never false-positives, while an undeclared leading port is still caught.
+  const asciiDashRhsProse = lintNativeOnlyPortParity(
+    realisticNativeAdapter.replace(
+      '- `store.load` - reads rows via `cursor.execute` and `session.commit`.',
+      '- `store.load` - reads rows via `cursor.execute` and mentions `store.purge`.',
+    ),
+    [{ path: 'prompts/domain.prompt.md', text: subheadingDep }],
+  );
+  assert.deepEqual(asciiDashRhsProse, []);
   const asciiDashDead = lintNativeOnlyPortParity(
     realisticNativeAdapter.replace(
       '- `store.load` - reads rows via `cursor.execute` and `session.commit`.',
-      '- `store.load` - reads rows via `cursor.execute` and calls `store.purge`.',
+      '- `store.purge` - reads rows via `cursor.execute` and `session.commit`.',
     ),
     [{ path: 'prompts/domain.prompt.md', text: subheadingDep }],
   );
@@ -2129,17 +2139,110 @@ test('3574 reopened: lintNativeOnlyPortParity recognizes exported <stem>.<op> op
     'exported <stem>.<op> operations across all declaration forms must pass with 0 errors',
   );
 
-  // Negative control: typo on exported op + completely undeclared port MUST fail with 4-part remediation.
+  // Negative control: typo on exported op inside ## Port wiring + completely undeclared port MUST fail with 4-part remediation (while prose outside ## Port wiring never false-positives).
   const brokenServerPrompt = validServerPrompt
-    .replace('`access.invoke_tool`', '`access.invoke_tools`')
+    .replaceAll('`access.invoke_tool`', '`access.invoke_tools`')
     .replace('`grant_store.save`', '`phantom_store.save`');
   const negErrors = lintNativeOnlyPortParity(brokenServerPrompt, deps, { path: 'prompts/connector/mcp-server.prompt.md' });
   assert.equal(negErrors.length, 2, negErrors.join('\n'));
-  assert.match(negErrors[0], /prompts\/connector\/mcp-server\.prompt\.md:8 \[native-only-unknown-port\].*"access\.invoke_tools"/);
+  assert.match(negErrors[0], /prompts\/connector\/mcp-server\.prompt\.md:11 \[native-only-unknown-port\].*"access\.invoke_tools"/);
   assert.match(negErrors[0], /access\.invoke_tool/);
   assert.match(negErrors[0], /Fix: declare "access\.invoke_tools".*pdd lint/);
   assert.match(negErrors[1], /prompts\/connector\/mcp-server\.prompt\.md:12 \[native-only-unknown-port\].*"phantom_store\.save"/);
   assert.match(negErrors[1], /Fix: declare "phantom_store\.save".*pdd lint/);
+});
+
+test('#3675 Option B: native-only port parity ignores prose dotted fields, emits advisory notice when no ports declared, and catches typos in ## Ports', () => {
+  const cliDep = [
+    '# Operator CLI',
+    '',
+    'Inspect `actor.actor_id` and `actor.channel`.',
+    '',
+    '## Ports',
+    '- `trust.authorize`',
+    '- `audit_log.append`',
+  ].join('\n');
+
+  const proseOnlyNative = [
+    '---',
+    'kind: native-only',
+    'reason: Terminal executable wrapper.',
+    '---',
+    '',
+    '# Terminal adapter',
+    '',
+    'Inspect `actor.identity_kind`, `foo.bar_baz`, `trust.fake_field`, and wire `phantom.op` in plain prose.',
+    '',
+    '## Dependencies',
+    '- [operator](operator.prompt.md)',
+  ].join('\n');
+
+  const findings = collectNativeOnlyPortParityFindings(proseOnlyNative, [{ path: 'prompts/cli/operator.prompt.md', text: cliDep }], {
+    path: 'prompts/cli/terminal.prompt.md',
+    dependencyPaths: ['prompts/cli/operator.prompt.md'],
+  });
+  assert.equal(findings.filter(f => f.defaultSeverity === 'error').length, 0);
+  const advisory = findings.filter(f => f.code === 'native-only-no-declared-ports' && f.defaultSeverity === 'warn');
+  assert.equal(advisory.length, 1);
+  // BREAK-IT F4: advisory Fix must recommend ## Ports / ## Port bindings, NOT frontmatter `ports:` (rejected by runtime-preflight).
+  assert.equal(advisory[0].detail.includes('frontmatter `ports:`'), false);
+  assert.match(advisory[0].detail, /## Ports.*## Port bindings/);
+
+  const declaredWithTypo = `${proseOnlyNative}\n\n## Ports\n- \`trust.authorise_typo\`\n`;
+  const typoErrors = lintNativeOnlyPortParity(declaredWithTypo, [{ path: 'prompts/cli/operator.prompt.md', text: cliDep }], {
+    path: 'prompts/cli/terminal.prompt.md',
+    dependencyPaths: ['prompts/cli/operator.prompt.md'],
+  });
+  assert.equal(typoErrors.length, 1);
+  assert.match(typoErrors[0], /\[native-only-unknown-port\].*"trust\.authorise_typo"/);
+
+  // BREAK-IT F1: syntactic non-ports (filenames, domains, stdlib/object refs, JS members) inside ## Port bindings & Port tables stay clean.
+  const declaredWithSyntacticNonPorts = [
+    proseOnlyNative,
+    '',
+    '## Port bindings',
+    '- Load credentials from `config.json`, `cli_state.sqlite`, `app.py`, `yarn.lock`, `example.com`, `os.path`, `self.store`, `app.state`, and `items.length` before calling `trust.authorize`.',
+    '',
+    '| Owner | Bound ports |',
+    '| --- | --- |',
+    '| `operator` | `audit_log.append` reading `config.json` and `cli_state.sqlite` |',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(declaredWithSyntacticNonPorts, [{ path: 'prompts/cli/operator.prompt.md', text: cliDep }], {
+      path: 'prompts/cli/terminal.prompt.md',
+      dependencyPaths: ['prompts/cli/operator.prompt.md'],
+    }),
+    [],
+  );
+
+  // BREAK-IT F2: backtick-prefixed label bullets with `:` or `https://` in ## Port bindings never drop ports after separator.
+  const backtickLabelBullets = [
+    proseOnlyNative,
+    '',
+    '## Port bindings',
+    '- `vendors` bindings: wire `trust.authorise_typo` and `phantom_service.nonexistent_op`.',
+    '- `Operations` (per https://docs.example.com/ports) uses `audit_log.append` and `phantom_url.bad_op`.',
+  ].join('\n');
+  const labelFindings = collectNativeOnlyPortParityFindings(backtickLabelBullets, [{ path: 'prompts/cli/operator.prompt.md', text: cliDep }], {
+    path: 'prompts/cli/terminal.prompt.md',
+    dependencyPaths: ['prompts/cli/operator.prompt.md'],
+  });
+  assert.equal(labelFindings.filter(f => f.code === 'native-only-no-declared-ports').length, 0);
+  const labelErrs = labelFindings.filter(f => f.error).map(f => f.error);
+  assert.equal(labelErrs.length, 3, labelErrs.join('\n'));
+  assert.ok(labelErrs.some(e => e.includes('"trust.authorise_typo"')));
+  assert.ok(labelErrs.some(e => e.includes('"phantom_service.nonexistent_op"')));
+  assert.ok(labelErrs.some(e => e.includes('"phantom_url.bad_op"')));
+
+  // BREAK-IT F3: minimal dependency without ## Ports mentioning `config.json` and `os.path` never leaks them into `declared ports:`.
+  const minimalDep = '# Minimal\nReads `config.json` via `os.path`.\n';
+  const minimalErrs = lintNativeOnlyPortParity(declaredWithTypo, [{ path: 'prompts/cli/minimal.prompt.md', text: minimalDep }], {
+    path: 'prompts/cli/terminal.prompt.md',
+    dependencyPaths: ['prompts/cli/minimal.prompt.md'],
+  });
+  assert.equal(minimalErrs.length, 1);
+  assert.equal(minimalErrs[0].includes('config.json'), false, minimalErrs[0]);
+  assert.equal(minimalErrs[0].includes('os.path'), false, minimalErrs[0]);
 });
 
 test('3562 polling FP fix: test-fixed-sleep exempts waitFor/until polling helpers, bounded retry loops, and Promise.race watchdogs while still flagging bare unguarded sleeps', () => {
