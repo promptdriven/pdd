@@ -327,10 +327,11 @@ jobs:
           export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_NO_UPDATE_CHECK=1 PDD_RUNTIME_URL=http://127.0.0.1:1
           mkdir -p "$HOME/.gemini/config" "$PDD_STATE_DIR"
 
+          orig_path="$PATH"
           # Fresh live install from npm.
           npm install --global --prefix "$smoke_dir/live" --ignore-scripts --no-audit --no-fund "@promptdriven/pdd@$EXPECTED_VERSION"
           pdd="$smoke_dir/live/bin/pdd"
-          export PATH="$smoke_dir/live/bin:$PATH"
+          export PATH="$smoke_dir/live/bin:$orig_path"
           test "$("$pdd" --version 2>"$smoke_dir/ver.err")" = "$EXPECTED_VERSION"
           test ! -s "$smoke_dir/ver.err"
           "$pdd" --help >/dev/null
@@ -343,7 +344,7 @@ jobs:
           (cd "$smoke_dir/harbor" && "$pdd" lint --local --json >/dev/null && "$pdd" status --json >/dev/null && "$pdd" files --json >/dev/null)
 
           # Real upgrade verification from previous release (stable) or latest -> next (rc).
-          export HOME="$smoke_dir/upg-home" PDD_STATE_DIR="$smoke_dir/upg-state"
+          export HOME="$smoke_dir/upg-home" PDD_STATE_DIR="$smoke_dir/upg-state" PATH="$smoke_dir/upg/bin:$orig_path"
           mkdir -p "$HOME/.gemini/config" "$PDD_STATE_DIR"
           if [ "$IS_PRERELEASE" = "true" ]; then
             npm install --global --prefix "$smoke_dir/upg" --ignore-scripts --no-audit --no-fund "@promptdriven/pdd@latest"
@@ -361,9 +362,9 @@ jobs:
             test -n "$prev_ver"
             npm install --global --prefix "$smoke_dir/upg" --ignore-scripts --no-audit --no-fund "@promptdriven/pdd@$prev_ver"
             "$smoke_dir/upg/bin/pdd" setup --yes >/dev/null
-            env -u PDD_NO_UPDATE_CHECK PATH="$smoke_dir/upg/bin:$PATH" "$smoke_dir/upg/bin/pdd" upgrade
+            env -u PDD_NO_UPDATE_CHECK "$smoke_dir/upg/bin/pdd" upgrade
           fi
-          test "$(PATH="$smoke_dir/upg/bin:$PATH" "$smoke_dir/upg/bin/pdd" --version 2>"$smoke_dir/upg-ver.err")" = "$EXPECTED_VERSION"
+          test "$("$smoke_dir/upg/bin/pdd" --version 2>"$smoke_dir/upg-ver.err")" = "$EXPECTED_VERSION"
           test ! -s "$smoke_dir/upg-ver.err"
 
   verify-published-pypi:
