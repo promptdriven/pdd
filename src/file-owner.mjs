@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { gitFiles } from './shared/git-context.mjs';
+import { isTestOwnedPathMatch, isTestPromptPathMatch } from './shared/test-paths.mjs';
 import { interfaceBlocks } from './shared/workspace-policy.mjs';
 
 const HEAD = 4096, PROMPT = 65536, LINE = 1100, WHOLE = 10 * 1024 * 1024;
@@ -170,12 +171,9 @@ export function promptClaims(promptPath, content) {
   return unique(claims.filter(path => canonicalPath(path) && !path.endsWith('.prompt.md'))).sort();
 }
 
-export const isTestOwnedPath = path => canonicalPath(path) && !path.endsWith('.prompt.md')
-  && /(?:^|\/)(?:tests?|__tests__)\/|(?:^|\/)(?:[^/]+\.(?:test|spec)\.[^/]+|test_[^/]+\.[^/]+|[^/]+_test\.[^/]+)$/i.test(path);
+export const isTestOwnedPath = path => canonicalPath(path) && !path.endsWith('.prompt.md') && isTestOwnedPathMatch(path);
 
-export const isTestPromptPath = path => canonicalPath(path) && path.endsWith('.prompt.md')
-  && (/(?:^|\/)prompts\/(?:tests?|__tests__)\/|(?:^|\/)[^/]+\.(?:test|spec)\.prompt\.md$/i.test(path)
-    || (/(?:^|\/)(?:tests?|__tests__)\//i.test(path) && !/(?:^|\/)(?:tests?|__tests__)\/fixtures\//i.test(path)));
+export const isTestPromptPath = path => canonicalPath(path) && path.endsWith('.prompt.md') && isTestPromptPathMatch(path);
 
 function bindingTable(text) {
   if (text === null || text === undefined) return new Map();

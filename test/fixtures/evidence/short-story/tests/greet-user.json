@@ -1,0 +1,22 @@
+{
+  "entry_path": "prompts/greeter.prompt.md",
+  "seeds": {
+    "visitor": {
+      "name": "Sam"
+    }
+  },
+  "steps": [
+    {
+      "id": "greet-sam",
+      "op": "greet",
+      "input": {
+        "$use": "visitor"
+      },
+      "checks": {
+        "1": [
+          ["result", "/message", "=", "Hello, Sam!"]
+        ]
+      }
+    }
+  ]
+}
