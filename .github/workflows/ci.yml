@@ -254,7 +254,7 @@ jobs:
           pnpm config set global-dir "$smoke_dir/pnpm/global"
           pnpm config set global-bin-dir "$PNPM_HOME"
           pnpm config set store-dir "$smoke_dir/pnpm/store"
-          pnpm add -g dist/npm/*.tgz --ignore-scripts
+          pnpm add -g "$PWD"/dist/npm/*.tgz --ignore-scripts
           test "$("$PNPM_HOME/pdd" --version 2>"$smoke_dir/ver.err")" = "$expected"
           test ! -s "$smoke_dir/ver.err"
           "$PNPM_HOME/pdd" setup --yes >"$smoke_dir/setup.out"

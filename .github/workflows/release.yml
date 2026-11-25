@@ -189,15 +189,13 @@ jobs:
           node scripts/evidence-run.mjs --suite scripts/evidence/wheel.suite.mjs \
             --cand "$smoke_dir/venv/bin/pdd" --out "$smoke_dir/wheel-rows.json"
 
-  # Single job behind one human approval (`environment: pypi-publish`) publishing BOTH npm and PyPI
-  # from the exact tested artifacts so registries cannot drift apart or ship untested bytes.
-  publish:
-    name: publish
+  # Publish exact tested npm tarball automatically after verify passes (no manual approval gate).
+  publish-npm:
+    name: publish-npm
     needs: [build, verify]
     if: ${{ github.event_name == 'release' || inputs.dry_run != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: pypi-publish
     permissions:
       contents: read
       id-token: write
@@ -235,6 +233,24 @@ jobs:
             npm publish "$tarball" --registry https://registry.npmjs.org --ignore-scripts --access public --provenance --tag "$DIST_TAG"
           fi
 
+  # Publish exact tested PyPI wheel + sdist behind human approval (`environment: pypi-publish`).
+  publish-pypi:
+    name: publish-pypi
+    needs: [build, verify]
+    if: ${{ github.event_name == 'release' || inputs.dry_run != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download exact tested artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist
+
       - name: Select PyPI authentication mode
         id: auth
         env:
@@ -264,9 +280,9 @@ jobs:
           skip-existing: true
           attestations: false
 
-  verify-published:
-    name: verify-published (${{ matrix.os }})
-    needs: [build, publish]
+  verify-published-npm:
+    name: verify-published-npm (${{ matrix.os }})
+    needs: [build, publish-npm]
     if: ${{ github.event_name == 'release' || inputs.dry_run != true }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -283,40 +299,20 @@ jobs:
         with:
           node-version: '22'
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Wait until npm and PyPI serve the published version
+      - name: Wait until npm serves the published version
         env:
           EXPECTED_VERSION: ${{ needs.build.outputs.version }}
-          EXPECTED_PY_VERSION: ${{ needs.build.outputs.py_version }}
         run: |
           set -euo pipefail
-          npm_ready=false
-          pypi_ready=false
           for attempt in $(seq 1 36); do
-            if [ "$npm_ready" != "true" ]; then
-              live_npm=$(npm view "@promptdriven/pdd@$EXPECTED_VERSION" version --registry https://registry.npmjs.org 2>/dev/null || true)
-              if [ "$live_npm" = "$EXPECTED_VERSION" ]; then npm_ready=true; fi
-            fi
-            if [ "$pypi_ready" != "true" ]; then
-              if curl -fsSL "https://pypi.org/pypi/pdd-cli/${EXPECTED_PY_VERSION}/json" \
-                | node --input-type=module -e '
-                  import { readFileSync } from "node:fs";
-                  const data = JSON.parse(readFileSync(0, "utf8"));
-                  process.exit(data?.info?.version === process.argv[1] && Array.isArray(data?.urls) && data.urls.length > 0 ? 0 : 1);
-                ' -- "$EXPECTED_PY_VERSION" 2>/dev/null; then
-                pypi_ready=true
-              fi
-            fi
-            if [ "$npm_ready" = "true" ] && [ "$pypi_ready" = "true" ]; then
-              echo "Both registries serve $EXPECTED_VERSION / pdd-cli==$EXPECTED_PY_VERSION (attempt $attempt)."
+            live_npm=$(npm view "@promptdriven/pdd@$EXPECTED_VERSION" version --registry https://registry.npmjs.org 2>/dev/null || true)
+            if [ "$live_npm" = "$EXPECTED_VERSION" ]; then
+              echo "npm serves $EXPECTED_VERSION (attempt $attempt)."
               exit 0
             fi
             sleep 5
           done
-          echo "Timed out waiting for registries: npm_ready=$npm_ready pypi_ready=$pypi_ready" >&2
+          echo "Timed out waiting for npm to serve $EXPECTED_VERSION" >&2
           exit 1
 
       - name: Install live from npm, run expect checks, and verify real upgrade
@@ -369,6 +365,49 @@ jobs:
           fi
           test "$(PATH="$smoke_dir/upg/bin:$PATH" "$smoke_dir/upg/bin/pdd" --version 2>"$smoke_dir/upg-ver.err")" = "$EXPECTED_VERSION"
           test ! -s "$smoke_dir/upg-ver.err"
+
+  verify-published-pypi:
+    name: verify-published-pypi (${{ matrix.os }})
+    needs: [build, publish-pypi]
+    if: ${{ github.event_name == 'release' || inputs.dry_run != true }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Wait until PyPI serves the published version
+        env:
+          EXPECTED_PY_VERSION: ${{ needs.build.outputs.py_version }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 36); do
+            if curl -fsSL "https://pypi.org/pypi/pdd-cli/${EXPECTED_PY_VERSION}/json" \
+              | node --input-type=module -e '
+                import { readFileSync } from "node:fs";
+                const data = JSON.parse(readFileSync(0, "utf8"));
+                process.exit(data?.info?.version === process.argv[1] && Array.isArray(data?.urls) && data.urls.length > 0 ? 0 : 1);
+              ' -- "$EXPECTED_PY_VERSION" 2>/dev/null; then
+              echo "PyPI serves pdd-cli==$EXPECTED_PY_VERSION (attempt $attempt)."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for PyPI to serve pdd-cli==$EXPECTED_PY_VERSION" >&2
+          exit 1
 
       - name: Install live from PyPI and run wheel expect checks
         env:
