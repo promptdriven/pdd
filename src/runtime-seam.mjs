@@ -1609,7 +1609,7 @@ function normalizeSelectionWords(rawWords, cwd, root, found) {
     try {
       isDir = inside && fs.statSync(abs).isDirectory();
     } catch {}
-    return word.includes('/') || found.visible?.has(rel) || isDir ? (rel || '.') : word;
+    return inside && (found.visible?.has(rel) || isDir) ? (rel || '.') : word;
   });
 }
 
@@ -2338,13 +2338,17 @@ export async function loadRuntimeClient() {
 
 const NON_EXEC_CHECK_FLAGS = [
   '--lint', '--local', '--files', '--explain-bindings',
-  '--read', '--retry', '--reconcile', '--reconcile-stale', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--write', '--bind-criteria',
+  '--read', '--retry', '--retry-unresolved', '--reconcile', '--reconcile-stale', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--write', '--bind-criteria',
 ];
 const FRESH_INCOMPATIBLE_CHECK_FLAGS = [
   '--read', '--retry', '--reconcile', '--reconcile-stale', '--files', '--explain-bindings',
   '--request', '--lint', '--local', '--screen', '--drawing', '--look',
   '--emit-v1', '--write', '--bind-criteria',
 ];
+const AFFECTED_ALLOWED_EXEC_FLAGS = new Set([
+  '--affected', '--json', '--details', '--timeout', '--batch-timeout',
+  '--max-calls', '--max-total-calls', '--no-restart-replacement', '--cache-clear', '--fresh',
+]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BATCH_RE = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 
@@ -2813,6 +2817,813 @@ function computeGraphAwareDefaultMaxCalls(input, ports) {
   return undefined;
 }
 
+function realishPath(targetPath) {
+  const parts = [];
+  let current = resolve(targetPath);
+  for (;;) {
+    try {
+      return join(realpathSync(current), ...parts.reverse());
+    } catch {
+      parts.push(current.slice(dirname(current).length + 1));
+      const parent = dirname(current);
+      if (parent === current) return resolve(targetPath);
+      current = parent;
+    }
+  }
+}
+
+function isPathInside(child, parent) {
+  const rel = relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !rel.startsWith(sep) && rel !== '..');
+}
+
+function resolveRuntimeStateDir(env, root) {
+  const dir = resolve(env?.PDD_STATE_DIR || join(env?.HOME || homedir(), '.pdd', 'runtime'));
+  if (root && isPathInside(realishPath(dir), realishPath(root))) {
+    return {
+      dir: null,
+      error: 'PDD_STATE_DIR is inside this repository. pdd keeps run state outside the repo. Choose another folder.',
+    };
+  }
+  return { dir, error: null };
+}
+
+function priorReservationTtlMs(env) {
+  const raw = env?.PDD_PRIOR_RESERVATION_TTL_HOURS;
+  if (raw !== undefined && raw !== null && String(raw).trim() !== '') {
+    const hours = Number(raw);
+    if (Number.isFinite(hours) && hours > 0) return hours * 3_600_000;
+  }
+  return 24 * 3_600_000;
+}
+
+function parseBatchTimestampMs(batchId) {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-[a-z0-9]{4}$/.exec(String(batchId ?? ''));
+  if (!m) return null;
+  const ts = Date.UTC(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    Number(m[6]),
+  );
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function rowTimestampMs(batchId, saved, row) {
+  if (Number.isFinite(row?.ended_at)) return row.ended_at;
+  if (Number.isFinite(row?.sent_at)) return row.sent_at;
+  const created = Date.parse(saved?.created_at ?? '');
+  if (Number.isFinite(created)) return created;
+  return parseBatchTimestampMs(batchId);
+}
+
+const LOCALLY_SETTLED_STATES = new Set(['passed', 'failed', 'refused', 'not_run']);
+
+function isLocallySettledFromReceipts(folder, ids) {
+  if (!Array.isArray(ids) || !ids.length) return false;
+  for (const id of ids) {
+    if (typeof id !== 'string' || !UUID_RE.test(id)) return false;
+    const receiptPath = join(folder, `${id}.json`);
+    if (!isSafeRegularJsonFile(receiptPath, 8 * 1024 * 1024)) return false;
+    let receipt;
+    try {
+      receipt = JSON.parse(initialReadFileSync(receiptPath, 'utf8'));
+    } catch {
+      return false;
+    }
+    const matchedId = receipt?.requestId === id || receipt?.id === id;
+    if (!isPlainObject(receipt) || receipt.command !== 'check' || !matchedId) return false;
+    if (!LOCALLY_SETTLED_STATES.has(receipt.state)) return false;
+    const refusalCode = receipt.result?.refusals?.[0]?.code ?? receipt.result?.report?.refusal?.code ?? null;
+    if (refusalCode === 'capacity-full' || refusalCode === 'server-busy') return false;
+    const calls = receipt.usage?.calls;
+    if (!Number.isSafeInteger(calls) || calls < 0) return false;
+  }
+  return true;
+}
+
+function scanRepoStaleReservations(root, env, { now = Date.now(), excludeBatch = null } = {}) {
+  const state = resolveRuntimeStateDir(env, root);
+  if (state.error || !state.dir) return [];
+  const batchesDir = join(state.dir, 'batches');
+  let names;
+  try {
+    names = fs.readdirSync(batchesDir);
+  } catch {
+    return [];
+  }
+  const wantedRoot = realishPath(root);
+  const ttlMs = priorReservationTtlMs(env);
+  const staleBatches = [];
+  for (const name of names.filter(item => typeof item === 'string' && BATCH_RE.test(item) && item !== excludeBatch).sort()) {
+    const folder = join(batchesDir, name);
+    try {
+      const st = initialLstatSync(folder);
+      if (st.isSymbolicLink() || !st.isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    const batchPath = join(folder, 'batch.json');
+    if (!isSafeRegularJsonFile(batchPath, 16 * 1024 * 1024)) continue;
+    let saved;
+    try {
+      saved = JSON.parse(initialReadFileSync(batchPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (
+      !isPlainObject(saved) ||
+      saved.intent !== 'check' ||
+      typeof saved.root !== 'string' ||
+      realishPath(saved.root) !== wantedRoot ||
+      !Array.isArray(saved.rows)
+    ) {
+      continue;
+    }
+    let expiredCount = 0;
+    let withinTtlCount = 0;
+    for (const row of saved.rows) {
+      if (!isPlainObject(row) || row.reservation_reconciled?.cleared === true) continue;
+      const ids = Array.isArray(row.request_ids)
+        ? row.request_ids.filter(id => typeof id === 'string' && id.length > 0)
+        : [];
+      if (!ids.length) continue;
+      const stateVal = row.recovery_state ?? row.state;
+      const needsCheck =
+        ['sending', 'queued', 'running', 'unknown'].includes(stateVal) ||
+        row.calls === 'unknown' ||
+        row.accounting_complete === false;
+      if (!needsCheck) continue;
+      if (isLocallySettledFromReceipts(folder, ids)) continue;
+      const ts = rowTimestampMs(name, saved, row);
+      const pastTtl = ts !== null && Number.isFinite(now) && Number.isFinite(ttlMs) && now - ts >= ttlMs;
+      if (pastTtl) expiredCount += 1;
+      else withinTtlCount += 1;
+    }
+    if (expiredCount + withinTtlCount > 0) {
+      staleBatches.push({ batch_id: name, expired_count: expiredCount, within_ttl_count: withinTtlCount });
+    }
+  }
+  return staleBatches;
+}
+
+async function runWithBoundedTimeout(work, timeoutMs, parentSignal) {
+  const controller = new AbortController();
+  const onParentAbort = () => controller.abort(parentSignal?.reason ?? new Error('aborted'));
+  if (parentSignal) {
+    if (parentSignal.aborted) onParentAbort();
+    else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  }
+  let timer = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = Object.assign(new Error(`timed out after ${timeoutMs}ms`), { code: 'auto-reconcile-timeout' });
+      controller.abort(err);
+      reject(err);
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  const workPromise = Promise.resolve().then(() => work(controller.signal));
+  workPromise.catch(() => {});
+  try {
+    return await Promise.race([workPromise, timeoutPromise]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+    if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+  }
+}
+
+async function autoReconcileStaleIfNeeded({ cwd, options, ports, ergonomicsMod, excludeBatch = null }) {
+  if (ports?.__skipAutoReconcile === true) return null;
+  const env = ports?.env ?? process.env;
+  const stderr = ports?.stderr ?? process.stderr;
+  const quickCheck = ergonomicsMod.planAutoReconcile({ options, stale_batches: [] });
+  if (quickCheck.reason === 'non-dispatch-mode') return null;
+  const root = repoTopRoot(cwd);
+  if (!root) return null;
+  const now = typeof ports?.now === 'function' ? ports.now() : Date.now();
+  const staleBatches = scanRepoStaleReservations(root, env, { now, excludeBatch });
+  const envTimeout =
+    env?.PDD_AUTO_RECONCILE_TIMEOUT_MS !== undefined && String(env.PDD_AUTO_RECONCILE_TIMEOUT_MS).trim() !== ''
+      ? Number(env.PDD_AUTO_RECONCILE_TIMEOUT_MS)
+      : null;
+  const configuredTimeout =
+    ports?.autoReconcileTimeoutMs !== undefined ? Number(ports.autoReconcileTimeoutMs) : envTimeout;
+  const plan = ergonomicsMod.planAutoReconcile({
+    options,
+    stale_batches: staleBatches,
+    configured_timeout_ms: configuredTimeout,
+  });
+  if (!plan.should_reconcile) return null;
+  try {
+    const result = await runWithBoundedTimeout(
+      signal => reconcileStaleReservations({ cwd }, { ...ports, signal }),
+      plan.timeout_ms,
+      ports?.signal,
+    );
+    if (result?.cleared_count > 0) {
+      stderr.write(
+        `Auto-reconciled ${result.cleared_count} stale prior reservation${result.cleared_count === 1 ? '' : 's'} across ${result.batches_inspected} batch${result.batches_inspected === 1 ? '' : 'es'} (${result.remaining_unresolved_count} remaining).\n`,
+      );
+    }
+    return result;
+  } catch (error) {
+    const detail = causeText(error?.message ?? error) || 'unavailable';
+    stderr.write(`Warning: auto-reconciliation of stale prior reservations skipped (${detail}); continuing check run.\n`);
+    return { skipped: true, error: detail };
+  }
+}
+
+function captureStreamSink() {
+  return {
+    text: '',
+    write(chunk, ...rest) {
+      this.text +=
+        typeof chunk === 'string'
+          ? chunk
+          : Buffer.isBuffer(chunk) || chunk instanceof Uint8Array
+            ? Buffer.from(chunk).toString('utf8')
+            : String(chunk);
+      const cb = rest.find(arg => typeof arg === 'function');
+      if (cb) cb();
+      return true;
+    },
+  };
+}
+
+async function runAffectedFilesDryRun(input = {}, ports = {}) {
+  const cwd = input?.cwd ?? process.cwd();
+  const stdout = ports.stdout ?? process.stdout;
+  const stderr = ports.stderr ?? process.stderr;
+  const env = ports.env ?? process.env;
+  const rawOptions = input?.options ?? {};
+  const isJson = rawOptions['--json'] === true;
+  const appMap = rawOptions['--app-map'];
+
+  const root = repoTopRoot(cwd);
+  if (!root) {
+    stderr.write('pdd test works in a Git repository. Run it inside your project.\n');
+    return 2;
+  }
+
+  const [, { headerPrompts }] = await Promise.all([
+    import('./secret-redaction.mjs'),
+    import('./file-owner.mjs'),
+  ]);
+
+  const lazyOverlay = { cwd, ports, map: undefined };
+  return withScenarioOverlay(lazyOverlay, async () => {
+    let found;
+    try {
+      found = findTests({ root, excludeFixtureProjects: true }, ports);
+    } catch (error) {
+      stderr.write(`${causeText(error?.message ?? error) || 'Could not discover repository tests.'}\n`);
+      return typeof error?.exitCode === 'number' ? error.exitCode : 2;
+    }
+    if (!found?.tests?.length) {
+      const lines = [
+        NO_TESTS,
+        ...whyNoTests(root, found?.discoveryVisible ?? found?.visible ?? [], found, ports),
+        ...(found?.excludedFixtureProjects ?? []).map(p => `Warning: skipped nested fixture project ${p}.`),
+      ];
+      stderr.write(`${lines.join('\n')}\n`);
+      return 2;
+    }
+
+    const rawBase =
+      input?.workflow !== undefined
+        ? input.workflow?.base_sha
+        : ports.workflowBaseSha !== undefined && ports.workflowBaseSha !== null
+          ? typeof ports.workflowBaseSha === 'function'
+            ? ports.workflowBaseSha({ root, env })
+            : ports.workflowBaseSha
+          : resolveWorkflowBaseSha({ root, env, allRunsPort: ports.allRuns ?? lazyAllRuns });
+    const base = /^[a-f0-9]{40}$/.test(rawBase ?? '') ? rawBase : 'HEAD';
+
+    const planningPorts = {
+      headerPrompts: ports.headerPrompts ?? headerPrompts,
+      capture: ports.captureSource ?? captureSource,
+      isStoryPath,
+      hasAcceptance,
+      matchTests,
+      orphanSummary,
+      ...ports.checkPlanPorts,
+    };
+
+    const checkPlan = buildCheckPlan(
+      {
+        root,
+        found,
+        selected: found.tests,
+        rows: [],
+        full: true,
+        base,
+        affected: true,
+        allowMissingInterfaces: true,
+      },
+      planningPorts,
+    );
+    const checkSelection = selectCheckTests(checkPlan, { affected: true });
+    const affectedTests = checkSelection.tests;
+    const affectedStories = checkPlan.stories.filter(s => s.role === 'target').map(s => s.story_path);
+    const omittedStories = checkPlan.stories.filter(s => s.role !== 'target').map(s => s.story_path);
+
+    let resolvedAppMap = appMap;
+    if (typeof appMap === 'string' && appMap.length > 0) {
+      try {
+        const realCwd = realpathSync(cwd);
+        const realRoot = realpathSync(root);
+        const relAppMap = relative(realRoot, resolve(realCwd, appMap)).split(sep).join('/');
+        if (relAppMap && relAppMap !== '..' && !relAppMap.startsWith('../') && found.visible?.has(relAppMap)) {
+          resolvedAppMap = relAppMap;
+        }
+      } catch {}
+    }
+
+    const filesOptions = {
+      '--files': true,
+      ...(isJson ? { '--json': true } : {}),
+      ...(resolvedAppMap !== undefined ? { '--app-map': resolvedAppMap } : {}),
+    };
+    const capturedOut = captureStreamSink();
+    const capturedErr = captureStreamSink();
+    const filesPorts = seamRuntimePorts(
+      withPortDefaults(withEligibilityDefault(ports, lazyEvidenceEligibility), {
+        headerPrompts,
+        redaction: seamRedaction(ports),
+      }),
+      { cwd: root },
+    );
+    filesPorts.stdout = capturedOut;
+    filesPorts.stderr = capturedErr;
+
+    const exitCode = await runtimeRunCheck(
+      {
+        ...input,
+        cwd: root,
+        words: affectedTests,
+        options: filesOptions,
+        cache: false,
+      },
+      filesPorts,
+    );
+
+    if (isJson) {
+      let parsed = null;
+      try {
+        parsed = capturedOut.text.trim() ? JSON.parse(capturedOut.text) : null;
+      } catch {
+        parsed = null;
+      }
+      if (isPlainObject(parsed)) {
+        const augmented = {
+          ...parsed,
+          affected: true,
+          ai_calls: 0,
+          check_selection: checkSelection,
+          check_plan: checkPlan,
+          affected_stories: affectedStories,
+          omitted_stories: omittedStories,
+        };
+        stdout.write(`${JSON.stringify(augmented)}\n`);
+      } else if (capturedOut.text) {
+        stdout.write(capturedOut.text);
+      }
+      if (capturedErr.text) stderr.write(capturedErr.text);
+      return exitCode;
+    }
+
+    const totalTests = found.tests.length;
+    const baselineCount = checkSelection.baseline_tests.length;
+    stdout.write(
+      `Affected selection: ${affectedTests.length} of ${totalTests} test${totalTests === 1 ? '' : 's'} (${affectedStories.length} ${affectedStories.length === 1 ? 'Story' : 'Stories'}) selected; ${baselineCount} omitted baseline test${baselineCount === 1 ? '' : 's'}. 0 AI calls.\n`,
+    );
+    for (const story of checkPlan.stories.filter(s => s.role === 'target')) {
+      stdout.write(`  target: ${story.story_path} (${story.tests.join(', ')}) — ${story.reason}\n`);
+    }
+    if (capturedOut.text) stdout.write(capturedOut.text);
+    if (capturedErr.text) stderr.write(capturedErr.text);
+    return exitCode;
+  });
+}
+
+function readBatchLocalReceiptsAndSummary(batchDir, rows) {
+  const receiptsById = {};
+  for (const row of rows) {
+    const ids = Array.isArray(row?.request_ids)
+      ? row.request_ids.filter(id => typeof id === 'string' && UUID_RE.test(id))
+      : [];
+    const lastId = ids.length > 0 ? ids[ids.length - 1] : null;
+    if (!lastId) continue;
+    const receiptPath = join(batchDir, `${lastId}.json`);
+    if (!isSafeRegularJsonFile(receiptPath, 8 * 1024 * 1024)) continue;
+    try {
+      const receipt = JSON.parse(initialReadFileSync(receiptPath, 'utf8'));
+      const matchedId = receipt?.requestId === lastId || receipt?.id === lastId || receipt?.request_id === lastId;
+      if (isPlainObject(receipt) && receipt.command === 'check' && matchedId && typeof receipt.state === 'string') {
+        receiptsById[lastId] = receipt.state;
+      }
+    } catch {
+      /* Ignore unreadable local receipt; keep batch row state. */
+    }
+  }
+  const summaryByTest = new Map();
+  const summaryPath = join(batchDir, 'summary.json');
+  if (isSafeRegularJsonFile(summaryPath, 16 * 1024 * 1024)) {
+    try {
+      const summary = JSON.parse(initialReadFileSync(summaryPath, 'utf8'));
+      if (Array.isArray(summary?.rows)) {
+        for (const sRow of summary.rows) {
+          if (isPlainObject(sRow) && typeof sRow.test === 'string') {
+            summaryByTest.set(sRow.test, sRow);
+          }
+        }
+      }
+    } catch {
+      /* Ignore malformed summary.json; batch.json remains primary. */
+    }
+  }
+  return { receiptsById, summaryByTest };
+}
+
+async function runRetryUnresolvedCommand(input = {}, ergoPlan, ports = {}, ergonomicsMod) {
+  const batchId = ergoPlan.batch_id;
+  const cwd = input?.cwd ?? process.cwd();
+  const env = ports.env ?? process.env;
+  const stdout = ports.stdout ?? process.stdout;
+  const stderr = ports.stderr ?? process.stderr;
+  const isJson = ergoPlan.forwarded_options['--json'] === true;
+
+  const root = repoTopRoot(cwd);
+  if (!root) {
+    stderr.write('pdd test works in a Git repository. Run it inside your project.\n');
+    return 2;
+  }
+
+  const state = resolveRuntimeStateDir(env, root);
+  if (state.error) {
+    stderr.write(`${state.error}\n`);
+    return 2;
+  }
+
+  const batchDir = join(state.dir, 'batches', batchId);
+  const batchPath = join(batchDir, 'batch.json');
+  try {
+    const st = initialLstatSync(batchDir);
+    if (st.isSymbolicLink() || !st.isDirectory()) {
+      stderr.write(`No saved batch ${batchId}.\n`);
+      return 2;
+    }
+  } catch {
+    stderr.write(`No saved batch ${batchId}.\n`);
+    return 2;
+  }
+  if (!isSafeRegularJsonFile(batchPath, 16 * 1024 * 1024)) {
+    stderr.write(`No saved batch ${batchId}.\n`);
+    return 2;
+  }
+
+  let saved;
+  try {
+    saved = JSON.parse(initialReadFileSync(batchPath, 'utf8'));
+  } catch {
+    stderr.write(`Saved batch ${batchId} is unreadable or invalid.\n`);
+    return 2;
+  }
+  if (!isPlainObject(saved) || !Array.isArray(saved.rows)) {
+    stderr.write(`Saved batch ${batchId} is unreadable or invalid.\n`);
+    return 2;
+  }
+  if (typeof saved.root !== 'string' || realishPath(saved.root) !== realishPath(root)) {
+    stderr.write('This saved batch belongs to a different repository.\n');
+    return 2;
+  }
+  if (saved.intent !== 'check' && !(saved.version === 1 && saved.intent === undefined)) {
+    stderr.write('The saved batch has no Check intent. Start a fresh selected pdd test.\n');
+    return 2;
+  }
+
+  // Reconcile expired / unresolved reservations on the target batch first (bounded, fail-open).
+  const envTimeout =
+    env?.PDD_AUTO_RECONCILE_TIMEOUT_MS !== undefined && String(env.PDD_AUTO_RECONCILE_TIMEOUT_MS).trim() !== ''
+      ? Number(env.PDD_AUTO_RECONCILE_TIMEOUT_MS)
+      : null;
+  const configuredTimeout =
+    ports?.autoReconcileTimeoutMs !== undefined ? Number(ports.autoReconcileTimeoutMs) : envTimeout;
+  const timeoutPlan = ergonomicsMod.planAutoReconcile({
+    options: {},
+    stale_batches: [{ batch_id: batchId, expired_count: 1, within_ttl_count: 0 }],
+    configured_timeout_ms: configuredTimeout,
+  });
+
+  let reconcileResult = null;
+  try {
+    reconcileResult = await runWithBoundedTimeout(
+      signal => reconcileCheckBatch({ cwd, batchId }, { ...ports, signal }),
+      timeoutPlan.timeout_ms,
+      ports?.signal,
+    );
+    if (reconcileResult?.cleared_count > 0) {
+      stderr.write(
+        `Reconciled batch ${batchId}: ${reconcileResult.cleared_count} reservation${reconcileResult.cleared_count === 1 ? '' : 's'} cleared (${reconcileResult.remaining_unresolved_count} remaining).\n`,
+      );
+    }
+  } catch (error) {
+    const detail = causeText(error?.message ?? error) || 'unavailable';
+    stderr.write(`Warning: reconciliation for batch ${batchId} skipped (${detail}); continuing retry.\n`);
+    reconcileResult = { batch: batchId, skipped: true, error: detail };
+  }
+
+  // Re-read batch.json after reconciliation so newly settled passing rows are not needlessly re-run.
+  if (isSafeRegularJsonFile(batchPath, 16 * 1024 * 1024)) {
+    try {
+      const refreshed = JSON.parse(initialReadFileSync(batchPath, 'utf8'));
+      if (isPlainObject(refreshed) && Array.isArray(refreshed.rows)) saved = refreshed;
+    } catch {
+      /* Retain already-parsed saved batch. */
+    }
+  }
+
+  const { receiptsById, summaryByTest } = readBatchLocalReceiptsAndSummary(batchDir, saved.rows);
+  const normalizedRows = saved.rows.map(row => {
+    if (!isPlainObject(row)) return row;
+    const sRow = typeof row.test === 'string' ? summaryByTest.get(row.test) : null;
+    const noteCode =
+      (isPlainObject(row.note) && typeof row.note.code === 'string' ? row.note.code : null) ??
+      (isPlainObject(sRow?.reason) && typeof sRow.reason.code === 'string' ? sRow.reason.code : null);
+    const failedCount = Math.max(
+      Array.isArray(row.failed_checks) ? row.failed_checks.length : 0,
+      Array.isArray(sRow?.failed_checks) ? sRow.failed_checks.length : 0,
+    );
+    const refusalCount = Math.max(
+      Array.isArray(row.refusals) ? row.refusals.length : 0,
+      Array.isArray(sRow?.refusals) ? sRow.refusals.length : 0,
+    );
+    return {
+      test: row.test,
+      state: row.state ?? sRow?.state ?? '',
+      recovery_state: row.recovery_state ?? null,
+      note_code: noteCode,
+      request_ids: Array.isArray(row.request_ids) ? row.request_ids : [],
+      failed_check_count: failedCount,
+      refusal_count: refusalCount,
+    };
+  });
+
+  const selection = ergonomicsMod.selectUnresolvedBatchTests({
+    batch_id: batchId,
+    rows: normalizedRows,
+    receipts_by_id: receiptsById,
+  });
+
+  if (selection.invalid_paths.length > 0) {
+    stderr.write(`Saved batch ${batchId} contains unsafe scenario path(s): ${selection.invalid_paths.join(', ')}.\n`);
+    return 2;
+  }
+
+  if (selection.all_passed) {
+    const msg = `Batch ${batchId} has no unresolved or failed scenarios to retry. 0 AI calls.`;
+    if (isJson) {
+      stdout.write(
+        `${JSON.stringify({
+          batch: null,
+          retried_from: batchId,
+          repo: root,
+          exit_code: 0,
+          ai_calls: 0,
+          retry_tests: [],
+          passed_tests: selection.passed_tests,
+          skipped_passed_tests: selection.passed_tests,
+          reconciled_batch: reconcileResult,
+          summary_line: msg,
+        })}\n`,
+      );
+    } else {
+      stdout.write(`${msg}\n`);
+    }
+    return 0;
+  }
+
+  // Also clear any other stale prior repo reservations before dispatching the retry batch.
+  await autoReconcileStaleIfNeeded({
+    cwd,
+    options: ergoPlan.forwarded_options,
+    ports,
+    ergonomicsMod,
+    excludeBatch: batchId,
+  });
+
+  stderr.write(
+    `Retrying ${selection.retry_tests.length} non-passed scenario${selection.retry_tests.length === 1 ? '' : 's'} from batch ${batchId} (skipping ${selection.skipped_count} passed): ${selection.retry_tests.join(', ')}\n`,
+  );
+
+  if (isJson) {
+    const capturedOut = captureStreamSink();
+    const exitCode = await runCheck(
+      {
+        ...input,
+        cwd: root,
+        words: selection.retry_tests,
+        options: { ...ergoPlan.forwarded_options },
+        cache: false,
+      },
+      { ...ports, stdout: capturedOut, __skipAutoReconcile: true },
+    );
+    let parsed = null;
+    try {
+      parsed = capturedOut.text.trim() ? JSON.parse(capturedOut.text) : null;
+    } catch {
+      parsed = null;
+    }
+    if (isPlainObject(parsed)) {
+      stdout.write(
+        `${JSON.stringify({
+          ...parsed,
+          retried_from: batchId,
+          skipped_passed_tests: selection.passed_tests,
+          ...(reconcileResult ? { reconciled_batch: reconcileResult } : {}),
+        })}\n`,
+      );
+    } else if (capturedOut.text) {
+      stdout.write(capturedOut.text);
+    }
+    return exitCode;
+  }
+
+  return runCheck(
+    {
+      ...input,
+      cwd: root,
+      words: selection.retry_tests,
+      options: { ...ergoPlan.forwarded_options },
+      cache: false,
+    },
+    { ...ports, __skipAutoReconcile: true },
+  );
+}
+
+function computeEligibleTargetedSlices(cwd, rawWords, rawOptions, ports, ergonomicsMod) {
+  const eligible = new Map();
+  if (!Array.isArray(rawWords) || rawWords.length === 0) return eligible;
+  if (NON_EXEC_CHECK_FLAGS.some(flag => rawOptions[flag] !== undefined)) return eligible;
+  if (rawOptions['--affected'] !== undefined || rawOptions['--journeys'] !== undefined) return eligible;
+
+  const root = repoTopRoot(cwd);
+  if (!root) return eligible;
+  let found;
+  try {
+    found = findTests({ root, excludeFixtureProjects: false }, ports);
+  } catch {
+    return eligible;
+  }
+  if (!found?.tests?.length) return eligible;
+
+  const normalized = normalizeSelectionWords(rawWords, cwd, root, found);
+  const explicitScenarioPaths = normalized
+    .map(w => (typeof w === 'string' ? w.replace(/^\.\//, '') : ''))
+    .filter(w => w.endsWith('.json') && found.tests.some(t => t.path === w));
+  if (explicitScenarioPaths.length === 0) return eligible;
+
+  let sel;
+  try {
+    sel = selectTests(found, normalized);
+  } catch {
+    return eligible;
+  }
+  if (!sel?.selected?.length) return eligible;
+
+  const explicitSet = new Set(explicitScenarioPaths);
+  const byStory = new Map();
+  for (const t of found.tests) {
+    if (!t?.storyPath) continue;
+    if (!byStory.has(t.storyPath)) byStory.set(t.storyPath, []);
+    byStory.get(t.storyPath).push(t);
+  }
+
+  for (const test of sel.selected) {
+    if (!explicitSet.has(test.path) || !test.storyPath || test.error) continue;
+    const allForStory = byStory.get(test.storyPath) ?? [];
+    if (allForStory.length < 2) continue;
+    const siblings = allForStory.filter(s => s.path !== test.path && !s.error);
+    if (!siblings.length) continue;
+
+    let ownRow;
+    try {
+      ownRow = preflight({ root, found, selected: [test], allowMissingInterfaces: true }).rows?.[0];
+    } catch {
+      continue;
+    }
+    if (!ownRow || ownRow.refusals?.length || !ownRow.not_checked?.length) continue;
+    const storyCriteria = Array.isArray(test.doc?.criteria) ? test.doc.criteria : [];
+    const storyIds = storyCriteria.map(c => c?.id).filter(Boolean);
+    if (!storyIds.length) continue;
+    const idByText = new Map(storyCriteria.filter(c => c?.id && c?.text).map(c => [c.text, c.id]));
+    const ownNotCheckedIds = new Set(ownRow.not_checked.map(item => item?.criterion_id).filter(Boolean));
+    const ownCheckedIds = storyIds.filter(id => !ownNotCheckedIds.has(id));
+
+    let sibRows;
+    try {
+      sibRows = preflight({ root, found, selected: siblings, allowMissingInterfaces: true }).rows ?? [];
+    } catch {
+      continue;
+    }
+    const siblingCheckedIds = new Set();
+    for (const sib of siblings) {
+      const sibRow = sibRows.find(r => r.test === sib.path);
+      if (!sibRow || sibRow.refusals?.length || sibRow.native_only?.length) continue;
+      const sibNotChecked = new Set((sibRow.not_checked ?? []).map(item => item?.criterion_id).filter(Boolean));
+      for (const crit of Array.isArray(sib.doc?.criteria) ? sib.doc.criteria : []) {
+        if (!crit?.id || sibNotChecked.has(crit.id)) continue;
+        if (crit.text && idByText.has(crit.text)) siblingCheckedIds.add(idByText.get(crit.text));
+        else if (!crit.text && storyIds.includes(crit.id)) siblingCheckedIds.add(crit.id);
+      }
+    }
+
+    const classification = ergonomicsMod.classifyTargetedScenarioCriteria({
+      explicit_scenario_paths: explicitScenarioPaths,
+      target_test_path: test.path,
+      story_criteria_ids: storyIds,
+      own_checked_ids: ownCheckedIds,
+      sibling_checked_ids: [...siblingCheckedIds],
+    });
+    if (classification.can_pass_as_targeted_slice && classification.sibling_covered_ids.length > 0) {
+      eligible.set(test.path, classification);
+    }
+  }
+  return eligible;
+}
+
+function promoteTargetedSliceSummary(summary, eligibleSlices, ports = {}) {
+  if (!isPlainObject(summary) || !Array.isArray(summary.rows) || eligibleSlices.size === 0) {
+    return { promoted: [], summary };
+  }
+  const promoted = [];
+  const nextRows = summary.rows.map(row => {
+    if (!isPlainObject(row) || !eligibleSlices.has(row.test)) return row;
+    const cls = eligibleSlices.get(row.test);
+    const allowedSiblingIds = new Set(cls.sibling_covered_ids);
+    const isNotCheckedDowngrade =
+      row.state === 'not run' &&
+      row.reason?.code === 'criteria-not-checked' &&
+      isPlainObject(row.checks) &&
+      Number.isSafeInteger(row.checks.total) &&
+      row.checks.total > 0 &&
+      row.checks.passed === row.checks.total &&
+      (!isPlainObject(row.criteria) || row.criteria.passed === cls.own_checked_count) &&
+      (!Array.isArray(row.failed_checks) || row.failed_checks.length === 0) &&
+      (!Array.isArray(row.refusals) || row.refusals.length === 0) &&
+      Array.isArray(row.not_checked) &&
+      row.not_checked.length > 0 &&
+      row.not_checked.every(item => typeof item?.criterion_id === 'string' && allowedSiblingIds.has(item.criterion_id));
+    if (!isNotCheckedDowngrade) return row;
+
+    promoted.push(row.test);
+    const { not_checked: siblingCovered, own_not_checked: _dropOwnNotChecked, ...rest } = row;
+    const updatedRow = {
+      ...rest,
+      state: 'passed',
+      reason: null,
+      targeted_scenario: true,
+      sibling_covered_criteria: siblingCovered,
+      ...(isPlainObject(row.criteria)
+        ? { criteria: { passed: cls.own_checked_count, total: cls.own_checked_count } }
+        : {}),
+      ...(Array.isArray(row.criterion_coverage)
+        ? {
+            criterion_coverage: row.criterion_coverage.filter(
+              item => !(typeof item?.criterion_id === 'string' && allowedSiblingIds.has(item.criterion_id)),
+            ),
+          }
+        : {}),
+    };
+    if (typeof row.summary_line === 'string') {
+      updatedRow.summary_line = summaryLine([updatedRow], updatedRow.story ?? null, ports);
+    }
+    return updatedRow;
+  });
+  if (promoted.length === 0) return { promoted: [], summary };
+
+  const exitCode = exitCodeFor(nextRows);
+  const nextSummaryLine = summaryLine(nextRows, null, ports);
+  const nextCheckScope = isPlainObject(summary.check_plan)
+    ? checkPlanResults(summary.check_plan, nextRows)
+    : summary.check_scope;
+
+  return {
+    promoted,
+    exitCode,
+    summary: {
+      ...summary,
+      exit_code: exitCode,
+      summary_line: nextSummaryLine,
+      rows: nextRows,
+      ...(nextCheckScope !== undefined ? { check_scope: nextCheckScope } : {}),
+    },
+  };
+}
+
 export async function runCheck(input = {}, ports = {}) {
   const rawOptions = input?.options ?? {};
   if (rawOptions['--emit-v1'] && rawOptions['--bind-criteria']) {
@@ -2837,6 +3648,34 @@ export async function runCheck(input = {}, ports = {}) {
   if (rawOptions['--reconcile-stale'] !== undefined) {
     return runCheckReconcileStaleCommand(input, ports);
   }
+  const words = commandWords(input);
+  const ergonomicsMod = await import('./core/test-ergonomics.mjs');
+  const ergoPlan = ergonomicsMod.planTestErgonomicsOptions({ words, options: rawOptions });
+  if (ergoPlan.mode === 'invalid') {
+    const stderr = ports.stderr ?? process.stderr;
+    stderr.write(`${ergoPlan.error}\n`);
+    return 2;
+  }
+  if (ergoPlan.mode === 'affected-files') {
+    return runAffectedFilesDryRun(input, ports);
+  }
+  if (ergoPlan.mode === 'retry-unresolved') {
+    return runRetryUnresolvedCommand(input, ergoPlan, ports, ergonomicsMod);
+  }
+  if (
+    rawOptions['--affected'] !== undefined &&
+    (rawOptions['--affected'] !== true ||
+      words.length > 0 ||
+      Object.keys(rawOptions)
+        .filter(key => rawOptions[key] !== undefined)
+        .some(key => !AFFECTED_ALLOWED_EXEC_FLAGS.has(key)))
+  ) {
+    const stderr = ports.stderr ?? process.stderr;
+    stderr.write(
+      '--affected accepts no Stories and only --files, --app-map, --cache-clear, --fresh, --json, --details, --timeout, --batch-timeout, --max-calls, --max-total-calls and --no-restart-replacement.\n',
+    );
+    return 2;
+  }
   const freshRequested = rawOptions['--fresh'] !== undefined;
   if (freshRequested) {
     const stderr = ports.stderr ?? process.stderr;
@@ -2849,7 +3688,13 @@ export async function runCheck(input = {}, ports = {}) {
       return 2;
     }
   }
-  const words = commandWords(input);
+  const cwdForPre = input?.cwd ?? process.cwd();
+  await autoReconcileStaleIfNeeded({
+    cwd: cwdForPre,
+    options: rawOptions,
+    ports,
+    ergonomicsMod,
+  });
   const screenRequested = rawOptions['--screen'] !== undefined;
   const nativeLintRequested = rawOptions['--lint'] === true && words.length > 0;
   const skipLintModules =
@@ -2893,7 +3738,7 @@ export async function runCheck(input = {}, ports = {}) {
   const cwd = effectiveInput?.cwd ?? process.cwd();
   const lazyOverlay = { cwd, ports, map: undefined };
 
-  const { onProjectLintResult, ...forwardPorts } = ports;
+  const { onProjectLintResult, __skipAutoReconcile: _ignoreSkipAutoReconcile, autoReconcileTimeoutMs: _ignoreTimeout, ...forwardPorts } = ports;
   const defaultLintSvgLayouts = lintMods
     ? arg => {
         const [{ lintSvgLayouts }, { lintRepoProject, resolveLintScope }] = lintMods;
@@ -2938,7 +3783,30 @@ export async function runCheck(input = {}, ports = {}) {
         ];
       }
     : undefined;
-  return withScenarioOverlay(lazyOverlay, () => {
+  return withScenarioOverlay(lazyOverlay, async () => {
+    const eligibleTargetedSlices = computeEligibleTargetedSlices(cwd, words, rawOptions, forwardPorts, ergonomicsMod);
+    const realStdout = forwardPorts.stdout ?? process.stdout;
+    const realStderr = forwardPorts.stderr ?? process.stderr;
+    const capturedStdout = eligibleTargetedSlices.size > 0 ? captureStreamSink() : null;
+    let observedBatchId = null;
+    const observedStderr =
+      eligibleTargetedSlices.size > 0
+        ? Object.assign(Object.create(realStderr), {
+            ...(realStderr.isTTY !== undefined ? { isTTY: realStderr.isTTY } : {}),
+            write(chunk, ...rest) {
+              const text =
+                typeof chunk === 'string'
+                  ? chunk
+                  : Buffer.isBuffer(chunk) || chunk instanceof Uint8Array
+                    ? Buffer.from(chunk).toString('utf8')
+                    : String(chunk);
+              const m = /pdd test --read (\d{8}-\d{6}-[a-z0-9]{4})/.exec(text);
+              if (m) observedBatchId = m[1];
+              return realStderr.write(chunk, ...rest);
+            },
+          })
+        : null;
+
     const checkPorts = seamRuntimePorts(
       withPortDefaults(withEligibilityDefault(forwardPorts, lazyEvidenceEligibility), {
         headerPrompts,
@@ -2966,6 +3834,8 @@ export async function runCheck(input = {}, ports = {}) {
       }),
       { cwd },
     );
+    if (capturedStdout) checkPorts.stdout = capturedStdout;
+    if (observedStderr) checkPorts.stderr = observedStderr;
     if (freshRequested) {
       // Bypass local pass cache reuse across all modes (including --lf --fresh, --affected --fresh,
       // --journeys --fresh) while preserving --lf failure lookup, unselected cached passes, and fresh writeback.
@@ -2975,7 +3845,125 @@ export async function runCheck(input = {}, ports = {}) {
       }
     }
     attachRunCheckThrottleBackoff(checkPorts, forwardPorts);
-    return runtimeRunCheck(effectiveInput, checkPorts);
+    const code = await runtimeRunCheck(effectiveInput, checkPorts);
+    if (!capturedStdout) return code;
+
+    const isJson = rawOptions['--json'] === true;
+    const root = repoTopRoot(cwd);
+    const state = root ? resolveRuntimeStateDir(env, root) : { dir: null, error: null };
+    let summary = null;
+    if (isJson && capturedStdout.text.trim()) {
+      try {
+        summary = JSON.parse(capturedStdout.text);
+      } catch {
+        summary = null;
+      }
+    } else if (observedBatchId && state.dir) {
+      const sumPath = join(state.dir, 'batches', observedBatchId, 'summary.json');
+      if (isSafeRegularJsonFile(sumPath, 16 * 1024 * 1024)) {
+        try {
+          summary = JSON.parse(initialReadFileSync(sumPath, 'utf8'));
+        } catch {
+          summary = null;
+        }
+      }
+    }
+
+    const promotedRes = promoteTargetedSliceSummary(summary, eligibleTargetedSlices, checkPorts);
+    if (promotedRes.promoted.length === 0) {
+      if (capturedStdout.text) realStdout.write(capturedStdout.text);
+      return code;
+    }
+
+    const batchForSave = promotedRes.summary?.batch ?? observedBatchId;
+    if (batchForSave && BATCH_RE.test(batchForSave) && state.dir) {
+      const batchFolder = join(state.dir, 'batches', batchForSave);
+      let safeFolder = false;
+      try {
+        const folderStat = initialLstatSync(batchFolder);
+        safeFolder = !folderStat.isSymbolicLink() && folderStat.isDirectory();
+      } catch {
+        safeFolder = false;
+      }
+      if (safeFolder) {
+        const sumPath = join(batchFolder, 'summary.json');
+        if (isSafeRegularJsonFile(sumPath, 16 * 1024 * 1024)) {
+          try {
+            writeFileAtomically(sumPath, `${JSON.stringify(promotedRes.summary, null, 2)}\n`);
+          } catch {
+            /* Preserve exit outcome even if summary update fails. */
+          }
+        }
+        const batchPath = join(batchFolder, 'batch.json');
+        if (isSafeRegularJsonFile(batchPath, 16 * 1024 * 1024)) {
+          try {
+            const savedBatch = JSON.parse(initialReadFileSync(batchPath, 'utf8'));
+            if (isPlainObject(savedBatch) && Array.isArray(savedBatch.rows)) {
+              const promotedByTest = new Map(
+                promotedRes.summary.rows
+                  .filter(r => isPlainObject(r) && promotedRes.promoted.includes(r.test))
+                  .map(r => [r.test, r]),
+              );
+              let batchMutated = false;
+              const nextBatchRows = savedBatch.rows.map(bRow => {
+                if (!isPlainObject(bRow) || !promotedByTest.has(bRow.test)) return bRow;
+                const pRow = promotedByTest.get(bRow.test);
+                const {
+                  not_checked: _dropNotChecked,
+                  own_not_checked: _dropOwnNotChecked,
+                  ...restBatchRow
+                } = bRow;
+                batchMutated = true;
+                return {
+                  ...restBatchRow,
+                  state: 'passed',
+                  recovery_state: 'passed',
+                  reason: null,
+                  note: null,
+                  targeted_scenario: true,
+                  sibling_covered_criteria: pRow.sibling_covered_criteria ?? [],
+                  ...(isPlainObject(pRow.criteria) ? { criteria: pRow.criteria } : {}),
+                };
+              });
+              if (batchMutated) {
+                writeFileAtomically(batchPath, `${JSON.stringify({ ...savedBatch, rows: nextBatchRows }, null, 2)}\n`);
+              }
+            }
+          } catch {
+            /* Preserve exit outcome even if batch.json update fails. */
+          }
+        }
+      }
+    }
+
+    if (isJson) {
+      realStdout.write(`${JSON.stringify(promotedRes.summary)}\n`);
+    } else {
+      const rendered = renderText(
+        {
+          batch: batchForSave,
+          rows: promotedRes.summary.rows,
+          coverage: promotedRes.summary.coverage,
+          warnings: Array.isArray(promotedRes.summary.warnings) ? promotedRes.summary.warnings : [],
+          details: rawOptions['--details'] === true,
+          timeoutMin: rawOptions['--timeout'] ?? null,
+          batchTimeoutMin: rawOptions['--batch-timeout'] ?? null,
+          exitCode: promotedRes.exitCode,
+          now: typeof forwardPorts.now === 'function' ? forwardPorts.now() : Date.now(),
+        },
+        checkPorts,
+      );
+      realStdout.write(rendered);
+      if (promotedRes.summary.check_scope) {
+        for (const lineText of checkPlanResultLines(promotedRes.summary.check_scope)) {
+          realStdout.write(`${lineText}\n`);
+        }
+      }
+    }
+    realStderr.write(
+      `Note: targeted scenario${promotedRes.promoted.length === 1 ? '' : 's'} ${promotedRes.promoted.join(', ')} passed own checks (remaining Story criteria are covered by sibling scenarios; run the full Story for a complete Story pass).\n`,
+    );
+    return promotedRes.exitCode;
   });
 }
 

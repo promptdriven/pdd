@@ -1,0 +1,157 @@
+{
+  "entry_path": "prompts/cli/test-ergonomics.prompt.md",
+  "steps": [
+    {
+      "id": "affected-files-dry-run",
+      "op": "planTestErgonomicsOptions",
+      "input": {
+        "words": [],
+        "options": { "--affected": true, "--files": true, "--json": true }
+      },
+      "checks": {
+        "1": [
+          ["result", "/handled", "=", true],
+          ["result", "/mode", "=", "affected-files"],
+          ["result", "/exit_code", "=", 0],
+          ["result", "/ai_calls", "=", 0],
+          ["result", "/error", "=", null]
+        ]
+      }
+    },
+    {
+      "id": "targeted-slice-sibling-covered",
+      "op": "classifyTargetedScenarioCriteria",
+      "input": {
+        "explicit_scenario_paths": ["tests/split.a.json"],
+        "target_test_path": "tests/split.a.json",
+        "story_criteria_ids": ["AC1", "AC2"],
+        "own_checked_ids": ["AC1"],
+        "sibling_checked_ids": ["AC2"]
+      },
+      "checks": {
+        "2": [
+          ["result", "/is_targeted_slice", "=", true],
+          ["result", "/own_checked_count", "=", 1],
+          ["result", "/sibling_covered_ids", "=", ["AC2"]],
+          ["result", "/uncovered_ids", "=", []],
+          ["result", "/can_pass_as_targeted_slice", "=", true]
+        ]
+      }
+    },
+    {
+      "id": "targeted-slice-uncovered-fails-closed",
+      "op": "classifyTargetedScenarioCriteria",
+      "input": {
+        "explicit_scenario_paths": ["tests/split.a.json"],
+        "target_test_path": "tests/split.a.json",
+        "story_criteria_ids": ["AC1", "AC2"],
+        "own_checked_ids": ["AC1"],
+        "sibling_checked_ids": []
+      },
+      "checks": {
+        "2": [
+          ["result", "/can_pass_as_targeted_slice", "=", false],
+          ["result", "/uncovered_ids", "=", ["AC2"]]
+        ]
+      }
+    },
+    {
+      "id": "retry-unresolved-selects-all-non-passed",
+      "op": "selectUnresolvedBatchTests",
+      "input": {
+        "batch_id": "20261125-100000-ab12",
+        "rows": [
+          { "test": "tests/calc.json", "state": "passed", "recovery_state": null, "note_code": null, "request_ids": ["req-1"], "failed_check_count": 0, "refusal_count": 0 },
+          { "test": "tests/calc.a.json", "state": "partial", "recovery_state": null, "note_code": "no-server-verdict", "request_ids": ["req-2"], "failed_check_count": 0, "refusal_count": 0 },
+          { "test": "tests/calc.b.json", "state": "unknown", "recovery_state": "unknown", "note_code": null, "request_ids": ["req-3"], "failed_check_count": 0, "refusal_count": 0 },
+          { "test": "tests/calc.c.json", "state": "not_run", "recovery_state": null, "note_code": "server-busy", "request_ids": [], "failed_check_count": 0, "refusal_count": 0 },
+          { "test": "tests/other.json", "state": "failed", "recovery_state": "failed", "note_code": null, "request_ids": ["req-4"], "failed_check_count": 1, "refusal_count": 0 }
+        ],
+        "receipts_by_id": {}
+      },
+      "checks": {
+        "3": [
+          ["result", "/retry_tests", "=", ["tests/calc.a.json", "tests/calc.b.json", "tests/calc.c.json", "tests/other.json"]],
+          ["result", "/passed_tests", "=", ["tests/calc.json"]],
+          ["result", "/skipped_count", "=", 1],
+          ["result", "/all_passed", "=", false]
+        ]
+      }
+    },
+    {
+      "id": "retry-unresolved-all-passed-skips-dispatch",
+      "op": "selectUnresolvedBatchTests",
+      "input": {
+        "batch_id": "20261125-100000-ab12",
+        "rows": [
+          { "test": "tests/calc.json", "state": "passed", "recovery_state": null, "note_code": null, "request_ids": ["req-1"], "failed_check_count": 0, "refusal_count": 0 },
+          { "test": "tests/other.json", "state": "unknown", "recovery_state": null, "note_code": null, "request_ids": ["req-2"], "failed_check_count": 0, "refusal_count": 0 }
+        ],
+        "receipts_by_id": { "req-2": "passed" }
+      },
+      "checks": {
+        "3": [
+          ["result", "/retry_tests", "=", []],
+          ["result", "/passed_tests", "=", ["tests/calc.json", "tests/other.json"]],
+          ["result", "/all_passed", "=", true]
+        ]
+      }
+    },
+    {
+      "id": "auto-reconcile-stale-triggers-bounded",
+      "op": "planAutoReconcile",
+      "input": {
+        "options": { "--fresh": true },
+        "stale_batches": [
+          { "batch_id": "20261125-205000-st01", "expired_count": 0, "within_ttl_count": 1 },
+          { "batch_id": "20261120-100000-st02", "expired_count": 2, "within_ttl_count": 0 }
+        ],
+        "default_timeout_ms": 10000,
+        "configured_timeout_ms": null
+      },
+      "checks": {
+        "4": [
+          ["result", "/should_reconcile", "=", true],
+          ["result", "/stale_batches", "=", ["20261120-100000-st02", "20261125-205000-st01"]],
+          ["result", "/expired_count", "=", 2],
+          ["result", "/within_ttl_count", "=", 1],
+          ["result", "/timeout_ms", "=", 10000]
+        ]
+      }
+    },
+    {
+      "id": "auto-reconcile-clean-noop",
+      "op": "planAutoReconcile",
+      "input": {
+        "options": {},
+        "stale_batches": [],
+        "default_timeout_ms": 10000,
+        "configured_timeout_ms": null
+      },
+      "checks": {
+        "4": [
+          ["result", "/should_reconcile", "=", false],
+          ["result", "/reason", "=", "no-stale-reservations"],
+          ["result", "/stale_batches", "=", []]
+        ]
+      }
+    },
+    {
+      "id": "invalid-affected-files-and-retry-unresolved",
+      "op": "planTestErgonomicsOptions",
+      "input": {
+        "words": [],
+        "options": { "--retry-unresolved": "not-a-batch" }
+      },
+      "checks": {
+        "5": [
+          ["result", "/handled", "=", true],
+          ["result", "/mode", "=", "invalid"],
+          ["result", "/exit_code", "=", 2],
+          ["result", "/ai_calls", "=", 0],
+          ["result", "/error", "!=", null]
+        ]
+      }
+    }
+  ]
+}
