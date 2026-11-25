@@ -83,7 +83,7 @@ jobs:
         with:
           node-version: '22'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -128,7 +128,7 @@ jobs:
           python -m twine check dist/pypi/*
 
       - name: Upload tested release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-artifacts
           path: dist/
@@ -148,12 +148,12 @@ jobs:
         with:
           node-version: '22'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
       - name: Download exact artifacts from build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-artifacts
           path: dist
@@ -205,7 +205,7 @@ jobs:
           node-version: '22'
 
       - name: Download exact tested artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-artifacts
           path: dist
@@ -246,7 +246,7 @@ jobs:
       id-token: write
     steps:
       - name: Download exact tested artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-artifacts
           path: dist
@@ -304,7 +304,7 @@ jobs:
           EXPECTED_VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 36); do
+          for attempt in $(seq 1 96); do
             live_npm=$(npm view "@promptdriven/pdd@$EXPECTED_VERSION" version --registry https://registry.npmjs.org 2>/dev/null || true)
             if [ "$live_npm" = "$EXPECTED_VERSION" ]; then
               echo "npm serves $EXPECTED_VERSION (attempt $attempt)."
@@ -385,7 +385,7 @@ jobs:
         with:
           node-version: '22'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -394,7 +394,7 @@ jobs:
           EXPECTED_PY_VERSION: ${{ needs.build.outputs.py_version }}
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 36); do
+          for attempt in $(seq 1 96); do
             if curl -fsSL "https://pypi.org/pypi/pdd-cli/${EXPECTED_PY_VERSION}/json" \
               | node --input-type=module -e '
                 import { readFileSync } from "node:fs";

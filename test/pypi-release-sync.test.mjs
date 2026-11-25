@@ -107,8 +107,8 @@ test('#3498 + #3677 release workflow builds once, verifies exact artifacts, publ
   assert.match(workflow, /sync-pypi-version\.mjs --check/);
   assert.match(workflow, /sync-pypi-version\.mjs --stage-bundle/);
   assert.match(workflow, /mkdir -p dist\/npm dist\/pypi[\s\S]*npm pack --ignore-scripts --pack-destination dist\/npm/);
-  assert.match(workflow, /actions\/upload-artifact@v4/);
-  assert.match(workflow, /actions\/download-artifact@v4/);
+  assert.match(workflow, /actions\/upload-artifact@v\d+/);
+  assert.match(workflow, /actions\/download-artifact@v\d+/);
   assert.match(workflow, /evidence-run\.mjs --suite scripts\/evidence\/public\.suite\.mjs/);
   assert.match(workflow, /evidence-run\.mjs --suite scripts\/evidence\/wheel\.suite\.mjs/);
   assert.match(workflow, /test ! -s "\$smoke_dir\/ver\.err"/);
