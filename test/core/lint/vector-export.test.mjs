@@ -13,6 +13,7 @@ import {
   exportFormalVectors,
   formatCompanionOutputPaths,
   normalizeItfValue,
+  runVectorExport,
 } from '../../../src/core/lint/vector-export.mjs';
 import { parseExactScenarioJson } from '../../../src/scenario-compile.mjs';
 
@@ -172,7 +173,13 @@ test('AC2: pdd vector export converts Quint ITF traces with #bigint, #tup, #set,
     { cwd: repo, home, input: JSON.stringify(itf) },
   );
   assert.equal(res.status, 0, res.stderr);
-  assert.equal(existsSync(join(repo, 'tests', 'option-grant.itf.json')), true);
+  const writtenItfPath = join(repo, 'tests', 'option-grant.itf.json');
+  assert.equal(existsSync(writtenItfPath), true);
+  const writtenItf = parseExactScenarioJson(readFileSync(writtenItfPath, 'utf8'));
+  assert.equal(writtenItf.initial_world.balance, 100);
+  assert.equal(writtenItf.steps[0].op, 'withdraw');
+  assert.equal(writtenItf.steps[0].input.amount, 25);
+  assert.deepEqual(writtenItf.steps[0].checks['1'], [['result', '/balance', '=', 75]]);
 
   // Verify the written companion vector is pdd lint-clean (0 errors, 0 warnings)!
   execFileSync('git', ['add', 'tests/option-grant.itf.json'], { cwd: repo });
@@ -344,4 +351,96 @@ test('regression: CLI --criterion overrides spec default_criterion while omitted
   });
   assert.equal(invalidSpec.status, 1);
   assert.equal(JSON.parse(invalidSpec.stdout).refusal.code, 'invalid-criterion');
+});
+
+test('regression: story_path refuses ancestor symlink, patch/set without from are preserved & validated, invalid optionals fail closed, and ports/json errors behave consistently', t => {
+  const { scratch, repo, home } = initTempRepo(t);
+
+  // 1. Ancestor symlink under repo for story_path must never be read via readSafeUtf8.
+  const outsideDir = join(scratch, 'outside-stories');
+  mkdirSync(outsideDir, { recursive: true });
+  writeFileSync(join(outsideDir, 'secret.md'), '# Secret\n\n## Acceptance criteria\n\n1. Only one criterion.\n');
+  symlinkSync(outsideDir, join(repo, 'linked-stories'));
+  // If secret.md were read, criterion "2" would fail story-criterion-mismatch; because ancestor symlink is ignored, export succeeds.
+  const symStorySpec = JSON.stringify({
+    schema_version: FORMAL_VECTORS_SCHEMA,
+    story_path: 'linked-stories/secret.md',
+    entry_path: 'prompts/option-grant.prompt.md',
+    default_op: 'issue',
+    cases: [{ id: 'c1', criterion: '2', input: { shares: 1 }, expect: { '/status': 'active' } }],
+  });
+  const symStoryRes = runCli(['vector', 'export', '--json'], { cwd: repo, home, input: symStorySpec });
+  assert.equal(symStoryRes.status, 0, symStoryRes.stderr);
+
+  // 2. patch & set without from are preserved and validated (including patch-null-deletes-key).
+  const withInputPatch = exportFormalVectors({
+    schema_version: FORMAL_VECTORS_SCHEMA,
+    entry_path: 'prompts/option-grant.prompt.md',
+    default_op: 'issue',
+    cases: [{ id: 'c1', input: { a: 1 }, patch: { b: 2 }, set: { '/c': null }, expect: { '/ok': true } }],
+  });
+  assert.equal(withInputPatch.ok, true);
+  assert.deepEqual(withInputPatch.files[0].doc.steps[0].patch, { b: 2 });
+  assert.deepEqual(withInputPatch.files[0].doc.steps[0].set, { '/c': null });
+
+  const inputPatchNull = exportFormalVectors({
+    schema_version: FORMAL_VECTORS_SCHEMA,
+    entry_path: 'prompts/option-grant.prompt.md',
+    default_op: 'issue',
+    cases: [{ id: 'c1', input: { a: 1 }, patch: { a: null }, expect: { '/ok': true } }],
+  });
+  assert.equal(inputPatchNull.ok, false);
+  assert.equal(inputPatchNull.refusal.code, 'patch-null-deletes-key');
+
+  // 3. Explicit invalid optional fields fail closed instead of silently falling back.
+  assert.equal(exportFormalVectors({
+    entry_path: 'prompts/option-grant.prompt.md',
+    default_op: 'issue',
+    cases: [{ id: 'c1', entry_path: 123, input: {}, expect: { '/ok': true } }],
+  }).refusal.code, 'invalid-case');
+  assert.equal(exportFormalVectors({
+    entry_path: 'prompts/option-grant.prompt.md',
+    default_op: 'issue',
+    cases: [{ id: 'c1', op: '   ', input: {}, expect: { '/ok': true } }],
+  }).refusal.code, 'invalid-case');
+  assert.equal(exportFormalVectors({
+    entry_path: 'prompts/option-grant.prompt.md',
+    story_path: 42,
+    default_op: 'issue',
+    cases: [{ id: 'c1', input: {}, expect: { '/ok': true } }],
+  }).refusal.code, 'invalid-document');
+  assert.equal(convertItfTrace({
+    '#meta': { format: 'ITF' },
+    states: [
+      { '#meta': { index: 0 }, balance: 10 },
+      { '#meta': { index: 1 }, action: 'withdraw', input: 123, balance: 5 },
+    ],
+  }, { entryPath: 'prompts/option-grant.prompt.md' }).refusal.code, 'invalid-itf');
+
+  // 4. Injected ports.stdin works even when process.stdin may be a TTY, and --json emits structured refusal on syntax error.
+  const outBuf = [];
+  const errBuf = [];
+  const validSpec = JSON.stringify({
+    schema_version: FORMAL_VECTORS_SCHEMA,
+    entry_path: 'prompts/option-grant.prompt.md',
+    default_op: 'issue',
+    cases: [{ id: 'c1', input: { shares: 1 }, expect: { '/status': 'active' } }],
+  });
+  const portExit = runVectorExport(
+    { cwd: repo, json: true },
+    {
+      stdin: { readText: () => validSpec },
+      stdout: { write: s => outBuf.push(s) },
+      stderr: { write: s => errBuf.push(s) },
+    },
+  );
+  assert.equal(portExit, 0, errBuf.join(''));
+  assert.equal(JSON.parse(outBuf.join('')).ok, true);
+
+  const badJsonCli = runCli(['vector', 'export', '--json'], { cwd: repo, home, input: '{broken json' });
+  assert.equal(badJsonCli.status, 1);
+  const badJsonPayload = JSON.parse(badJsonCli.stdout);
+  assert.equal(badJsonPayload.schema_version, FORMAL_EXPORT_RESULT_SCHEMA);
+  assert.equal(badJsonPayload.ok, false);
+  assert.equal(badJsonPayload.refusal.code, 'invalid-json');
 });

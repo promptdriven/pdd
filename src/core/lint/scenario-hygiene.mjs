@@ -37,10 +37,17 @@ function isPositiveNumberLike(value, allowZero = false) {
 
 function isPositiveCallsCheck(check) {
   if (Array.isArray(check)) {
-    // Short JSON tuple: ["calls", path, op, value]
+    // Short JSON tuple:
+    // - criterion-keyed map entry: ["calls", path, op, value]
+    // - array-form step.checks entry: [criterion, "calls", path, op, value]
     if (check.length >= 4 && check[0] === 'calls') {
       const op = check[2];
       const val = check[3];
+      if (POSITIVE_CALLS_OPS.has(op)) return isPositiveNumberLike(val, false);
+      if (STRICT_GT_CALLS_OPS.has(op)) return isPositiveNumberLike(val, true);
+    } else if (check.length >= 5 && check[1] === 'calls') {
+      const op = check[3];
+      const val = check[4];
       if (POSITIVE_CALLS_OPS.has(op)) return isPositiveNumberLike(val, false);
       if (STRICT_GT_CALLS_OPS.has(op)) return isPositiveNumberLike(val, true);
     }

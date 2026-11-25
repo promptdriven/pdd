@@ -9,7 +9,7 @@ import { auditProductPlan } from '../../product-documents.mjs';
 import { isLintableStoryPath, lintStory } from '../../story-lint.mjs';
 import { gitFiles } from '../../shared/git-context.mjs';
 import { causeText, isSecretPath } from '../../shared/safe-read.mjs';
-import { ROOT_TEST_SCENARIO_JSON_RE } from '../../shared/test-paths.mjs';
+import { ROOT_TEST_SCENARIO_JSON_RE, TEST_SCENARIO_JSON_RE } from '../../shared/test-paths.mjs';
 import { workspace } from '../../shared/workspace-policy.mjs';
 import { HEAD_BYTES, canonicalRepoPath, formatDiagnosticLine, formatTeachingDetail, readSafeHeadUtf8, readSafeUtf8, scrubChildEnv } from './diagnostics.mjs';
 import {
@@ -363,7 +363,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
     : (Array.isArray(tests)
       ? [...new Set(tests.map(t => (typeof t === 'string' ? t : t?.path)).filter(p => typeof p === 'string' && p.endsWith('.json')).map(p => p.replace(/^\.\//, '')).filter(p => scopedSet.has(p)))].sort()
       : (Array.isArray(promptPaths)
-        ? scopedFiles.filter(p => ROOT_TEST_SCENARIO_JSON_RE.test(p)).filter(sc => {
+        ? scopedFiles.filter(p => TEST_SCENARIO_JSON_RE.test(p)).filter(sc => {
             const raw = getFull(sc);
             if (!raw) return false;
             try { return scenarioPromptRefs(JSON.parse(raw)).some(r => targetPromptSet.has(r)); } catch { return false; }

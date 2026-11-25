@@ -230,6 +230,21 @@ test('lower-bound positive calls checks exceeding default per-request cap emit s
   assert.equal(evaluated.metrics.min_estimated_calls, 90);
   assert.equal(evaluated.metrics.default_call_cap, 56);
   assert.match(evaluated.finding.detail, /minimum 90 estimated calls exceeding default per-request cap 56/);
+
+  // Short JSON array-form 5-tuple calls checks ([criterion, "calls", path, op, value]) also count!
+  const arrayTupleSteps = Array.from({ length: 10 }, (_, idx) => ({
+    id: `a${idx + 1}`,
+    op: 'step',
+    input: { n: idx + 1 },
+    checks: Array.from({ length: 8 }, (_, i) => ['1', 'calls', `p.op${i}`, '=', 1]),
+  }));
+  const arrayEvaluated = evaluateScenarioHygiene(
+    { entry_path: 'prompts/ledger.prompt.md', initial_world: { ok: true }, steps: arrayTupleSteps },
+    { path: 'tests/heavy-array.json' },
+  );
+  assert.equal(arrayEvaluated.oversized, true);
+  assert.equal(arrayEvaluated.metrics.min_estimated_calls, 90);
+  assert.equal(arrayEvaluated.metrics.default_call_cap, 56);
 });
 
 test('lintRepoProject scopes scenario-oversized cleanly and does not leak non-scenario JSON', t => {

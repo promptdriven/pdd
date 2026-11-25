@@ -10,7 +10,7 @@ import {
   parseExactScenarioJson,
   stringifyExactScenarioJson,
 } from '../../scenario-compile.mjs';
-import { canonicalRepoPath } from './diagnostics.mjs';
+import { canonicalRepoPath, readSafeUtf8 } from './diagnostics.mjs';
 import { DEFAULT_SCENARIO_MAX_STEPS, evaluateScenarioHygiene } from './scenario-hygiene.mjs';
 
 export const FORMAL_VECTORS_SCHEMA = 'pdd.formal-vectors.v1';
@@ -136,9 +136,18 @@ export function convertItfTrace(
   for (let i = 1; i < states.length; i++) {
     const prev = states[i - 1];
     const cur = states[i];
-    const op = (typeof cur.action === 'string' && cur.action.trim())
+    if (cur.action !== undefined && (typeof cur.action !== 'string' || !cur.action.trim())) {
+      return makeRefusal('invalid-itf', `states[${i}].action`, `ITF transition state ${i} "action" must be a nonblank string when provided.`);
+    }
+    if (cur.op !== undefined && (typeof cur.op !== 'string' || !cur.op.trim())) {
+      return makeRefusal('invalid-itf', `states[${i}].op`, `ITF transition state ${i} "op" must be a nonblank string when provided.`);
+    }
+    if (cur.input !== undefined && !isPlainObject(cur.input)) {
+      return makeRefusal('invalid-itf', `states[${i}].input`, `ITF transition state ${i} "input" must be a JSON object when provided.`);
+    }
+    const op = typeof cur.action === 'string'
       ? cur.action.trim()
-      : (typeof cur.op === 'string' && cur.op.trim()
+      : (typeof cur.op === 'string'
         ? cur.op.trim()
         : (typeof defaultOp === 'string' && defaultOp.trim() ? defaultOp.trim() : null));
     if (!op) {
@@ -149,7 +158,7 @@ export function convertItfTrace(
         'Pass --op <operation> or include an "action" field on each transition state.',
       );
     }
-    const input = isPlainObject(cur.input) ? cloneExact(cur.input) : {};
+    const input = cur.input !== undefined ? cloneExact(cur.input) : {};
     const stepCase = {
       id: `case-${i}`,
       op,
@@ -239,7 +248,13 @@ function buildStepFromCase(rawCase, index, { defaultOp, defaultEntryPath, defaul
   }
   seenIds.add(trimmedId);
 
-  const op = typeof rawCase.op === 'string' && rawCase.op.trim()
+  if (rawCase.op !== undefined && (typeof rawCase.op !== 'string' || !rawCase.op.trim())) {
+    return makeRefusal('invalid-case', `${section}.op`, `${section}.op must be a nonblank string when provided.`);
+  }
+  if (rawCase.entry_path !== undefined && (typeof rawCase.entry_path !== 'string' || !rawCase.entry_path.trim())) {
+    return makeRefusal('invalid-case', `${section}.entry_path`, `${section}.entry_path must be a nonblank string when provided.`);
+  }
+  const op = typeof rawCase.op === 'string'
     ? rawCase.op.trim()
     : (typeof defaultOp === 'string' && defaultOp.trim() ? defaultOp.trim() : null);
   if (!op) {
@@ -307,16 +322,16 @@ function buildStepFromCase(rawCase, index, { defaultOp, defaultEntryPath, defaul
   }
 
   const step = { id: trimmedId, op };
-  if (typeof rawCase.entry_path === 'string' && rawCase.entry_path.trim() && rawCase.entry_path.trim() !== defaultEntryPath) {
+  if (typeof rawCase.entry_path === 'string' && rawCase.entry_path.trim() !== defaultEntryPath) {
     step.entry_path = rawCase.entry_path.trim();
   }
   if (rawCase.from !== undefined) {
     step.from = cloneExact(rawCase.from);
-    if (rawCase.patch !== undefined) step.patch = cloneExact(rawCase.patch);
-    if (rawCase.set !== undefined) step.set = cloneExact(rawCase.set);
   } else {
     step.input = rawCase.input !== undefined ? cloneExact(rawCase.input) : {};
   }
+  if (rawCase.patch !== undefined) step.patch = cloneExact(rawCase.patch);
+  if (rawCase.set !== undefined) step.set = cloneExact(rawCase.set);
   if (expectedError) step.error = expectedError;
   step.checks = { [criterion]: checkList };
   return { ok: true, step, checkCount: checkList.length };
@@ -365,18 +380,37 @@ export function exportFormalVectors(
     );
   }
 
-  const effEntryPath = (typeof entryPath === 'string' && entryPath.trim())
+  if (entryPath !== undefined && entryPath !== null && (typeof entryPath !== 'string' || !entryPath.trim())) {
+    return makeRefusal('invalid-document', 'entry_path', 'entryPath (--entry) must be a nonblank string when provided.');
+  }
+  if (storyPath !== undefined && storyPath !== null && (typeof storyPath !== 'string' || !storyPath.trim())) {
+    return makeRefusal('invalid-document', 'story_path', 'storyPath (--story) must be a nonblank string when provided.');
+  }
+  if (defaultOp !== undefined && defaultOp !== null && (typeof defaultOp !== 'string' || !defaultOp.trim())) {
+    return makeRefusal('invalid-document', 'default_op', 'defaultOp (--op) must be a nonblank string when provided.');
+  }
+  if (spec.entry_path !== undefined && (typeof spec.entry_path !== 'string' || !spec.entry_path.trim())) {
+    return makeRefusal('invalid-document', 'entry_path', '"entry_path" must be a nonblank string when provided.');
+  }
+  if (spec.story_path !== undefined && (typeof spec.story_path !== 'string' || !spec.story_path.trim())) {
+    return makeRefusal('invalid-document', 'story_path', '"story_path" must be a nonblank string when provided.');
+  }
+  if (spec.default_op !== undefined && (typeof spec.default_op !== 'string' || !spec.default_op.trim())) {
+    return makeRefusal('invalid-document', 'default_op', '"default_op" must be a nonblank string when provided.');
+  }
+
+  const effEntryPath = typeof entryPath === 'string'
     ? entryPath.trim()
-    : (typeof spec.entry_path === 'string' && spec.entry_path.trim() ? spec.entry_path.trim() : null);
+    : (typeof spec.entry_path === 'string' ? spec.entry_path.trim() : null);
   if (!effEntryPath) {
     return makeRefusal('missing-entry-path', 'entry_path', 'Formal vector export requires "entry_path" (or --entry PATH).');
   }
-  const effStoryPath = (typeof storyPath === 'string' && storyPath.trim())
+  const effStoryPath = typeof storyPath === 'string'
     ? storyPath.trim()
-    : (typeof spec.story_path === 'string' && spec.story_path.trim() ? spec.story_path.trim() : null);
-  const effDefaultOp = (typeof defaultOp === 'string' && defaultOp.trim())
+    : (typeof spec.story_path === 'string' ? spec.story_path.trim() : null);
+  const effDefaultOp = typeof defaultOp === 'string'
     ? defaultOp.trim()
-    : (typeof spec.default_op === 'string' && spec.default_op.trim() ? spec.default_op.trim() : null);
+    : (typeof spec.default_op === 'string' ? spec.default_op.trim() : null);
 
   const overrideCriterion = (defaultCriterion !== undefined && defaultCriterion !== null)
     ? normalizeCriterionKey(defaultCriterion, null)
@@ -584,7 +618,11 @@ export function runVectorExport(
   }
 
   let rawText = '';
-  const useStdin = inputPath === '-' || (!inputPath && ports.stdinText !== undefined) || (!inputPath && !process.stdin.isTTY);
+  const stdinPort = ports.stdin ?? process.stdin;
+  const useStdin = inputPath === '-'
+    || (!inputPath && ports.stdinText !== undefined)
+    || (!inputPath && ports.stdin !== undefined)
+    || (!inputPath && !stdinPort?.isTTY);
   if (useStdin && (!inputPath || inputPath === '-')) {
     rawText = ports.stdinText !== undefined ? String(ports.stdinText) : readStreamSync(ports.stdin);
   } else if (typeof inputPath === 'string' && inputPath.trim()) {
@@ -609,7 +647,17 @@ export function runVectorExport(
   try {
     parsed = parseExactScenarioJson(rawText);
   } catch (err) {
-    writeErr(`Invalid input JSON: ${err?.message || String(err)}`);
+    const refusal = {
+      code: 'invalid-json',
+      section: 'root',
+      message: `Invalid input JSON: ${err?.message || String(err)}`,
+      hint: 'Provide valid JSON (pdd.formal-vectors.v1 or Quint ITF trace) and rerun `pdd vector export`.',
+    };
+    if (json) {
+      stdout.write(`${stringifyExactScenarioJson({ schema_version: FORMAL_EXPORT_RESULT_SCHEMA, ok: false, written: false, refusal }, 2)}\n`);
+    } else {
+      writeErr(refusal.message);
+    }
     return 1;
   }
 
@@ -628,16 +676,13 @@ export function runVectorExport(
     }
   }
 
-  // Load Story text when available so compileScenario verifies criterion indices against the Story.
+  // Load Story text safely (checking every ancestor for symlinks, regular-file kind, and byte cap).
   let storySource = null;
   const candidateStory = (typeof storyPath === 'string' && storyPath.trim())
     ? storyPath.trim().replace(/^\.\//, '')
     : (typeof parsed?.story_path === 'string' && parsed.story_path.trim() ? parsed.story_path.trim().replace(/^\.\//, '') : null);
   if (candidateStory && canonicalRepoPath(candidateStory)) {
-    try {
-      const storyFull = join(realRoot, candidateStory);
-      if (!lstatSync(storyFull).isSymbolicLink()) storySource = readFileSync(storyFull, 'utf8');
-    } catch { /* optional Story file */ }
+    storySource = readSafeUtf8(realRoot, candidateStory);
   }
 
   const exported = exportFormalVectors(parsed, {
@@ -672,9 +717,14 @@ export function runVectorExport(
       }
       validatedTargets.push({ file, abs: checked.abs, rel: checked.rel });
     }
-    for (const { file, abs } of validatedTargets) {
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, file.text, 'utf8');
+    try {
+      for (const { file, abs } of validatedTargets) {
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, file.text, 'utf8');
+      }
+    } catch (err) {
+      writeErr(`Could not write output file: ${err?.message || String(err)}`);
+      return 2;
     }
   }
 
