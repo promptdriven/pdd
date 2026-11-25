@@ -2,7 +2,7 @@
 import { execFileSync } from 'node:child_process';
 import { readSafeUtf8 } from '../../core/lint/diagnostics.mjs';
 import { loadProjectLintConfig } from '../../core/lint/project-config.mjs';
-import { TEST_FILE_PATH_RE, stripLeadingTestDir } from '../../shared/test-paths.mjs';
+import { TEST_FILE_PATH_RE, isTestHelperSpecifier, readPytestTestpaths, stripLeadingTestDir } from '../../shared/test-paths.mjs';
 import { collectTestFixedSleepFindings, collectTestUnexcusedSkipFindings, lintAutopilotTestHygiene, lintTestFixedSleeps, lintTestUnexcusedSkips } from '../lint-sleep-skip.mjs';
 import { MIN_REALISTIC_PAYLOAD_BYTES, NON_PRODUCTION_DIR_RE, canonicalTargetPath, classifyProductionPathSurfaces, normalizePath, resolveRelativeTarget } from './surfaces.mjs';
 import {
@@ -400,12 +400,13 @@ export function lintChangedTestPrivateImports({ root, files = [], changedFiles =
     const message = `Test imports private internal symbol "${sym}" from "${spec}". Test observable behavior through public exports instead of private helpers.`;
     findings.push({ path: rel, line, code: 'test-private-import', category: 'public-interface test', severity, message, formatted: `${severity === 'error' ? 'Error' : 'Warning'}: public-interface test: ${rel}:${line} [test-private-import] ${message}` });
   };
+  const testpaths = readPytestTestpaths(root);
   for (const rel of changedFiles) {
     if (typeof rel !== 'string' || !allowed.has(rel) || !BACKSIDE_TEST_FILE_RE.test(rel) || BACKSIDE_SKIP_SUBDIR_RE.test(rel)) continue;
     const text = readSafeUtf8(root, rel); if (text === null) continue;
     const lang = detectLang(rel);
-    if (lang === 'js') for (const m of text.matchAll(/\bimport\s+\{([^}]+)\}\s+from\s+['"](\.\.?\/[^'"]+)['"]/g)) { const line = text.slice(0, m.index).split('\n').length; for (const p of m[1].split(',')) { const sym = p.trim().split(/\s+as\s+/i)[0]?.trim(); if (sym && PRIVATE_IMPORT_SYM_RE.test(sym)) push(rel, line, sym, m[2]); } }
-    else if (lang === 'py') for (const m of text.matchAll(/^[ \t]*from\s+(\.+[A-Za-z0-9_.]*|[A-Za-z0-9_.]+)\s+import\s+([^\n#]+)/gm)) { const line = text.slice(0, m.index).split('\n').length; for (const p of m[2].replace(/[()]/g, '').split(',')) { const sym = p.trim().split(/\s+as\s+/i)[0]?.trim(); if (sym && PRIVATE_IMPORT_SYM_RE.test(sym)) push(rel, line, sym, m[1]); } }
+    if (lang === 'js') for (const m of text.matchAll(/\bimport\s+\{([^}]+)\}\s+from\s+['"](\.\.?\/[^'"]+)['"]/g)) { if (isTestHelperSpecifier(m[2], rel, testpaths)) continue; const line = text.slice(0, m.index).split('\n').length; for (const p of m[1].split(',')) { const sym = p.trim().split(/\s+as\s+/i)[0]?.trim(); if (sym && PRIVATE_IMPORT_SYM_RE.test(sym)) push(rel, line, sym, m[2]); } }
+    else if (lang === 'py') for (const m of text.matchAll(/^[ \t]*from\s+(\.+[A-Za-z0-9_.]*|[A-Za-z0-9_.]+)\s+import\s+([^\n#]+)/gm)) { if (isTestHelperSpecifier(m[1], rel, testpaths)) continue; const line = text.slice(0, m.index).split('\n').length; for (const p of m[2].replace(/[()]/g, '').split(',')) { const sym = p.trim().split(/\s+as\s+/i)[0]?.trim(); if (sym && PRIVATE_IMPORT_SYM_RE.test(sym)) push(rel, line, sym, m[1]); } }
     else if (lang === 'rs') for (const m of text.matchAll(/\buse\s+(crate::[A-Za-z0-9_:]+)::(_(?!_)[A-Za-z0-9_]+)/g)) push(rel, text.slice(0, m.index).split('\n').length, m[2], m[1]);
   }
   return { findings };
