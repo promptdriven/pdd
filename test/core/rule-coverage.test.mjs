@@ -582,3 +582,59 @@ test('Verifier edge-case regressions: edits past 240 chars, double-backtick span
   assert.equal(byId['TR-H4'].status, 'not_proved');
   assert.equal(byId['TR-H4'].not_proved_reason, 'requires dedicated HSM device');
 });
+
+test('Blind reviewer regressions: O(N) ReDoS safety, real Not proved after quoted/backticked mention on same line, nested parens in doc-level Not proved, continuation-only bold bullet, and path dedup', () => {
+  // 1. O(N) linear-time ReDoS safety on 20,000-char adversarial whitespace/colon/dot inputs (must finish in <100ms).
+  const t0 = performance.now();
+  assert.equal(isExplicitRuleId(`${':'.repeat(20_000)}a`), false);
+  const redosMd = [
+    '# ReDoS',
+    '',
+    '## Domain decisions',
+    '',
+    `- LED-H1${' '.repeat(20_000)}X`,
+    `- **LED-H2:** Reason. Not proved: ${'.'.repeat(20_000)}a`,
+    `Not proved: LED-H3${' '.repeat(20_000)}X`,
+    '',
+  ].join('\n');
+  const redosRules = extractRulesFromMarkdown(redosMd, { sourcePath: 'prompts/redos.prompt.md' });
+  const elapsedMs = performance.now() - t0;
+  assert.ok(elapsedMs < 150, `expected linear-time <150ms on 20k-char adversarial inputs, took ${elapsedMs.toFixed(1)}ms`);
+  assert.equal(redosRules.some(r => r.id === 'LED-H2'), true);
+
+  // 2. Quoted or backticked `Not proved:` mention followed by a REAL `Not proved: <reason>` on the SAME line.
+  const sameLine = [
+    '# Same line',
+    '',
+    '## Domain decisions',
+    '',
+    '- **LED-H1:** Rejects `Not proved:` when empty. Not proved: live webhook only',
+    '- **LED-H2:** Example "Not proved: foo" vs real. Not proved: hardware required',
+    '- **TR-M:** Multi-provider feed.',
+    '- **LED-H3:**',
+    '  Balance stays non-negative across continuation lines.',
+    '',
+    '## Notes',
+    '',
+    '- Rejects `Not proved: TR-M: fake` syntax; Not proved: TR-M (external FX feed (Bloomberg API) unavailable offline)',
+    '',
+  ].join('\n');
+  const slRes = evaluateRuleCoverage({ changedDocs: [{ path: 'prompts/sl.prompt.md', before: '', after: sameLine }], testFiles: [] });
+  const byId = Object.fromEntries(slRes.rules.map(r => [r.id, r]));
+  assert.equal(byId['LED-H1'].status, 'not_proved');
+  assert.equal(byId['LED-H1'].not_proved_reason, 'live webhook only');
+  assert.equal(byId['LED-H2'].status, 'not_proved');
+  assert.equal(byId['LED-H2'].not_proved_reason, 'hardware required');
+  assert.equal(byId['TR-M'].status, 'not_proved');
+  assert.equal(byId['TR-M'].not_proved_reason, 'external FX feed (Bloomberg API) unavailable offline');
+  assert.equal(byId['LED-H3'].status, 'uncovered');
+  assert.equal(byId['LED-H3'].text, 'Balance stays non-negative across continuation lines.');
+
+  // 3. Evidence deduplicates strictly by path per rule ID.
+  const refs = findRuleReferencesInFiles(['LED-H1'], [
+    { path: 'test/a.formal.test.mjs', kind: 'formal', content: '// LED-H1\n' },
+    { path: 'test/a.formal.test.mjs', kind: 'native', content: '// LED-H1\n' },
+  ]);
+  assert.equal(refs['LED-H1'].length, 1);
+  assert.equal(refs['LED-H1'][0].kind, 'formal');
+});

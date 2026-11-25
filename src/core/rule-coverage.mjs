@@ -69,8 +69,17 @@ function splitTableRowEscaped(line) {
   return cells;
 }
 
+function trimTrailingChars(value, charSet) {
+  let end = value.length;
+  while (end > 0 && charSet.has(value[end - 1])) end -= 1;
+  return end === value.length ? value : value.slice(0, end);
+}
+
+const COLON_CHAR_SET = new Set([':']);
+const TRAILING_REASON_PUNCT_SET = new Set(['.', ';', ',', ' ', '\t', '\r', '\n']);
+
 function unwrapRuleToken(raw) {
-  let text = String(raw ?? '').trim().replace(/:+$/, '').trim();
+  let text = trimTrailingChars(String(raw ?? '').trim(), COLON_CHAR_SET).trim();
   for (let i = 0; i < 4; i++) {
     const prev = text;
     if (text.startsWith('**') && text.endsWith('**') && text.length > 4) text = text.slice(2, -2).trim();
@@ -78,7 +87,7 @@ function unwrapRuleToken(raw) {
     else if (text.startsWith('`') && text.endsWith('`') && text.length > 2) text = text.slice(1, -1).trim();
     else if (text.startsWith('*') && text.endsWith('*') && text.length > 2) text = text.slice(1, -1).trim();
     else if (text.startsWith('[') && text.endsWith(']') && text.length > 2) text = text.slice(1, -1).trim();
-    text = text.replace(/:+$/, '').trim();
+    text = trimTrailingChars(text, COLON_CHAR_SET).trim();
     if (text === prev) break;
   }
   return text;
@@ -137,22 +146,34 @@ function cleanNotProvedReason(raw, openedWithParen = false) {
   let reason = openedWithParen ? sliceBalancedParenContent(String(raw ?? '')) : String(raw ?? '');
   reason = collapseSpaces(reason)
     .replace(/^\*{1,2}\s*/, '')
-    .replace(/^[-—–:,;]+\s*/, '')
-    .replace(/\s*[.;,]+$/, '')
-    .replace(/^\*{1,2}|\*{1,2}$/g, '')
-    .trim();
+    .replace(/^[-—–:,;]+\s*/, '');
+  reason = trimTrailingChars(reason, TRAILING_REASON_PUNCT_SET);
+  if (reason.startsWith('**')) reason = reason.slice(2);
+  else if (reason.startsWith('*')) reason = reason.slice(1);
+  if (reason.endsWith('**')) reason = reason.slice(0, -2);
+  else if (reason.endsWith('*')) reason = reason.slice(0, -1);
+  reason = trimTrailingChars(reason.trim(), TRAILING_REASON_PUNCT_SET).trim();
   return SUBSTANTIVE_REASON_RE.test(reason) ? reason : null;
 }
 
 function extractInlineNotProvedReason(text) {
   const raw = String(text ?? '');
-  const re = /\bNot\s+proved\s*:\s*\*{0,2}\s*([^\r\n|]*)/gi;
+  const re = /\bNot\s+proved\s*:/gi;
   let match;
   while ((match = re.exec(raw)) !== null) {
     if (isInsideBackticksOrDoubleQuotes(raw, match.index)) continue;
     const before = raw.slice(0, match.index).replace(/\*{1,2}\s*$/, '').trimEnd();
     const openedWithParen = before.endsWith('(');
-    const reason = cleanNotProvedReason(match[1], openedWithParen);
+    const afterStart = match.index + match[0].length;
+    let tailEnd = raw.length;
+    for (let k = afterStart; k < raw.length; k++) {
+      const ch = raw[k];
+      if (ch === '\r' || ch === '\n' || ch === '|') {
+        tailEnd = k;
+        break;
+      }
+    }
+    const reason = cleanNotProvedReason(raw.slice(afterStart, tailEnd), openedWithParen);
     if (reason) return reason;
   }
   return null;
@@ -162,21 +183,44 @@ function extractInlineIdPrefix(text) {
   const body = String(text ?? '').trim();
   if (!body) return null;
 
-  const patterns = [
-    /^\*\*`?([^`*:\r\n]+?)`?:?\*\*(?:\s*(?::|—|–|-\s+)\s*|\s+)(.*)$/,
-    /^`([^`\r\n]+)`\s*(?::|—|–|-\s+)\s*(.*)$/,
-    /^\[([^\]\r\n]+)\]\s*(?:(?::|—|–|-)\s*)?(.*)$/,
-    /^([A-Za-z0-9_-]+)\s*(?::|—|–|\s+-\s+)\s*(.*)$/,
-  ];
-
-  for (const re of patterns) {
-    const match = re.exec(body);
-    if (!match) continue;
-    const candidate = unwrapRuleToken(match[1]);
+  // 1. Bold prefix: **LED-H1:** ..., **LED-H1**: ..., **LED-H1** — ..., **LED-H1** - ..., or continuation-only **LED-H1:**
+  const boldMatch = /^\*\*`?([^`*:\r\n]+?)`?(:?)\*\*(.*)$/.exec(body);
+  if (boldMatch) {
+    const candidate = unwrapRuleToken(boldMatch[1]);
     if (isExplicitRuleId(candidate)) {
-      return { id: candidate, rest: collapseSpaces(match[2]) };
+      const tail = boldMatch[3];
+      if (!tail.trim()) return { id: candidate, rest: '' };
+      const sepMatch = /^(?:\s*(?::|—|–)|\s+-\s+|\s+)(.*)$/.exec(tail);
+      if (sepMatch) return { id: candidate, rest: collapseSpaces(sepMatch[1]) };
     }
   }
+
+  // 2. Backtick prefix: `TR-C1`: ... | `TR-C1` — ... | `TR-C1` - ...
+  const tickMatch = /^`([^`\r\n]+)`(?:\s*(?::|—|–)|\s+-\s+)(.*)$/.exec(body);
+  if (tickMatch) {
+    const candidate = unwrapRuleToken(tickMatch[1]);
+    if (isExplicitRuleId(candidate)) return { id: candidate, rest: collapseSpaces(tickMatch[2]) };
+  }
+
+  // 3. Bracketed prefix: [TR-H1] ... | [TR-H1]: ... | [TR-H1] — ...
+  const bracketMatch = /^\[([^\]\r\n]+)\](.*)$/.exec(body);
+  if (bracketMatch) {
+    const candidate = unwrapRuleToken(bracketMatch[1]);
+    if (isExplicitRuleId(candidate)) {
+      const tail = bracketMatch[2];
+      const sepMatch = /^(?:\s*(?::|—|–|-)|\s+)(.*)$/.exec(tail);
+      if (sepMatch) return { id: candidate, rest: collapseSpaces(sepMatch[1]) };
+      if (!tail.trim()) return { id: candidate, rest: '' };
+    }
+  }
+
+  // 4. Plain prefix: R1: ... | LED-H1 — ... | LED-H1 - ...
+  const plainMatch = /^([A-Za-z0-9_-]+)(?:\s*(?::|—|–)|\s+-\s+)(.*)$/.exec(body);
+  if (plainMatch) {
+    const candidate = unwrapRuleToken(plainMatch[1]);
+    if (isExplicitRuleId(candidate)) return { id: candidate, rest: collapseSpaces(plainMatch[2]) };
+  }
+
   return null;
 }
 
@@ -195,15 +239,20 @@ function pickTableIdColumn(headerCells) {
 
 function extractDocLevelNotProvedMap(proseLines) {
   const map = new Map();
-  const re = /\b[Nn][Oo][Tt]\s+[Pp][Rr][Oo][Vv][Ee][Dd]\s*:\s*(?:\*\*|`)?([A-Z][A-Z0-9_-]{1,31})(?:\*\*|`)?\s*(?:\(([^)\r\n]+)\)|(?::|—|–|\s+-\s+)\s*([^\r\n]+))/g;
+  const markerRe = /\bNot\s+proved\s*:/gi;
+  const afterRe = /^(?:\*\*|`)?([A-Z][A-Z0-9_-]{1,31})(?:\*\*|`)?(?:\s*\((.*)|\s*(?::|—|–)(.*)|\s+-\s+(.*))$/;
   for (const { text } of proseLines) {
-    re.lastIndex = 0;
+    markerRe.lastIndex = 0;
     let match;
-    while ((match = re.exec(text)) !== null) {
+    while ((match = markerRe.exec(text)) !== null) {
       if (isInsideBackticksOrDoubleQuotes(text, match.index)) continue;
-      const id = unwrapRuleToken(match[1]);
+      const tail = text.slice(match.index + match[0].length).replace(/^\*{1,2}/, '').trimStart();
+      const parsed = afterRe.exec(tail);
+      if (!parsed) continue;
+      const id = unwrapRuleToken(parsed[1]);
       if (!isExplicitRuleId(id)) continue;
-      const reason = cleanNotProvedReason(match[2] ?? match[3] ?? '', false);
+      const openedWithParen = parsed[2] !== undefined;
+      const reason = cleanNotProvedReason(parsed[2] ?? parsed[3] ?? parsed[4] ?? '', openedWithParen);
       if (reason && !map.has(id)) map.set(id, reason);
     }
   }
@@ -562,9 +611,8 @@ export function findRuleReferencesInFiles(ruleIds = [], testFiles = []) {
     const seen = new Set();
     const deduped = [];
     for (const entry of evidenceById[id]) {
-      const key = `${entry.kind}\0${entry.path}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      if (seen.has(entry.path)) continue;
+      seen.add(entry.path);
       deduped.push(entry);
     }
     deduped.sort((a, b) => (TIER_RANK[a.kind] - TIER_RANK[b.kind]) || a.path.localeCompare(b.path) || (a.line - b.line));
