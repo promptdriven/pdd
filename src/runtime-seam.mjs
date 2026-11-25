@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs, { realpathSync } from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { homedir } from 'node:os';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   CHECK_STATES,
@@ -38,7 +38,7 @@ import {
   composeProductTry as runtimeComposeProductTry,
   coverageText,
   createAgentBridge as runtimeCreateAgentBridge,
-  createLocalCommandBridge,
+  createLocalCommandBridge as runtimeCreateLocalCommandBridge,
   createSavedStoryEvidenceReader as rawCreateSavedStoryEvidenceReader,
   createStrictSourceAccess as rawCreateStrictSourceAccess,
   createTryGuide as runtimeCreateTryGuide,
@@ -458,6 +458,75 @@ function seamRedaction(ports = {}) {
     redact: ports.redactSecrets ?? host.redact,
     known: host.known,
   });
+}
+
+const LIVE_LOCAL_INCOMPATIBLE_CHECK_FLAGS = [
+  '--lint', '--codex', '--local', '--remote', '--target',
+  '--read', '--retry', '--reconcile', '--reconcile-stale', '--files', '--explain-bindings', '--app-map',
+  '--screen', '--drawing', '--look', '--emit-v1', '--write', '--bind-criteria',
+  '--affected', '--journeys', '--lf', '--cache-clear', '--diff', '--base', '--issue', '--request',
+];
+const LIVE_LOCAL_INCOMPATIBLE_TRY_FLAGS = [
+  '--product', '--parts', '--journey', '--stop', '--save-last', '--no-wait', '--agent',
+  '--cli', '--shell', '--serve', '--data', '--show-data', '--quiet', '-q',
+];
+const isStandaloneProgramTarget = word =>
+  typeof word === 'string' && (/\.prompt\.md$/i.test(word) || basename(word).toLowerCase() === 'app-map.json');
+
+function validateLiveLocalOptions(rawOptions = {}, kind = 'check', cwd = process.cwd(), stderr = process.stderr) {
+  const enabled = rawOptions['--live-local'];
+  if (enabled === undefined || enabled === false) {
+    if (rawOptions['--command-manifest'] !== undefined || rawOptions['--allow-live-writes'] !== undefined) {
+      stderr.write('--command-manifest and --allow-live-writes require --live-local.\n');
+      return { errorCode: 2 };
+    }
+    return { options: rawOptions };
+  }
+  if (
+    enabled !== true ||
+    typeof rawOptions['--command-manifest'] !== 'string' ||
+    !rawOptions['--command-manifest'].trim() ||
+    (rawOptions['--allow-live-writes'] !== undefined && typeof rawOptions['--allow-live-writes'] !== 'boolean')
+  ) {
+    stderr.write('--live-local requires an explicit --command-manifest path and Boolean write flag.\n');
+    return { errorCode: 2 };
+  }
+  const incompatible = kind === 'try' ? LIVE_LOCAL_INCOMPATIBLE_TRY_FLAGS : LIVE_LOCAL_INCOMPATIBLE_CHECK_FLAGS;
+  if (incompatible.some(flag => rawOptions[flag] !== undefined)) {
+    stderr.write(
+      kind === 'try'
+        ? 'This option combination is unavailable with --live-local. Live Prompt Interpreter sessions must stay in the foreground.\n'
+        : 'This option combination is unavailable with --live-local. Run pdd test --help.\n',
+    );
+    return { errorCode: 2 };
+  }
+  let manifestPath = rawOptions['--command-manifest'];
+  if (!isAbsolute(manifestPath) && typeof cwd === 'string' && cwd) {
+    const top = repoTopRoot(cwd);
+    if (top && resolve(cwd) !== resolve(top)) {
+      manifestPath = resolve(cwd, manifestPath);
+    }
+  }
+  if (manifestPath === rawOptions['--command-manifest']) {
+    return { options: rawOptions };
+  }
+  return { options: { ...rawOptions, '--command-manifest': manifestPath } };
+}
+
+async function withLiveLocalPorts(input, ports) {
+  if (input?.options?.['--live-local'] !== true) return ports;
+  const [{ createLiveLocalHost }] = await Promise.all([
+    import('./core/live-local-host.mjs'),
+    import('./secret-redaction.mjs'),
+  ]);
+  const defaults = createLiveLocalHost({
+    env: ports.env ?? process.env,
+    redaction: seamRedaction(ports),
+    root: input?.cwd ?? input?.root ?? process.cwd(),
+  });
+  const liveLocal = withPortDefaults(ports.liveLocal ?? {}, defaults);
+  liveLocal.journal = withPortDefaults(ports.liveLocal?.journal ?? {}, defaults.journal);
+  return { ...ports, liveLocal };
 }
 
 function withPortDefaults(ports = {}, defaults = {}) {
@@ -2798,7 +2867,11 @@ function computeGraphAwareDefaultMaxCalls(input, ports) {
 }
 
 export async function runCheck(input = {}, ports = {}) {
-  const rawOptions = input?.options ?? {};
+  const initialCwd = input?.cwd ?? process.cwd();
+  const validatedLiveLocal = validateLiveLocalOptions(input?.options ?? {}, 'check', initialCwd, ports.stderr ?? process.stderr);
+  if (validatedLiveLocal.errorCode !== undefined) return validatedLiveLocal.errorCode;
+  const rawOptions = validatedLiveLocal.options;
+  const normalizedInput = rawOptions === (input?.options ?? {}) ? input : { ...input, options: rawOptions };
   if (rawOptions['--emit-v1'] && rawOptions['--bind-criteria']) {
     const stderr = ports.stderr ?? process.stderr;
     stderr.write('Use either --emit-v1 or --bind-criteria, not both.\n');
@@ -2810,16 +2883,16 @@ export async function runCheck(input = {}, ports = {}) {
     return 2;
   }
   if (rawOptions['--emit-v1']) {
-    return runEmitV1(input, ports);
+    return runEmitV1(normalizedInput, ports);
   }
   if (rawOptions['--bind-criteria']) {
-    return runBindCriteria(input, ports);
+    return runBindCriteria(normalizedInput, ports);
   }
   if (rawOptions['--reconcile'] !== undefined) {
-    return runCheckReconcileCommand(input, ports);
+    return runCheckReconcileCommand(normalizedInput, ports);
   }
   if (rawOptions['--reconcile-stale'] !== undefined) {
-    return runCheckReconcileStaleCommand(input, ports);
+    return runCheckReconcileStaleCommand(normalizedInput, ports);
   }
   const freshRequested = rawOptions['--fresh'] !== undefined;
   if (freshRequested) {
@@ -2870,14 +2943,15 @@ export async function runCheck(input = {}, ports = {}) {
     delete effectiveOptions['--fresh'];
   }
   const effectiveInput = {
-    ...input,
+    ...normalizedInput,
     options: effectiveOptions,
     client,
   };
   const cwd = effectiveInput?.cwd ?? process.cwd();
   const lazyOverlay = { cwd, ports, map: undefined };
 
-  const { onProjectLintResult, ...forwardPorts } = ports;
+  const { onProjectLintResult, ...rawForwardPorts } = ports;
+  const forwardPorts = await withLiveLocalPorts(effectiveInput, rawForwardPorts);
   const defaultLintSvgLayouts = lintMods
     ? arg => {
         const [{ lintSvgLayouts }, { lintRepoProject, resolveLintScope }] = lintMods;
@@ -2961,6 +3035,13 @@ export async function runCheck(input = {}, ports = {}) {
     attachRunCheckThrottleBackoff(checkPorts, forwardPorts);
     return runtimeRunCheck(effectiveInput, checkPorts);
   });
+}
+
+export async function createLocalCommandBridge(input, ports = {}) {
+  return runtimeCreateLocalCommandBridge(
+    input,
+    await withLiveLocalPorts({ ...input, options: { '--live-local': true } }, ports),
+  );
 }
 
 export async function askAgent(input = {}, ports = {}) {
@@ -3220,11 +3301,36 @@ function classifyPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
 }
 
 export async function runTry(input = {}, ports = {}) {
-  const { runTry: rawTryOverride, ...forwardPorts } = ports;
-  const opts = input?.options ?? {};
-  const freshRequested = opts['--fresh'] !== undefined;
+  const { runTry: rawTryOverride, ...rawForwardPorts } = ports;
   const cwd = input?.cwd ?? process.cwd();
-  const words = commandWords(input);
+  const validatedLiveLocal = validateLiveLocalOptions(input?.options ?? {}, 'try', cwd, rawForwardPorts.stderr ?? process.stderr);
+  if (validatedLiveLocal.errorCode !== undefined) return validatedLiveLocal.errorCode;
+  const opts = validatedLiveLocal.options;
+  const normalizedInput = opts === (input?.options ?? {}) ? input : { ...input, options: opts };
+  const freshRequested = opts['--fresh'] !== undefined;
+  const words = commandWords(normalizedInput);
+  if (opts['--live-local'] === true && words.some(isStandaloneProgramTarget)) {
+    (rawForwardPorts.stderr ?? process.stderr).write('--live-local applies to Story runs, not standalone .prompt.md or app-map.json targets.\n');
+    return 2;
+  }
+  if (opts['--live-local'] === true && words.length === 0 && typeof rawTryOverride !== 'function') {
+    const root = repoTopRoot(cwd);
+    if (root) {
+      try {
+        const found = findTests({ root, excludeFixtureProjects: true }, rawForwardPorts);
+        if (!found.tests.length && !(found.untested?.length)) {
+          const policy = found.workspace ?? loadRuntimeWorkspace({ root });
+          const standalonePrompts = [...(found.discoveryVisible ?? found.visible ?? [])]
+            .filter(path => path.endsWith('.prompt.md') && allowsRuntimePath(policy, path));
+          if (standalonePrompts.length === 1) {
+            (rawForwardPorts.stderr ?? process.stderr).write('--live-local applies to Story runs, not standalone .prompt.md or app-map.json targets.\n');
+            return 2;
+          }
+        }
+      } catch {}
+    }
+  }
+  const forwardPorts = await withLiveLocalPorts(normalizedInput, rawForwardPorts);
   const isDirectProgramTarget =
     words.length >= 1 &&
     typeof words[0] === 'string' &&
@@ -3261,12 +3367,13 @@ export async function runTry(input = {}, ports = {}) {
       }
     }
   }
-  let runInput = input;
+  let runInput = normalizedInput;
   if (typeof rawTryOverride !== 'function' && isDirectProgramTarget) {
     const stderr = forwardPorts.stderr ?? process.stderr;
     if (opts['--stop']) {
       const stopDisallowed = [
-        '--tab', '--new', '--fresh', '--no-open', '--no-wait', '--app-map', '--product',
+        '--tab', '--new', '--fresh', '--live-local', '--command-manifest', '--allow-live-writes',
+        '--no-open', '--no-wait', '--app-map', '--product',
         '--parts', '--journey', '--max-calls', '--cli', '--shell', '--serve', '--page',
         '--save-last', '--agent', '--data', '--show-data', '--quiet', '-q',
       ];
@@ -3461,7 +3568,7 @@ export async function runTry(input = {}, ports = {}) {
         }
         return text.includes(FORM_TAB_NOTICE);
       });
-      return invoke(input, { ...forwardPorts, stderr: reopenStderr });
+      return invoke(normalizedInput, { ...forwardPorts, stderr: reopenStderr });
     }
     return code;
   }
@@ -3976,6 +4083,9 @@ export async function check(input = {}, ports = {}) {
   const extraOptions = {
     ...(input?.affected === true && input?.options?.['--affected'] === undefined ? { '--affected': true } : {}),
     ...(input?.fresh === true && input?.options?.['--fresh'] === undefined ? { '--fresh': true } : {}),
+    ...(input?.liveLocal === true && input?.options?.['--live-local'] === undefined ? { '--live-local': true } : {}),
+    ...(input?.commandManifest !== undefined && input?.options?.['--command-manifest'] === undefined ? { '--command-manifest': input.commandManifest } : {}),
+    ...(input?.allowLiveWrites === true && input?.options?.['--allow-live-writes'] === undefined ? { '--allow-live-writes': true } : {}),
   };
   return runCheck(buildCheckInput(input, { defaultCache: true, extraOptions }), ports);
 }
@@ -4052,6 +4162,9 @@ export async function simulate(input = {}, ports = {}) {
   const cwd = input?.cwd ?? input?.root;
   const options = { ...(input?.options ?? {}) };
   if (input?.fresh === true && options['--fresh'] === undefined) options['--fresh'] = true;
+  if (input?.liveLocal === true && options['--live-local'] === undefined) options['--live-local'] = true;
+  if (input?.commandManifest !== undefined && options['--command-manifest'] === undefined) options['--command-manifest'] = input.commandManifest;
+  if (input?.allowLiveWrites === true && options['--allow-live-writes'] === undefined) options['--allow-live-writes'] = true;
   if (input?.mode === 'cli') options['--cli'] = true;
   else if (input?.mode === 'serve' && options['--serve'] === undefined) options['--serve'] = input?.port ?? true;
   else if (input?.mode === 'save-last') options['--save-last'] = true;
@@ -4166,7 +4279,6 @@ export {
   cleanText,
   compileLocalManifest,
   coverageText,
-  createLocalCommandBridge,
   defaultLineReader,
   defaultMaxCalls,
   discoveryRefusal,

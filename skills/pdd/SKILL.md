@@ -61,7 +61,7 @@ Load [references/verification.md](references/verification.md) before finalizing 
 | Prompting rules, 100% Truth, `// Prompt:` headers, `native-only` specs, approvals | [references/prompting.md](references/prompting.md) |
 | Stories, compact scenario JSON, targets, operators, schemas & budgets | [references/stories.md](references/stories.md) |
 | Multi-part product maps, plans, contracts & `--through prompt-pr` | [references/product.md](references/product.md) |
-| External fakes, DB/HTTP/CLI, 3-Port Rule, telemetry & `pdd mcp` | [references/ports-and-cli.md](references/ports-and-cli.md) |
+| External fakes, DB/HTTP/CLI, `--live-local`, 3-Port Rule, telemetry & `pdd mcp` | [references/ports-and-cli.md](references/ports-and-cli.md) |
 | Single-file plain-prose UI, optional `app-map.json`, `.ui.svg` & direct `pdd` | [references/ui-and-screens.md](references/ui-and-screens.md) |
 | Native tests, Feature Map (`verify.paths`), `pdd prove` & Deliberate-Break Probe | [references/verification.md](references/verification.md) |
 | Code-bound formal verification (zero-install PRNG/grid default, 3-tier stack & mutation control) | [references/formal.md](references/formal.md) |
