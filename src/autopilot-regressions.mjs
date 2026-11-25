@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-regressions.prompt.md (sha256: 3f7ba8760a9d849333624a883dd8dac9739396a3c59643fc9bd8dc2b72e6fbac).
+// Prompt: prompts/cli/autopilot-regressions.prompt.md
 import * as nativeFs from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';

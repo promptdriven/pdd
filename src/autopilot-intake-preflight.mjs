@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-intake-preflight.prompt.md (sha256: 733a48b6d7f68913a0a9f77d6c53a1842869447585801a2a7475590a725786b4).
+// Prompt: prompts/cli/autopilot-intake-preflight.prompt.md
 
 export const PREFLIGHT_REASON_CODES = Object.freeze([
   'cross_repo',

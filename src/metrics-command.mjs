@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-command.prompt.md (sha256: f34959daef947465fcf1ee3612ed17159a23c165fe3d67b4043bc4f73701f693).
+// Prompt: prompts/cli/metrics-command.prompt.md
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

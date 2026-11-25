@@ -169,7 +169,7 @@ test('ai-lint.mjs has ZERO runtime-seam imports, enforces disableTools/deny-all 
   assert.doesNotMatch(stripComments(readonlySrc), /runtime-seam|autopilot\/|core\/|accounts\/|workflow-/);
   assert.doesNotMatch(stripComments(aiLintSrc), /runtime-seam/);
   assert.doesNotMatch(stripComments(facadeSrc), /runtime-seam/);
-  assert.match(facadeSrc, /Generated from prompts\/cli\/codex-lint\.prompt\.md/);
+  assert.match(facadeSrc, /(?:Generated from|Prompt:) prompts\/cli\/codex-lint\.prompt\.md/);
   assert.ok(facadeSrc.split('\n').length <= 40);
   assert.equal(buildCodexLintPrompt, buildAiLintPrompt);
   assert.equal(groupCodexLintBatches, groupAiLintBatches);

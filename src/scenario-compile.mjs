@@ -1,4 +1,4 @@
-// Generated from prompts/cli/scenario-compile.prompt.md (sha256: 0f4a903a5f3f1f84c34cdca704cacb5ff2edaf0d71a5cbff97eedb0a70746aac).
+// Prompt: prompts/cli/scenario-compile.prompt.md
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';

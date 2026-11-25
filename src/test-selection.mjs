@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-selection.prompt.md (sha256: 573f1d627ad2beec74e9bb767e3a1c7e915f54e40a8270ac217f54f2d832feaa).
+// Prompt: prompts/cli/test-selection.prompt.md
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';

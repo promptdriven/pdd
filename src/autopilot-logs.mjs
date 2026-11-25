@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-logs.prompt.md (sha256: 85feb34d06c1be3f4f34af79c1a95b27bc23db5d24d2c6b57416a07bc50ee035).
+// Prompt: prompts/cli/autopilot-logs.prompt.md
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
