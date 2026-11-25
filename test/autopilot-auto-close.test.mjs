@@ -265,3 +265,11 @@ test('AC3: close-merged-issues workflow is ignored as PR CI and closes comma-lis
     assert.equal(issues.get(keepOpen).state, 'open', `issue #${keepOpen} must remain open`);
   }
 });
+
+test('close-merged-issues workflow posts the comment before closing the issue', () => {
+  const wf = readFileSync(new URL('../.github/workflows/close-merged-issues.yml', import.meta.url), 'utf8');
+  const commentIdx = wf.indexOf('/issues/${issueNum}/comments');
+  const patchIdx = wf.indexOf("state: 'closed'");
+  assert.ok(commentIdx > 0 && patchIdx > 0, 'expected both comment POST and close PATCH in workflow');
+  assert.ok(commentIdx < patchIdx, 'comment POST must run before close PATCH so failed comments never leave silent closures');
+});
