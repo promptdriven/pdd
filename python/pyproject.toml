@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.1.52"
+version = "0.1.53"
 description = "Prompt Driven Development (PDD) CLI — write prompts as source, test and run them with the interpreter, and prove real code"
 readme = "README.md"
 license = "MIT"
