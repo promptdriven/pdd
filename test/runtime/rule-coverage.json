@@ -1,0 +1,161 @@
+{
+  "entry_path": "prompts/cli/rule-coverage.prompt.md",
+  "initial_world": {},
+  "simulation": {},
+  "steps": [
+    {
+      "id": "mixed-prompt-rules-RC-1",
+      "op": "evaluateRuleCoverage",
+      "input": {
+        "changedDocs": [
+          {
+            "path": "prompts/ledger.prompt.md",
+            "fileKind": "prompt",
+            "before": "",
+            "after": "# Ledger\n\n## Domain decisions\n\n| ID | Rule | Verification |\n| --- | --- | --- |\n| LED-H1 | Balance never drops below zero | Tier 1 |\n| LED-H2 | Transfers conserve minor units | Scenario |\n| LED-H3 | Preview uses formatted labels | Not proved: preview formatting only |\n| LED-H4 | Audit entry records timestamp | |\n"
+          }
+        ],
+        "testFiles": [
+          {
+            "path": "test/ledger.formal.test.mjs",
+            "kind": "formal",
+            "content": "import test from 'node:test';\ntest('LED-H1 non-negative balance', () => {});\n"
+          },
+          {
+            "path": "test/runtime/ledger.json",
+            "kind": "scenario",
+            "content": "{\n  \"entry_path\": \"prompts/ledger.prompt.md\",\n  \"steps\": [\n    {\n      \"id\": \"LED-H2-clamp\",\n      \"op\": \"transfer\",\n      \"input\": {},\n      \"checks\": {\n        \"1\": [[\"result\", \"/ok\", \"=\", true]]\n      }\n    }\n  ]\n}\n"
+          }
+        ]
+      },
+      "checks": {
+        "1": [
+          ["result", "/rules/0/id", "=", "LED-H1"],
+          ["result", "/rules/0/status", "=", "covered"],
+          ["result", "/rules/0/tiers", "=", ["formal"]],
+          ["result", "/rules/1/id", "=", "LED-H2"],
+          ["result", "/rules/1/status", "=", "covered"],
+          ["result", "/rules/1/tiers", "=", ["scenario"]],
+          ["result", "/rules/2/id", "=", "LED-H3"],
+          ["result", "/rules/2/status", "=", "not_proved"],
+          ["result", "/rules/2/not_proved_reason", "=", "preview formatting only"],
+          ["result", "/rules/3/id", "=", "LED-H4"],
+          ["result", "/rules/3/status", "=", "uncovered"],
+          ["result", "/summary", "=", {"total": 4, "covered": 2, "not_proved": 1, "uncovered": 1}],
+          ["result", "/warnings", "count", 1],
+          ["result", "/warnings/0", "contains", "LED-H4"]
+        ]
+      }
+    },
+    {
+      "id": "story-diff-native-and-unchanged-RC-2",
+      "op": "evaluateRuleCoverage",
+      "input": {
+        "changedDocs": [
+          {
+            "path": "user_stories/tokens.md",
+            "fileKind": "story",
+            "before": "# Revoke token\n\n## Rules to check\n\n- **TR-H1:** Sessions expire after 24 hours.\n- **TR-C1:** Revoked tokens cannot refresh.\n",
+            "after": "# Revoke token\n\n## Rules to check\n\n- **TR-H1:** Sessions expire after 24 hours.\n- **TR-C1:** Revoked tokens cannot refresh or issue new sessions.\n"
+          }
+        ],
+        "testFiles": [
+          {
+            "path": "test/tokens.test.mjs",
+            "kind": "native",
+            "content": "import test from 'node:test';\ntest('TR-C1: revoked token cannot issue session', () => {});\n"
+          }
+        ]
+      },
+      "checks": {
+        "2": [
+          ["result", "/rules", "count", 1],
+          ["result", "/rules/0/id", "=", "TR-C1"],
+          ["result", "/rules/0/status", "=", "covered"],
+          ["result", "/rules/0/tiers", "=", ["native"]],
+          ["result", "/warnings", "=", []]
+        ]
+      }
+    },
+    {
+      "id": "plain-prose-and-fences-RC-2",
+      "op": "evaluateRuleCoverage",
+      "input": {
+        "changedDocs": [
+          {
+            "path": "prompts/cli/sample.prompt.md",
+            "fileKind": "prompt",
+            "before": "",
+            "after": "# Sample\n\n## Domain decisions\n\n- **Codex:** Reads config from home directory.\n- `PDD_SKILL_NAMES`: lists bundled skills.\n- **Non-empty:** Rejects blank inputs.\n\n```markdown\n| LED-H9 | Fenced example rule |\n- **TR-H9:** Fenced bullet rule.\n```\n"
+          }
+        ],
+        "testFiles": []
+      },
+      "checks": {
+        "3": [
+          ["result", "/rules", "=", []],
+          ["result", "/summary", "=", {"total": 0, "covered": 0, "not_proved": 0, "uncovered": 0}],
+          ["result", "/warnings", "=", []]
+        ]
+      }
+    },
+    {
+      "id": "prod-and-substring-no-false-coverage-RC-3",
+      "op": "evaluateRuleCoverage",
+      "input": {
+        "changedDocs": [
+          {
+            "path": "prompts/ledger.prompt.md",
+            "fileKind": "prompt",
+            "before": "",
+            "after": "# Ledger\n\n## Domain decisions\n\n- **LED-H4:** Audit entry records timestamp.\n"
+          }
+        ],
+        "testFiles": [
+          {
+            "path": "src/ledger.mjs",
+            "content": "// LED-H4 enforced here\nexport const audit = () => true;\n"
+          },
+          {
+            "path": "test/ledger.test.mjs",
+            "kind": "native",
+            "content": "test('LED-H40 and XLED-H4 are unrelated rules', () => {});\n"
+          }
+        ]
+      },
+      "checks": {
+        "4": [
+          ["result", "/rules", "count", 1],
+          ["result", "/rules/0/id", "=", "LED-H4"],
+          ["result", "/rules/0/status", "=", "uncovered"],
+          ["result", "/rules/0/evidence", "=", []],
+          ["result", "/warnings", "count", 1]
+        ]
+      }
+    },
+    {
+      "id": "empty-not-proved-stays-uncovered",
+      "op": "evaluateRuleCoverage",
+      "input": {
+        "changedDocs": [
+          {
+            "path": "prompts/ledger.prompt.md",
+            "fileKind": "prompt",
+            "before": "",
+            "after": "# Ledger\n\n## Domain decisions\n\n- **LED-H5:** Closing balance reconciles daily. Not proved:\n"
+          }
+        ],
+        "testFiles": []
+      },
+      "checks": {
+        "5": [
+          ["result", "/rules", "count", 1],
+          ["result", "/rules/0/id", "=", "LED-H5"],
+          ["result", "/rules/0/status", "=", "uncovered"],
+          ["result", "/rules/0/not_proved_reason", "=", null],
+          ["result", "/warnings", "count", 1]
+        ]
+      }
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { lintSvgLayouts as defaultLintSvgLayouts } from '../../svg-layout.mjs';
 import { gitFiles } from '../../shared/git-context.mjs';
+import { analyzeRepoRuleCoverage } from '../rule-coverage.mjs';
 import { resolveLintScope } from './lint-scope.mjs';
 import { loadBaseTrustedLintCommands } from './project-config.mjs';
 import { lintRepoProject, runConfiguredLintCommands } from './project-lint.mjs';
@@ -122,8 +123,9 @@ export function runLocalLint(
   }
 
   // Combined `--diff` + explicit targets: re-run diff spotlight strictly scoped to the resolved target closure.
+  let scopePaths = null;
   if (isDiffRequested && targetWords.length > 0) {
-    const scopePaths = new Set([
+    scopePaths = new Set([
       ...scope.directFiles,
       ...scope.prompts,
       ...scope.stories,
@@ -216,6 +218,17 @@ export function runLocalLint(
     ? (ports.runUpstreamLinters ?? runUpstreamLinters)(root, { env }, ports)
     : null;
 
+  const ruleCoverage = isDiffRequested && diffResult && diffResult.baseAvailable !== false
+    ? (ports.analyzeRepoRuleCoverage ?? analyzeRepoRuleCoverage)({
+        root,
+        baseSha: diffResult.baseSha,
+        baseRef: resolvedDiffBase,
+        changedEntries: diffResult.changedEntries,
+        allFiles: effectiveFiles,
+        filterPaths: scopePaths,
+      })
+    : null;
+
   const problems = [
     ...project.errors,
     ...scenarioErrors,
@@ -229,6 +242,7 @@ export function runLocalLint(
       ...project.warnings,
       ...commandWarnings,
       ...(diffResult ? diffResult.advisories.map(a => `Warning: ${a}`) : []),
+      ...(ruleCoverage ? ruleCoverage.warnings : []),
     ]),
   ];
   const exitCode = problems.length > 0 ? 1 : 0;
@@ -247,6 +261,7 @@ export function runLocalLint(
     warnings,
     findings: project.findings,
     ...(diffResult ? { diff: diffResult } : {}),
+    ...(ruleCoverage ? { rule_coverage: ruleCoverage.rules } : {}),
     ...(commandResult ? { commands: commandResult.results } : {}),
     ...(upstreamResult && upstreamResult.results.length ? { upstream_linters: upstreamResult.results } : {}),
   };

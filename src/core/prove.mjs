@@ -13,6 +13,7 @@ import { lintRepoProject } from './lint/project-lint.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
 import { detectShadowBinaries, runDiffSpotlight } from './lint/test-inventory.mjs';
 import { runFormalVerification } from './formal-verify.mjs';
+import { analyzeRepoRuleCoverage, formatRuleCoverageSummary } from './rule-coverage.mjs';
 import { classifyVerifyPathTier, detectHostCapabilities, formatProofTiersLine, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths, summarizeProofTiers } from './verify-paths.mjs';
 
 export const OUTCOME_PROVED = 'Proved';
@@ -466,7 +467,7 @@ export function runProve(
       baseRef: baseRef ?? null, baseSha: null, headSha, configSource: null, touchedFiles: [], changedSurfaces: [],
       lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
       diff: { ok: false, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
-      test: null, formal: null, paths: [], notProvedReasons,
+      test: null, formal: null, rule_coverage: [], paths: [], notProvedReasons,
     };
     if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
     else stdout.write(`Not proved:\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
@@ -646,13 +647,16 @@ export function runProve(
   const exitCode = outcome === OUTCOME_FAILED ? EXIT_FAILED : (outcome === OUTCOME_NOT_PROVED ? EXIT_NOT_PROVED : EXIT_PROVED);
   const proofTiers = summarizeProofTiers({ testResult, pathResults });
   const proofTiersLine = formatProofTiersLine(proofTiers);
+  const ruleCoverage = analyzeRepoRuleCoverage({ root, baseSha, baseRef, changedEntries: diff.changedEntries });
+  const ruleCoverageLine = formatRuleCoverageSummary(ruleCoverage);
+  const ruleCoverageSuffix = ruleCoverageLine ? `\n${ruleCoverageLine}` : '';
   const receipt = {
     schema_version: 'pdd.prove.v1', mode: 'verify', outcome, exit_code: exitCode, baseRef, baseSha, headSha,
     dirty, proofScope, ...(dirtyFiles.length ? { dirtyFiles: dirtyFiles.slice(0, 12) } : {}),
     configSource: baseVerify.configured ? baseVerify.source : (testCommand ? 'auto-detected' : null), touchedFiles: diff.touchedFiles, changedSurfaces,
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
-    test: testResult, formal: formalResult, paths: pathResults, proofTiers, notProvedReasons,
+    test: testResult, formal: formalResult, rule_coverage: ruleCoverage.rules, paths: pathResults, proofTiers, notProvedReasons,
   };
 
   const scopeSuffix = statusFailed
@@ -660,8 +664,8 @@ export function runProve(
     : (dirty ? ` (working tree, uncommitted changes: ${dirtyFiles.slice(0, 4).join(', ')})` : '');
   const formalLine = formalResult?.summary || 'Formal: not-applicable';
   if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
-  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.\n${proofTiersLine}\n`);
-  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n${proofTiersLine}\n`);
-  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.\n${proofTiersLine}\n`); }
+  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.\n${proofTiersLine}${ruleCoverageSuffix}\n`);
+  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n${proofTiersLine}${ruleCoverageSuffix}\n`);
+  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.\n${proofTiersLine}${ruleCoverageSuffix}\n`); }
   return { exitCode, outcome, receipt };
 }
