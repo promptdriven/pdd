@@ -286,3 +286,62 @@ test('AC4 & safety: refuses missing checks, invalid pointers, patch-null-deletes
   assert.equal(symRes.status, 2);
   assert.equal(readFileSync(outside, 'utf8'), 'untouched');
 });
+
+test('regression: --write allows ancestor directory matching target basename and refuses non-directory ancestor', t => {
+  const { repo, home } = initTempRepo(t);
+  const validSpec = JSON.stringify({
+    schema_version: FORMAL_VECTORS_SCHEMA,
+    entry_path: 'prompts/option-grant.prompt.md',
+    default_op: 'issue',
+    cases: [{ id: 'c1', input: { shares: 1 }, expect: { '/status': 'active' } }],
+  });
+
+  // Ancestor directory shares the same basename as the target file (tests/same.json/same.json).
+  mkdirSync(join(repo, 'tests', 'same.json'), { recursive: true });
+  const sameRes = runCli(['vector', 'export', '--out', 'tests/same.json/same.json', '--write'], { cwd: repo, home, input: validSpec });
+  assert.equal(sameRes.status, 0, sameRes.stderr);
+  assert.equal(existsSync(join(repo, 'tests', 'same.json', 'same.json')), true);
+
+  // Ancestor path is a regular file rather than a directory -> exit 2 fail-closed.
+  writeFileSync(join(repo, 'tests', 'blocking-file.json'), 'not a dir');
+  const blockedRes = runCli(['vector', 'export', '--out', 'tests/blocking-file.json/child.json', '--write'], { cwd: repo, home, input: validSpec });
+  assert.equal(blockedRes.status, 2);
+  assert.match(blockedRes.stderr, /not a directory/i);
+});
+
+test('regression: CLI --criterion overrides spec default_criterion while omitted --criterion preserves spec default_criterion', t => {
+  const { repo, home } = initTempRepo(t);
+  const specWithDefault2 = JSON.stringify({
+    schema_version: FORMAL_VECTORS_SCHEMA,
+    entry_path: 'prompts/option-grant.prompt.md',
+    default_op: 'issue',
+    default_criterion: '2',
+    cases: [{ id: 'c1', input: { shares: 1 }, expect: { '/status': 'active' } }],
+  });
+
+  // Omitted --criterion preserves spec.default_criterion ("2").
+  const preserved = runCli(['vector', 'export', '--json'], { cwd: repo, home, input: specWithDefault2 });
+  assert.equal(preserved.status, 0, preserved.stderr);
+  assert.deepEqual(Object.keys(JSON.parse(preserved.stdout).files[0].doc.steps[0].checks), ['2']);
+
+  // Explicit --criterion 1 overrides spec.default_criterion ("2").
+  const overridden = runCli(['vector', 'export', '--criterion', '1', '--json'], { cwd: repo, home, input: specWithDefault2 });
+  assert.equal(overridden.status, 0, overridden.stderr);
+  assert.deepEqual(Object.keys(JSON.parse(overridden.stdout).files[0].doc.steps[0].checks), ['1']);
+
+  // Blank CLI --criterion is rejected at argument parsing (exit 2), while invalid spec default_criterion fails closed (exit 1).
+  const blankCli = runCli(['vector', 'export', '--criterion', '', '--json'], { cwd: repo, home, input: specWithDefault2 });
+  assert.equal(blankCli.status, 2);
+
+  const invalidLib = exportFormalVectors(JSON.parse(specWithDefault2), { defaultCriterion: '' });
+  assert.equal(invalidLib.ok, false);
+  assert.equal(invalidLib.refusal.code, 'invalid-criterion');
+
+  const invalidSpec = runCli(['vector', 'export', '--json'], {
+    cwd: repo,
+    home,
+    input: JSON.stringify({ ...JSON.parse(specWithDefault2), default_criterion: 0 }),
+  });
+  assert.equal(invalidSpec.status, 1);
+  assert.equal(JSON.parse(invalidSpec.stdout).refusal.code, 'invalid-criterion');
+});

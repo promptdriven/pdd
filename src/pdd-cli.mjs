@@ -985,7 +985,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           storyPath: plan.options['--story'] ?? null,
           entryPath: plan.options['--entry'] ?? null,
           op: plan.options['--op'] ?? null,
-          criterion: plan.options['--criterion'] ?? '1',
+          criterion: plan.options['--criterion'] ?? null,
           ...(plan.options['--max-steps'] !== undefined ? { maxSteps: Number(plan.options['--max-steps']) } : {}),
           split: plan.options['--split'] === true,
           write: plan.options['--write'] === true,

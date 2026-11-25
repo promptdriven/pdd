@@ -328,7 +328,7 @@ export function exportFormalVectors(
     storyPath = null,
     entryPath = null,
     defaultOp = null,
-    defaultCriterion = '1',
+    defaultCriterion = null,
     maxSteps = DEFAULT_EXPORT_MAX_STEPS,
     split = false,
     outputBasePath = 'tests/formal-export.json',
@@ -341,7 +341,13 @@ export function exportFormalVectors(
 
   let spec = inputDoc;
   if (isItfTraceDoc(inputDoc)) {
-    const converted = convertItfTrace(inputDoc, { storyPath, entryPath, defaultOp, defaultCriterion });
+    const itfCriterion = (defaultCriterion !== undefined && defaultCriterion !== null)
+      ? normalizeCriterionKey(defaultCriterion, null)
+      : '1';
+    if (!itfCriterion) {
+      return makeRefusal('invalid-criterion', 'default_criterion', 'defaultCriterion (--criterion) must be a nonblank criterion ID or positive integer.');
+    }
+    const converted = convertItfTrace(inputDoc, { storyPath, entryPath, defaultOp, defaultCriterion: itfCriterion });
     if (!converted.ok) return converted;
     spec = converted.spec;
   }
@@ -371,7 +377,20 @@ export function exportFormalVectors(
   const effDefaultOp = (typeof defaultOp === 'string' && defaultOp.trim())
     ? defaultOp.trim()
     : (typeof spec.default_op === 'string' && spec.default_op.trim() ? spec.default_op.trim() : null);
-  const effDefaultCriterion = normalizeCriterionKey(spec.default_criterion, defaultCriterion) ?? '1';
+
+  const overrideCriterion = (defaultCriterion !== undefined && defaultCriterion !== null)
+    ? normalizeCriterionKey(defaultCriterion, null)
+    : null;
+  if (defaultCriterion !== undefined && defaultCriterion !== null && !overrideCriterion) {
+    return makeRefusal('invalid-criterion', 'default_criterion', 'defaultCriterion (--criterion) must be a nonblank criterion ID or positive integer.');
+  }
+  const specCriterion = (spec.default_criterion !== undefined && spec.default_criterion !== null)
+    ? normalizeCriterionKey(spec.default_criterion, null)
+    : null;
+  if (spec.default_criterion !== undefined && spec.default_criterion !== null && !specCriterion) {
+    return makeRefusal('invalid-criterion', 'default_criterion', 'spec.default_criterion must be a nonblank criterion ID or positive integer.');
+  }
+  const effDefaultCriterion = overrideCriterion ?? specCriterion ?? '1';
 
   if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 1000) {
     return makeRefusal('invalid-max-steps', 'maxSteps', `maxSteps (${String(maxSteps)}) must be an integer between 1 and 1000.`);
@@ -496,17 +515,21 @@ function validateSafeOutputPath(realRoot, rawOutPath) {
   if (!canonicalRepoPath(rel)) {
     return { ok: false, error: `--out path "${rawOutPath}" must stay inside the repository root (${realRoot}).` };
   }
-  // Refuse symlinks on any existing ancestor or target path.
+  // Refuse symlinks on any existing ancestor or target path, and verify ancestor/target file kinds.
   const parts = rel.split('/');
   let cur = realRoot;
-  for (const part of parts) {
-    cur = join(cur, part);
+  for (let i = 0; i < parts.length; i++) {
+    cur = join(cur, parts[i]);
+    const isLast = i === parts.length - 1;
     try {
       const st = lstatSync(cur);
       if (st.isSymbolicLink()) {
         return { ok: false, error: `Refusing to write through symlink path "${rel}".` };
       }
-      if (part === parts.at(-1) && !st.isFile()) {
+      if (!isLast && !st.isDirectory()) {
+        return { ok: false, error: `Cannot create output path "${rel}": ancestor "${parts.slice(0, i + 1).join('/')}" is not a directory.` };
+      }
+      if (isLast && !st.isFile()) {
         return { ok: false, error: `Refusing to overwrite non-regular file "${rel}".` };
       }
     } catch (err) {
@@ -535,7 +558,7 @@ export function runVectorExport(
     storyPath = null,
     entryPath = null,
     op = null,
-    criterion = '1',
+    criterion = null,
     maxSteps = DEFAULT_EXPORT_MAX_STEPS,
     split = false,
     write = false,
@@ -621,7 +644,7 @@ export function runVectorExport(
     storyPath: storyPath ?? null,
     entryPath: entryPath ?? null,
     defaultOp: op ?? null,
-    defaultCriterion: criterion ?? '1',
+    defaultCriterion: criterion ?? null,
     maxSteps: Number(maxSteps),
     split: Boolean(split),
     outputBasePath,
