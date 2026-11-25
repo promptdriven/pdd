@@ -23,7 +23,7 @@ Start with `# <Product name>: map`, `Sentence: "<the person's sentence>"`, and `
 | `## Questions` | `Id`, `Question`, `Recommendation`, `Example`, `Answer` |
 | `## Rules to check` *(optional)* | `Id`, `Owner`, `Rule`, `Verified By` |
 
-- State whether each part faces a person or runs headless (only user-facing parts get screens/UI; backend servers, routers, and daemons stay screenless).
+- State whether each part faces a person or runs headless (only user-facing parts get screens and `.ui.svg` drawings; backend servers, APIs, CLIs, routers, and daemons stay screenless).
 - Write Stories in plain customer words (`As a <person>, I want <goal>, so that <reason>`). Never write component-actor Stories (`"I want the router to..."`) or duplicate plumbing Stories (`1` user goal = `1` Story).
 - Leave unanswered questions blank with a clear recommendation and concrete example; never invent the person's answer.
 
