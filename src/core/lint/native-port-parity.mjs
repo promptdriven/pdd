@@ -102,10 +102,10 @@ function extractSqlColumns(fences) {
   return cols;
 }
 
-function extractDeclaredWiredRefs(raw, proseLines, sqlCols) {
+function extractDeclaredWiredRefs(raw, proseLines, sqlCols, declaredPrefixes) {
   const firstLine = new Map();
   const record = (port, op, lineNo, { ignoreSql = false, fromFrontmatter = false } = {}) => {
-    if (!isValidPortPair(port, op, ignoreSql ? EMPTY_SQL_COLS : sqlCols)) return;
+    if (!isValidPortPair(port, op, ignoreSql ? EMPTY_SQL_COLS : sqlCols, declaredPrefixes)) return;
     const key = `${port}.${op}`;
     if (!firstLine.has(key)) firstLine.set(key, { line: lineNo, fromFrontmatter });
     else if (fromFrontmatter) firstLine.get(key).fromFrontmatter = true;
@@ -181,9 +181,12 @@ function extractDeclaredWiredRefs(raw, proseLines, sqlCols) {
     const bm = BULLET_RE.exec(line);
     if (bm) {
       const body = bm[2].trim();
-      const lead = /^`([^`\r\n]+)`/.exec(body) ?? /^([a-z][a-zA-Z0-9_-]*\.[a-z][a-zA-Z0-9_-]*)(?:\s*\([^()\r\n]*\))?(?=\s*(?::|—|–|->|=>|-\s|$))/.exec(body);
-      const sepMatch = lead ? /(?::|—|–|->|=>| - )/.exec(body.slice(lead[0].length)) : null;
-      scanChunk(lead && sepMatch ? body.slice(0, lead[0].length + sepMatch.index) : body, lineNo, { ignoreSql: true });
+      const leadPort = /^(?:`([a-z][a-zA-Z0-9_-]*\.(?:[a-z][a-zA-Z0-9_-]*(?:\s*\([^()\r\n]*\))?|\{[^}\r\n]+\}))`|([a-z][a-zA-Z0-9_-]*\.[a-z][a-zA-Z0-9_-]*)(?:\s*\([^()\r\n]*\))?)\s*(?::|—|–|->|=>| - )/.exec(body);
+      if (leadPort) {
+        scanChunk(leadPort[1] ? `\`${leadPort[1]}\`` : leadPort[2], lineNo, { ignoreSql: true });
+      } else {
+        scanChunk(body, lineNo, { ignoreSql: false });
+      }
     } else if (line.trim()) {
       scanChunk(line, lineNo, { ignoreSql: false });
     }
@@ -214,8 +217,14 @@ export function collectNativeOnlyPortParityFindings(
     for (const p of display) displayPorts.add(p);
   }
 
+  const declaredPrefixes = new Set();
+  for (const p of [...displayPorts, ...exportedPeerOps]) {
+    const dot = p.indexOf('.');
+    if (dot > 0) declaredPrefixes.add(p.slice(0, dot));
+  }
+
   const { fences, proseLines } = scanMarkdownLinesAndFences(stripPromptMetadataPreservingLines(text));
-  const allRefs = extractDeclaredWiredRefs(text, proseLines, extractSqlColumns(fences));
+  const allRefs = extractDeclaredWiredRefs(text, proseLines, extractSqlColumns(fences), declaredPrefixes);
   const refs = explicitFrontmatterOnly ? allRefs.filter(r => r.fromFrontmatter) : allRefs;
 
   const linkedLabels = (dependencyPaths.length ? dependencyPaths : deps.map(d => d.path).filter(Boolean)).sort();
@@ -226,8 +235,8 @@ export function collectNativeOnlyPortParityFindings(
   if (!refs.length) {
     if (explicitFrontmatterOnly || !deps.length) return [];
     const detail = formatTeachingDetail({
-      invariant: `Native-only prompt links checkable dependencies (${depSummary}) but declares no ports in frontmatter \`ports:\` or a \`## Ports\` / \`## Port bindings\` section; port parity was not checked`,
-      fix: `Declare wired ports in frontmatter \`ports:\` or a \`## Ports\` / \`## Port bindings\` section in ${path}`,
+      invariant: `Native-only prompt links checkable dependencies (${depSummary}) but declares no ports in a \`## Ports\` / \`## Port bindings\` section or port table; port parity was not checked`,
+      fix: `Declare wired ports in a \`## Ports\` or \`## Port bindings\` section (or a \`Bound ports\` table column) in ${path}`,
       rerun: 'pdd lint',
     });
     return [{

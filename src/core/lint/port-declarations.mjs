@@ -12,6 +12,24 @@ import {
 } from './prompt-metadata.mjs';
 import { DECLARATIVE_SCHEMA_FENCE_LANGS } from './prompt-rules.mjs';
 
+export const NON_PORT_EXTS = new Set([
+  'mjs', 'cjs', 'js', 'jsx', 'ts', 'tsx', 'mts', 'cts', 'py', 'pyi', 'go', 'rs', 'rb', 'java', 'kt', 'cs', 'cc', 'cpp', 'hpp', 'swift', 'php', 'lua', 'sh', 'bash', 'zsh', 'ps1', 'bat',
+  'json', 'jsonc', 'jsonl', 'ndjson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'xml', 'xsd', 'html', 'htm', 'css', 'scss', 'less', 'svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico',
+  'pdf', 'csv', 'tsv', 'txt', 'md', 'mdx', 'rst', 'log', 'sql', 'ddl', 'db', 'sqlite', 'sqlite3', 'wal', 'shm', 'proto', 'graphql', 'gql', 'prisma', 'avsc', 'avro', 'thrift',
+  'wasm', 'gz', 'tar', 'zip', 'pem', 'crt', 'cert', 'key', 'pid', 'sock', 'socket', 'service', 'timer', 'example', 'sample', 'tmp', 'bak', 'orig', 'git', 'lockb', 'map',
+]);
+export const NON_PORT_FILES = new Set(['yarn.lock', 'bun.lock', 'cargo.lock', 'poetry.lock', 'gemfile.lock', 'composer.lock', 'uv.lock', 'flake.lock', 'podfile.lock', 'packages.lock', 'merge-queue.lock']);
+export const NON_PORT_TLDS = new Set(['com', 'org', 'net', 'io', 'dev', 'app', 'ai', 'gov', 'edu', 'localhost', 'arpa', 'local']);
+export const NON_PORT_PREFIXES = new Set([
+  'env', 'process', 'console', 'window', 'document', 'global', 'globalthis', 'module', 'exports', 'import', 'this', 'self', 'super', 'args', 'argv', 'stdin', 'stdout', 'stderr',
+  'ports', 'options', 'opts', 'req', 'res', 'request', 'response', 'err', 'error', 'headers', 'params', 'query', 'body', 'payload', 'cookies', 'ctx', 'app', 'router', 'server', 'db', 'pool', 'conn', 'tx', 'cursor', 'session',
+  'config', 'excluded', 'sqlite3', 'uvicorn', 'asyncio', 'json', 'sqlalchemy', 'httpx', 'requests', 'fastapi', 'flask', 'express', 'fastify', 'koa', 'django', 'pydantic', 'aiohttp',
+  'psycopg', 'psycopg2', 'pg', 'prisma', 'drizzle', 'knex', 'redis', 'ioredis', 'boto3', 'logging', 'logger', 'pathlib', 'subprocess', 'threading', 'multiprocessing',
+  'datetime', 'time', 'math', 'random', 'hashlib', 'base64', 'urllib', 'socket', 'ssl', 'node', 'bun', 'deno', 'sys', 'os', 'path', 'posix', 'fs', 'url', 'util',
+  'crypto', 'stream', 'events', 'timers', 'zlib', 'net', 'tls', 'dns', 'http', 'https', 'http2', 'child_process', 'worker_threads', 'readline', 'std', 'fmt',
+]);
+export const NON_PORT_JS_MEMBERS = new Set(['length', 'prototype', 'constructor', 'toString', 'valueOf', 'hasOwnProperty', 'startsWith', 'endsWith', 'forEach', 'flatMap', 'indexOf', 'lastIndexOf', 'toLowerCase', 'toUpperCase', 'charAt', 'substring', 'substr']);
+
 export const VERSION_RE = /^v?\d+$/i;
 export const IDENT_RE = /^[a-z][a-zA-Z0-9_-]*$/;
 export const TABLE_EXCL_COL_RE = /\b(?:tcp|udp|http|https|listen|network|socket|file|path|table|column|field|type|route|endpoint|url|sql|env|variable|header|status|code|metric|flag|option|description|notes?)\b/i;
@@ -78,9 +96,12 @@ export function isSingleCallSpan(span, openIdx) {
   return false;
 }
 
-export function isValidPortPair(port, op, sqlCols = EMPTY_SET) {
+export function isValidPortPair(port, op, sqlCols = EMPTY_SET, declaredPrefixes = EMPTY_SET) {
   if (port.length < 2 || op.length < 2 || VERSION_RE.test(port) || VERSION_RE.test(op)) return false;
-  return !sqlCols.has(`${port.toLowerCase()}.${op.toLowerCase()}`);
+  const pl = port.toLowerCase(), ol = op.toLowerCase(), full = `${pl}.${ol}`;
+  if (NON_PORT_EXTS.has(ol) || NON_PORT_FILES.has(full) || NON_PORT_TLDS.has(ol)) return false;
+  if (NON_PORT_PREFIXES.has(pl) && !declaredPrefixes.has(port)) return false;
+  return !NON_PORT_JS_MEMBERS.has(op) && !sqlCols.has(full);
 }
 
 export function stripUrlsAndLinks(line) {

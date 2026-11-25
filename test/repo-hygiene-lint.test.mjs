@@ -2182,7 +2182,11 @@ test('#3675 Option B: native-only port parity ignores prose dotted fields, emits
     dependencyPaths: ['prompts/cli/operator.prompt.md'],
   });
   assert.equal(findings.filter(f => f.defaultSeverity === 'error').length, 0);
-  assert.equal(findings.filter(f => f.code === 'native-only-no-declared-ports' && f.defaultSeverity === 'warn').length, 1);
+  const advisory = findings.filter(f => f.code === 'native-only-no-declared-ports' && f.defaultSeverity === 'warn');
+  assert.equal(advisory.length, 1);
+  // BREAK-IT F4: advisory Fix must recommend ## Ports / ## Port bindings, NOT frontmatter `ports:` (rejected by runtime-preflight).
+  assert.equal(advisory[0].detail.includes('frontmatter `ports:`'), false);
+  assert.match(advisory[0].detail, /## Ports.*## Port bindings/);
 
   const declaredWithTypo = `${proseOnlyNative}\n\n## Ports\n- \`trust.authorise_typo\`\n`;
   const typoErrors = lintNativeOnlyPortParity(declaredWithTypo, [{ path: 'prompts/cli/operator.prompt.md', text: cliDep }], {
@@ -2191,6 +2195,54 @@ test('#3675 Option B: native-only port parity ignores prose dotted fields, emits
   });
   assert.equal(typoErrors.length, 1);
   assert.match(typoErrors[0], /\[native-only-unknown-port\].*"trust\.authorise_typo"/);
+
+  // BREAK-IT F1: syntactic non-ports (filenames, domains, stdlib/object refs, JS members) inside ## Port bindings & Port tables stay clean.
+  const declaredWithSyntacticNonPorts = [
+    proseOnlyNative,
+    '',
+    '## Port bindings',
+    '- Load credentials from `config.json`, `cli_state.sqlite`, `app.py`, `yarn.lock`, `example.com`, `os.path`, `self.store`, `app.state`, and `items.length` before calling `trust.authorize`.',
+    '',
+    '| Owner | Bound ports |',
+    '| --- | --- |',
+    '| `operator` | `audit_log.append` reading `config.json` and `cli_state.sqlite` |',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(declaredWithSyntacticNonPorts, [{ path: 'prompts/cli/operator.prompt.md', text: cliDep }], {
+      path: 'prompts/cli/terminal.prompt.md',
+      dependencyPaths: ['prompts/cli/operator.prompt.md'],
+    }),
+    [],
+  );
+
+  // BREAK-IT F2: backtick-prefixed label bullets with `:` or `https://` in ## Port bindings never drop ports after separator.
+  const backtickLabelBullets = [
+    proseOnlyNative,
+    '',
+    '## Port bindings',
+    '- `vendors` bindings: wire `trust.authorise_typo` and `phantom_service.nonexistent_op`.',
+    '- `Operations` (per https://docs.example.com/ports) uses `audit_log.append` and `phantom_url.bad_op`.',
+  ].join('\n');
+  const labelFindings = collectNativeOnlyPortParityFindings(backtickLabelBullets, [{ path: 'prompts/cli/operator.prompt.md', text: cliDep }], {
+    path: 'prompts/cli/terminal.prompt.md',
+    dependencyPaths: ['prompts/cli/operator.prompt.md'],
+  });
+  assert.equal(labelFindings.filter(f => f.code === 'native-only-no-declared-ports').length, 0);
+  const labelErrs = labelFindings.filter(f => f.error).map(f => f.error);
+  assert.equal(labelErrs.length, 3, labelErrs.join('\n'));
+  assert.ok(labelErrs.some(e => e.includes('"trust.authorise_typo"')));
+  assert.ok(labelErrs.some(e => e.includes('"phantom_service.nonexistent_op"')));
+  assert.ok(labelErrs.some(e => e.includes('"phantom_url.bad_op"')));
+
+  // BREAK-IT F3: minimal dependency without ## Ports mentioning `config.json` and `os.path` never leaks them into `declared ports:`.
+  const minimalDep = '# Minimal\nReads `config.json` via `os.path`.\n';
+  const minimalErrs = lintNativeOnlyPortParity(declaredWithTypo, [{ path: 'prompts/cli/minimal.prompt.md', text: minimalDep }], {
+    path: 'prompts/cli/terminal.prompt.md',
+    dependencyPaths: ['prompts/cli/minimal.prompt.md'],
+  });
+  assert.equal(minimalErrs.length, 1);
+  assert.equal(minimalErrs[0].includes('config.json'), false, minimalErrs[0]);
+  assert.equal(minimalErrs[0].includes('os.path'), false, minimalErrs[0]);
 });
 
 test('3562 polling FP fix: test-fixed-sleep exempts waitFor/until polling helpers, bounded retry loops, and Promise.race watchdogs while still flagging bare unguarded sleeps', () => {
