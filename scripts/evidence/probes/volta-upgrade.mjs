@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Real Volta install + real `pdd upgrade` verification (#3628) for `release-set`.
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
@@ -25,6 +25,19 @@ const run = (cmd, args, env = baseEnv) => {
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed (${r.status}):\n${r.stderr}\n${r.stdout}`);
   return r;
 };
+const runAsync = (cmd, args, env = baseEnv) => new Promise((resolvePromise, rejectPromise) => {
+  const child = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', d => { stdout += d; });
+  child.stderr.on('data', d => { stderr += d; });
+  const timer = setTimeout(() => { child.kill('SIGKILL'); rejectPromise(new Error(`${cmd} ${args.join(' ')} timed out`)); }, 180_000);
+  child.on('error', err => { clearTimeout(timer); rejectPromise(err); });
+  child.on('close', status => {
+    clearTimeout(timer);
+    if (status !== 0) rejectPromise(new Error(`${cmd} ${args.join(' ')} failed (${status}):\n${stderr}\n${stdout}`));
+    else resolvePromise({ status, stdout, stderr });
+  });
+});
 
 let server;
 try {
@@ -81,7 +94,7 @@ try {
   const upgEnv = { ...baseEnv, NODE_OPTIONS: `--import=${fetchShim}`, npm_config_registry: `http://127.0.0.1:${port}` };
   delete upgEnv.PDD_NO_UPDATE_CHECK;
 
-  run(pddBin, ['upgrade'], upgEnv);
+  await runAsync(pddBin, ['upgrade'], upgEnv);
   const ver = run(pddBin, ['--version']);
   if (ver.stdout.trim() !== targetVer || ver.stderr.trim() !== '') {
     throw new Error(`Volta post-upgrade --version mismatch: out=${JSON.stringify(ver.stdout)} err=${JSON.stringify(ver.stderr)} expected=${targetVer}`);
