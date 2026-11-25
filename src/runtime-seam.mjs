@@ -409,6 +409,11 @@ function withScenarioOverlay(lazyStore, fn) {
   return scenarioOverlayStorage.run(lazyStore, fn);
 }
 
+function runWithScenarioOverlay(cwd, ports, fn) {
+  const lazyOverlay = { cwd: cwd ?? process.cwd(), ports, map: undefined };
+  return withScenarioOverlay(lazyOverlay, fn);
+}
+
 function repoTopRoot(cwd = process.cwd()) {
   if (typeof cwd !== 'string' || !cwd) return null;
   const res = spawnSync('git', ['rev-parse', '--show-toplevel'], {
@@ -848,6 +853,17 @@ function seamRuntimePorts(ports = {}, { cwd = null, wrapStdout = true } = {}) {
     exitCodeFor: exit.exitCodeFor,
     promptTestsLabel: PROMPT_TESTS_LABEL,
   });
+  if (merged.readTryOwner === undefined || merged.readTryOwner === null) {
+    merged.readTryOwner = (ownerInput = {}, ownerPorts = {}) => {
+      const effectivePorts = withPortDefaults(ownerPorts, merged);
+      effectivePorts.files = wrapCaseFilesForShortJson(effectivePorts.files, effectivePorts);
+      return runWithScenarioOverlay(
+        ownerInput?.cwd ?? cwd ?? process.cwd(),
+        effectivePorts,
+        () => runtimeReadTryOwner(ownerInput, effectivePorts),
+      );
+    };
+  }
   if (typeof baseFetch === 'function') {
     merged.fetch = wrapFetchForLegacyCriteriaDiagnostic(baseFetch, cwd, merged);
   }
@@ -3550,17 +3566,18 @@ export async function readTryOwner(input = {}, ports = {}) {
     import('./secret-redaction.mjs'),
     import('./product-documents.mjs'),
   ]);
-  return runtimeReadTryOwner(
-    input,
-    seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(ports, lazyEvidenceEligibility), {
-        tryLauncherUrl: TRY_LAUNCHER_URL,
-        parseProductDocuments,
-        parseProductWorldWriters,
-        redaction: seamRedaction(ports),
-      }),
-    ),
+  const cwd = input?.cwd ?? process.cwd();
+  const boundPorts = seamRuntimePorts(
+    withPortDefaults(withEligibilityDefault(ports, lazyEvidenceEligibility), {
+      tryLauncherUrl: TRY_LAUNCHER_URL,
+      parseProductDocuments,
+      parseProductWorldWriters,
+      files: wrapCaseFilesForShortJson(ports.files, ports),
+      redaction: seamRedaction(ports),
+    }),
+    { cwd },
   );
+  return runWithScenarioOverlay(cwd, boundPorts, () => runtimeReadTryOwner(input, boundPorts));
 }
 
 export async function observeTryCall(input = {}, ports = {}) {
@@ -3655,6 +3672,7 @@ export async function run(input = {}, ports = {}) {
 export function createTryTools(input, ports = {}) {
   const lazyParseProductDocuments = (...args) => hostProductDocuments().parseProductDocuments(...args);
   const lazyParseProductWorldWriters = (...args) => hostProductDocuments().parseProductWorldWriters(...args);
+  const cwd = input?.cwd ?? process.cwd();
   return runtimeCreateTryTools(
     input,
     seamRuntimePorts(
@@ -3664,9 +3682,10 @@ export function createTryTools(input, ports = {}) {
         parseProductWorldWriters: lazyParseProductWorldWriters,
         saveDoorCase,
         applyPendingCaseWithHandoff,
+        files: wrapCaseFilesForShortJson(ports.files, ports),
         redaction: seamRedaction(ports),
       }),
-      { wrapStdout: false },
+      { cwd, wrapStdout: false },
     ),
   );
 }
@@ -3676,6 +3695,7 @@ export async function runMcp(input, ports = {}) {
     import('./secret-redaction.mjs'),
     import('./product-documents.mjs'),
   ]);
+  const cwd = input?.cwd ?? process.cwd();
   return runtimeRunMcp(
     input,
     seamRuntimePorts(
@@ -3686,9 +3706,10 @@ export async function runMcp(input, ports = {}) {
         parseProductWorldWriters,
         saveDoorCase,
         applyPendingCaseWithHandoff,
+        files: wrapCaseFilesForShortJson(ports.files, ports),
         redaction: seamRedaction(ports),
       }),
-      { wrapStdout: false },
+      { cwd, wrapStdout: false },
     ),
   );
 }
