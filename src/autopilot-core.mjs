@@ -9,6 +9,15 @@ import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
 import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited, winningClaim } from './autopilot/claims.mjs';
 import { githubOriginRepository, sameRepo, validateRepoName } from './shared/github-repo.mjs';
+import {
+  PYTEST_FILENAME_RE,
+  TEST_DIR_PATTERN,
+  TEST_PLACE_RE,
+  VALIDATOR_TEST_FILE_RE,
+  isJsTestPath,
+  isTestAnnotationPath,
+  isTestSpecPath,
+} from './shared/test-paths.mjs';
 import { githubFullLastPage } from './github-calls.mjs';
 import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
@@ -780,7 +789,7 @@ function recordFlakeLedger(ctx, entries) {
 function extractBaseRedTarget(causeText, detailText, job) {
   const scanForTestFile = raw => {
     const s = String(raw ?? '');
-    const m = /(?:^|[\s'"`(])((?:test|tests|__tests__)\/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+)(?=$|[\s'"`):,])/.exec(s);
+    const m = new RegExp(`(?:^|[\\s'"\`(])((?:${TEST_DIR_PATTERN})/[A-Za-z0-9_./-]+\\.[A-Za-z0-9]+)(?=$|[\\s'"\`):,])`).exec(s);
     return m ? m[1] : null;
   };
   const fromCause = scanForTestFile(causeText);
@@ -5961,7 +5970,7 @@ const HEAD_KINDS = [...KINDS, 'linked', 'tests'], CONTROL_KINDS = { 'control-vec
 const KIND_WORDS = { vectors: 'replay', formal: 'formal', linked: 'replay', tests: 'regression' };
 const KIND_TOUCH = { linked: 'that import a changed module' };
 const CODE_FILE = /\.(?:[cm]?js|[cm]?ts|jsx|tsx|py|go|rs|java|kt|rb|c|cc|cpp|h|hpp|cs|swift)$/;
-const TEST_PLACE = /(?:^|\/)(?:tests?|__tests__|spec|fixtures)\/|\.(?:test|spec)\.[^/]+$|_test\.(?:py|go|rs)$|(?:^|\/)test_[^/]+\.py$/i;
+const TEST_PLACE = TEST_PLACE_RE;
 const codeFiles = changed => changed.filter(file => CODE_FILE.test(file) && !TEST_PLACE.test(file));
 const MAX_REPLAY_FILES = 400, MAX_REPLAY_COMMAND = 100_000, REPLAY_OUTPUT = 4 * 1024 * 1024, VECTORS_SCHEMA = 5;
 const IMPORT_ERROR_LINE = /^(?:Error \[ERR_MODULE_NOT_FOUND\]: Cannot find (?:module|package)\s+['"]|Error: Cannot find (?:module|package)\s+['"]|SyntaxError:\s+The requested module\s+['"][^'"]+['"]\s+does not provide an export named\s+['"]|code:\s*['"](?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND)['"],?$|ModuleNotFoundError:|ImportError:|cannot find package\b|error\[E0432\]:\s*unresolved import\b)/;
@@ -6115,7 +6124,7 @@ function usesNodeTest(fs, cwd, file, depth = 2, seen = new Set()) {
   }
   return false;
 }
-const PYTEST_COLLECTIBLE_RE = /(?:^|\/)(?:test_[^/]+\.py|[^/]+_test\.py)$/i;
+const PYTEST_COLLECTIBLE_RE = PYTEST_FILENAME_RE;
 function detectReplayFileRunner(fs, cwd, kind, file, { formalCommand = null, repoPkg = null, detected = null } = {}) {
   if (join(cwd, file).includes('\\')) return { runner: null, why: 'a backslash in its path' };
   if (kind === 'formal' && named(formalCommand)) return { runner: 'formal-command', why: null };
@@ -6672,7 +6681,7 @@ async function stopChecks(ctx, job, recover = false) {
 }
 
 const parsePrNumber = value => Number.isSafeInteger(value) && value > 0 ? value : /^\s*#?\d+\s*$/.test(String(value ?? '')) ? Number(String(value).replace(/[^\d]/g, '')) : null;
-const isTestPath = path => /(?:^|\/|\\)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[^/]+$/i.test(String(path ?? ''));
+const isTestPath = isTestSpecPath;
 
 function deterministicPathLines({ changed = [], baseFiles = [], before = EMPTY_READ, after = EMPTY_READ, adopt = [], adopting = false, fallbackLabel = 'changes' }) {
   const onBase = new Set(baseFiles), changedSet = new Set(changed.map(c => c.path));
@@ -7378,7 +7387,6 @@ function collectBacksideLint(headTree, changed, baseTree) {
   return { codes: [...codeSet].sort(), details: details.slice(0, 10) };
 }
 
-const VALIDATOR_TEST_FILE_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$)/i;
 const VALIDATOR_TEST_EXT_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift)$/i;
 const VALIDATOR_SKIP_SUBDIR_RE = /(?:^|\/)(?:fixtures|helpers)\//i;
 const MAX_INSPECT_TEST_BYTES = 512 * 1024;
@@ -8934,7 +8942,7 @@ function isInventoryTestFile(filePath) {
   if (parts.some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')) return false;
   if (/(?:^|\/)(?:fixtures|helpers)\//i.test(filePath)) return false;
   const base = parts.at(-1);
-  if (/\.(?:[cm]?[jt]s|[jt]sx)$/.test(base) && (/\.(?:test|spec)\./.test(base) || parts.some(p => p === 'test' || p === 'tests' || p === '__tests__'))) return true;
+  if (isJsTestPath(filePath)) return true;
   if (/^(?:test_.*|.*_test)\.py$/.test(base)) return true;
   if (/_test\.go$/.test(base)) return true;
   return false;
@@ -11207,7 +11215,7 @@ async function ciFailureDetails(ctx, runs, status, failedNames) {
       const line = Number.isSafeInteger(a?.start_line) ? `:${a.start_line}` : '';
       const msg = [a?.title, a?.message].filter(Boolean).join(' — ');
       if (msg) chunks.push(`${path ? `${path}${line}: ` : ''}${msg}`);
-      if (path && /(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[A-Za-z0-9]+$/.test(path)) {
+      if (path && isTestAnnotationPath(path)) {
         const name = oneLine(a?.title || a?.message || basename(path), 160);
         if (name && !annotatedTests.some(t => t.name === name && t.file === path)) annotatedTests.push({ name, file: path });
       }

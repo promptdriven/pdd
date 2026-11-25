@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["import", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "warn"
+  },
+  "rules": {
+    "import/no-cycle": "error",
+    "max-lines": ["warn", { "max": 2000, "skipBlankLines": false, "skipComments": false }]
+  },
+  "ignorePatterns": [
+    "node_modules/**",
+    "test/fixtures/**",
+    "examples/**"
+  ]
+}
