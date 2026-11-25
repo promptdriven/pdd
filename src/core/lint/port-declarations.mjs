@@ -2,6 +2,7 @@
 
 // Extract declared `<port>.<op>` and `<stem>.<op>` public operations from checkable prompts & contracts (#3619 R1-R8 parity).
 import { posix } from 'node:path';
+import { TEST_DIR_NAMES } from '../../shared/test-paths.mjs';
 import {
   extractFrontmatterPorts,
   extractRuntimeInterfaceObjects,
@@ -50,7 +51,7 @@ const GENERIC_PROMPT_DIR_NAMES = new Set([
   'prompts', 'prompt', 'src', 'lib', 'cli', 'docs', 'doc', 'contracts', 'contract',
   'shared', 'common', 'core', 'app', 'apps', 'pkg', 'packages', 'modules', 'module',
   'services', 'service', 'domains', 'domain', 'internal', 'api', 'server', 'web', 'ui',
-  'test', 'tests', '__tests__', 'spec', 'specs', 'fixtures', 'examples',
+  ...TEST_DIR_NAMES, 'spec', 'specs', 'fixtures', 'examples',
 ]);
 const NON_OP_LABEL_WORDS = new Set([
   'note', 'notes', 'input', 'inputs', 'output', 'outputs', 'result', 'results',

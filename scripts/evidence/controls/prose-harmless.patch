@@ -1,0 +1,11 @@
+diff --git a/prompts/worker.prompt.md b/prompts/worker.prompt.md
+--- a/prompts/worker.prompt.md
++++ b/prompts/worker.prompt.md
+@@ -26,3 +26,7 @@ Thin native-only adapter implemented in `src/worker.mjs` that wires the vault an
+ ## Dependencies
+ 
+ - [Vault service](vault.prompt.md)
++
++## Prose notes
++
++Diagnostic note mentioning `foo.bar_baz`, hex `0xdeadbeef`, commit `0123456789abcdef0123456789abcdef01234567`, and arrows `req -> resp`.
