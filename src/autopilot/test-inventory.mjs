@@ -1,6 +1,7 @@
 // Static base-vs-head test inventory for Autopilot pre-review checks.
 import { execFile as callbackExec } from 'node:child_process';
 import { promisify } from 'node:util';
+import { isJsTestPath } from '../shared/test-paths.mjs';
 
 const exec = promisify(callbackExec);
 const MAX_FILES = 1000, MAX_BLOB = 1024 * 1024, MAX_BYTES = 16 * MAX_BLOB, BUDGET = 12000;
@@ -24,7 +25,7 @@ const unavailable = reason => {
 };
 function language(path) {
   const base = path.split('/').at(-1);
-  if (/\.(?:[cm]?[jt]s|[jt]sx)$/.test(base) && (/\.(?:test|spec)\./.test(base) || path.split('/').some(p => ['test','tests','__tests__'].includes(p)))) return 'js';
+  if (isJsTestPath(path)) return 'js';
   if (/^(?:test_.*|.*_test)\.py$/.test(base)) return 'py';
   if (/_test\.go$/.test(base)) return 'go';
   return null;

@@ -2,6 +2,9 @@
 // Delegates prompt metadata & file-owner parsing to core modules.
 import { headerPrompts, promptClaims } from '../../file-owner.mjs';
 import { extractRuntimeInterfaceObjects, findFrontmatterRange } from '../../core/lint/prompt-metadata.mjs';
+import { NON_PRODUCTION_DIR_RE } from '../../shared/test-paths.mjs';
+
+export { NON_PRODUCTION_DIR_RE };
 
 export const MIN_REALISTIC_PAYLOAD_BYTES = 4096;
 export const REAL_HOST_FAILURE_CLASSES = Object.freeze([
@@ -28,7 +31,6 @@ export const REAL_E2E_KINDS = new Set([
   'real-execution',
 ]);
 
-export const NON_PRODUCTION_DIR_RE = /^(?:test|tests|__tests__|spec|fixtures|examples|prompts|user_stories|docs)\//i;
 const DOC_FILE_RE = /(?:^docs\/|\.(?:txt|rst)$|(?:^|\/)(?:license|changelog)[^/]*$)/i;
 
 const tokenMatch = (pattern) => new RegExp(`(?:^|[^a-z0-9])(?:${pattern})(?:$|[^a-z0-9])`, 'i');

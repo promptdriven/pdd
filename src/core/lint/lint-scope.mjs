@@ -7,6 +7,7 @@ import { posix, relative, resolve, sep } from 'node:path';
 import { headerEntries, isTestOwnedPath } from '../../file-owner.mjs';
 import { isLintableStoryPath } from '../../story-lint.mjs';
 import { isSecretPath } from '../../shared/safe-read.mjs';
+import { TEST_SCENARIO_JSON_RE } from '../../shared/test-paths.mjs';
 import { workspace } from '../../shared/workspace-policy.mjs';
 import { HEAD_BYTES, canonicalRepoPath, readSafeHeadUtf8, readSafeUtf8 } from './diagnostics.mjs';
 import { extractDependencyLinks, isNativeOnlyPrompt } from './prompt-metadata.mjs';
@@ -16,7 +17,7 @@ export const TEST_CODE_EXT = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|
 export const FIXTURE_DIR = /(?:^|\/)fixtures(?:\/|$)/i;
 export const EXAMPLE_DIR = /(?:^|\/)examples(?:\/|$)/i;
 export const NON_CODE_DIR = /^(?:user_stories|docs?|\.github)\//i;
-export const SCENARIO_JSON_RE = /(?:^|\/)(?:tests?|__tests__)\/.*\.json$/i;
+export const SCENARIO_JSON_RE = TEST_SCENARIO_JSON_RE;
 export const APP_MAP_PATH_RE = /(?:^|\/)(?:app-map\.json|app\/maps\/[^/]+\.json)$/i;
 
 export const isContractDocPath = p => /(?:^|\/)contracts\/.+\.md$/i.test(p) && !p.endsWith('.prompt.md');

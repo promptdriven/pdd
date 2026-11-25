@@ -2,6 +2,7 @@
 import { execFileSync } from 'node:child_process';
 import { readSafeUtf8 } from '../../core/lint/diagnostics.mjs';
 import { loadProjectLintConfig } from '../../core/lint/project-config.mjs';
+import { TEST_FILE_PATH_RE, stripLeadingTestDir } from '../../shared/test-paths.mjs';
 import { collectTestFixedSleepFindings, collectTestUnexcusedSkipFindings, lintAutopilotTestHygiene, lintTestFixedSleeps, lintTestUnexcusedSkips } from '../lint-sleep-skip.mjs';
 import { MIN_REALISTIC_PAYLOAD_BYTES, NON_PRODUCTION_DIR_RE, canonicalTargetPath, classifyProductionPathSurfaces, normalizePath, resolveRelativeTarget } from './surfaces.mjs';
 import {
@@ -20,7 +21,7 @@ const SKIP_KEYWORD_RE = /(?:e2e|validation|validator|real-binding)/i;
 const PRIVATE_IMPORT_SYM_RE = /^_(?!_)[A-Za-z0-9_$]*$/;
 const BACKSIDE_CODE_EXT_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift)$/i;
 const BACKSIDE_SKIP_SUBDIR_RE = /(?:^|\/)(?:fixtures|helpers)\//i;
-const BACKSIDE_TEST_FILE_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
+const BACKSIDE_TEST_FILE_RE = TEST_FILE_PATH_RE;
 
 const decodeEsc = (c) => (c === 'n' ? '\n' : c === 'r' ? '\r' : c === 't' ? '\t' : c);
 const isRegexStart = (p) => !p || '([{:;,=!?&|+-*%^~<>}'.includes(p) || /^(?:return|case|throw|in|of|typeof|void|delete|new|else|do|yield|await)$/.test(p);
@@ -271,7 +272,7 @@ export function inspectTestBoundaryTargets(testPath, text, { nativeOnlyTargets }
   else if (lang === 'rs') for (const m of code.matchAll(/\buse\s+(?:crate|super)::([A-Za-z0-9_:]+)/g)) consider(`src/${m[1].replace(/::/g, '/')}`);
   for (const m of code.matchAll(PROD_PATH_LITERAL_RE)) consider(m[1]);
   if (!boundaryTargetSet.size) {
-    const stripped = normTest.replace(/^(?:test|tests|__tests__|spec)\//i, '').replace(/(?:^|\/)test_([^/]+)\.py$/i, '$1.py').replace(/_test\.(go|rs|py)$/i, '.$1').replace(/\.(?:test|spec|vectors\.test|e2e\.test)\.[a-z0-9]+$/i, '.mjs');
+    const stripped = stripLeadingTestDir(normTest).replace(/(?:^|\/)test_([^/]+)\.py$/i, '$1.py').replace(/_test\.(go|rs|py)$/i, '.$1').replace(/\.(?:test|spec|vectors\.test|e2e\.test)\.[a-z0-9]+$/i, '.mjs');
     const own = classifyProductionPathSurfaces(stripped).filter((s) => s !== 'docs' && s !== 'runtime-code');
     if (own.length) { for (const s of own) surfaceSet.add(s); boundaryTargetSet.add(`test-stem:${canonicalTargetPath(stripped)}`); }
   }
