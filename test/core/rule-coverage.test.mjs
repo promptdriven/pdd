@@ -342,7 +342,7 @@ test('Real CLI subprocess E2E: pdd lint --diff and pdd prove --json report rule_
       '',
       '| ID | Rule | Verification |',
       '| --- | --- | --- |',
-      '| LED-BASE | Base invariant already on main | Existing |',
+      '| LED-H0 | Base invariant already on main | Existing |',
       '',
       '## Dependencies',
       '',
@@ -350,6 +350,7 @@ test('Real CLI subprocess E2E: pdd lint --diff and pdd prove --json report rule_
       '',
     ].join('\n'),
   );
+  assert.equal(isExplicitRuleId('LED-H0'), true, 'unchanged merge-base rule must be a valid explicit rule ID');
   writeFileSync(join(repo, 'src', 'ledger.mjs'), '// Prompt: prompts/ledger.prompt.md\n\nexport const clamp = n => Math.max(0, n);\n');
   writeFileSync(
     join(repo, 'test', 'ledger.test.mjs'),
@@ -363,7 +364,7 @@ test('Real CLI subprocess E2E: pdd lint --diff and pdd prove --json report rule_
 
   execFileSync('git', ['checkout', '-q', '-b', 'feat-rules'], { cwd: repo });
 
-  // Add mixed rules: LED-H1 (formal), LED-H2 (scenario), LED-H3 (Not proved), LED-H4 (uncovered); keep LED-BASE unchanged!
+  // Add mixed rules: LED-H1 (formal), LED-H2 (scenario), LED-H3 (Not proved), LED-H4 (uncovered); keep valid LED-H0 unchanged!
   writeFileSync(
     join(repo, 'prompts', 'ledger.prompt.md'),
     [
@@ -375,7 +376,7 @@ test('Real CLI subprocess E2E: pdd lint --diff and pdd prove --json report rule_
       '',
       '| ID | Rule | Verification |',
       '| --- | --- | --- |',
-      '| LED-BASE | Base invariant already on main | Existing |',
+      '| LED-H0 | Base invariant already on main | Existing |',
       '| LED-H1 | Balance never drops below zero | Tier 1 |',
       '| LED-H2 | Transfers conserve minor units | Scenario |',
       '| LED-H3 | Preview uses formatted labels | Not proved: preview formatting only |',
@@ -501,4 +502,83 @@ test('Zero false warnings when editing plain-prose ## Domain decisions in a git 
   assert.deepEqual(findRuleReferencesInFiles([], []), {});
   assert.deepEqual(formatRuleCoverageWarnings([]), []);
   assert.deepEqual(analyzeRepoRuleCoverage({ root: '' }).rules, []);
+});
+
+test('Verifier edge-case regressions: edits past 240 chars, double-backtick spans, cross-fence breaks, escaped table pipes, balanced parens, Unicode & lowercase doc-level Not proved', () => {
+  // 1. Edits past char 240 MUST still be detected by diffChangedRules!
+  const longPrefix = 'A'.repeat(260);
+  const beforeLong = `# Long\n\n## Domain decisions\n\n- **LED-H1:** ${longPrefix} ALLOW negative balance.\n`;
+  const afterLong = `# Long\n\n## Domain decisions\n\n- **LED-H1:** ${longPrefix} FORBID negative balance.\n`;
+  const changedLong = diffChangedRules([{ path: 'prompts/long.prompt.md', before: beforeLong, after: afterLong }]);
+  assert.equal(changedLong.length, 1, 'tail edit past 240 chars must be detected as changed');
+  assert.equal(changedLong[0].id, 'LED-H1');
+
+  // 2. Double-backtick inline code spans (``Not proved: fake``) must NOT excuse a rule!
+  const doubleTick = '# Spec\n\n## Domain decisions\n\n- **LED-H2:** Rejects ``Not proved: fake syntax`` markers.\n';
+  const dtRes = evaluateRuleCoverage({ changedDocs: [{ path: 'prompts/dt.prompt.md', before: '', after: doubleTick }], testFiles: [] });
+  assert.equal(dtRes.rules[0].status, 'uncovered');
+  assert.equal(dtRes.rules[0].not_proved_reason, null);
+
+  // 3. Fenced code block immediately after table or bullet MUST break table/bullet continuity!
+  const crossFence = [
+    '# Fence',
+    '',
+    '## Domain decisions',
+    '',
+    '| ID | Rule |',
+    '| --- | --- |',
+    '| LED-H1 | Real row |',
+    '```markdown',
+    '| LED-H2 | Inside fence |',
+    '```',
+    '| LED-H3 | Stray pipe line after fence with no header |',
+    '',
+    '- **TR-H1:** Real bullet.',
+    '```txt',
+    'example',
+    '```',
+    '  - Not proved: stray post-fence indented line',
+    '',
+  ].join('\n');
+  const cfRules = extractRulesFromMarkdown(crossFence, { sourcePath: 'prompts/cf.prompt.md' });
+  assert.deepEqual(cfRules.map(r => r.id), ['LED-H1', 'TR-H1']);
+  assert.equal(cfRules.find(r => r.id === 'TR-H1').not_proved_reason, null);
+
+  // 4. Escaped pipe `\|` in table cell preserves ID column alignment!
+  const escapedPipe = [
+    '# Escaped',
+    '',
+    '## Domain decisions',
+    '',
+    '| Area | Rule ID | Invariant |',
+    '| --- | --- | --- |',
+    '| A \\| B | LED-H9 | Escaped pipe stays in column 0 |',
+    '',
+  ].join('\n');
+  const epRules = extractRulesFromMarkdown(escapedPipe, { sourcePath: 'prompts/ep.prompt.md' });
+  assert.deepEqual(epRules.map(r => r.id), ['LED-H9']);
+
+  // 5. Balanced parens in inline `(Not proved: ...)`, Unicode rationale, and lowercase doc-level `not proved:`.
+  const misc = [
+    '# Misc',
+    '',
+    '## Domain decisions',
+    '',
+    '- [R2] Badge text. (Not proved: purely cosmetic) see (issue #123).',
+    '- **R3:** External settlement. Not proved: 外部決済連携のみ',
+    '- **TR-H4:** Deferred hardware probe.',
+    '',
+    '## Notes',
+    '',
+    '- not proved: TR-H4 (requires dedicated HSM device)',
+    '',
+  ].join('\n');
+  const miscRes = evaluateRuleCoverage({ changedDocs: [{ path: 'prompts/misc.prompt.md', before: '', after: misc }], testFiles: [] });
+  const byId = Object.fromEntries(miscRes.rules.map(r => [r.id, r]));
+  assert.equal(byId.R2.status, 'not_proved');
+  assert.equal(byId.R2.not_proved_reason, 'purely cosmetic');
+  assert.equal(byId.R3.status, 'not_proved');
+  assert.equal(byId.R3.not_proved_reason, '外部決済連携のみ');
+  assert.equal(byId['TR-H4'].status, 'not_proved');
+  assert.equal(byId['TR-H4'].not_proved_reason, 'requires dedicated HSM device');
 });

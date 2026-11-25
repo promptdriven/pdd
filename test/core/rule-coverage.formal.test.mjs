@@ -68,15 +68,19 @@ test('Formal RC-1, RC-2, RC-3, RC-4: 300 seeded PRNG worlds preserve conservatio
         afterLines.push(formatBullet(baseDesc));
         expectedChangedIds.add(id);
       } else if (mode === 2) {
-        beforeLines.push(formatBullet(baseDesc));
-        afterLines.push(formatBullet(`${baseDesc} tightened`));
+        const longPad = rng() < 0.35 ? ` ${'x'.repeat(250)}` : '';
+        beforeLines.push(formatBullet(`${baseDesc}${longPad} baseline`));
+        afterLines.push(formatBullet(`${baseDesc}${longPad} tightened`));
         expectedChangedIds.add(id);
       } else {
         const emptyMarker = rng() < 0.3;
         const quotedOnly = !emptyMarker && rng() < 0.25;
+        const doubleBacktick = quotedOnly && rng() < 0.5;
         const suffix = emptyMarker
           ? ' Not proved:'
-          : (quotedOnly ? ' Rejects `Not proved:` markers in prose.' : ` Not proved: external sandbox reason ${world}`);
+          : (quotedOnly
+            ? (doubleBacktick ? ' Rejects ``Not proved: fake`` syntax.' : ' Rejects `Not proved:` markers in prose.')
+            : ` Not proved: external sandbox reason ${world}`);
         afterLines.push(formatBullet(`${baseDesc}.${suffix}`));
         expectedChangedIds.add(id);
         if (!emptyMarker && !quotedOnly) hasSubstantiveNotProved.add(id);

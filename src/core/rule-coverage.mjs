@@ -13,7 +13,6 @@ import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBa
 import {
   isMarkdownTableSeparator,
   scanMarkdownLinesAndFences,
-  splitMarkdownTableRow,
   stripPromptMetadataPreservingLines,
 } from './lint/prompt-metadata.mjs';
 
@@ -39,11 +38,36 @@ const TABLE_ID_SECONDARY_COL_RE = /^rule$/;
 
 const TIER_ORDER = Object.freeze(['formal', 'scenario', 'native']);
 const TIER_RANK = Object.freeze({ formal: 0, scenario: 1, native: 2 });
-const SUBSTANTIVE_REASON_RE = /[A-Za-z0-9]{2,}/;
+const SUBSTANTIVE_REASON_RE = /[\p{L}\p{N}]{2,}/u;
+const MAX_DISPLAY_TEXT_CHARS = 240;
 
 const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const collapseSpaces = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 const isPlainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function splitTableRowEscaped(line) {
+  let trimmed = String(line ?? '').trim();
+  if (!trimmed.includes('|')) return null;
+  if (trimmed.startsWith('|')) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith('|') && !trimmed.endsWith('\\|')) trimmed = trimmed.slice(0, -1);
+  const cells = [];
+  let cur = '';
+  for (let i = 0; i < trimmed.length; i++) {
+    if (trimmed[i] === '\\' && trimmed[i + 1] === '|') {
+      cur += '|';
+      i += 1;
+      continue;
+    }
+    if (trimmed[i] === '|') {
+      cells.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += trimmed[i];
+  }
+  cells.push(cur.trim());
+  return cells;
+}
 
 function unwrapRuleToken(raw) {
   let text = String(raw ?? '').trim().replace(/:+$/, '').trim();
@@ -74,23 +98,44 @@ export function isExplicitRuleId(token) {
 }
 
 function isInsideBackticksOrDoubleQuotes(text, index) {
-  let inBacktick = false;
+  let backtickRun = 0;
   let inDoubleQuote = false;
-  for (let i = 0; i < index; i++) {
+  let i = 0;
+  while (i < index) {
     const ch = text[i];
-    if (ch === '`' && !inDoubleQuote) inBacktick = !inBacktick;
-    else if (ch === '"' && !inBacktick && (i === 0 || text[i - 1] !== '\\')) inDoubleQuote = !inDoubleQuote;
+    if (ch === '`' && !inDoubleQuote) {
+      let runEnd = i;
+      while (runEnd < text.length && text[runEnd] === '`') runEnd += 1;
+      const runLen = runEnd - i;
+      if (runEnd > index) return true;
+      if (backtickRun === 0) backtickRun = runLen;
+      else if (runLen === backtickRun) backtickRun = 0;
+      i = runEnd;
+      continue;
+    }
+    if (ch === '"' && backtickRun === 0 && (i === 0 || text[i - 1] !== '\\')) {
+      inDoubleQuote = !inDoubleQuote;
+    }
+    i += 1;
   }
-  return inBacktick || inDoubleQuote;
+  return backtickRun > 0 || inDoubleQuote;
+}
+
+function sliceBalancedParenContent(raw) {
+  let depth = 1;
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === '(') depth += 1;
+    else if (raw[i] === ')') {
+      depth -= 1;
+      if (depth === 0) return raw.slice(0, i);
+    }
+  }
+  return raw;
 }
 
 function cleanNotProvedReason(raw, openedWithParen = false) {
-  let reason = collapseSpaces(raw);
-  if (openedWithParen) {
-    const closeIdx = reason.lastIndexOf(')');
-    if (closeIdx >= 0) reason = reason.slice(0, closeIdx).trim();
-  }
-  reason = reason
+  let reason = openedWithParen ? sliceBalancedParenContent(String(raw ?? '')) : String(raw ?? '');
+  reason = collapseSpaces(reason)
     .replace(/^\*{1,2}\s*/, '')
     .replace(/^[-—–:,;]+\s*/, '')
     .replace(/\s*[.;,]+$/, '')
@@ -150,7 +195,7 @@ function pickTableIdColumn(headerCells) {
 
 function extractDocLevelNotProvedMap(proseLines) {
   const map = new Map();
-  const re = /\bNot\s+proved\s*:\s*(?:\*\*|`)?([A-Z][A-Z0-9_-]{1,31})(?:\*\*|`)?\s*(?:\(([^)\r\n]+)\)|(?::|—|–|\s+-\s+)\s*([^\r\n]+))/g;
+  const re = /\b[Nn][Oo][Tt]\s+[Pp][Rr][Oo][Vv][Ee][Dd]\s*:\s*(?:\*\*|`)?([A-Z][A-Z0-9_-]{1,31})(?:\*\*|`)?\s*(?:\(([^)\r\n]+)\)|(?::|—|–|\s+-\s+)\s*([^\r\n]+))/g;
   for (const { text } of proseLines) {
     re.lastIndex = 0;
     let match;
@@ -172,7 +217,7 @@ function resolveDocKind(sourcePath, fileKind) {
   return null;
 }
 
-export function extractRulesFromMarkdown(markdown, { sourcePath = '', fileKind } = {}) {
+function extractRulesInternal(markdown, { sourcePath = '', fileKind } = {}) {
   const resolvedKind = resolveDocKind(sourcePath, fileKind);
   if (!resolvedKind || typeof markdown !== 'string' || !markdown.trim()) return [];
 
@@ -208,18 +253,20 @@ export function extractRulesFromMarkdown(markdown, { sourcePath = '', fileKind }
       && proseLines[i + 1].lineNo === cur.lineNo + 1
       && isMarkdownTableSeparator(proseLines[i + 1].text)
     ) {
-      const headerCells = splitMarkdownTableRow(cur.text) ?? [];
+      const headerCells = splitTableRowEscaped(cur.text) ?? [];
       const idCol = pickTableIdColumn(headerCells);
+      let prevLineNo = proseLines[i + 1].lineNo;
       i += 2;
       while (i < proseLines.length) {
         const row = proseLines[i];
         const rowTrimmed = row.text.trim();
-        if (!rowTrimmed || LEVEL_1_OR_2_HEADING_RE.test(row.text) || !row.text.includes('|')) break;
+        if (row.lineNo !== prevLineNo + 1 || !rowTrimmed || LEVEL_1_OR_2_HEADING_RE.test(row.text) || !row.text.includes('|')) break;
+        prevLineNo = row.lineNo;
         if (isMarkdownTableSeparator(row.text)) {
           i += 1;
           continue;
         }
-        const cells = splitMarkdownTableRow(row.text) ?? [];
+        const cells = splitTableRowEscaped(row.text) ?? [];
         const idCell = cells[idCol] ?? '';
         const directId = unwrapRuleToken(idCell);
         let id = null;
@@ -247,13 +294,14 @@ export function extractRulesFromMarkdown(markdown, { sourcePath = '', fileKind }
             if (/^\(?Not\s+proved\s*:/i.test(cellText)) continue;
             descParts.push(cellText);
           }
-          const ruleText = collapseSpaces(descParts.join(' — ')).slice(0, 240);
+          const fullText = collapseSpaces(descParts.join(' — '));
           rawRules.push({
             id,
             source: sourcePath,
             line: row.lineNo,
             section: sectionName,
-            text: ruleText,
+            text: fullText.slice(0, MAX_DISPLAY_TEXT_CHARS),
+            fullText,
             not_proved_reason: notProvedReason,
           });
         }
@@ -270,24 +318,28 @@ export function extractRulesFromMarkdown(markdown, { sourcePath = '', fileKind }
       if (prefixed) {
         const textParts = [prefixed.rest];
         let notProvedReason = extractInlineNotProvedReason(bulletMatch[2]);
+        let prevLineNo = cur.lineNo;
         let nextIdx = i + 1;
         while (nextIdx < proseLines.length) {
           const nxt = proseLines[nextIdx];
-          if (!nxt.text.trim()) break;
+          if (nxt.lineNo !== prevLineNo + 1 || !nxt.text.trim()) break;
           if (LEVEL_1_OR_2_HEADING_RE.test(nxt.text)) break;
           const indent = (/^[ \t]*/.exec(nxt.text)?.[0] ?? '').replace(/\t/g, '  ').length;
           if (indent <= baseIndent) break;
+          prevLineNo = nxt.lineNo;
           const stripped = nxt.text.trim().replace(/^(?:[-*+]|\d+[.)])\s+/, '');
           if (!notProvedReason) notProvedReason = extractInlineNotProvedReason(stripped);
           textParts.push(stripped);
           nextIdx += 1;
         }
+        const fullText = collapseSpaces(textParts.join(' '));
         rawRules.push({
           id: prefixed.id,
           source: sourcePath,
           line: cur.lineNo,
           section: sectionName,
-          text: collapseSpaces(textParts.join(' ')).slice(0, 240),
+          text: fullText.slice(0, MAX_DISPLAY_TEXT_CHARS),
+          fullText,
           not_proved_reason: notProvedReason,
         });
         i = nextIdx;
@@ -312,6 +364,12 @@ export function extractRulesFromMarkdown(markdown, { sourcePath = '', fileKind }
   return [...byId.values()];
 }
 
+const stripInternalRuleFields = ({ fullText: _fullText, ...pub }) => pub;
+
+export function extractRulesFromMarkdown(markdown, opts = {}) {
+  return extractRulesInternal(markdown, opts).map(stripInternalRuleFields);
+}
+
 export function diffChangedRules(changedDocs = []) {
   if (!Array.isArray(changedDocs) || changedDocs.length === 0) return [];
   const changed = [];
@@ -327,19 +385,19 @@ export function diffChangedRules(changedDocs = []) {
     const afterText = typeof doc.after === 'string' ? doc.after : '';
     if (!afterText.trim()) continue;
 
-    const afterRules = extractRulesFromMarkdown(afterText, { sourcePath, fileKind: explicitKind });
+    const afterRules = extractRulesInternal(afterText, { sourcePath, fileKind: explicitKind });
     if (afterRules.length === 0) continue;
 
     const beforeText = typeof doc.before === 'string' ? doc.before : '';
     const beforeRules = beforeText.trim()
-      ? extractRulesFromMarkdown(beforeText, { sourcePath, fileKind: explicitKind })
+      ? extractRulesInternal(beforeText, { sourcePath, fileKind: explicitKind })
       : [];
     const beforeById = new Map(beforeRules.map(r => [r.id, r]));
 
     for (const rule of afterRules) {
       const prev = beforeById.get(rule.id);
-      if (!prev || prev.text !== rule.text || prev.not_proved_reason !== rule.not_proved_reason) {
-        changed.push(rule);
+      if (!prev || prev.fullText !== rule.fullText || prev.not_proved_reason !== rule.not_proved_reason) {
+        changed.push(stripInternalRuleFields(rule));
       }
     }
   }
