@@ -356,19 +356,18 @@
       }
     },
     {
-      "id": "lint-flags-silent-skip-and-mock-only",
+      "id": "lint-flags-silent-skip",
       "op": "lintValidationCode",
       "input": {
         "path": "test/api-orders.test.mjs",
         "kind": "test",
-        "text": "import { mock } from 'node:test';\nimport { createOrder } from '../api/orders.mjs';\nconst fakeClient = mock.fn(() => ({ ok: true }));\nif (err === 'real-binding-unavailable') return { localSkipRow: true }; // local skip",
-        "hasRealE2eCoverage": false
+        "text": "import { createOrder } from '../api/orders.mjs';\nif (err === 'real-binding-unavailable') return { localSkipRow: true }; // local skip"
       },
       "checks": {
         "6": [
           ["result", "/ok", "=", false],
-          ["result", "/codes", "=", ["boundary-mock-only-test", "silent-validation-skip"]],
-          ["result", "/warnings", "len>=", 2]
+          ["result", "/codes", "=", ["silent-validation-skip"]],
+          ["result", "/warnings", "len>=", 1]
         ]
       }
     },

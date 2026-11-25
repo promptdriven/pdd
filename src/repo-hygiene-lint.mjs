@@ -28,9 +28,6 @@ export {
   lintPromptStructure,
 } from './core/lint/prompt-rules.mjs';
 export {
-  lintNativeOnlyContract,
-} from './core/lint/native-only-contract.mjs';
-export {
   lintNativeOnlyPortParity,
   collectNativeOnlyPortParityFindings,
 } from './core/lint/native-port-parity.mjs';

@@ -216,9 +216,10 @@ test('Astra #13: custom-rule glob pre-filter, lintRepoAntiPatterns compat export
 
   const repo = initGitRepo(t, 'pdd-compat-export-');
   mkdirSync(join(repo, 'prompts'), { recursive: true });
-  writeFileSync(join(repo, 'prompts', 'thin.prompt.md'), '---\nkind: native-only\nreason: Stub.\n---\n\n# Thin\n\nOwn `src/thin.mjs`.\n\n## Dependencies\nNone.\n');
+  const longFence = ['```js', ...Array.from({ length: 20 }, (_, i) => `const v${i} = ${i};`), '```'].join('\n');
+  writeFileSync(join(repo, 'prompts', 'long-fence.prompt.md'), `# Long fence\n\nOwn \`src/long.mjs\`.\n\n${longFence}\n\n## Dependencies\nNone.\n`);
   commitAll(repo);
   const compatWarns = lintRepoAntiPatterns({ root: repo });
   assert.deepEqual(compatWarns, lintRepoProject({ root: repo }).warnings);
-  assert.ok(compatWarns.some(w => w.includes('[native-only-contract-incomplete]')));
+  assert.ok(compatWarns.some(w => w.includes('[prompt-code-fence-length]')));
 });
