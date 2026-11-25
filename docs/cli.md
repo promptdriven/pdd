@@ -1445,6 +1445,8 @@ most 40 a tick. The cards cover every
 open issue in scope: unlike the core, they do not skip issues that cool down after a
 no-result or whose blocker is named only in the text. `pdd autopilot intake` prints
 the cards and today's changes; `--json` prints them as JSON.
+See [Autopilot issue refinement](autopilot-issue-refinement.md) for the active
+refiner step and for a template of an issue that is ready at the first check.
 
 
 ## Explain resource bindings

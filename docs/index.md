@@ -16,6 +16,7 @@ Start with the [README](../README.md).
 - [CLI reference](cli.md): every command form, option, and running from a source checkout.
 - [Metrics](metrics.md): local Autopilot throughput, funnel, and 7-day cohort metrics (`pdd metrics`).
 - [Autopilot factory & smoke tests](autopilot-factory.md): offline Autopilot factory harness and fresh release smoke sandbox.
+- [Autopilot issue refinement](autopilot-issue-refinement.md): how active intake strengthens a weak issue, and how to write an issue that is ready at the first check.
 - [Interpreter boundaries](runtime-boundaries.md): offline review, server lint, native factory bindings, and call-accounting evidence.
 - [Interpreter capacity & retries](lint-capacity.md): remote lint wait queues, slot limits (`PDD_MAX_JOBS`), and retry behavior.
 - [Runtime bindings](runtime-bindings.md) & [Runtime interface admission](runtime-interface-admission.md): resource binding resolution and hosted interface admission rules.
