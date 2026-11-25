@@ -1,7 +1,7 @@
 import '../../helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lintNativeOnlyPortParity } from '../../../src/core/lint/native-port-parity.mjs';
+import { collectNativeOnlyPortParityFindings, lintNativeOnlyPortParity } from '../../../src/core/lint/native-port-parity.mjs';
 import { extractFrontmatterPorts } from '../../../src/core/lint/prompt-metadata.mjs';
 
 test('YAML frontmatter ports (inline and block list) declare valid ports alongside ## Ports and <stem>.<op> exports', () => {
@@ -72,9 +72,9 @@ test('YAML frontmatter ports (inline and block list) declare valid ports alongsi
   assert.match(errs[0], /Fix:.*Rerun: `pdd lint/);
 });
 
-test('Astra #11: wiring cue prose line carries into immediately following bullet list to catch undeclared ports', () => {
+test('#3675 Option B: undeclared prose bullet lists are ignored with advisory, while ## Ports bullets catch undeclared ports', () => {
   const dep = '# Order domain\n\n## Ports\n- `store.load`\n\n## Dependencies\nNone.\n';
-  const adapterWithCueList = [
+  const adapterWithProseList = [
     '---',
     'kind: native-only',
     'reason: Native mailer + store adapter.',
@@ -91,23 +91,31 @@ test('Astra #11: wiring cue prose line carries into immediately following bullet
     '- [order](order.prompt.md)',
   ].join('\n');
 
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      adapterWithProseList,
+      [{ path: 'prompts/order.prompt.md', text: dep, isPrompt: true }],
+      { path: 'prompts/adapter.prompt.md' },
+    ),
+    [],
+  );
+  const proseFindings = collectNativeOnlyPortParityFindings(
+    adapterWithProseList,
+    [{ path: 'prompts/order.prompt.md', text: dep, isPrompt: true }],
+    { path: 'prompts/adapter.prompt.md' },
+  );
+  assert.equal(proseFindings.length, 1);
+  assert.equal(proseFindings[0].defaultSeverity, 'warn');
+  assert.equal(proseFindings[0].code, 'native-only-no-declared-ports');
+
+  const adapterWithPortsSection = adapterWithProseList.replace('Wire the following ports:', '## Ports');
   const errs = lintNativeOnlyPortParity(
-    adapterWithCueList,
+    adapterWithPortsSection,
     [{ path: 'prompts/order.prompt.md', text: dep, isPrompt: true }],
     { path: 'prompts/adapter.prompt.md' },
   );
   assert.equal(errs.length, 1, errs.join('\n'));
   assert.match(errs[0], /prompts\/adapter\.prompt\.md:11 \[native-only-unknown-port\].*"mailer\.send"/);
-
-  // Astra R2 #8: cue line WITHOUT trailing colon still carries across optional blank line into bullet list.
-  const withoutColon = adapterWithCueList.replace('Wire the following ports:', 'Wire the following ports');
-  const errsNoColon = lintNativeOnlyPortParity(
-    withoutColon,
-    [{ path: 'prompts/order.prompt.md', text: dep, isPrompt: true }],
-    { path: 'prompts/adapter.prompt.md' },
-  );
-  assert.equal(errsNoColon.length, 1, errsNoColon.join('\n'));
-  assert.match(errsNoColon[0], /"mailer\.send"/);
 });
 
 test('#3619 R1-R8 parity: O(N) inline code spans, hyphen/path boundary guards, peer dir/stem ops, non-op suffix rejection, and routing table filter', () => {

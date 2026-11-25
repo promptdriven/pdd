@@ -114,7 +114,7 @@ test('Attack 6 (all 10 bypasses): YAML 1.2 zero-indent, Port Endpoint col, retur
   assert.ok(e3.some(x => x.includes('"vault.mint_secret"')));
   assert.ok(e3.some(x => x.includes('"vault.rotate_key"')));
 
-  // 4. Post-delimiter backtick span inside ## Ports bullet
+  // 4. #3675 Option B: inside ## Ports bullets, leading port before delimiter is checked, while RHS description prose does not false-positive
   const postDelimPrompt = [
     '---',
     'kind: native-only',
@@ -126,7 +126,9 @@ test('Attack 6 (all 10 bypasses): YAML 1.2 zero-indent, Port Endpoint col, retur
     '## Dependencies',
     '- [helpers](helpers.prompt.md)',
   ].join('\n');
-  const e4 = lintNativeOnlyPortParity(postDelimPrompt, dep, { path: 'prompts/vault.prompt.md' });
+  assert.deepEqual(lintNativeOnlyPortParity(postDelimPrompt, dep, { path: 'prompts/vault.prompt.md' }), []);
+  const badLeadPrompt = postDelimPrompt.replace('- `helpers.clamp`:', '- `vault.mint_secret`:');
+  const e4 = lintNativeOnlyPortParity(badLeadPrompt, dep, { path: 'prompts/vault.prompt.md' });
   assert.equal(e4.length, 1, e4.join('\n'));
   assert.match(e4[0], /"vault\.mint_secret"/);
 
