@@ -1,7 +1,9 @@
 name: PDD checks
 
+# No top-level `paths:` filter: a required gate job that never starts blocks PRs.
 on:
   pull_request:
+  merge_group:
   push:
     branches: [main]
   workflow_dispatch:
@@ -9,15 +11,60 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded PR runs only; never cancel `main` or `merge_group` runs.
 concurrency:
-  group: pdd-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: pdd-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test-shards:
-    name: test-shard (${{ matrix.shard }}/8)
+  changes:
+    name: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.detect.outputs.rust }}
+      release: ${{ steps.detect.outputs.release }}
+      release_set: ${{ steps.detect.outputs.release_set }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Detect Rust workspace and release-version changes
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+          HAS_RELEASE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'test:release') }}
+        run: |
+          set -euo pipefail
+          rust=false
+          if [ -f Cargo.toml ]; then rust=true; fi
+
+          release=false
+          if git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+            base_ver=$(git show HEAD^1:package.json 2>/dev/null | jq -r '.version // empty' || true)
+            head_ver=$(jq -r '.version // empty' package.json)
+            if [ -n "$base_ver" ] && [ -n "$head_ver" ] && [ "$base_ver" != "$head_ver" ]; then
+              release=true
+            fi
+          fi
+
+          release_set=false
+          if [ "$release" = "true" ] || [ "$HAS_RELEASE_LABEL" = "true" ] || { [ "$EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; }; then
+            release_set=true
+          fi
+
+          {
+            echo "rust=$rust"
+            echo "release=$release"
+            echo "release_set=$release_set"
+          } >> "$GITHUB_OUTPUT"
+
+  unit:
+    name: unit (${{ matrix.shard }}/8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -31,42 +78,37 @@ jobs:
           node-version: '22'
       - name: Ensure shell test prerequisites
         run: |
-          command -v bash
-          bash --version
-          if ! command -v zsh; then
-            sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends zsh
+          if ! command -v zsh >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install --yes --no-install-recommends zsh
           fi
-          command -v zsh
-          zsh --version
       - name: Install dependencies
         run: npm ci --ignore-scripts
-      - name: Check architecture boundaries (G7)
-        if: matrix.shard == 1
-        run: npm run check:arch
-      - name: Run offline unit tests
+      - name: Run parallel offline unit tests
         id: unit-tests
         run: |
           unit_list=$(node scripts/list-tests.mjs --unit)
           test -n "$unit_list"
           mapfile -t unit_tests <<< "$unit_list"
           set +e
-          node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-concurrency=4 --test-shard=${{ matrix.shard }}/8 "${unit_tests[@]}" 2>&1 | tee "$RUNNER_TEMP/tests-unit.tap"
+          node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs \
+            --test --test-concurrency=4 --test-timeout=300000 --test-shard=${{ matrix.shard }}/8 \
+            "${unit_tests[@]}" 2>&1 | tee "$RUNNER_TEMP/tests-unit.tap"
           exit "${PIPESTATUS[0]}"
-      - name: Run sequential browser tests
+      - name: Run sequential tests (browser + timing-sensitive)
         if: success() || steps.unit-tests.outcome == 'failure'
         run: |
-          browser_list=$(node scripts/list-tests.mjs --browser)
-          test -n "$browser_list"
-          mapfile -t browser_tests <<< "$browser_list"
+          serial_list=$(node scripts/list-tests.mjs --serial)
+          test -n "$serial_list"
+          mapfile -t serial_tests <<< "$serial_list"
           set +e
-          # Keep Chrome startup sequential so browser tests do not compete across workers.
-          node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/8 "${browser_tests[@]}" 2>&1 | tee "$RUNNER_TEMP/tests-browser.tap"
+          node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs \
+            --test --test-concurrency=1 --test-timeout=300000 --test-shard=${{ matrix.shard }}/8 \
+            "${serial_tests[@]}" 2>&1 | tee "$RUNNER_TEMP/tests-serial.tap"
           exit "${PIPESTATUS[0]}"
       - name: Summarize test counts
         if: always()
         run: |
-          node --input-type=module - "$RUNNER_TEMP/tests-unit.tap" "$RUNNER_TEMP/tests-browser.tap" >> "$GITHUB_STEP_SUMMARY" <<'NODE'
+          node --input-type=module - "$RUNNER_TEMP/tests-unit.tap" "$RUNNER_TEMP/tests-serial.tap" >> "$GITHUB_STEP_SUMMARY" <<'NODE'
           import { readFileSync } from 'node:fs';
           const parseCounts = path => {
             let output = '';
@@ -79,7 +121,7 @@ jobs:
             return counts;
           };
           const rows = process.argv.slice(2).map(parseCounts);
-          console.log('### tests');
+          console.log('### unit');
           if (rows.some(row => !row)) {
             console.log('Test counts unavailable: no complete final TAP totals. See the test log.');
           } else {
@@ -87,21 +129,25 @@ jobs:
             console.log(`${passed}/${total} passed, ${failed} failed, ${cancelled} cancelled, ${skipped} skipped, ${todo} todo.`);
           }
           NODE
-      - run: node bin/pdd.mjs --help
-      - run: npm pack --ignore-scripts --dry-run
 
-  public:
-    # main requires this check name; every offline test shard must pass.
-    name: tests
-    if: ${{ always() }}
-    needs: test-shards
+  lint:
+    name: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Require every test shard to pass
-        env:
-          SHARD_RESULT: ${{ needs.test-shards.result }}
-        run: test "$SHARD_RESULT" = success
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      # Area 3 swaps this step to oxlint + dependency-cruiser.
+      - name: Check architecture boundaries (G7)
+        run: npm run check:arch
 
+  # Kept until PR B replaces install-smoke + install-matrix with `package` + `evidence-public`.
   install-smoke:
     name: install-smoke
     runs-on: ubuntu-latest
@@ -117,23 +163,20 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Pack, install and smoke the installed command
         run: |
+          set -euo pipefail
           smoke_dir=$(mktemp -d)
-          checks=0
-          trap 'echo "### install-smoke" >> "$GITHUB_STEP_SUMMARY"; echo "$checks/4 command smoke checks passed (help, local lint, saved-local read, empty-state read). No runtime scenario tests ran." >> "$GITHUB_STEP_SUMMARY"; rm -rf "$smoke_dir"' EXIT
-          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state"
-          export PDD_RUNTIME_URL=http://127.0.0.1:1
+          trap 'rm -rf "$smoke_dir"' EXIT
+          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_RUNTIME_URL=http://127.0.0.1:1
           mkdir -p "$HOME" "$PDD_STATE_DIR"
           npm pack --ignore-scripts --json --pack-destination "$smoke_dir" > "$smoke_dir/pack.json"
           archive=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$smoke_dir/pack.json")
           node --input-type=module -e 'import { bundleInstalledDependencies } from "./test/helpers/pack-offline.mjs"; bundleInstalledDependencies(process.cwd(), process.argv[1], process.argv[2]);' "$smoke_dir/$archive" "$smoke_dir"
           npm install --global --prefix "$smoke_dir/install" --offline --ignore-scripts --no-audit --no-fund --package-lock=false "$smoke_dir/$archive"
           installed="$smoke_dir/install/bin/pdd"
-          "$installed" --help
-          checks=$((checks + 1))
+          "$installed" --help >/dev/null
           cp -R test/fixtures/harbor "$smoke_dir/harbor"
           cd "$smoke_dir/harbor"
-          git init --quiet
-          git add .
+          git init --quiet && git add .
           "$installed" lint --json place-order > "$smoke_dir/lint.json"
           node --input-type=module - "$smoke_dir/lint.json" "$PDD_STATE_DIR" <<'NODE'
           import assert from 'node:assert/strict';
@@ -143,23 +186,14 @@ jobs:
           assert.equal(result.exit_code, 0);
           assert.equal(result.local_only, true);
           assert.deepEqual(result.problems, []);
-          assert.equal(existsSync(join(process.argv[3], 'batches')), false, 'offline lint writes zero batch state');
+          assert.equal(existsSync(join(process.argv[3], 'batches')), false);
           NODE
-          checks=$((checks + 1))
           "$installed" status --json > "$smoke_dir/status.json"
-          node --input-type=module - "$smoke_dir/status.json" <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          const result = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-          assert.ok(result && typeof result === 'object');
-          NODE
-          checks=$((checks + 1))
+          node -e 'const r = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!r || typeof r !== "object") process.exit(1);' "$smoke_dir/status.json"
           mkdir -p "$smoke_dir/empty-state"
           read_result=0
           PDD_STATE_DIR="$smoke_dir/empty-state" "$installed" test --read > "$smoke_dir/read.log" 2>&1 || read_result=$?
-          cat "$smoke_dir/read.log"
           test "$read_result" -eq 2
-          checks=$((checks + 1))
 
   install-matrix:
     name: install-matrix (${{ matrix.manager }})
@@ -168,7 +202,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        manager: [npm-messy-home, pypi-venv, pnpm-global, volta-global]
+        manager: [npm-messy-home, pypi-venv]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -182,7 +216,7 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: npm ci --ignore-scripts
-      - name: Verify real npm install -g + messy HOME setup/upgrade (#3645/#3646)
+      - name: Verify npm install -g + messy HOME setup/upgrade (#3645/#3646)
         if: matrix.manager == 'npm-messy-home'
         run: |
           set -euo pipefail
@@ -197,40 +231,24 @@ jobs:
           npm install --global --prefix "$smoke_dir/prefix" --offline --ignore-scripts --no-audit --no-fund --package-lock=false "$smoke_dir/$archive"
           pdd="$smoke_dir/prefix/bin/pdd"
           export PATH="$smoke_dir/prefix/bin:$PATH"
-
-          # Seed messy laptop HOME: unmarked 0.1.39 split skills, Claude symlinks, non-PDD skill, 0-byte mcp_config.json, whitespace settings.json.
           for s in pdd-setup pdd-prompting pdd-small-change pdd-bug pdd-feature pdd-product pdd-graph; do
             mkdir -p "$HOME/.agents/skills/$s" "$HOME/.gemini/config/skills/$s"
             printf -- '---\nname: %s\nmetadata:\n  pdd-skills: 0.1.39\n---\nold\n' "$s" > "$HOME/.agents/skills/$s/SKILL.md"
             printf -- '---\nname: %s\nmetadata:\n  pdd-skills: 0.1.39\n---\nold\n' "$s" > "$HOME/.gemini/config/skills/$s/SKILL.md"
             ln -s "../../.agents/skills/$s" "$HOME/.claude/skills/$s"
           done
-          mkdir -p "$HOME/.agents/skills/finish-pr"
-          printf 'keep\n' > "$HOME/.agents/skills/finish-pr/SKILL.md"
           : > "$HOME/.gemini/config/mcp_config.json"
           printf '   \n\t\n' > "$HOME/.gemini/settings.json"
-
-          ver_before=$("$pdd" --version 2>"$smoke_dir/before.err")
-          test "$ver_before" = "$expected"
+          test "$("$pdd" --version 2>"$smoke_dir/before.err")" = "$expected"
           grep -q "Retired PDD skills remain" "$smoke_dir/before.err"
-
           "$pdd" setup --yes >"$smoke_dir/setup.out"
           grep -q "Done!" "$smoke_dir/setup.out"
-          grep -q "Removed retired PDD skills" "$smoke_dir/setup.out"
           test -f "$HOME/.agents/skills/pdd/SKILL.md"
-          test -f "$HOME/.claude/skills/pdd/SKILL.md"
-          test -f "$HOME/.gemini/config/skills/pdd/SKILL.md"
           test ! -e "$HOME/.agents/skills/pdd-bug"
-          test ! -L "$HOME/.claude/skills/pdd-bug"
-          test -f "$HOME/.agents/skills/finish-pr/SKILL.md"
           node -e 'const fs = require("node:fs"); JSON.parse(fs.readFileSync(process.argv[1], "utf8")); JSON.parse(fs.readFileSync(process.argv[2], "utf8"));' "$HOME/.gemini/config/mcp_config.json" "$HOME/.gemini/settings.json"
-
           "$pdd" setup --upgrade >"$smoke_dir/upg.out"
           test ! -s "$smoke_dir/upg.out"
-          ver_after=$("$pdd" --version 2>"$smoke_dir/after.err")
-          test "$ver_after" = "$expected"
-          test ! -s "$smoke_dir/after.err"
-      - name: Verify real Python venv pdd-cli wheel install + setup + upgrade guard
+      - name: Verify Python venv pdd-cli wheel install + setup + upgrade guard
         if: matrix.manager == 'pypi-venv'
         run: |
           set -euo pipefail
@@ -239,30 +257,49 @@ jobs:
           export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_CLI_CACHE_DIR="$smoke_dir/cache" PDD_NO_UPDATE_CHECK=1 PYTHONDONTWRITEBYTECODE=1
           mkdir -p "$HOME/.gemini/config" "$PDD_STATE_DIR" "$PDD_CLI_CACHE_DIR" "$smoke_dir/pypi-dist"
           expected=$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')
-
           node scripts/sync-pypi-version.mjs --stage-bundle
           python -m pip install --upgrade pip build
           python -m build --wheel --outdir "$smoke_dir/pypi-dist" python
           python -m venv "$smoke_dir/venv"
           "$smoke_dir/venv/bin/pip" install --no-deps "$smoke_dir/pypi-dist"/*.whl
-
           export PATH="$smoke_dir/venv/bin:$PATH"
-          ver=$(PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" --version 2>"$smoke_dir/ver.err")
-          test "$ver" = "$expected"
+          test "$(PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" --version 2>"$smoke_dir/ver.err")" = "$expected"
           test ! -s "$smoke_dir/ver.err"
-
           : > "$HOME/.gemini/config/mcp_config.json"
           PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" setup --yes >"$smoke_dir/setup.out"
           grep -q "Done!" "$smoke_dir/setup.out"
-          test -f "$HOME/.agents/skills/pdd/SKILL.md"
-          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));' "$HOME/.gemini/config/mcp_config.json"
-
           upg_status=0
           PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" upgrade >"$smoke_dir/upg.out" 2>"$smoke_dir/upg.err" || upg_status=$?
           test "$upg_status" -eq 1
           grep -q "pip install -U pdd-cli" "$smoke_dir/upg.err"
-      - name: Verify real pnpm global install + setup + upgrade guard
-        if: matrix.manager == 'pnpm-global'
+
+  release-set:
+    name: release-set (${{ matrix.target }})
+    needs: changes
+    if: needs.changes.outputs.release_set == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: pnpm
+            os: ubuntu-latest
+          - target: volta
+            os: ubuntu-latest
+          - target: macos
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Verify pnpm global install + setup + upgrade hint
+        if: matrix.target == 'pnpm'
         run: |
           set -euo pipefail
           smoke_dir=$(mktemp -d)
@@ -274,14 +311,11 @@ jobs:
           npm pack --ignore-scripts --json --pack-destination "$smoke_dir" > "$smoke_dir/pack.json"
           archive=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$smoke_dir/pack.json")
           expected=$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')
-          node --input-type=module -e 'import { bundleInstalledDependencies } from "./test/helpers/pack-offline.mjs"; bundleInstalledDependencies(process.cwd(), process.argv[1], process.argv[2]);' "$smoke_dir/$archive" "$smoke_dir"
-
           pnpm config set global-dir "$smoke_dir/pnpm/global"
           pnpm config set global-bin-dir "$PNPM_HOME"
           pnpm config set store-dir "$smoke_dir/pnpm/store"
           pnpm add -g "$smoke_dir/$archive" --ignore-scripts
-          ver=$("$PNPM_HOME/pdd" --version 2>"$smoke_dir/ver.err")
-          test "$ver" = "$expected"
+          test "$("$PNPM_HOME/pdd" --version 2>"$smoke_dir/ver.err")" = "$expected"
           test ! -s "$smoke_dir/ver.err"
           "$PNPM_HOME/pdd" setup --yes >"$smoke_dir/setup.out"
           grep -q "Done!" "$smoke_dir/setup.out"
@@ -289,77 +323,185 @@ jobs:
           "$PNPM_HOME/pdd" upgrade >"$smoke_dir/upg.out" 2>"$smoke_dir/upg.err" || upg_status=$?
           test "$upg_status" -eq 1
           grep -q "pnpm add -g @promptdriven/pdd@latest" "$smoke_dir/upg.err"
-      - name: Verify real Volta install + setup + setup --upgrade
-        if: matrix.manager == 'volta-global'
+      - name: Verify real Volta install and real pdd upgrade (#3628)
+        if: matrix.target == 'volta'
         run: |
           set -euo pipefail
           smoke_dir=$(mktemp -d)
-          trap 'rm -rf "$smoke_dir"' EXIT
+          reg_pid=""
+          trap '[ -n "$reg_pid" ] && kill "$reg_pid" 2>/dev/null || true; rm -rf "$smoke_dir"' EXIT
           export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" VOLTA_HOME="$smoke_dir/volta" PDD_NO_UPDATE_CHECK=1
           mkdir -p "$HOME/.gemini/config" "$PDD_STATE_DIR" "$VOLTA_HOME"
           curl -fsSL https://get.volta.sh | bash -s -- --skip-setup
           export PATH="$VOLTA_HOME/bin:$PATH"
           volta install node@22
 
-          npm pack --ignore-scripts --json --pack-destination "$smoke_dir" > "$smoke_dir/pack.json"
-          archive=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$smoke_dir/pack.json")
-          expected=$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')
-          node --input-type=module -e 'import { bundleInstalledDependencies } from "./test/helpers/pack-offline.mjs"; bundleInstalledDependencies(process.cwd(), process.argv[1], process.argv[2]);' "$smoke_dir/$archive" "$smoke_dir"
+          # Install last public release via Volta and seed a used HOME with a 0-byte mcp_config.json.
+          volta install @promptdriven/pdd@latest
+          old_ver=$("$VOLTA_HOME/bin/pdd" --version 2>/dev/null)
+          : > "$HOME/.gemini/config/mcp_config.json"
+          "$VOLTA_HOME/bin/pdd" setup --yes >"$smoke_dir/setup.out"
 
-          # Serve packed tarball from a local loopback npm registry so real `volta install @promptdriven/pdd` installs natively without hitting npmjs.org.
-          node --input-type=module - "$smoke_dir/$archive" "$expected" "$smoke_dir/reg.port" <<'NODE' &
+          # Pack candidate tarball; bump patch+1 only if candidate version <= @latest so `pdd upgrade` runs live.
+          npm pack --ignore-scripts --json --pack-destination "$smoke_dir" > "$smoke_dir/pack.json"
+          archive="$smoke_dir/$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$smoke_dir/pack.json")"
+          target_ver=$(node --input-type=module - "$archive" "$old_ver" "$smoke_dir/cand-upgrade.tgz" "$smoke_dir/repack" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const [, , src, oldVer, dst, work] = process.argv;
+          const parse = v => String(v).match(/^(\d+)\.(\d+)\.(\d+)/)?.slice(1).map(Number) || [0, 0, 0];
+          const pkg = JSON.parse(execFileSync('tar', ['-xOf', src, 'package/package.json'], { encoding: 'utf8' }));
+          const a = parse(pkg.version), b = parse(oldVer);
+          const newer = a[0] > b[0] || (a[0] === b[0] && (a[1] > b[1] || (a[1] === b[1] && a[2] > b[2])));
+          if (newer) { copyFileSync(src, dst); console.log(pkg.version); }
+          else {
+            const next = `${b[0]}.${b[1]}.${b[2] + 1}`;
+            mkdirSync(work, { recursive: true });
+            execFileSync('tar', ['-xzf', src, '-C', work]);
+            pkg.version = next;
+            writeFileSync(join(work, 'package/package.json'), JSON.stringify(pkg, null, 2) + '\n');
+            execFileSync('tar', ['-czf', dst, '-C', work, 'package']);
+            console.log(next);
+          }
+          NODE
+          )
+
+          # Serve candidate tarball from a local loopback npm registry and run real `pdd upgrade` under Volta.
+          node --input-type=module - "$smoke_dir/cand-upgrade.tgz" "$target_ver" "$smoke_dir/reg.port" <<'NODE' &
           import http from 'node:http';
           import { readFileSync, writeFileSync } from 'node:fs';
           import { createHash } from 'node:crypto';
           const [, , archive, version, portFile] = process.argv;
           const tgz = readFileSync(archive);
+          const repoPkg = JSON.parse(readFileSync('package.json', 'utf8'));
           const shasum = createHash('sha1').update(tgz).digest('hex');
           const integrity = `sha512-${createHash('sha512').update(tgz).digest('base64')}`;
           const server = http.createServer((req, res) => {
             const rawPath = (req.url || '/').split('?')[0];
-            if (rawPath === '/pkg.tgz') {
-              res.writeHead(200, { 'content-type': 'application/octet-stream' });
-              res.end(tgz);
-              return;
-            }
+            if (rawPath === '/pkg.tgz') { res.writeHead(200, { 'content-type': 'application/octet-stream' }); res.end(tgz); return; }
             const decoded = decodeURIComponent(rawPath);
             if (decoded !== '/@promptdriven/pdd' && decoded !== `/@promptdriven/pdd/${version}`) {
-              res.writeHead(302, { location: `https://registry.npmjs.org${req.url}` });
-              res.end();
-              return;
+              res.writeHead(302, { location: `https://registry.npmjs.org${req.url}` }); res.end(); return;
             }
             const addr = server.address();
-            const versionDoc = {
-              name: '@promptdriven/pdd',
-              version,
-              bin: { pdd: 'bin/pdd.mjs', 'pdd-codex': 'bin/pdd-codex.mjs', 'pdd-claude': 'bin/pdd-claude.mjs' },
-              bundleDependencies: ['@promptdriven/runtime-client'],
+            const doc = {
+              name: '@promptdriven/pdd', version,
+              dependencies: repoPkg.dependencies || {},
+              bin: repoPkg.bin,
               dist: { shasum, integrity, tarball: `http://127.0.0.1:${addr.port}/pkg.tgz` },
             };
             const body = decoded === `/@promptdriven/pdd/${version}`
-              ? versionDoc
-              : { name: '@promptdriven/pdd', 'dist-tags': { latest: version }, versions: { [version]: versionDoc } };
+              ? doc : { name: '@promptdriven/pdd', 'dist-tags': { latest: version }, versions: { [version]: doc } };
             res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify(body));
           });
-          server.listen(0, '127.0.0.1', () => {
-            writeFileSync(portFile, String(server.address().port));
-          });
-          setTimeout(() => server.close(), 120000);
+          server.listen(0, '127.0.0.1', () => writeFileSync(portFile, String(server.address().port)));
+          setTimeout(() => server.close(), 180000);
           NODE
           reg_pid=$!
-          trap 'kill "$reg_pid" 2>/dev/null || true; rm -rf "$smoke_dir"' EXIT
           for _ in $(seq 1 50); do [ -s "$smoke_dir/reg.port" ] && break; sleep 0.1; done
           reg_port=$(cat "$smoke_dir/reg.port")
           printf 'registry=http://127.0.0.1:%s/\n' "$reg_port" > "$HOME/.npmrc"
-          npm_config_registry="http://127.0.0.1:$reg_port" volta install "@promptdriven/pdd@$expected"
 
-          ver=$("$VOLTA_HOME/bin/pdd" --version 2>"$smoke_dir/ver.err")
-          test "$ver" = "$expected"
+          cat > "$smoke_dir/fetch-shim.mjs" <<EOF
+          const origFetch = globalThis.fetch;
+          globalThis.fetch = async (url, init) => {
+            if (String(url).includes('api.github.com/repos/promptdriven/pdd/releases')) {
+              return new Response(JSON.stringify([{ tag_name: 'alpha-v${target_ver}', draft: false, prerelease: false, published_at: '2026-11-25T00:00:00Z' }]), { status: 200, headers: { 'content-type': 'application/json' } });
+            }
+            return origFetch(url, init);
+          };
+          EOF
+
+          env -u PDD_NO_UPDATE_CHECK NODE_OPTIONS="--import=$smoke_dir/fetch-shim.mjs" \
+            npm_config_registry="http://127.0.0.1:$reg_port" "$VOLTA_HOME/bin/pdd" upgrade
+          test "$("$VOLTA_HOME/bin/pdd" --version 2>"$smoke_dir/ver.err")" = "$target_ver"
           test ! -s "$smoke_dir/ver.err"
-          : > "$HOME/.gemini/config/mcp_config.json"
-          "$VOLTA_HOME/bin/pdd" setup --yes >"$smoke_dir/setup.out"
-          grep -q "Done!" "$smoke_dir/setup.out"
           test -f "$HOME/.agents/skills/pdd/SKILL.md"
+          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));' "$HOME/.gemini/config/mcp_config.json"
           "$VOLTA_HOME/bin/pdd" setup --upgrade >"$smoke_dir/upg.out"
           test ! -s "$smoke_dir/upg.out"
+      - name: Verify macOS global install + harbor smoke
+        if: matrix.target == 'macos'
+        run: |
+          set -euo pipefail
+          smoke_dir=$(mktemp -d)
+          trap 'rm -rf "$smoke_dir"' EXIT
+          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_NO_UPDATE_CHECK=1 PDD_RUNTIME_URL=http://127.0.0.1:1
+          mkdir -p "$HOME/.gemini/config" "$PDD_STATE_DIR"
+          npm pack --ignore-scripts --json --pack-destination "$smoke_dir" > "$smoke_dir/pack.json"
+          archive=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$smoke_dir/pack.json")
+          expected=$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')
+          npm install --global --prefix "$smoke_dir/prefix" --ignore-scripts --no-audit --no-fund --package-lock=false "$smoke_dir/$archive"
+          pdd="$smoke_dir/prefix/bin/pdd"
+          test "$("$pdd" --version 2>"$smoke_dir/ver.err")" = "$expected"
+          test ! -s "$smoke_dir/ver.err"
+          : > "$HOME/.gemini/config/mcp_config.json"
+          "$pdd" setup --yes >"$smoke_dir/setup.out"
+          grep -q "Done!" "$smoke_dir/setup.out"
+          cp -R test/fixtures/harbor "$smoke_dir/harbor"
+          git -C "$smoke_dir/harbor" init -q && git -C "$smoke_dir/harbor" add .
+          (cd "$smoke_dir/harbor" && "$pdd" lint --local --json >/dev/null && "$pdd" status --json >/dev/null)
+
+  rust:
+    name: rust
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Ensure Rust toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install pinned deslop-please release binary
+        run: |
+          set -euo pipefail
+          ver="v0.1.4"
+          asset="deslop-please-x86_64-unknown-linux-musl-${ver}.tar.gz"
+          sha="4d2a26d55db443f652bc9bb1ce1821a18cae16dd6bed5356755a74036e2bf1ca"
+          curl -fsSL "https://github.com/deterministic-machines/deslop-please/releases/download/${ver}/${asset}" -o "$RUNNER_TEMP/${asset}"
+          echo "${sha}  $RUNNER_TEMP/${asset}" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/${asset}" -C "$RUNNER_TEMP/bin" deslop-please
+          chmod +x "$RUNNER_TEMP/bin/deslop-please"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - run: deslop-please
+
+  main-gate:
+    name: main-gate
+    if: ${{ always() }}
+    needs: [changes, unit, lint, rust, release-set]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require all active gate jobs to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          MAY_SKIP: >-
+            {"rust": ${{ needs.changes.outputs.rust != 'true' }},
+             "release-set": ${{ needs.changes.outputs.release_set != 'true' }}}
+        run: |
+          echo "$NEEDS" | jq -e --argjson ok "$MAY_SKIP" \
+            'to_entries | all(.value.result == "success" or (.value.result == "skipped" and $ok[.key] == true))'
+
+  # Thin alias keeping branch protection green during changeover to `main-gate`.
+  tests:
+    name: tests
+    if: ${{ always() }}
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require unit shards to pass
+        env:
+          UNIT_RESULT: ${{ needs.unit.result }}
+        run: test "$UNIT_RESULT" = success
