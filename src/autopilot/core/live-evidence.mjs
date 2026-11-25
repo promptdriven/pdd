@@ -1019,7 +1019,11 @@ export async function collectLiveEvidenceContract({
   const recipeProtectedPatterns = recipeScripts.unresolved.length > 0
     ? [...new Set([...recipeScripts.paths, '**'])]
     : recipeScripts.paths;
-  const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, cleanFiles);
+  const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, cleanFiles, {
+    root: headTree,
+    baseSha: baseTipValid ? cleanBaseTip : null,
+    baseRoot: baseTree,
+  });
 
   // 2. Load 0600 test-env metadata & probe host capabilities ONLY when merge-base verify.paths (or explicit probeOptions) need them;
   // inject sandbox credentials ONLY post-review and strictly keyed by unique `recipe.id` via `ports.envForStep`.

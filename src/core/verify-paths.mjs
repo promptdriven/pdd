@@ -143,7 +143,7 @@ export function loadVerifyConfig(rootOrObject, { gitRef } = {}) {
   }
 }
 
-export function matchVerifyPaths(verifyConfig, touchedFiles = [], { root = null, baseSha = null, testpaths = null } = {}) {
+export function matchVerifyPaths(verifyConfig, touchedFiles = [], { root = null, baseSha = null, baseRoot = null, testpaths = null } = {}) {
   const cleanFiles = [...new Set((touchedFiles ?? []).filter(f => typeof f === 'string' && f.trim()).map(f => f.replace(/^\.\//, '')))].sort();
   const matched = [];
   const coveredFiles = new Set();
@@ -154,11 +154,18 @@ export function matchVerifyPaths(verifyConfig, touchedFiles = [], { root = null,
       for (const f of matchedFiles) coveredFiles.add(f);
     }
   }
-  const extraTestDirs = Array.isArray(testpaths) ? testpaths : (root ? readPytestTestpaths(root) : []);
+  const extraTestDirs = Array.isArray(testpaths)
+    ? testpaths
+    : (baseSha && root ? readPytestTestpaths(root, { gitRef: baseSha }) : (baseRoot ? readPytestTestpaths(baseRoot) : (root ? readPytestTestpaths(root) : [])));
   const isExemptManifest = f => {
-    if (f !== 'pyproject.toml' || !root || !baseSha) return false;
-    const baseRes = spawnSync('git', ['show', `${baseSha}:pyproject.toml`], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    const baseRaw = baseRes.status === 0 ? baseRes.stdout : null;
+    if (f !== 'pyproject.toml' || !root || (!baseSha && !baseRoot)) return false;
+    let baseRaw = null;
+    if (baseSha) {
+      const baseRes = spawnSync('git', ['show', `${baseSha}:pyproject.toml`], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      baseRaw = baseRes.status === 0 ? baseRes.stdout : null;
+    } else if (baseRoot) {
+      baseRaw = readSafeUtf8(baseRoot, 'pyproject.toml');
+    }
     return isNonProductionPyprojectEdit(baseRaw, readSafeUtf8(root, 'pyproject.toml'));
   };
   const changedSurfaces = cleanFiles.filter(f => isProductionSurfaceFile(f) && !isConfiguredTestPath(f, extraTestDirs) && !isExemptManifest(f));
