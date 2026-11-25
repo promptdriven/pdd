@@ -1,0 +1,167 @@
+{
+  "entry_path": "prompts/cli/vector-export.prompt.md",
+  "initial_world": {},
+  "steps": [
+    {
+      "id": "export-boundary-cases",
+      "op": "exportFormalVectors",
+      "input": {
+        "inputDoc": {
+          "schema_version": "pdd.formal-vectors.v1",
+          "entry_path": "prompts/option-grant.prompt.md",
+          "default_op": "issue",
+          "cases": [
+            {
+              "id": "boundary-at-fmv",
+              "input": { "shares": 10, "strike_cents": 4200 },
+              "expect": { "/strike_cents": 4200, "/status": "active" }
+            },
+            {
+              "id": "zero-shares-error",
+              "criterion": "1",
+              "input": { "shares": 0 },
+              "error": "pool_exhausted",
+              "checks": [["calls", "ledger.save", "=", 0]]
+            }
+          ]
+        },
+        "options": { "outputBasePath": "tests/option-grant.formal.json" }
+      },
+      "checks": {
+        "1": [
+          ["result", "/ok", "=", true],
+          ["result", "/files", "count", 1],
+          ["result", "/files/0/path", "=", "tests/option-grant.formal.json"],
+          ["result", "/files/0/step_count", "=", 2],
+          ["result", "/files/0/doc/entry_path", "=", "prompts/option-grant.prompt.md"],
+          ["result", "/files/0/doc/steps/0/input/strike_cents", "=", 4200],
+          ["result", "/files/0/doc/steps/1/error", "=", "pool_exhausted"]
+        ]
+      }
+    },
+    {
+      "id": "export-quint-itf-trace",
+      "op": "exportFormalVectors",
+      "input": {
+        "inputDoc": {
+          "#meta": { "format": "ITF" },
+          "vars": ["balance", "action", "input", "result"],
+          "states": [
+            { "#meta": { "index": 0 }, "balance": { "#bigint": "100" } },
+            {
+              "#meta": { "index": 1 },
+              "balance": { "#bigint": "75" },
+              "action": "withdraw",
+              "input": { "amount": { "#bigint": "25" } },
+              "result": { "balance": { "#bigint": "75" } }
+            }
+          ]
+        },
+        "options": {
+          "entryPath": "prompts/ledger.prompt.md",
+          "defaultOp": "withdraw",
+          "outputBasePath": "tests/ledger.itf.json"
+        }
+      },
+      "checks": {
+        "2": [
+          ["result", "/ok", "=", true],
+          ["result", "/files/0/step_count", "=", 1],
+          ["result", "/files/0/doc/initial_world/balance", "=", 100],
+          ["result", "/files/0/doc/steps/0/op", "=", "withdraw"],
+          ["result", "/files/0/doc/steps/0/input/amount", "=", 25]
+        ]
+      }
+    },
+    {
+      "id": "refuse-exceeding-max-steps",
+      "op": "exportFormalVectors",
+      "input": {
+        "inputDoc": {
+          "schema_version": "pdd.formal-vectors.v1",
+          "entry_path": "prompts/ledger.prompt.md",
+          "default_op": "inc",
+          "cases": [
+            { "id": "c1", "input": { "n": 1 }, "expect": { "/n": 2 } },
+            { "id": "c2", "input": { "n": 2 }, "expect": { "/n": 3 } },
+            { "id": "c3", "input": { "n": 3 }, "expect": { "/n": 4 } }
+          ]
+        },
+        "options": { "maxSteps": 2, "split": false, "outputBasePath": "tests/ledger.formal.json" }
+      },
+      "checks": {
+        "3": [
+          ["result", "/ok", "=", false],
+          ["result", "/refusal/code", "=", "max-steps-exceeded"]
+        ]
+      }
+    },
+    {
+      "id": "split-exceeding-max-steps",
+      "op": "exportFormalVectors",
+      "input": {
+        "inputDoc": {
+          "schema_version": "pdd.formal-vectors.v1",
+          "entry_path": "prompts/ledger.prompt.md",
+          "default_op": "inc",
+          "cases": [
+            { "id": "c1", "input": { "n": 1 }, "expect": { "/n": 2 } },
+            { "id": "c2", "input": { "n": 2 }, "expect": { "/n": 3 } },
+            { "id": "c3", "input": { "n": 3 }, "expect": { "/n": 4 } }
+          ]
+        },
+        "options": { "maxSteps": 2, "split": true, "outputBasePath": "tests/ledger.formal.json" }
+      },
+      "checks": {
+        "3": [
+          ["result", "/ok", "=", true],
+          ["result", "/files", "count", 2],
+          ["result", "/files/0/path", "=", "tests/ledger.formal-01.json"],
+          ["result", "/files/0/step_count", "=", 2],
+          ["result", "/files/1/path", "=", "tests/ledger.formal-02.json"],
+          ["result", "/files/1/step_count", "=", 1]
+        ]
+      }
+    },
+    {
+      "id": "refuse-missing-checks",
+      "op": "exportFormalVectors",
+      "input": {
+        "inputDoc": {
+          "schema_version": "pdd.formal-vectors.v1",
+          "entry_path": "prompts/ledger.prompt.md",
+          "default_op": "inc",
+          "cases": [
+            { "id": "empty-check", "input": { "n": 1 } }
+          ]
+        }
+      },
+      "checks": {
+        "4": [
+          ["result", "/ok", "=", false],
+          ["result", "/refusal/code", "=", "missing-checks"]
+        ]
+      }
+    },
+    {
+      "id": "refuse-invalid-pointer",
+      "op": "exportFormalVectors",
+      "input": {
+        "inputDoc": {
+          "schema_version": "pdd.formal-vectors.v1",
+          "entry_path": "prompts/ledger.prompt.md",
+          "default_op": "inc",
+          "cases": [
+            { "id": "bad-ptr", "input": { "n": 1 }, "expect": { "no_leading_slash": 2 } }
+          ]
+        }
+      },
+      "checks": {
+        "4": [
+          ["result", "/ok", "=", false],
+          ["result", "/refusal/code", "=", "invalid-pointer"]
+        ]
+      }
+    }
+  ]
+}

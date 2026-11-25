@@ -25,6 +25,7 @@ import { collectNativeOnlyPortParityFindings } from './native-port-parity.mjs';
 import { evaluateCustomRulesOnFile, loadBaseTrustedLintCommands, loadBaseTrustedLintOverrides, loadProjectLintConfig, matchesAnyCustomRule } from './project-config.mjs';
 import { extractDependencyLinkTargets, isNativeOnlyPrompt } from './prompt-metadata.mjs';
 import { collectPromptCodeBlockFindings, collectPromptDependencyFindings, collectPromptSizeFindings, collectPromptStructureFindings } from './prompt-rules.mjs';
+import { DEFAULT_SCENARIO_MAX_STEPS, DEFAULT_SCENARIO_MAX_WORLD_BYTES, collectScenarioHygieneFindings } from './scenario-hygiene.mjs';
 import { collectStoryUnboundCriteriaFindings } from './story-criteria-parity.mjs';
 
 const PROMPT_SIZE_MIN_CODE_LINES = 25;
@@ -113,6 +114,10 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
   let effectiveSeverities = lintConfig.ruleSeverities;
   let effectiveCommands = lintConfig.commands;
   let effectiveMutationCommand = lintConfig.mutationCommand ?? null;
+  let effectiveScenarioConfig = {
+    maxSteps: lintConfig.scenarioConfig?.maxSteps ?? DEFAULT_SCENARIO_MAX_STEPS,
+    maxWorldBytes: lintConfig.scenarioConfig?.maxWorldBytes ?? DEFAULT_SCENARIO_MAX_WORLD_BYTES,
+  };
   const untrustedConfigOverrides = [];
   if (config === undefined && (enforceBaseTrust || trustBaseRef !== undefined)) {
     const baseTrusted = loadBaseTrustedLintOverrides(realRoot, { baseRef: trustBaseRef });
@@ -123,6 +128,16 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
     if (baseCmds.skippedMutationCommand) untrustedConfigOverrides.push('lint.mutation_command');
     effectiveDisabled = new Set(baseTrusted.disabledRules);
     effectiveSeverities = new Map(baseTrusted.ruleSeverities);
+    const baseMaxSteps = baseTrusted.scenarioConfig?.maxSteps ?? DEFAULT_SCENARIO_MAX_STEPS;
+    const baseMaxWorldBytes = baseTrusted.scenarioConfig?.maxWorldBytes ?? DEFAULT_SCENARIO_MAX_WORLD_BYTES;
+    if (effectiveScenarioConfig.maxSteps > baseMaxSteps) {
+      untrustedConfigOverrides.push('lint.scenario.max_steps');
+      effectiveScenarioConfig.maxSteps = baseMaxSteps;
+    }
+    if (effectiveScenarioConfig.maxWorldBytes > baseMaxWorldBytes) {
+      untrustedConfigOverrides.push('lint.scenario.max_world_bytes');
+      effectiveScenarioConfig.maxWorldBytes = baseMaxWorldBytes;
+    }
     for (const id of lintConfig.disabledRules) {
       if (!baseTrusted.disabledRules.has(id)) {
         untrustedConfigOverrides.push(`${id} (disable)`);
@@ -341,6 +356,21 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
   }
   if (targetStories.length) {
     rawFindings.push(...collectStoryUnboundCriteriaFindings({ realRoot, storyPaths: targetStories, scopedFiles, readFile: getFull, allowExplicitSubset: !requireFullStoryCriteria }));
+  }
+
+  const targetScenarios = hasExplicitScope
+    ? [...scope.scenarios].filter(p => scopedSet.has(p)).sort()
+    : (Array.isArray(tests)
+      ? [...new Set(tests.map(t => (typeof t === 'string' ? t : t?.path)).filter(p => typeof p === 'string' && p.endsWith('.json')).map(p => p.replace(/^\.\//, '')).filter(p => scopedSet.has(p)))].sort()
+      : (Array.isArray(promptPaths)
+        ? scopedFiles.filter(p => ROOT_TEST_SCENARIO_JSON_RE.test(p)).filter(sc => {
+            const raw = getFull(sc);
+            if (!raw) return false;
+            try { return scenarioPromptRefs(JSON.parse(raw)).some(r => targetPromptSet.has(r)); } catch { return false; }
+          })
+        : scopedFiles.filter(p => p.endsWith('.json'))));
+  if (targetScenarios.length) {
+    rawFindings.push(...collectScenarioHygieneFindings({ realRoot, scenarioPaths: targetScenarios, readFile: getFull, scenarioConfig: effectiveScenarioConfig }));
   }
 
   const promptFilterSet = isReportingScoped ? targetPromptSet : null;

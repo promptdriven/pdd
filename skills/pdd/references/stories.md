@@ -48,7 +48,7 @@ Place `<slug>.json` in `tests/` or `test/` (use `tests/runtime/` or `test/runtim
 - Set top-level `"entry_path"` (override per step when calling another prompt).
 - Use top-level `"seeds"` + step `"from"` + `"patch"` to template repeated step inputs cleanly (do not combine `"from"` and `"input"` on the same step). All steps execute against top-level `"initial_world"` (carrying world mutations forward across sequential steps). Because `"patch"` uses RFC 7396 JSON Merge Patch (where `null` deletes keys), use `"set": {"/a/b": null}` to assign literal `null` or replace array elements.
 - Chain `{"$step": "step-id#/field"}` or mutate shared `"initial_world"` only for persistence criteria.
-- Keep scenarios compact: **every criterion needs at least one exact check** (one cohesive step may verify multiple criteria; `5–8` steps typical, cap `15` steps, `<= 10` moves/rows/calls per step, `10` min server cap per step). Omit step `"model"`.
+- Keep scenarios compact: **every criterion needs at least one exact check** (one cohesive step may verify multiple criteria; `5–8` steps typical, cap `15` steps, `<= 16 KiB` serialized `initial_world` + `seeds`, `<= 10` moves/rows/calls per step, `10` min server cap per step; split larger suites into focused companion files `tests/<Story>.<focus>.json`). Omit step `"model"`. Offline `pdd lint` emits a non-blocking `scenario-oversized` warning above these limits (configurable via `pdd.json` `"lint.scenario"`).
 
 ```json
 {
