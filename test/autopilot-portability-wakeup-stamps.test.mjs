@@ -708,7 +708,21 @@ test('3460-7: greenfield pdd-product plan-only repo with no package.json on main
   await w.tick();
   assert.equal(w.job(17, 'suite')?.head, head2, 'suite starts on repaired head2 after review PASS');
   w.suite(17, 0);
-  await w.tick();
+  await w.tick({
+    validateE2e: async () => ({
+      offlinePassed: true,
+      e2eChecks: [{
+        kind: 'real-host-smoke',
+        command: 'npm test',
+        executed: true,
+        exitCode: 0,
+        passed: 1,
+        failed: 0,
+        skipped: 0,
+        liveLocal: true,
+      }],
+    }),
+  });
   assert.equal(pr.merged, false, 'Check 4 holds greenfield PR adding protected package.json for manual human merge');
   assert.ok(w.labels(17).includes('pdd:needs-decision'));
   assert.match(w.comments(17).join('\n'), /merge this PR manually on GitHub/i);
@@ -846,6 +860,20 @@ test('3460-8: openPullRequest fails closed on malformed/omitted evidence, keeps 
 
   w.review(17, 'PASS');
   w.suite(17, 0);
-  await w.tick();
+  await w.tick({
+    validateE2e: async () => ({
+      offlinePassed: true,
+      e2eChecks: [{
+        kind: 'real-host-smoke',
+        command: 'npm test',
+        executed: true,
+        exitCode: 0,
+        passed: 1,
+        failed: 0,
+        skipped: 0,
+        liveLocal: true,
+      }],
+    }),
+  });
   assert.equal(w.github.prs.get(omittedTestsStamp.pr).merged, true, 'PR merged cleanly after scoped review and suite passed');
 });

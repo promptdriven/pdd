@@ -1,4 +1,5 @@
-// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 691dd6196bed4cd3f73c6e54357b81dbbd926f01249066f198c14749055ad53b).
+// Prompt: prompts/cli/autopilot-validator.prompt.md
+
 // ZERO LLM numeric confidence scores, ZERO hardcoded model names, ZERO hardcoded capability names.
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';

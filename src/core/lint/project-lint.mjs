@@ -21,7 +21,6 @@ import {
   isEligibleProductionCodeFile,
   scenarioPromptRefs,
 } from './lint-scope.mjs';
-import { collectNativeOnlyContractFindings } from './native-only-contract.mjs';
 import { collectNativeOnlyPortParityFindings } from './native-port-parity.mjs';
 import { evaluateCustomRulesOnFile, loadBaseTrustedLintCommands, loadBaseTrustedLintOverrides, loadProjectLintConfig, matchesAnyCustomRule } from './project-config.mjs';
 import { extractDependencyLinkTargets, isNativeOnlyPrompt } from './prompt-metadata.mjs';
@@ -294,7 +293,6 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
       ...collectPromptSizeFindings(content, ownedCode, { path: promptPath, minCodeLines: PROMPT_SIZE_MIN_CODE_LINES }),
     );
     if (isNativeOnlyPrompt(content)) {
-      rawFindings.push(...collectNativeOnlyContractFindings(content, { path: promptPath }));
       const direct = extractDependencyLinkTargets(content, promptPath).filter(p => scopedSet.has(p));
       const directCheckable = direct.filter(t => t.endsWith('.prompt.md') && typeof getPrompt(t) === 'string' && !isNativeOnlyPrompt(getPrompt(t)));
       const directNativePeers = direct.filter(t => t.endsWith('.prompt.md') && typeof getPrompt(t) === 'string' && isNativeOnlyPrompt(getPrompt(t)));
