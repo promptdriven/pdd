@@ -876,7 +876,8 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
   const sbCoolingOffline = { ...sbCooling, env: { ...sbCooling.env, PDD_CLOUD_URL: 'http://127.0.0.1:1' } };
   const offlineStatus = await invokeCli(['accounts', 'status'], sbCoolingOffline);
   assert.equal(offlineStatus.exit, 0);
-  assert.match(offlineStatus.stdout, /5h: -, 7d: -/, 'offline status displays "-" rather than misleading 100% left');
+  assert.match(offlineStatus.stdout, /Quota:\s+-/, 'offline status displays "-" rather than misleading 100% left');
+  assert.doesNotMatch(offlineStatus.stdout, /100% left/, 'offline unprobed status must never fabricate 100% left');
 
   // Backward compatibility: legacy server returning non-`pddg_lse_` token keeps lease-scoped URL + `http_headers` + `model_catalog_url`!
   cloud.state.embeddedLeaseTokens = false;
@@ -959,7 +960,7 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured l
 
   const statusHuman = await invokeCli(['accounts', 'status'], sb);
   assert.equal(statusHuman.exit, 0);
-  assert.match(statusHuman.stdout, /5h: 12% left \(2026-11-18T01:00Z\), 7d: 70% left \(2026-11-22T00:00Z\)/);
+  assert.match(statusHuman.stdout, /Quota:\s+5h 12% left \(resets 2026-11-18 01:00 UTC\) \| 7d 70% left \(resets 2026-11-22 00:00 UTC\)/);
 
   const authPath = managedCodexAuthPath(sb.env);
   const configPath = managedCodexConfigPath(sb.env);

@@ -27,8 +27,11 @@ import {
 import {
   accountDisplayState,
   formatExpiryRemaining,
-  formatShortReset,
-  formatWindow,
+  formatSeatAccess,
+  formatStatusQuota,
+  formatUtcTimestamp,
+  sanitizeStatusText,
+  shortenHomePath,
   withLeftPercentActiveMap,
   withLeftPercentFields,
 } from './cli-format.mjs';
@@ -177,6 +180,122 @@ export function reconcileListedState(accounts, current, { env }, ports = {}) {
   return { accessible, updatedState };
 }
 
+function renderStatusSections({
+  current,
+  accessible,
+  pendingInvites,
+  cloudReachable,
+  codexHomePath,
+  codexReady,
+  activeAutoProfiles,
+  codexRuntimeLines,
+  reauthRequired,
+  env,
+  nowMs,
+}) {
+  const accessibleIds = new Set(accessible.map(a => a?.account_id).filter(Boolean));
+  const visiblePendingInvites = Array.isArray(pendingInvites)
+    ? pendingInvites.filter(inv => !(inv?.account_id && accessibleIds.has(inv.account_id)))
+    : [];
+
+  let statusValue;
+  if (current.enrolled) {
+    if (cloudReachable) {
+      const countPart = `${accessible.length} account${accessible.length === 1 ? '' : 's'}`;
+      const invitePart = visiblePendingInvites.length > 0
+        ? `, ${visiblePendingInvites.length} pending invite${visiblePendingInvites.length === 1 ? '' : 's'}`
+        : '';
+      statusValue = `enrolled (${countPart}${invitePart})`;
+    } else {
+      statusValue = 'enrolled (offline — cached local state)';
+    }
+  } else if (cloudReachable) {
+    statusValue = visiblePendingInvites.length > 0
+      ? `not enrolled (${visiblePendingInvites.length} pending invite${visiblePendingInvites.length === 1 ? '' : 's'})`
+      : 'not enrolled';
+  } else {
+    statusValue = 'not enrolled (offline — cached local state)';
+  }
+
+  const autoSwitchValue = activeAutoProfiles.length > 0
+    ? `on (${activeAutoProfiles.map(p => shortenHomePath(p, env)).join(', ')})`
+    : 'off (default)';
+  const codexHomeValue = `${shortenHomePath(codexHomePath, env)} (${codexReady ? 'ready' : 'not materialized'}; ~/.codex/auth.json untouched)`;
+
+  const sections = [[
+    'PDD Cloud Accounts',
+    `  ${'Status:'.padEnd(12)}  ${statusValue}`,
+    `  ${'Auto-switch:'.padEnd(12)}  ${autoSwitchValue}`,
+    `  ${'Codex home:'.padEnd(12)}  ${codexHomeValue}`,
+  ]];
+
+  if (codexRuntimeLines.length > 0) {
+    sections.push(['Running pdd-codex', ...codexRuntimeLines]);
+  }
+
+  const activeEntries = Object.entries(current.active ?? {}).filter(([, entry]) => entry && typeof entry === 'object');
+  if (activeEntries.length > 0) {
+    const activeRows = activeEntries.map(([prov, entry]) => {
+      const liveAcc = accessible.find(a => a.account_id === entry.account_id) ?? null;
+      const rawState = liveAcc ? accountDisplayState(liveAcc, entry, current.reauth) : (entry.state || 'ready');
+      const dispState = sanitizeStatusText(rawState) || 'ready';
+      const access = formatSeatAccess(liveAcc) || formatSeatAccess(entry);
+      const quota = formatStatusQuota(
+        liveAcc?.five_hour_used_percent ?? entry.five_hour_used_percent,
+        liveAcc?.five_hour_reset_at ?? entry.five_hour_reset_at,
+        liveAcc?.weekly_used_percent ?? entry.weekly_used_percent,
+        liveAcc?.weekly_reset_at ?? entry.weekly_reset_at,
+      );
+      const expStr = formatExpiryRemaining(
+        liveAcc?.access_token_expires_at ?? entry.access_token_expires_at ?? entry.expires_at,
+        nowMs,
+      );
+      const deliveryMode = sanitizeStatusText(entry.delivery_mode) || 'default';
+      const leaseLine = `${expStr} | ${deliveryMode}`;
+      const refreshed = formatUtcTimestamp(liveAcc?.last_refresh_at ?? liveAcc?.refreshed_at ?? entry.last_refresh_at);
+      return {
+        prov: sanitizeStatusText(prov) || 'unknown',
+        label: sanitizeStatusText(entry.label) || sanitizeStatusText(entry.account_id) || '-',
+        stateTag: `[${dispState}]`,
+        access,
+        quota,
+        leaseLine,
+        refreshed,
+      };
+    });
+    const provW = Math.max(...activeRows.map(r => r.prov.length));
+    const labelW = Math.max(...activeRows.map(r => r.label.length));
+    const stateW = Math.max(...activeRows.map(r => r.stateTag.length));
+    const detailKeyW = activeRows.some(r => Boolean(r.refreshed)) ? 10 : 6;
+    const seatLines = ['Active Seats'];
+    activeRows.forEach((row, idx) => {
+      if (idx > 0) seatLines.push('');
+      const headerParts = [row.prov.padEnd(provW), row.label.padEnd(labelW), row.stateTag.padEnd(stateW)];
+      if (row.access) headerParts.push(row.access);
+      seatLines.push(`  ${headerParts.join('  ')}`.trimEnd());
+      seatLines.push(`    ${'Quota:'.padEnd(detailKeyW)}  ${row.quota}`);
+      seatLines.push(`    ${'Lease:'.padEnd(detailKeyW)}  ${row.leaseLine}`);
+      if (row.refreshed) seatLines.push(`    ${'Refreshed:'.padEnd(detailKeyW)}  ${row.refreshed}`);
+    });
+    sections.push(seatLines);
+  } else if (current.enrolled) {
+    sections.push(['Active Seats', '  None']);
+  }
+
+  if (reauthRequired.length > 0) {
+    const actionLines = ['Action Required'];
+    for (const item of reauthRequired) {
+      const prov = sanitizeStatusText(item.provider) || 'codex';
+      const label = sanitizeStatusText(item.label) || sanitizeStatusText(item.account_id) || '-';
+      actionLines.push(`  Re-authenticate "${label}" (${prov}):`);
+      actionLines.push(`    pdd accounts add --provider ${prov} --label ${label}`);
+    }
+    sections.push(actionLines);
+  }
+
+  return sections.map(s => s.join('\n')).join('\n\n');
+}
+
 export async function runStatusCommand({ json = false, cwd, env }, ports = {}) {
   const fs = ports.fs ?? nativeFs, nowMs = (ports.now ?? Date.now)();
   let current = readCloudAccountsState({ env }, ports), accessible = [], pendingInvites = [], cloudReachable = false;
@@ -223,23 +342,20 @@ export async function runStatusCommand({ json = false, cwd, env }, ports = {}) {
     };
   }
 
-  const lines = [
-    `Cloud accounts: ${current.enrolled ? 'enrolled' : 'not enrolled'} (${cloudReachable ? `${accessible.length} account${accessible.length === 1 ? '' : 's'}` : 'offline — showing cached local state'})`,
-    `Codex isolated home: ${codexHomePath} (${codexAuthPresent && codexConfigPresent ? 'materialized' : 'not materialized'}; ~/.codex/auth.json untouched)`,
-    activeAutoProfiles.length ? `Terminal auto-switch: on (${activeAutoProfiles.join(', ')})` : 'Terminal auto-switch: off (default)',
-  ];
-  for (const [prov, entry] of Object.entries(current.active ?? {})) {
-    const liveAcc = accessible.find(a => a.account_id === entry.account_id) ?? null;
-    const dispState = liveAcc ? accountDisplayState(liveAcc, entry) : (entry.state || 'ready');
-    const refreshStr = formatShortReset(liveAcc?.last_refresh_at ?? entry.last_refresh_at) || '-';
-    const expStr = formatExpiryRemaining(liveAcc?.access_token_expires_at ?? entry.access_token_expires_at ?? entry.expires_at, nowMs);
-    const fiveH = formatWindow(liveAcc?.five_hour_used_percent ?? entry.five_hour_used_percent, liveAcc?.five_hour_reset_at ?? entry.five_hour_reset_at);
-    const sevenD = formatWindow(liveAcc?.weekly_used_percent ?? entry.weekly_used_percent, liveAcc?.weekly_reset_at ?? entry.weekly_reset_at);
-    lines.push(`Active ${prov}: ${entry.label} [${dispState}] (mode: ${entry.delivery_mode ?? 'default'}, 5h: ${fiveH}, 7d: ${sevenD}, last refresh: ${refreshStr}, lease: ${expStr})`);
-  }
-  lines.push(...codexRuntimeLines);
-  for (const item of reauthRequired) lines.push(`Re-authentication required: "${item.label}" — run pdd accounts add --provider ${item.provider ?? 'codex'} --label ${item.label}`);
-  return { exitCode: 0, message: redactSecrets(lines.join('\n')) };
+  const message = renderStatusSections({
+    current,
+    accessible,
+    pendingInvites,
+    cloudReachable,
+    codexHomePath,
+    codexReady: codexAuthPresent && codexConfigPresent,
+    activeAutoProfiles,
+    codexRuntimeLines,
+    reauthRequired,
+    env,
+    nowMs,
+  });
+  return { exitCode: 0, message: redactSecrets(message) };
 }
 
 export function syncStateAfterAccountRemoval(account, accounts, { env }, ports = {}) {

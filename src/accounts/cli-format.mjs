@@ -130,13 +130,101 @@ export function renderAccountsTable(accounts, pendingInvites, activeByProvider, 
   return lines.join('\n');
 }
 
+export function shortenHomePath(filePath, env = {}) {
+  if (typeof filePath !== 'string' || !filePath) return String(filePath ?? '');
+  const rawHome = typeof env?.HOME === 'string' ? env.HOME.trim() : '';
+  const home = rawHome.replace(/[\\/]+$/, '');
+  if (!home || /^[A-Za-z]:$/.test(home)) return filePath;
+  if (filePath === home) return '~';
+  if (filePath.startsWith(`${home}/`) || filePath.startsWith(`${home}\\`)) {
+    return `~${filePath.slice(home.length)}`;
+  }
+  return filePath;
+}
+
+export function sanitizeStatusText(value) {
+  if (typeof value !== 'string') return '';
+  let out = '';
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code === 0x1b && value.charCodeAt(i + 1) === 0x5b) {
+      i += 2;
+      while (i < value.length) {
+        const c = value.charCodeAt(i);
+        if (c >= 0x40 && c <= 0x7e) break;
+        i += 1;
+      }
+      continue;
+    }
+    if (code < 0x20 || code === 0x7f) {
+      out += ' ';
+      continue;
+    }
+    out += value[i];
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+export function formatUtcTimestamp(iso) {
+  if (typeof iso !== 'string' || !iso.trim()) return '';
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return sanitizeStatusText(iso).slice(0, 19).trimEnd();
+  return new Date(ms).toISOString().replace('T', ' ').replace(/:\d{2}(?:\.\d+)?Z$/, ' UTC');
+}
+
+export function formatHumanDuration(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return '<1m';
+  if (ms < 60_000) return '<1m';
+  const totalMinutes = Math.round(ms / 60_000);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  if (totalMinutes < 24 * 60) {
+    const hours = Math.floor(totalMinutes / 60);
+    const mins = totalMinutes % 60;
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  }
+  const totalHours = Math.round(ms / 3_600_000);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+}
+
+function formatStatusWindow(pct, resetAt) {
+  const left = computeLeftPercent(pct);
+  if (left === null) return null;
+  const reset = formatUtcTimestamp(resetAt);
+  return reset ? `${left}% left (resets ${reset})` : `${left}% left`;
+}
+
+export function formatStatusQuota(fiveHourUsed, fiveHourResetAt, weeklyUsed, weeklyResetAt) {
+  const fiveH = formatStatusWindow(fiveHourUsed, fiveHourResetAt);
+  const sevenD = formatStatusWindow(weeklyUsed, weeklyResetAt);
+  if (fiveH === null && sevenD === null) return '-';
+  return `5h ${fiveH ?? '-'} | 7d ${sevenD ?? '-'}`;
+}
+
+export function formatSeatAccess(source) {
+  if (!object(source)) return '';
+  const ownerLogin = sanitizeStatusText(source.owner_login);
+  if (typeof source.is_owner === 'boolean') {
+    const kind = source.is_owner ? 'owner' : 'shared';
+    return ownerLogin ? `${kind} (${ownerLogin})` : kind;
+  }
+  if (typeof source.shared === 'boolean') {
+    const kind = source.shared ? 'shared' : 'owner';
+    return ownerLogin ? `${kind} (${ownerLogin})` : kind;
+  }
+  return '';
+}
+
 export function formatExpiryRemaining(iso, nowMs) {
   if (typeof iso !== 'string' || !iso.trim()) return 'unknown';
   const expMs = Date.parse(iso);
-  if (!Number.isFinite(expMs)) return iso;
-  const diffMin = Math.round((expMs - nowMs) / 60_000);
-  const short = formatShortReset(iso);
-  return diffMin <= 0 ? `expired (${short})` : `valid (${diffMin}m remaining, ${short})`;
+  if (!Number.isFinite(expMs)) return sanitizeStatusText(iso) || 'unknown';
+  const utc = formatUtcTimestamp(iso);
+  const remainingMs = expMs - nowMs;
+  return remainingMs <= 0
+    ? `expired (${utc})`
+    : `valid (${formatHumanDuration(remainingMs)} left, exp ${utc})`;
 }
 
 export function decodeJwtPayload(jwt) {

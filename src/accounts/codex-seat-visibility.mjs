@@ -217,19 +217,32 @@ function findMatchingAccount(entry, codexAccounts) {
   return null;
 }
 
-function formatRuntimeStatusLine(lease) {
-  const prefix = lease.pinned ? 'Active pdd-codex (pinned)' : 'Active pdd-codex';
-  let accessDisplay = 'access: unknown';
+function formatRuntimeAccessDisplay(lease) {
   if (lease.access_type === 'owner') {
-    accessDisplay = lease.owner_login ? `owner (${lease.owner_login})` : 'owner';
-  } else if (lease.access_type === 'shared') {
-    accessDisplay = lease.owner_login ? `shared (${lease.owner_login})` : 'shared';
+    return lease.owner_login ? `owner (${lease.owner_login})` : 'owner';
   }
-  const rotateDisplay = lease.auto_rotate ? 'auto-rotate: on' : 'auto-rotate: off';
-  const sessionsDisplay = lease.live_sessions === 1
-    ? '1 live session'
-    : `${lease.live_sessions} live sessions`;
-  return `${prefix}: ${lease.label} (${accessDisplay}, ${rotateDisplay}, ${sessionsDisplay})`;
+  if (lease.access_type === 'shared') {
+    return lease.owner_login ? `shared (${lease.owner_login})` : 'shared';
+  }
+  return 'access: unknown';
+}
+
+function formatRuntimeStatusLines(leases) {
+  const rows = leases.map(lease => ({
+    cols: [
+      lease.label,
+      formatRuntimeAccessDisplay(lease),
+      lease.auto_rotate ? 'auto-rotate: on' : 'auto-rotate: off',
+      lease.live_sessions === 1 ? '1 live session' : `${lease.live_sessions} live sessions`,
+    ],
+    pinned: lease.pinned === true,
+  }));
+  const widths = [0, 1, 2, 3].map(idx => Math.max(...rows.map(r => r.cols[idx].length)));
+  return rows.map(row => {
+    const parts = row.cols.map((val, idx) => val.padEnd(widths[idx]));
+    if (row.pinned) parts.push('[pinned]');
+    return `  ${parts.join('  ')}`.trimEnd();
+  });
 }
 
 export function summarizeCodexRuntimeStatus({
@@ -337,6 +350,6 @@ export function summarizeCodexRuntimeStatus({
       expires_at: primary.expires_at,
       leases: normalized,
     },
-    lines: normalized.map(formatRuntimeStatusLine),
+    lines: formatRuntimeStatusLines(normalized),
   };
 }

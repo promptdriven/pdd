@@ -30,12 +30,14 @@ Own `src/accounts/codex-seat-visibility.mjs`. Export pure deterministic function
   - Drop all unwhitelisted fields (never copy tokens, grants, or gateway URLs). Emit exact lease fields: `mode` (`"pinned"` when `entry.pinned === true || entry.mode === "pinned"`, else `"shared"`), `lease_id`, `account_id`, `label`, `access_type` (`"owner" | "shared" | "unknown"`), `owner_login`, `auto_rotate` (boolean `entry.auto_rotate`, defaulting to `!pinned`), `pinned`, `live_sessions` (positive integer), and `expires_at` (trimmed non-empty string or `null`).
   - Sort `leases` deterministically: `"shared"` before `"pinned"`, then `label.toLowerCase()` ascending, then `account_id ?? ""` ascending, then `lease_id ?? ""` ascending.
   - Summary invariants: `codex_runtime.active` equals `leases.length > 0`; `codex_runtime.live_sessions` equals the exact sum of `live_sessions` across `leases` (`0` when empty); when `active` is `true`, top-level `label`, `account_id`, `access_type`, `owner_login`, `auto_rotate`, `pinned`, and `expires_at` mirror `leases[0]`; when `active` is `false`, all seven top-level summary fields are `null`, `live_sessions` is `0`, `leases` is `[]`, and `lines` is `[]`.
-  - Format one human-readable line per active lease in `lines`:
-    - `prefix`: `"Active pdd-codex (pinned)"` when `pinned` is `true`, else `"Active pdd-codex"`.
-    - `accessDisplay`: `"owner (<owner_login>)"` / `"owner"` for `"owner"`, `"shared (<owner_login>)"` / `"shared"` for `"shared"`, or `"access: unknown"` for `"unknown"`.
-    - `rotateDisplay`: `"auto-rotate: on"` when `auto_rotate` is `true`, else `"auto-rotate: off"`.
-    - `sessionsDisplay`: `"1 live session"` when `live_sessions === 1`, else `"${live_sessions} live sessions"`.
-    - Line: `"${prefix}: ${label} (${accessDisplay}, ${rotateDisplay}, ${sessionsDisplay})"`.
+  - Format one aligned, 2-space-indented human-readable row per active lease in `lines` (rendered under the `Running pdd-codex` section in `pdd accounts status` when non-empty):
+    - Build 4 aligned columns plus an optional 5th pinned marker for each sorted lease:
+      1. `label`
+      2. `accessDisplay`: `"owner (<owner_login>)"` / `"owner"` for `"owner"`, `"shared (<owner_login>)"` / `"shared"` for `"shared"`, or `"access: unknown"` for `"unknown"`.
+      3. `rotateDisplay`: `"auto-rotate: on"` when `auto_rotate` is `true`, else `"auto-rotate: off"`.
+      4. `sessionsDisplay`: `"1 live session"` when `live_sessions === 1`, else `"${live_sessions} live sessions"`.
+      5. Optional 5th column: `"[pinned]"` when `pinned` is `true`, else omitted.
+    - Compute column widths for columns 1–4 as the maximum string length of each column across all sorted `leases`. Right-pad columns 1–4 with spaces (`padEnd`) to their column widths, join columns 1–4 (and `"[pinned]"` when `pinned` is `true`) with `"  "` (two spaces), prefix with `"  "` (two spaces), and trim trailing spaces (`trimEnd`) so non-pinned rows never end with spaces.
 
 ## Public contract
 
