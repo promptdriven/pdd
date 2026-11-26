@@ -1471,7 +1471,7 @@ test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-v
     fakeCodexPath,
     [
       '#!/usr/bin/env python3',
-      'import fcntl, os, signal, struct, sys, termios, time',
+      'import fcntl, os, signal, struct, termios, time',
       'bg_pid = os.fork()',
       'if bg_pid == 0:',
       '    time.sleep(30)',
@@ -1480,11 +1480,9 @@ test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-v
       '    r, c, _, _ = struct.unpack("HHHH", fcntl.ioctl(1, termios.TIOCGWINSZ, b"\\x00" * 8))',
       '    return f"{r}x{c}"',
       'def on_winch(_s, _f):',
-      '    sys.stdout.write(f"RESIZED={read_winsz()}\\n")',
-      '    sys.stdout.flush()',
+      '    os.write(1, f"RESIZED={read_winsz()}\\n".encode())',
       'signal.signal(signal.SIGWINCH, on_winch)',
-      'sys.stdout.write(f"BG_PID={bg_pid} INIT_SIZE={read_winsz()}\\n")',
-      'sys.stdout.flush()',
+      'os.write(1, f"BG_PID={bg_pid} INIT_SIZE={read_winsz()}\\n".encode())',
       'while True:',
       '    time.sleep(0.05)',
     ].join('\n') + '\n',
@@ -1523,7 +1521,20 @@ test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-v
   };
 
   let bgGrandchildPid = 0;
-  t.after(() => {
+  let ptyRunPromise = null;
+  t.after(async () => {
+    try { ptyStdin.end(); } catch {}
+    if (ptyRunPromise) {
+      let timer;
+      await Promise.race([
+        ptyRunPromise.catch(() => {}),
+        new Promise(r => {
+          timer = setTimeout(r, 2000);
+          timer.unref?.();
+        }),
+      ]);
+      clearTimeout(timer);
+    }
     if (bgGrandchildPid > 0) {
       try { process.kill(bgGrandchildPid, 'SIGKILL'); } catch {}
     }
@@ -1547,10 +1558,11 @@ test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-v
     ptyStdout.on('chunk', onChunk);
   });
 
-  const ptyRunPromise = invokeCli(['accounts', 'codex'], sbPty, {}, {
+  const ptyStderr = sink(true);
+  ptyRunPromise = invokeCli(['accounts', 'codex'], sbPty, {}, {
     stdin: ptyStdin,
     stdout: ptyStdout,
-    stderr: sink(true),
+    stderr: ptyStderr,
   });
 
   const initMatch = await waitForPtyPattern(/BG_PID=(\d+)\s+INIT_SIZE=30x100/);
@@ -1558,6 +1570,14 @@ test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-v
   assert.ok(bgGrandchildPid > 0);
   assert.equal(ptyStdin.isRaw, true, 'TTY raw mode enabled while interactive PTY is active');
 
+  // Burst multiple back-to-back resizes across ticks so concurrent TIOCSWINSZ + killpg(SIGWINCH)
+  // delivery stresses signal reentrancy before landing on the final 48x140 size.
+  for (let i = 0; i < 40; i += 1) {
+    ptyStdout.rows = 30 + (i % 15);
+    ptyStdout.columns = 100 + i;
+    ptyStdout.emit('resize');
+    if (i % 2 === 0) await new Promise(r => setImmediate(r));
+  }
   ptyStdout.rows = 48;
   ptyStdout.columns = 140;
   ptyStdout.emit('resize');
@@ -1567,6 +1587,8 @@ test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-v
   ptyStdin.end();
   await ptyRunPromise;
 
+  assert.doesNotMatch(ptyStdout.text, /Traceback|RuntimeError/, 'SIGWINCH burst must not trigger reentrant stdout RuntimeError');
+  assert.doesNotMatch(ptyStderr.text, /Traceback|RuntimeError/, 'PTY supervisor stderr must not contain Python tracebacks');
   assert.equal(ptyStdin.isRaw, false, 'TTY raw mode restored to initial state on PTY exit');
   assert.deepEqual(ptyStdin.rawCalls, [true, false]);
 
