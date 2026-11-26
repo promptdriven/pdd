@@ -5,6 +5,7 @@ import { join, resolve, relative, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { findTests, selectTests, readPrompt, scenarioShapeRefusal, storyCriteria, checkInput, createStrictSourceAccess, preflight, exactValue, parseScenarioJson, stringifyScenarioJson } from './runtime-seam.mjs';
 import { compileScenarioText } from './scenario-compile.mjs';
+import { classifyTargetedScenarioCriteria } from './core/test-ergonomics.mjs';
 
 const commandWords = command => {
   if (typeof command !== 'string' || !command.trim() || /[\n\r;|&<>`$\\'"(){}*?\[\]]/.test(command)) return null;
@@ -70,30 +71,104 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
   const source = createStrictSourceAccess(root, found.workspace).sourceFilePort(found.visible);
   const groups = new Map();
   for (const item of missing) groups.set(item.storyPath, [{scenario:null, step:unrun({step_id:item.storyPath}, item.line)}]);
+  const explicitScenarioPaths = new Set(
+    normalized
+      .map(w => (typeof w === 'string' ? w.replace(/^\.\//, '') : ''))
+      .filter(w => w.endsWith('.json') && selection.selected.some(t => t.path === w)),
+  );
+  const selectedByStory = new Map();
+  for (const test of selection.selected) {
+    if (test.storyPath) {
+      if (!selectedByStory.has(test.storyPath)) selectedByStory.set(test.storyPath, []);
+      selectedByStory.get(test.storyPath).push(test);
+    }
+  }
+  const siblingCoveredCache = new Map();
+  const checkedCriterionTextsFor = candidate => {
+    try {
+      if (candidate.error || scenarioShapeRefusal(candidate.doc, candidate.path)) return new Set();
+      const admission = preflight({ root, found, selected: [candidate] }).rows[0];
+      if (admission.refusals.length || admission.native_only?.length) return new Set();
+      const raw = source.read({ path: candidate.path }).content;
+      const storySource = source.read({ path: candidate.storyPath }).content;
+      const compiled = compileScenarioText(raw, { path: candidate.path, storyPath: candidate.storyPath, storySource });
+      if (compiled.refusal) return new Set();
+      const parsedDoc = parseScenarioJson(compiled.text);
+      const storyList = storyCriteria(storySource);
+      if (!isDeepStrictEqual(compiled.doc, candidate.doc) || !storyList.length || !isDeepStrictEqual([...storyList].sort(), parsedDoc.criteria.map(c => c.text).sort())) return new Set();
+      const notCheckedIds = new Set((admission.not_checked ?? []).map(item => item.criterion_id));
+      const checkedTexts = new Set();
+      for (const criterion of parsedDoc.criteria) {
+        if (!notCheckedIds.has(criterion.id)) checkedTexts.add(criterion.text);
+      }
+      return checkedTexts;
+    } catch {
+      return new Set();
+    }
+  };
+  const siblingCheckedIdsFor = (test, doc, pool) => {
+    const key = `${test.path}\0${pool === found.tests ? 'all' : 'sel'}`;
+    if (siblingCoveredCache.has(key)) return siblingCoveredCache.get(key);
+    const idByText = new Map(doc.criteria.map(c => [c.text, c.id]));
+    const coveredIds = new Set();
+    for (const sib of pool) {
+      if (sib.path === test.path || sib.storyPath !== test.storyPath) continue;
+      for (const text of checkedCriterionTextsFor(sib)) {
+        const matchedId = idByText.get(text);
+        if (matchedId) coveredIds.add(matchedId);
+      }
+    }
+    siblingCoveredCache.set(key, coveredIds);
+    return coveredIds;
+  };
   for (const test of selection.selected) {
     const story = test.storyPath ?? test.path, steps = groups.get(story) ?? [];
-    let refusal = test.error || scenarioShapeRefusal(test.doc,test.path), doc;
+    let refusal = test.error || scenarioShapeRefusal(test.doc,test.path), doc, admission;
     try {
-      const admission = preflight({root,found,selected:[test]}).rows[0];
+      admission = preflight({root,found,selected:[test]}).rows[0];
       if (admission.native_only?.length) {
         steps.push({scenario:test.path, step:unrun({step_id:test.path}, `Native-only interface: ${admission.native_only.map(item => item.reason).join('; ')}`)});
         groups.set(story,steps);
         continue;
       }
-      if (admission.refusals.length || admission.not_checked?.length) refusal = true;
+      if (admission.refusals.length) refusal = true;
       const raw = source.read({path:test.path}).content;
       const storySource = source.read({path:test.storyPath}).content;
       const compiled = compileScenarioText(raw, {path:test.path, storyPath:test.storyPath, storySource});
       if (compiled.refusal) refusal = true;
       doc = parseScenarioJson(compiled.text);
-      const story = storyCriteria(storySource);
-      if (!isDeepStrictEqual(compiled.doc, test.doc) || !story.length || !isDeepStrictEqual([...story].sort(),doc.criteria.map(c=>c.text).sort())) refusal = true;
+      const storyList = storyCriteria(storySource);
+      if (!isDeepStrictEqual(compiled.doc, test.doc) || !storyList.length || !isDeepStrictEqual([...storyList].sort(),doc.criteria.map(c=>c.text).sort())) refusal = true;
       for (const step of doc.steps) source.read({path:step.entry_path});
     } catch { refusal = true; }
+    let siblingCoverageValid = false;
+    if (!refusal && admission?.not_checked?.length) {
+      const notCheckedIds = new Set(admission.not_checked.map(item => item.criterion_id));
+      const storyCriteriaIds = doc.criteria.map(c => c.id);
+      const ownCheckedIds = storyCriteriaIds.filter(id => !notCheckedIds.has(id));
+      if (explicitScenarioPaths.has(test.path)) {
+        const siblingIds = siblingCheckedIdsFor(test, doc, found.tests);
+        const cls = classifyTargetedScenarioCriteria({
+          explicit_scenario_paths: [...explicitScenarioPaths],
+          target_test_path: test.path,
+          story_criteria_ids: storyCriteriaIds,
+          own_checked_ids: ownCheckedIds,
+          sibling_checked_ids: [...siblingIds],
+        });
+        siblingCoverageValid = cls.can_pass_as_targeted_slice;
+      } else {
+        const selectedSiblings = selectedByStory.get(test.storyPath) ?? [];
+        if (selectedSiblings.length > 1) {
+          const siblingIds = siblingCheckedIdsFor(test, doc, selectedSiblings);
+          siblingCoverageValid = ownCheckedIds.length > 0 && storyCriteriaIds.every(id => !notCheckedIds.has(id) || siblingIds.has(id));
+        }
+      }
+      if (!siblingCoverageValid) refusal = true;
+    }
     if (refusal) steps.push({scenario:test.path, step:unrun({step_id:test.path}, 'Scenario is invalid or unavailable.')});
     else {
       const covered = new Set(doc.steps.flatMap(step => step.checks.map(check => check.criterion_id)));
-      if (doc.criteria.some(criterion => !covered.has(criterion.id))) steps.push({scenario:test.path, step:unrun({step_id:test.path}, 'A Story criterion has no check.')});
+      if (!siblingCoverageValid && doc.criteria.some(criterion => !covered.has(criterion.id))) steps.push({scenario:test.path, step:unrun({step_id:test.path}, 'A Story criterion has no check.')});
       steps.push(...doc.steps.map(step => ({scenario:test.path, step:execute(step,doc,found,root,{spawn})})));
     }
     groups.set(story,steps);

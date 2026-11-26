@@ -55,12 +55,25 @@ const defaultReadPackageVersion = ({ packageRoot }) => {
   catch { return { ok: false, version: '' }; }
 };
 function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
-  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--reconcile', '--reconcile-stale', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => options[flag])) return null;
+  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--retry-unresolved', '--reconcile', '--reconcile-stale', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => options[flag])) return null;
   try {
-    const found = runtime.findTests({ root: cwd });
-    const { selected, unknown } = runtime.selectTests(found, words, options);
+    const root = resolveLintRoot(cwd);
+    const found = runtime.findTests({ root });
+    let realRoot = root;
+    let realCwd = cwd;
+    try { realRoot = realpathSync(root); realCwd = realpathSync(cwd); } catch {}
+    const normalized = words.map(word => {
+      if (typeof word !== 'string' || !word) return word;
+      const abs = resolve(realCwd, word);
+      const rel = relative(realRoot, abs).split(sep).join('/');
+      const inside = rel !== '..' && !rel.startsWith('../');
+      let isDir = false;
+      try { isDir = inside && statSync(abs).isDirectory(); } catch {}
+      return inside && (found.visible?.has(rel) || isDir) ? (rel || '.') : word;
+    });
+    const { selected, unknown } = runtime.selectTests(found, normalized, options);
     if (unknown?.length || !selected?.length) return null;
-    const { rows } = runtime.preflight({ root: cwd, found, selected, allowMissingInterfaces: true });
+    const { rows } = runtime.preflight({ root, found, selected, allowMissingInterfaces: true });
     for (const row of rows) {
       if (row.native_only?.length) {
         const nativePaths = new Set(row.native_only.map(item => item.path));
@@ -72,7 +85,7 @@ function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
       for (const entryPath of entryPaths) {
         if (!found.visible?.has(entryPath)) continue;
         let entryPrompt;
-        try { entryPrompt = runtime.readPrompt(cwd, found.visible, entryPath, found.workspace); } catch { continue; }
+        try { entryPrompt = runtime.readPrompt(root, found.visible, entryPath, found.workspace); } catch { continue; }
         if (isNative(entryPrompt)) continue;
         const visited = new Set([entryPath]), queue = [];
         const enqueue = (p, from) => {
@@ -86,7 +99,7 @@ function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
           if (visited.has(depPath) || !found.visible?.has(depPath)) continue;
           visited.add(depPath);
           let depPrompt;
-          try { depPrompt = runtime.readPrompt(cwd, found.visible, depPath, found.workspace); } catch { continue; }
+          try { depPrompt = runtime.readPrompt(root, found.visible, depPath, found.workspace); } catch { continue; }
           if (isNative(depPrompt)) return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: depPath };
           enqueue(depPrompt, depPath);
         }
@@ -243,10 +256,23 @@ export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
   ].join('\n');
 }
 const LINT_FORBIDDEN_TEST_FLAGS = [
-  '--affected', '--journeys', '--lf', '--cache-clear', '--fresh', '--read', '--retry',
+  '--live-local', '--command-manifest', '--allow-live-writes',
+  '--affected', '--journeys', '--lf', '--cache-clear', '--fresh', '--read', '--retry', '--retry-unresolved',
   '--reconcile', '--reconcile-stale', '--batch-timeout', '--explain-bindings', '--files', '--screen', '--drawing', '--look',
   '--target', '--max-total-calls', '--no-restart-replacement', '--app-map', '--request',
 ];
+const LIVE_LOCAL_INCOMPATIBLE_TEST_FLAGS = [
+  '--lint', '--codex', '--local', '--remote', '--target',
+  '--read', '--retry', '--retry-unresolved', '--reconcile', '--reconcile-stale', '--files', '--explain-bindings', '--app-map',
+  '--screen', '--drawing', '--look', '--emit-v1', '--write', '--bind-criteria',
+  '--affected', '--journeys', '--lf', '--cache-clear', '--diff', '--base', '--issue', '--request',
+];
+const LIVE_LOCAL_INCOMPATIBLE_TRY_FLAGS = [
+  '--product', '--parts', '--journey', '--stop', '--save-last', '--no-wait', '--agent',
+  '--cli', '--shell', '--serve', '--data', '--show-data', '--quiet', '-q',
+];
+const isStandaloneProgramTarget = word =>
+  typeof word === 'string' && (/\.prompt\.md$/i.test(word) || basename(word).toLowerCase() === 'app-map.json');
 const NON_SCENARIO_TEST_DIRS = new Set([
   'fixtures', '__fixtures__', 'mocks', '__mocks__', 'snapshots', '__snapshots__',
   'data', 'testdata', 'golden', 'cassettes',
@@ -1017,7 +1043,40 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
     }
     case 'runtime-check':
-    case 'runtime-try':
+    case 'runtime-try': {
+      const liveLocalEnabled = plan.options['--live-local'];
+      if (liveLocalEnabled === undefined || liveLocalEnabled === false) {
+        if (plan.options['--command-manifest'] !== undefined || plan.options['--allow-live-writes'] !== undefined) {
+          line(stderr, '--command-manifest and --allow-live-writes require --live-local.');
+          return 2;
+        }
+      } else {
+        if (
+          liveLocalEnabled !== true ||
+          typeof plan.options['--command-manifest'] !== 'string' ||
+          !plan.options['--command-manifest'].trim() ||
+          (plan.options['--allow-live-writes'] !== undefined && typeof plan.options['--allow-live-writes'] !== 'boolean')
+        ) {
+          line(stderr, '--live-local requires an explicit --command-manifest path and Boolean write flag.');
+          return 2;
+        }
+        const incompatible = plan.local === 'runtime-check'
+          ? LIVE_LOCAL_INCOMPATIBLE_TEST_FLAGS
+          : LIVE_LOCAL_INCOMPATIBLE_TRY_FLAGS;
+        if (incompatible.some(flag => plan.options[flag] !== undefined)) {
+          line(
+            stderr,
+            plan.local === 'runtime-check'
+              ? `This option combination is unavailable with --live-local. Run pdd ${NAMES.test} --help.`
+              : 'This option combination is unavailable with --live-local. Live Prompt Interpreter sessions must stay in the foreground.',
+          );
+          return 2;
+        }
+        if (plan.local === 'runtime-try' && plan.operands.some(isStandaloneProgramTarget)) {
+          line(stderr, '--live-local applies to Story runs, not standalone .prompt.md or app-map.json targets.');
+          return 2;
+        }
+      }
       if (plan.local === 'runtime-check' && (plan.options['--issue'] !== undefined || plan.options['--codex'] === true)) {
         line(stderr, `Use pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`);
         return 2;
@@ -1098,6 +1157,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
       }
+    }
     case 'project-files': {
       const { runProjectFiles } = await import('./project-files.mjs');
       return runProjectFiles({ cwd, json: !!plan.options['--json'] }, { stdout, stderr });
@@ -1135,6 +1195,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     && hasSafeHome
     && !SKIP_SKILL_SYNC_ROUTES.has(plan.local)
     && !quietDirect
+    && !(plan.local === 'runtime-check' && plan.options['--files'] === true)
     && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
     && plan.options['--json'] !== true
     && !argv.includes('--json')) {
@@ -1155,7 +1216,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
     } catch { /* Post-upgrade skill sync never blocks or fails a CLI command. */ }
   }
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'doctor', 'init', 'status', 'lint', 'prove', 'vector-export'].includes(plan.local) && !quietDirect && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'doctor', 'init', 'status', 'lint', 'prove', 'vector-export'].includes(plan.local) && !quietDirect && !(plan.local === 'runtime-check' && plan.options['--files'] === true) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

@@ -716,11 +716,6 @@
           [
             "test",
             "--affected",
-            "--files"
-          ],
-          [
-            "test",
-            "--affected",
             "--read"
           ],
           [

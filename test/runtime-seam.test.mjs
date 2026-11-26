@@ -4335,21 +4335,17 @@ test('SEAM26 (#3444): every CLI option accepted by @promptdriven/runtime-client 
   const lintCatalogSet = new Set(lintRoute.options.map(option => option.name));
   const tryCatalogSet = new Set(tryRoute.options.map(option => option.name));
 
-  // Audited @promptdriven/runtime-client 1.1.0 options that are intentionally NOT on the public pdd CLI:
-  // - exclusion-list-only legacy flags in 1.1.0 (only referenced in --step / --samples incompatibility arrays)
-  // - live-local flags (require host ports.liveLocal not exposed on public pdd CLI)
-  // - internal/unexposed 1.1.0 probe/step and direct-program flags
+  // Audited @promptdriven/runtime-client options that are intentionally NOT on the public pdd CLI:
+  // - exclusion-list-only legacy flags (only referenced in --step / --samples incompatibility arrays)
+  // - internal/unexposed probe/step and sampling flags
   const EXCLUSION_LIST_STEP_CHECK_OPTIONS = ['--full', '--journey', '--parts'];
   const EXCLUSION_LIST_SAMPLE_CHECK_OPTIONS = ['--live', '--resource-mode'];
   const NON_PUBLIC_RUNTIME_CHECK_OPTIONS = new Set([
     ...EXCLUSION_LIST_STEP_CHECK_OPTIONS,
     ...EXCLUSION_LIST_SAMPLE_CHECK_OPTIONS,
-    '--live-local', '--command-manifest', '--allow-live-writes',
     '--samples', '--step',
   ]);
-  const NON_PUBLIC_RUNTIME_TRY_OPTIONS = new Set([
-    '--live-local', '--command-manifest', '--allow-live-writes',
-  ]);
+  const NON_PUBLIC_RUNTIME_TRY_OPTIONS = new Set([]);
 
   const missingCheck = checkRuntimeOptions.filter(flag => !checkCatalogSet.has(flag) && !NON_PUBLIC_RUNTIME_CHECK_OPTIONS.has(flag));
   const missingTry = tryRuntimeOptions.filter(flag => !tryCatalogSet.has(flag) && !NON_PUBLIC_RUNTIME_TRY_OPTIONS.has(flag));

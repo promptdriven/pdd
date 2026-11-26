@@ -3,7 +3,7 @@
 // ancestor-safe private dirs, unified arg parsing, directory locking, PID sweeping,
 // guarded lease heartbeats, process exit/signal cleanup, and ENOENT->127 spawning.
 import * as nativeFs from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   assertSafePrivateDir,
   readJsonObjectQuiet,
@@ -11,6 +11,7 @@ import {
   writeAtomicPrivate,
 } from '../shared/atomic-fs.mjs';
 import { defaultIsPidAlive, withDirectoryLock } from '../shared/file-lock.mjs';
+import { resolvePddStateBase } from '../shared/state-dir.mjs';
 import { signalToExitCode, spawnInheritedProcess } from '../shared/subprocess.mjs';
 import { CloudAccountsError } from './cloud-error.mjs';
 
@@ -325,4 +326,131 @@ export function spawnWrappedBinary(command, args, { cwd, env, onChild = null, cu
     });
   }
   return spawnInheritedProcess(command, args, { cwd, env, onChild, spawn: ports?.spawn });
+}
+
+/**
+ * Resolve the per-user `pdd-codex` runtime root (`~/.local/state/pdd/codex-runtime` by default,
+ * never `/tmp` so Linux stock Codex creates helper binaries cleanly).
+ */
+export function resolveCodexRuntimeRoot({ env = process.env, tmpRoot = null } = {}) {
+  if (typeof tmpRoot === 'string' && tmpRoot.trim()) return tmpRoot.trim();
+  if (typeof env?.PDD_CODEX_RUNTIME_ROOT === 'string' && env.PDD_CODEX_RUNTIME_ROOT.trim()) {
+    return env.PDD_CODEX_RUNTIME_ROOT.trim();
+  }
+  return join(resolvePddStateBase(env), 'codex-runtime');
+}
+
+/**
+ * Resolve the per-user shared machine runtime directory (`<runtimeRoot>/pdd-codex-<uid>`).
+ */
+export function sharedCodexRuntimeDirPath({ env = process.env, tmpRoot = null, uid = null } = {}) {
+  const root = resolveCodexRuntimeRoot({ env, tmpRoot });
+  const effectiveUid = uid !== null && uid !== undefined
+    ? String(uid)
+    : (typeof process.getuid === 'function' ? String(process.getuid()) : 'user');
+  return join(resolve(root), `pdd-codex-${effectiveUid}`);
+}
+
+function isSafeReadableDir(fs, dirPath, expectedUid) {
+  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+  let st;
+  try { st = lstat.call(fs, dirPath); } catch { return false; }
+  if (!st || st.isSymbolicLink() || !st.isDirectory()) return false;
+  if (expectedUid !== null && typeof st.uid === 'number' && st.uid !== expectedUid) return false;
+  return true;
+}
+
+function readSafeJsonRegularFile(fs, filePath, expectedUid) {
+  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+  let st;
+  try { st = lstat.call(fs, filePath); } catch { return null; }
+  if (!st || st.isSymbolicLink() || !st.isFile()) return null;
+  if (expectedUid !== null && typeof st.uid === 'number' && st.uid !== expectedUid) return null;
+  return readJsonObjectQuiet(fs, filePath);
+}
+
+function listLivePidsReadOnly(fs, pidsDir, isPidAlive, expectedUid) {
+  if (!isSafeReadableDir(fs, pidsDir, expectedUid)) return [];
+  let entries = [];
+  try { entries = fs.readdirSync(pidsDir); } catch { return []; }
+  const seen = new Set();
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    const pidNum = Number(name);
+    if (!Number.isSafeInteger(pidNum) || pidNum <= 0) continue;
+    if (isPidAlive(pidNum)) seen.add(pidNum);
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
+function buildRuntimeLeaseSnapshot(meta, { mode, pinned, liveSessions }) {
+  return {
+    mode,
+    pinned,
+    lease_id: typeof meta.lease_id === 'string' ? meta.lease_id : null,
+    account_id: typeof meta.account_id === 'string' ? meta.account_id : null,
+    label: typeof meta.label === 'string' ? meta.label : null,
+    is_owner: typeof meta.is_owner === 'boolean' ? meta.is_owner : null,
+    shared: typeof meta.shared === 'boolean' ? meta.shared : null,
+    owner_login: typeof meta.owner_login === 'string' ? meta.owner_login : null,
+    auto_rotate: typeof meta.auto_rotate === 'boolean' ? meta.auto_rotate : !pinned,
+    expires_at: typeof meta.expires_at === 'string' ? meta.expires_at : null,
+    live_sessions: liveSessions,
+  };
+}
+
+/**
+ * Strictly read-only inspection of live `pdd-codex` runtime leases (shared + pinned).
+ * Never creates directories, acquires locks, mutates PID files, follows symlinks,
+ * reads foreign-owned entries, or opens `auth.json`.
+ */
+export function readLiveCodexRuntimeLeases({ env = process.env, tmpRoot = null, uid = null } = {}, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const isPidAlive = ports.isPidAlive ?? defaultIsPidAlive;
+  const expectedUid = ports.expectedUid !== undefined
+    ? ports.expectedUid
+    : (typeof process.getuid === 'function' ? process.getuid() : null);
+
+  const root = resolve(resolveCodexRuntimeRoot({ env, tmpRoot }));
+  if (!isSafeReadableDir(fs, root, expectedUid)) return [];
+
+  const results = [];
+  const sharedDir = sharedCodexRuntimeDirPath({ env, tmpRoot, uid });
+  if (isSafeReadableDir(fs, sharedDir, expectedUid)) {
+    const meta = readSafeJsonRegularFile(fs, join(sharedDir, 'lease.json'), expectedUid);
+    if (meta) {
+      const livePids = listLivePidsReadOnly(fs, join(sharedDir, 'pids'), isPidAlive, expectedUid);
+      if (livePids.length > 0) {
+        results.push(buildRuntimeLeaseSnapshot(meta, {
+          mode: 'shared',
+          pinned: false,
+          liveSessions: livePids.length,
+        }));
+      }
+    }
+  }
+
+  let rootEntries = [];
+  try { rootEntries = fs.readdirSync(root); } catch { rootEntries = []; }
+  for (const name of rootEntries) {
+    if (!name.startsWith('pdd-codex-pin-')) continue;
+    const pinDir = join(root, name);
+    if (!isSafeReadableDir(fs, pinDir, expectedUid)) continue;
+    const meta = readSafeJsonRegularFile(fs, join(pinDir, 'lease.json'), expectedUid);
+    if (!meta) continue;
+    const pidsFromDir = listLivePidsReadOnly(fs, join(pinDir, 'pids'), isPidAlive, expectedUid);
+    let liveSessions = pidsFromDir.length;
+    if (liveSessions === 0 && Number.isSafeInteger(meta.pid) && meta.pid > 0 && isPidAlive(meta.pid)) {
+      liveSessions = 1;
+    }
+    if (liveSessions > 0) {
+      results.push(buildRuntimeLeaseSnapshot(meta, {
+        mode: 'pinned',
+        pinned: true,
+        liveSessions,
+      }));
+    }
+  }
+
+  return results;
 }
