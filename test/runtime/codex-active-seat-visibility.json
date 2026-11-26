@@ -1,0 +1,238 @@
+{
+  "entry_path": "prompts/cli/codex-seat-visibility.prompt.md",
+  "steps": [
+    {
+      "id": "interactive-owned-seat",
+      "op": "resolveCodexSeatNotice",
+      "input": {
+        "codexArgs": [],
+        "isInteractiveTty": true,
+        "seat": {
+          "label": "cx4",
+          "accountId": "acc_cx4",
+          "pinned": false,
+          "autoRotate": true,
+          "isOwner": true,
+          "ownerLogin": "serhan"
+        }
+      },
+      "checks": {
+        "1": [
+          ["result", "/shouldPrint", "=", true],
+          ["result", "/reason", "=", "interactive"],
+          ["result", "/notice", "=", "pdd-codex: using PDD Cloud seat \"cx4\" (owner, auto-rotate on)"]
+        ]
+      }
+    },
+    {
+      "id": "interactive-shared-seat",
+      "op": "resolveCodexSeatNotice",
+      "input": {
+        "codexArgs": ["-C", "exec"],
+        "isInteractiveTty": true,
+        "seat": {
+          "label": "team-cx",
+          "accountId": "acc_team_1",
+          "pinned": false,
+          "autoRotate": true,
+          "isOwner": false,
+          "ownerLogin": "alice"
+        }
+      },
+      "checks": {
+        "1": [
+          ["result", "/shouldPrint", "=", true],
+          ["result", "/reason", "=", "interactive"],
+          ["result", "/notice", "=", "pdd-codex: using PDD Cloud seat \"team-cx\" (shared by alice, auto-rotate on)"]
+        ]
+      }
+    },
+    {
+      "id": "interactive-pinned-owned-and-unknown",
+      "op": "resolveCodexSeatNotice",
+      "input": {
+        "codexArgs": ["resume", "--last"],
+        "isInteractiveTty": true,
+        "seat": {
+          "label": "cx4",
+          "accountId": "acc_cx4",
+          "pinned": true,
+          "autoRotate": false,
+          "isOwner": true
+        }
+      },
+      "checks": {
+        "2": [
+          ["result", "/shouldPrint", "=", true],
+          ["result", "/reason", "=", "interactive"],
+          ["result", "/notice", "=", "pdd-codex: pinned to \"cx4\" (owner, auto-rotate off)"]
+        ]
+      }
+    },
+    {
+      "id": "interactive-pinned-unknown-access",
+      "op": "resolveCodexSeatNotice",
+      "input": {
+        "codexArgs": [],
+        "isInteractiveTty": true,
+        "seat": {
+          "label": "cx4",
+          "accountId": "acc_cx4",
+          "pinned": true,
+          "autoRotate": false
+        }
+      },
+      "checks": {
+        "2": [
+          ["result", "/shouldPrint", "=", true],
+          ["result", "/reason", "=", "interactive"],
+          ["result", "/notice", "=", "pdd-codex: pinned to \"cx4\" (auto-rotate off)"]
+        ]
+      }
+    },
+    {
+      "id": "skip-exec-json",
+      "op": "resolveCodexSeatNotice",
+      "input": {
+        "codexArgs": ["exec", "--json", "summarize repo"],
+        "isInteractiveTty": true,
+        "seat": {
+          "label": "cx4",
+          "pinned": false,
+          "autoRotate": true,
+          "isOwner": true
+        }
+      },
+      "checks": {
+        "3": [
+          ["result", "/shouldPrint", "=", false],
+          ["result", "/reason", "=", "non_interactive_subcommand"],
+          ["result", "/notice", "=", null]
+        ]
+      }
+    },
+    {
+      "id": "skip-machine-flag-on-resume",
+      "op": "resolveCodexSeatNotice",
+      "input": {
+        "codexArgs": ["resume", "--json"],
+        "isInteractiveTty": true,
+        "seat": {
+          "label": "cx4",
+          "pinned": false,
+          "autoRotate": true,
+          "isOwner": true
+        }
+      },
+      "checks": {
+        "3": [
+          ["result", "/shouldPrint", "=", false],
+          ["result", "/reason", "=", "machine_output_flag"],
+          ["result", "/notice", "=", null]
+        ]
+      }
+    },
+    {
+      "id": "skip-non-tty",
+      "op": "resolveCodexSeatNotice",
+      "input": {
+        "codexArgs": [],
+        "isInteractiveTty": false,
+        "seat": {
+          "label": "cx4",
+          "pinned": false,
+          "autoRotate": true,
+          "isOwner": true
+        }
+      },
+      "checks": {
+        "3": [
+          ["result", "/shouldPrint", "=", false],
+          ["result", "/reason", "=", "non_interactive_tty"],
+          ["result", "/notice", "=", null]
+        ]
+      }
+    },
+    {
+      "id": "status-shared-and-pinned-live",
+      "op": "summarizeCodexRuntimeStatus",
+      "input": {
+        "runtimeLeases": [
+          {
+            "mode": "pinned",
+            "pinned": true,
+            "lease_id": "lse_pin_1",
+            "account_id": "acc_cx4",
+            "label": "cx4",
+            "is_owner": true,
+            "auto_rotate": false,
+            "expires_at": "2026-12-01T00:00:00Z",
+            "live_sessions": 1
+          },
+          {
+            "mode": "shared",
+            "pinned": false,
+            "lease_id": "lse_shared_1",
+            "account_id": "acc_team_1",
+            "label": "team-cx",
+            "auto_rotate": true,
+            "expires_at": "2026-12-02T00:00:00Z",
+            "live_sessions": 2
+          }
+        ],
+        "accounts": [
+          {
+            "account_id": "acc_team_1",
+            "label": "team-cx",
+            "provider": "codex",
+            "is_owner": false,
+            "owner_login": "alice"
+          }
+        ],
+        "cachedActiveCodex": null
+      },
+      "checks": {
+        "4": [
+          ["result", "/codex_runtime/active", "=", true],
+          ["result", "/codex_runtime/live_sessions", "=", 3],
+          ["result", "/codex_runtime/label", "=", "team-cx"],
+          ["result", "/codex_runtime/access_type", "=", "shared"],
+          ["result", "/codex_runtime/owner_login", "=", "alice"],
+          ["result", "/codex_runtime/auto_rotate", "=", true],
+          ["result", "/codex_runtime/leases", "count", 2],
+          ["result", "/lines/0", "=", "  team-cx  shared (alice)  auto-rotate: on   2 live sessions"],
+          ["result", "/lines/1", "=", "  cx4      owner           auto-rotate: off  1 live session   [pinned]"]
+        ]
+      }
+    },
+    {
+      "id": "status-no-live-sessions",
+      "op": "summarizeCodexRuntimeStatus",
+      "input": {
+        "runtimeLeases": [
+          {
+            "mode": "shared",
+            "pinned": false,
+            "lease_id": "lse_stale",
+            "account_id": "acc_cx4",
+            "label": "cx4",
+            "is_owner": true,
+            "auto_rotate": true,
+            "live_sessions": 0
+          }
+        ],
+        "accounts": [],
+        "cachedActiveCodex": null
+      },
+      "checks": {
+        "5": [
+          ["result", "/codex_runtime/active", "=", false],
+          ["result", "/codex_runtime/live_sessions", "=", 0],
+          ["result", "/codex_runtime/label", "=", null],
+          ["result", "/codex_runtime/leases", "count", 0],
+          ["result", "/lines", "count", 0]
+        ]
+      }
+    }
+  ]
+}

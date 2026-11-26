@@ -11,6 +11,7 @@ if (major < 22) {
     const { exitCode } = await runPddCodexCli(process.argv.slice(2), {
       cwd: process.cwd(),
       env: process.env,
+      stdin: process.stdin,
       stdout: process.stdout,
       stderr: process.stderr,
     });
