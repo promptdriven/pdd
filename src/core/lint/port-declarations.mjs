@@ -2,6 +2,7 @@
 
 // Extract declared `<port>.<op>` and `<stem>.<op>` public operations from checkable prompts & contracts (#3619 R1-R8 parity).
 import { posix } from 'node:path';
+import { TEST_DIR_NAMES } from '../../shared/test-paths.mjs';
 import {
   extractFrontmatterPorts,
   extractRuntimeInterfaceObjects,
@@ -50,7 +51,7 @@ const GENERIC_PROMPT_DIR_NAMES = new Set([
   'prompts', 'prompt', 'src', 'lib', 'cli', 'docs', 'doc', 'contracts', 'contract',
   'shared', 'common', 'core', 'app', 'apps', 'pkg', 'packages', 'modules', 'module',
   'services', 'service', 'domains', 'domain', 'internal', 'api', 'server', 'web', 'ui',
-  'test', 'tests', '__tests__', 'spec', 'specs', 'fixtures', 'examples',
+  ...TEST_DIR_NAMES, 'spec', 'specs', 'fixtures', 'examples',
 ]);
 const NON_OP_LABEL_WORDS = new Set([
   'note', 'notes', 'input', 'inputs', 'output', 'outputs', 'result', 'results',
@@ -437,22 +438,17 @@ export function extractDeclaredPorts(raw, { isPrompt = true, path = '' } = {}) {
   const mentioned = new Set(), display = new Set(), exportedPeerOps = new Set();
   const promptPrefixes = isPrompt ? derivePromptPrefixes(path) : new Set();
 
-  const addPair = (port, op, strictDisplay = false) => {
-    if (port.length < 2 || op.length < 2 || VERSION_RE.test(port) || VERSION_RE.test(op)) return;
-    const ol = op.toLowerCase(), fl = `${port.toLowerCase()}.${ol}`;
-    if (NON_PORT_EXTS.has(ol) || NON_PORT_FILES.has(fl) || NON_PORT_TLDS.has(ol)) return;
+  const addPair = (port, op, includeDisplay = true) => {
+    if (!isValidPortPair(port, op)) return;
     const full = `${port}.${op}`;
     mentioned.add(full);
-    if (!strictDisplay || isValidPortPair(port, op)) display.add(full);
+    if (includeDisplay) display.add(full);
   };
   const addExport = (op, prefixes = promptPrefixes) => {
     const id = cleanIdent(op, true);
     if (!id) return;
-    const ol = id.toLowerCase();
-    if (NON_PORT_EXTS.has(ol) || NON_PORT_TLDS.has(ol)) return;
     for (const prefix of prefixes) {
       if (prefix.length < 2 || VERSION_RE.test(prefix)) continue;
-      if (NON_PORT_FILES.has(`${prefix.toLowerCase()}.${ol}`)) continue;
       const full = `${prefix}.${id}`;
       exportedPeerOps.add(full);
       mentioned.add(full);
@@ -660,8 +656,9 @@ export function extractDeclaredPorts(raw, { isPrompt = true, path = '' } = {}) {
     }
   }
 
+  const includeProseInDisplay = display.size === 0;
   const scanLines = proseLines.map(x => x.text);
   for (const fence of fences) if (!isPrompt || DECLARATIVE_SCHEMA_FENCE_LANGS.has(fence.lang)) for (const item of fence.bodyLines) scanLines.push(item.text);
-  for (const line of scanLines) if (line.includes('.')) scanDottedTokens(stripUrlsAndLinks(line), (p, o) => addPair(p, o, true));
+  for (const line of scanLines) if (line.includes('.')) scanDottedTokens(stripUrlsAndLinks(line), (p, o) => addPair(p, o, includeProseInDisplay));
   return { mentioned, display, exportedPeerOps };
 }

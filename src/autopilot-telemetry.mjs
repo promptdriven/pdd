@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-telemetry.prompt.md (sha256: a7f12a1bfcdc279adc3f9f6615faaaba8fd7f784b17a7eff15179f12d412a827).
+// Prompt: prompts/cli/autopilot-telemetry.prompt.md
 
 export const AUTOPILOT_PHASES = Object.freeze([
   'intake',

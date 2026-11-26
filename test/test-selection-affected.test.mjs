@@ -391,7 +391,7 @@ test('3065 real repository prompt sync and affected selection remain aligned', (
   const ownerJson = JSON.parse(ownerOut);
   const tsOwner = ownerJson.files.find(f => f.path === 'src/test-selection.mjs');
   assert.equal(tsOwner?.owner, 'prompts/cli/test-selection.prompt.md');
-  assert.equal(tsOwner?.headers?.[0]?.state, 'current');
+  assert.equal(tsOwner?.headers?.[0]?.state, 'none');
   assert.equal(tsOwner?.headers?.[0]?.legacy, false);
 
   // Real-repo lexer & hub-leaf regression assertions (#3065 review)

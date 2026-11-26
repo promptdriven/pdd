@@ -7,12 +7,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { isTestOwnedPath } from '../file-owner.mjs';
 import { causeText } from '../shared/safe-read.mjs';
+import { COLOCATED_TEST_PATH_RE, TEST_SCENARIO_JSON_RE, TEST_TARGET_FILE_RE, detectPytestConfigEdits, isConfiguredTestPath, readPytestTestpaths } from '../shared/test-paths.mjs';
 import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBaseRef, scrubChildEnv } from './lint/diagnostics.mjs';
 import { lintRepoProject } from './lint/project-lint.mjs';
 import { compileGlobMatcher } from './lint/regex-safety.mjs';
 import { detectShadowBinaries, runDiffSpotlight } from './lint/test-inventory.mjs';
 import { runFormalVerification } from './formal-verify.mjs';
-import { detectHostCapabilities, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths } from './verify-paths.mjs';
+import { classifyVerifyPathTier, detectHostCapabilities, formatProofTiersLine, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths, summarizeProofTiers } from './verify-paths.mjs';
 
 export const OUTCOME_PROVED = 'Proved';
 export const OUTCOME_FAILED = 'Failed';
@@ -25,7 +26,7 @@ export const EXIT_NOT_PROVED = 3;
 const SETUP_FAILURE_LINE_RE = /^(?:(?:Error:\s*Cannot find module\b|Error \[ERR_MODULE_NOT_FOUND\]|ERR_MODULE_NOT_FOUND\b|Cannot find package\b|ModuleNotFoundError:|ImportError:|No module named\b|SyntaxError:|FileNotFoundError:|Error:\s*ENOENT\b|ENOENT:|ERROR collecting\b|command not found\b|not recognized as an internal\b|cannot find package\b|no Go files\b|error\[E\d+\]:|failed to compile\b)|.*\[build failed\])/i;
 const DIAG_PREFIX_RE = /^\s*(?:#\s*|E\s+)?/;
 const TARGETABLE_ERROR_CLASS_RE = /^(SyntaxError|ImportError|FileNotFoundError):/i;
-const COLOCATED_TEST_RE = /(?:\.(?:test|spec)\.(?:[cm]?[jt]s|[jt]sx)|(?:^|\/)test_[^/]+\.py$|_test\.(?:py|go|rs)$|^(?:test|tests|__tests__|fixtures)\/)/i;
+const COLOCATED_TEST_RE = COLOCATED_TEST_PATH_RE;
 
 function findSetupFailureLine(stderr, stdout) {
   // Scan stderr first so an actual diagnostic on stderr is NEVER shadowed by an arbitrary stdout banner.
@@ -233,7 +234,6 @@ function extractReferencedNpmScripts(commands = []) {
   return [...names];
 }
 
-const TEST_TARGET_FILE_RE = /(?:(?:\.(?:test|spec)\.[a-z0-9]+$)|(?:_test\.(?:py|go|rs)$)|(?:(?:^|\/)test_[^/]+\.py$))/i;
 const SCRIPT_TOKEN_EXT_RE = /\.(?:[cm]?js|[cm]?ts|sh|bash|py|rb|pl)$/i;
 
 function extractReferencedRepoScripts(commands = []) {
@@ -359,8 +359,9 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
   try {
     const changedFromBase = listChangedFiles(root, baseSha);
     // Always union colocated/repo test files with explicit --overlay globs so fixture overlays never drop the regression test.
+    const configuredTestpaths = readPytestTestpaths(root, { gitRef: baseSha });
     const overlayPaths = changedFromBase.filter(
-      f => COLOCATED_TEST_RE.test(f) || isTestOwnedPath(f) || overlayGlobs.some(m => m.test(f)),
+      f => COLOCATED_TEST_RE.test(f) || isTestOwnedPath(f) || isConfiguredTestPath(f, configuredTestpaths) || overlayGlobs.some(m => m.test(f)),
     );
     const wtBase = gitExec(root, ['worktree', 'add', '--detach', baseWorktree, baseSha]);
     if (wtBase.status !== 0) throw new Error(wtBase.stderr || wtBase.stdout || 'git worktree add base failed');
@@ -502,6 +503,11 @@ export function runProve(
   if (changedReferencedScripts.length > 0) {
     notProvedReasons.push(`Working-tree/branch edits to verify-referenced script(s) (${changedReferencedScripts.join(', ')}) are not yet trusted on merge base; human review required.`);
   }
+  const usesPytest = allVerifyCommands.some(c => typeof c === 'string' && /\bpytest\b/i.test(c));
+  const changedPytestConfigs = usesPytest ? detectPytestConfigEdits(root, baseSha, diff.touchedFiles) : [];
+  if (changedPytestConfigs.length > 0) {
+    notProvedReasons.push(`Working-tree/branch edits to pytest configuration (${changedPytestConfigs.join(', ')}) are not yet trusted on merge base; human review required.`);
+  }
 
   const shadowBins = detectShadowBinaries(root, { touchedFiles: diff.touchedFiles, baseSha });
   const extraShadowErrors = [];
@@ -531,7 +537,7 @@ export function runProve(
 
   let testResult = null;
   let formalResult = null;
-  const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, diff.touchedFiles);
+  const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, diff.touchedFiles, { root, baseSha });
   const pathResults = [];
   const scrubbedBaseEnv = scrubChildEnv(env);
   const resolveStepEnv = (phase, recipeId, command) => (
@@ -539,7 +545,7 @@ export function runProve(
       ? ports.envForStep({ phase, recipeId, command, baseEnv: scrubbedBaseEnv })
       : scrubbedBaseEnv
   );
-  if (shadowBins.length === 0 && changedPkgScripts.length === 0 && changedReferencedScripts.length === 0) {
+  if (shadowBins.length === 0 && changedPkgScripts.length === 0 && changedReferencedScripts.length === 0 && changedPytestConfigs.length === 0) {
     if (testCommand) {
       const testEnv = resolveStepEnv('test', null, testCommand);
       const r = execShellCommand(testCommand, { cwd: root, env: testEnv, timeoutMs, preScrubbed: true }, ports);
@@ -554,19 +560,21 @@ export function runProve(
     const capState = detectHostCapabilities(matched.flatMap(r => r.needs), { env, capabilities, probe: ports.probeCapability, isTTY: ports.isTTY });
     for (const recipe of matched) {
       const { satisfied, missing } = matchCapabilities(recipe.needs, capState);
+      const tier = classifyVerifyPathTier(recipe);
+      const tierMeta = { ...(recipe.scope ? { scope: recipe.scope } : {}), tier };
       if (!satisfied) {
-        pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', missingCapabilities: missing, ok: false });
+        pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', missingCapabilities: missing, ok: false });
         notProvedReasons.push(`Recipe "${recipe.id}" (${recipe.name}) skipped: missing required capability [${missing.join(', ')}].`);
         continue;
       }
       const recipeEnv = resolveStepEnv('path', recipe.id, recipe.run);
       const r = execShellCommand(recipe.run, { cwd: root, env: recipeEnv, timeoutMs, preScrubbed: true }, ports);
       if (r.timedOut) {
-        pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', timedOut: true, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary });
+        pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', timedOut: true, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary });
         notProvedReasons.push(`Verify path "${recipe.id}" timed out after ${timeoutMinutes} min (\`${recipe.run}\`); rerun with --timeout MIN.`);
         continue;
       }
-      pathResults.push({ id: recipe.id, name: recipe.name, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', timedOut: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
+      pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', timedOut: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
     }
 
     const formalEnv = resolveStepEnv('formal', null, baseVerify.formalCommand || '');
@@ -597,7 +605,7 @@ export function runProve(
     } else if (finding.code === 'story-unbound-criteria') {
       const slug = finding.path.split('/').at(-1).replace(/\.md$/i, '');
       const touched = touchedSet.has(finding.path)
-        || diff.touchedFiles.some(tf => /(?:^|\/)(?:tests?|__tests__)\/.*\.json$/i.test(tf) && (tf.endsWith(`/${slug}.json`) || tf.includes(`/${slug}.`)));
+        || diff.touchedFiles.some(tf => TEST_SCENARIO_JSON_RE.test(tf) && (tf.endsWith(`/${slug}.json`) || tf.includes(`/${slug}.`)));
       if (touched) notProvedReasons.push(`${finding.path}:${finding.line} [story-unbound-criteria] ${finding.message}`);
     }
   }
@@ -636,13 +644,15 @@ export function runProve(
 
   const outcome = failedErrors.length > 0 ? OUTCOME_FAILED : (notProvedReasons.length > 0 ? OUTCOME_NOT_PROVED : OUTCOME_PROVED);
   const exitCode = outcome === OUTCOME_FAILED ? EXIT_FAILED : (outcome === OUTCOME_NOT_PROVED ? EXIT_NOT_PROVED : EXIT_PROVED);
+  const proofTiers = summarizeProofTiers({ testResult, pathResults });
+  const proofTiersLine = formatProofTiersLine(proofTiers);
   const receipt = {
     schema_version: 'pdd.prove.v1', mode: 'verify', outcome, exit_code: exitCode, baseRef, baseSha, headSha,
     dirty, proofScope, ...(dirtyFiles.length ? { dirtyFiles: dirtyFiles.slice(0, 12) } : {}),
     configSource: baseVerify.configured ? baseVerify.source : (testCommand ? 'auto-detected' : null), touchedFiles: diff.touchedFiles, changedSurfaces,
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
-    test: testResult, formal: formalResult, paths: pathResults, notProvedReasons,
+    test: testResult, formal: formalResult, paths: pathResults, proofTiers, notProvedReasons,
   };
 
   const scopeSuffix = statusFailed
@@ -650,8 +660,8 @@ export function runProve(
     : (dirty ? ` (working tree, uncommitted changes: ${dirtyFiles.slice(0, 4).join(', ')})` : '');
   const formalLine = formalResult?.summary || 'Formal: not-applicable';
   if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
-  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.\n`);
-  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n`);
-  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.\n`); }
+  else if (outcome === OUTCOME_PROVED) stdout.write(`Proved${scopeSuffix}: lint clean, tests passed, ${pathResults.length} verify path(s) green. ${formalLine}.\n${proofTiersLine}\n`);
+  else if (outcome === OUTCOME_NOT_PROVED) stdout.write(`Not proved${scopeSuffix} (${formalLine}):\n${notProvedReasons.map(r => `  - ${r}`).join('\n')}\n${proofTiersLine}\n`);
+  else { for (const err of failedErrors) stderr.write(`${err}\n`); stderr.write(`Failed${scopeSuffix} (${formalLine}): ${failedErrors.length} check(s) failed.\n${proofTiersLine}\n`); }
   return { exitCode, outcome, receipt };
 }

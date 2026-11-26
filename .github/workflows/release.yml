@@ -6,12 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'GitHub Release tag to verify and publish (for example alpha-v0.1.35 or v0.1.35)'
+        description: 'Optional GitHub Release tag to verify parity against (select the tag/branch via workflow ref)'
         required: false
         default: ''
         type: string
       dry_run:
-        description: 'Verify and build npm + PyPI packages without publishing'
+        description: 'Build and verify npm + PyPI packages without publishing'
         required: false
         default: false
         type: boolean
@@ -24,14 +24,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify-release:
-    name: verify-release
+  build:
+    name: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
-      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+      py_version: ${{ steps.meta.outputs.py_version }}
+      dist_tag: ${{ steps.meta.outputs.dist_tag }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
     steps:
       - name: Resolve target GitHub Release tag
         id: target
@@ -43,6 +45,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           tag=""
           if [ "$EVENT_NAME" = "release" ]; then
             tag="${RELEASE_TAG#refs/tags/}"
@@ -68,22 +71,19 @@ jobs:
               fi
             fi
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
-            echo "checkout_ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
           else
             echo "tag=" >> "$GITHUB_OUTPUT"
-            echo "checkout_ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/checkout@v7
         with:
-          ref: ${{ steps.target.outputs.checkout_ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -94,36 +94,88 @@ jobs:
         id: meta
         env:
           TARGET_TAG: ${{ steps.target.outputs.tag }}
-          CHECKOUT_REF: ${{ steps.target.outputs.checkout_ref }}
         run: |
+          set -euo pipefail
           if [ -n "$TARGET_TAG" ]; then
             node scripts/sync-pypi-version.mjs --check --tag "$TARGET_TAG"
           else
             node scripts/sync-pypi-version.mjs --check
           fi
-          version=$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
-          echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
+          node --input-type=module - "$TARGET_TAG" >> "$GITHUB_OUTPUT" <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { toPep440Version } from './scripts/sync-pypi-version.mjs';
+          import { npmDistTagForVersion } from './scripts/publish-release.mjs';
+          const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+          const pyVersion = toPep440Version(version);
+          const distTag = npmDistTagForVersion(version);
+          const isPrerelease = version.includes('-') ? 'true' : 'false';
+          console.log(`version=${version}`);
+          console.log(`py_version=${pyVersion}`);
+          console.log(`dist_tag=${distTag}`);
+          console.log(`is_prerelease=${isPrerelease}`);
+          console.log(`tag=${process.argv[2]}`);
+          NODE
 
-      - name: Build and smoke-test npm and PyPI packages
-        env:
-          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+      - name: Build npm tarball, Python wheel, and sdist once
         run: |
-          smoke_dir=$(mktemp -d)
-          trap 'rm -rf "$smoke_dir" python/pdd_cli/_bundled' EXIT
-          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_CLI_CACHE_DIR="$smoke_dir/cache" PDD_NO_UPDATE_CHECK=1 PYTHONDONTWRITEBYTECODE=1
-          mkdir -p "$HOME" "$PDD_STATE_DIR" "$PDD_CLI_CACHE_DIR" "$smoke_dir/npm-dist" "$smoke_dir/pypi-dist"
-
-          npm pack --ignore-scripts --pack-destination "$smoke_dir/npm-dist"
+          set -euo pipefail
+          trap 'rm -rf python/pdd_cli/_bundled' EXIT
+          mkdir -p dist/npm dist/pypi
+          npm pack --ignore-scripts --pack-destination dist/npm
           node scripts/sync-pypi-version.mjs --stage-bundle
-
           python -m pip install --upgrade pip build twine
-          python -m build --outdir "$smoke_dir/pypi-dist" python
-          python -m twine check "$smoke_dir/pypi-dist"/*
+          python -m build --outdir dist/pypi python
+          python -m twine check dist/pypi/*
 
+      - name: Upload tested release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-artifacts
+          path: dist/
+          retention-days: 1
+
+  verify:
+    name: verify
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Download exact artifacts from build
+        uses: actions/download-artifact@v8
+        with:
+          name: release-artifacts
+          path: dist
+
+      - name: Run public and wheel evidence suites on exact built artifacts
+        env:
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          smoke_dir=$(mktemp -d)
+          trap 'rm -rf "$smoke_dir"' EXIT
+          mkdir -p "$smoke_dir/base" "$smoke_dir/home" "$smoke_dir/state" "$smoke_dir/cache"
+          npm pack @promptdriven/pdd@latest --pack-destination "$smoke_dir/base"
+
+          # Run Area 1 evidence engine with public npm suite against the last public release.
+          node scripts/evidence-run.mjs --suite scripts/evidence/public.suite.mjs \
+            --base "$smoke_dir"/base/*.tgz --cand dist/npm/*.tgz --out "$smoke_dir/public-rows.json"
+
+          # Install exact built wheel offline and verify CLI entrypoints + wheel suite.
           python -m venv "$smoke_dir/venv"
-          "$smoke_dir/venv/bin/pip" install "$smoke_dir/pypi-dist"/*.whl
+          "$smoke_dir/venv/bin/pip" install --no-index --no-deps dist/pypi/*.whl
+          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_CLI_CACHE_DIR="$smoke_dir/cache" PDD_NO_UPDATE_CHECK=1 PYTHONDONTWRITEBYTECODE=1
           pypi_version=$(PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" --version 2>"$smoke_dir/ver.err")
           test "$pypi_version" = "$EXPECTED_VERSION"
           test ! -s "$smoke_dir/ver.err"
@@ -134,30 +186,13 @@ jobs:
           grep -q "pdd-claude" "$smoke_dir/claude.out"
           test ! -s "$smoke_dir/claude.err"
 
-          cp -R test/fixtures/harbor "$smoke_dir/harbor"
-          git -C "$smoke_dir/harbor" init -q
-          (
-            cd "$smoke_dir/harbor"
-            PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" lint --local
-          )
+          node scripts/evidence-run.mjs --suite scripts/evidence/wheel.suite.mjs \
+            --cand "$smoke_dir/venv/bin/pdd" --out "$smoke_dir/wheel-rows.json"
 
-          # Verify PyPI wheel `pdd setup --yes` handles 0-byte mcp_config.json + retired skills and `pdd upgrade` advises `pip install -U pdd-cli`.
-          mkdir -p "$HOME/.agents/skills/pdd-bug" "$HOME/.gemini/config"
-          printf -- '---\nname: pdd-bug\nmetadata:\n  pdd-skills: 0.1.39\n---\nold\n' > "$HOME/.agents/skills/pdd-bug/SKILL.md"
-          : > "$HOME/.gemini/config/mcp_config.json"
-          PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" setup --yes >"$smoke_dir/setup.out"
-          grep -q "Done!" "$smoke_dir/setup.out"
-          test -f "$HOME/.agents/skills/pdd/SKILL.md"
-          test ! -e "$HOME/.agents/skills/pdd-bug"
-          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));' "$HOME/.gemini/config/mcp_config.json"
-          py_upg=0
-          PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" upgrade >"$smoke_dir/py-upg.out" 2>"$smoke_dir/py-upg.err" || py_upg=$?
-          test "$py_upg" -eq 1
-          grep -q "pip install -U pdd-cli" "$smoke_dir/py-upg.err"
-
+  # Publish exact tested npm tarball automatically after verify passes (no manual approval gate).
   publish-npm:
     name: publish-npm
-    needs: verify-release
+    needs: [build, verify]
     if: ${{ github.event_name == 'release' || inputs.dry_run != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -165,55 +200,43 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.verify-release.outputs.checkout_ref }}
-          persist-credentials: false
-
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
+      - name: Download exact tested artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: release-artifacts
+          path: dist
 
-      - name: Verify release tag parity before npm publish
+      - name: Publish exact tested tarball to npm
         env:
-          TARGET_TAG: ${{ needs.verify-release.outputs.tag }}
-        run: node scripts/sync-pypi-version.mjs --check --tag "$TARGET_TAG"
-
-      - name: Publish @promptdriven/pdd to npm
-        env:
-          EXPECTED_VERSION: ${{ needs.verify-release.outputs.version }}
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+          DIST_TAG: ${{ needs.build.outputs.dist_tag }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          set -euo pipefail
           existing=$(npm view "@promptdriven/pdd@$EXPECTED_VERSION" version --registry https://registry.npmjs.org 2>/dev/null || true)
           if [ "$existing" = "$EXPECTED_VERSION" ]; then
             echo "@promptdriven/pdd@$EXPECTED_VERSION is already published on npm; skipping."
             exit 0
           fi
-
-          dist_tag="latest"
-          case "$EXPECTED_VERSION" in
-            *-rc.*|*-rc[0-9]*|*-rc) dist_tag="next" ;;
-            *-beta.*|*-beta[0-9]*|*-beta) dist_tag="beta" ;;
-            *-alpha.*|*-alpha[0-9]*|*-alpha) dist_tag="alpha" ;;
-            *-*) dist_tag="alpha" ;;
-          esac
-
+          tarball=$(ls dist/npm/*.tgz)
           userconfig=$(mktemp)
           trap 'rm -f "$userconfig"' EXIT
           if [ -n "$NPM_TOKEN" ]; then
             printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$userconfig"
-            npm publish --userconfig "$userconfig" --registry https://registry.npmjs.org --ignore-scripts --access public --provenance --tag "$dist_tag"
+            npm publish "$tarball" --userconfig "$userconfig" --registry https://registry.npmjs.org --ignore-scripts --access public --provenance --tag "$DIST_TAG"
           else
             npm install -g npm@^11.5.1
-            npm publish --registry https://registry.npmjs.org --ignore-scripts --access public --provenance --tag "$dist_tag"
+            npm publish "$tarball" --registry https://registry.npmjs.org --ignore-scripts --access public --provenance --tag "$DIST_TAG"
           fi
 
+  # Publish exact tested PyPI wheel + sdist behind human approval (`environment: pypi-publish`).
   publish-pypi:
     name: publish-pypi
-    needs: verify-release
+    needs: [build, verify]
     if: ${{ github.event_name == 'release' || inputs.dry_run != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -222,32 +245,11 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - name: Download exact tested artifacts
+        uses: actions/download-artifact@v8
         with:
-          ref: ${{ needs.verify-release.outputs.checkout_ref }}
-          persist-credentials: false
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies and stage bundled CLI
-        env:
-          TARGET_TAG: ${{ needs.verify-release.outputs.tag }}
-        run: |
-          npm ci --ignore-scripts
-          node scripts/sync-pypi-version.mjs --check --tag "$TARGET_TAG"
-          node scripts/sync-pypi-version.mjs --stage-bundle
-
-      - name: Build and verify PyPI sdist and wheel
-        run: |
-          python -m pip install --upgrade pip build twine
-          python -m build --outdir dist python
-          python -m twine check dist/*
+          name: release-artifacts
+          path: dist
 
       - name: Select PyPI authentication mode
         id: auth
@@ -260,19 +262,182 @@ jobs:
             echo "mode=oidc" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish to PyPI via Trusted Publishing (OIDC)
+      # Keep PyPI publish steps in this workflow file (PyPI rejects OIDC from called workflows).
+      - name: Publish exact tested wheel + sdist to PyPI via Trusted Publishing (OIDC)
         if: steps.auth.outputs.mode == 'oidc'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dist/
+          packages-dir: dist/pypi/
           skip-existing: true
           attestations: true
 
-      - name: Publish to PyPI via PYPI_API_TOKEN
+      - name: Publish exact tested wheel + sdist to PyPI via PYPI_API_TOKEN
         if: steps.auth.outputs.mode == 'token'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dist/
+          packages-dir: dist/pypi/
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
           attestations: false
+
+  verify-published-npm:
+    name: verify-published-npm (${{ matrix.os }})
+    needs: [build, publish-npm]
+    if: ${{ github.event_name == 'release' || inputs.dry_run != true }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Wait until npm serves the published version
+        env:
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 96); do
+            live_npm=$(npm view "@promptdriven/pdd@$EXPECTED_VERSION" version --registry https://registry.npmjs.org 2>/dev/null || true)
+            if [ "$live_npm" = "$EXPECTED_VERSION" ]; then
+              echo "npm serves $EXPECTED_VERSION (attempt $attempt)."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for npm to serve $EXPECTED_VERSION" >&2
+          exit 1
+
+      - name: Install live from npm, run expect checks, and verify real upgrade
+        env:
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+          DIST_TAG: ${{ needs.build.outputs.dist_tag }}
+          IS_PRERELEASE: ${{ needs.build.outputs.is_prerelease }}
+        run: |
+          set -euo pipefail
+          smoke_dir=$(mktemp -d)
+          trap 'rm -rf "$smoke_dir"' EXIT
+          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_NO_UPDATE_CHECK=1 PDD_RUNTIME_URL=http://127.0.0.1:1
+          mkdir -p "$HOME/.gemini/config" "$PDD_STATE_DIR"
+
+          orig_path="$PATH"
+          # Fresh live install from npm.
+          npm install --global --prefix "$smoke_dir/live" --ignore-scripts --no-audit --no-fund "@promptdriven/pdd@$EXPECTED_VERSION"
+          pdd="$smoke_dir/live/bin/pdd"
+          export PATH="$smoke_dir/live/bin:$orig_path"
+          test "$("$pdd" --version 2>"$smoke_dir/ver.err")" = "$EXPECTED_VERSION"
+          test ! -s "$smoke_dir/ver.err"
+          "$pdd" --help >/dev/null
+          : > "$HOME/.gemini/config/mcp_config.json"
+          "$pdd" setup --yes >"$smoke_dir/setup.out"
+          grep -q "Done!" "$smoke_dir/setup.out"
+          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));' "$HOME/.gemini/config/mcp_config.json"
+          cp -R test/fixtures/harbor "$smoke_dir/harbor"
+          git -C "$smoke_dir/harbor" init -q && git -C "$smoke_dir/harbor" add .
+          (cd "$smoke_dir/harbor" && "$pdd" lint --local --json >/dev/null && "$pdd" status --json >/dev/null && "$pdd" files --json >/dev/null)
+
+          # Real upgrade verification from previous release (stable) or latest -> next (rc).
+          export HOME="$smoke_dir/upg-home" PDD_STATE_DIR="$smoke_dir/upg-state" PATH="$smoke_dir/upg/bin:$orig_path"
+          mkdir -p "$HOME/.gemini/config" "$PDD_STATE_DIR"
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            npm install --global --prefix "$smoke_dir/upg" --ignore-scripts --no-audit --no-fund "@promptdriven/pdd@latest"
+            "$smoke_dir/upg/bin/pdd" setup --yes >/dev/null
+            npm install --global --prefix "$smoke_dir/upg" --ignore-scripts --no-audit --no-fund "@promptdriven/pdd@$DIST_TAG"
+            "$smoke_dir/upg/bin/pdd" setup --upgrade
+          else
+            prev_ver=$(npm view @promptdriven/pdd versions --json --registry https://registry.npmjs.org \
+              | node --input-type=module -e '
+                import { readFileSync } from "node:fs";
+                const raw = JSON.parse(readFileSync(0, "utf8"));
+                const versions = (Array.isArray(raw) ? raw : [raw]).filter(v => !v.includes("-") && v !== process.argv[1]);
+                console.log(versions.at(-1) || "");
+              ' -- "$EXPECTED_VERSION")
+            test -n "$prev_ver"
+            npm install --global --prefix "$smoke_dir/upg" --ignore-scripts --no-audit --no-fund "@promptdriven/pdd@$prev_ver"
+            "$smoke_dir/upg/bin/pdd" setup --yes >/dev/null
+            env -u PDD_NO_UPDATE_CHECK "$smoke_dir/upg/bin/pdd" upgrade
+          fi
+          test "$("$smoke_dir/upg/bin/pdd" --version 2>"$smoke_dir/upg-ver.err")" = "$EXPECTED_VERSION"
+          test ! -s "$smoke_dir/upg-ver.err"
+
+  verify-published-pypi:
+    name: verify-published-pypi (${{ matrix.os }})
+    needs: [build, publish-pypi]
+    if: ${{ github.event_name == 'release' || inputs.dry_run != true }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Wait until PyPI serves the published version
+        env:
+          EXPECTED_PY_VERSION: ${{ needs.build.outputs.py_version }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 96); do
+            if curl -fsSL "https://pypi.org/pypi/pdd-cli/${EXPECTED_PY_VERSION}/json" \
+              | node --input-type=module -e '
+                import { readFileSync } from "node:fs";
+                const data = JSON.parse(readFileSync(0, "utf8"));
+                process.exit(data?.info?.version === process.argv[1] && Array.isArray(data?.urls) && data.urls.length > 0 ? 0 : 1);
+              ' -- "$EXPECTED_PY_VERSION" 2>/dev/null; then
+              echo "PyPI serves pdd-cli==$EXPECTED_PY_VERSION (attempt $attempt)."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for PyPI to serve pdd-cli==$EXPECTED_PY_VERSION" >&2
+          exit 1
+
+      - name: Install live from PyPI and run wheel expect checks
+        env:
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+          EXPECTED_PY_VERSION: ${{ needs.build.outputs.py_version }}
+        run: |
+          set -euo pipefail
+          smoke_dir=$(mktemp -d)
+          trap 'rm -rf "$smoke_dir"' EXIT
+          python -m venv "$smoke_dir/venv"
+          "$smoke_dir/venv/bin/pip" install --no-cache-dir --pre "pdd-cli==$EXPECTED_PY_VERSION"
+          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_CLI_CACHE_DIR="$smoke_dir/cache"
+          export PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 PDD_NO_UPDATE_CHECK=1 PDD_RUNTIME_URL=http://127.0.0.1:1 PYTHONDONTWRITEBYTECODE=1
+          mkdir -p "$HOME/.gemini/config" "$PDD_STATE_DIR" "$PDD_CLI_CACHE_DIR"
+          export PATH="$smoke_dir/venv/bin:$PATH"
+
+          test "$("$smoke_dir/venv/bin/pdd" --version 2>"$smoke_dir/ver.err")" = "$EXPECTED_VERSION"
+          test ! -s "$smoke_dir/ver.err"
+          "$smoke_dir/venv/bin/pdd-codex" --pdd-help >/dev/null
+          "$smoke_dir/venv/bin/pdd-claude" --pdd-help >/dev/null
+          if [ -f scripts/evidence-run.mjs ] && [ -f scripts/evidence/wheel.suite.mjs ]; then
+            node scripts/evidence-run.mjs --suite scripts/evidence/wheel.suite.mjs \
+              --cand "$smoke_dir/venv/bin/pdd" --out "$smoke_dir/live-wheel-rows.json"
+          else
+            : > "$HOME/.gemini/config/mcp_config.json"
+            "$smoke_dir/venv/bin/pdd" setup --yes >"$smoke_dir/setup.out"
+            grep -q "Done!" "$smoke_dir/setup.out"
+            upg_status=0
+            "$smoke_dir/venv/bin/pdd" upgrade >"$smoke_dir/upg.out" 2>"$smoke_dir/upg.err" || upg_status=$?
+            test "$upg_status" -eq 1
+            grep -q "pip install -U pdd-cli" "$smoke_dir/upg.err"
+          fi

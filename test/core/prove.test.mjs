@@ -860,3 +860,105 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
     process.env.PATH = origPath;
   }
 });
+
+test('#3633 honest proof-tier labels: pdd prove surfaces simulated, real-host run, and adversarial run in JSON and text without fabricating unexecuted tiers', t => {
+  const seed = (prefix, files) => {
+    const dir = initGitRepo(t, prefix);
+    for (const [rel, body] of Object.entries(files)) {
+      const full = join(dir, rel);
+      mkdirSync(join(full, '..'), { recursive: true });
+      writeFileSync(full, body);
+    }
+    commitAll(dir, 'init');
+    return dir;
+  };
+
+  // 1. parseVerifyConfig validates optional tier cleanly
+  const badTier = parseVerifyConfig({
+    verify: {
+      paths: [{ id: 'bad', tier: 'magic', when: ['src/**'], run: 'node -e 0' }],
+    },
+  });
+  assert.ok(badTier.errors.some(e => e.includes('tier must be one of')));
+
+  // 2. Repo with unit test + real-host path (NO adversarial path) -> simulated=Proved, real-host run=Proved, adversarial run=Not proved!
+  const repo = seed('pdd-prove-tiers-', {
+    'package.json': JSON.stringify({ name: 'tiers-demo', type: 'module', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'pdd.json': JSON.stringify({
+      verify: {
+        test: 'node --test',
+        paths: [
+          { id: 'cli-smoke', tier: 'real-host', when: ['src/**'], run: 'node -e "process.exit(0)"' },
+        ],
+      },
+    }, null, 2) + '\n',
+    'src/app.mjs': 'export const greet = name => `hi ${name}`;\n',
+    'test/app.test.mjs': 'import test from "node:test"; import assert from "node:assert/strict"; import { greet } from "../src/app.mjs"; test("greet", () => assert.equal(greet("a"), "hi a"));\n',
+  });
+  execFileSync('git', ['checkout', '-q', '-b', 'feat/tiers'], { cwd: repo });
+  writeFileSync(join(repo, 'src/app.mjs'), 'export const greet = name => `hello ${name}`;\n');
+  writeFileSync(join(repo, 'test/app.test.mjs'), 'import test from "node:test"; import assert from "node:assert/strict"; import { greet } from "../src/app.mjs"; test("greet", () => assert.equal(greet("a"), "hello a"));\n');
+  commitAll(repo, 'update greeting');
+
+  const textOut = makeSink();
+  const resText = runProve({ cwd: repo, json: false }, { stdout: textOut, stderr: makeSink() });
+  assert.equal(resText.exitCode, 0, textOut.text);
+  assert.match(textOut.text, /Proof tiers: simulated=Proved, real-host run=Proved, adversarial run=Not proved/);
+  assert.equal(resText.receipt.proofTiers.simulated.status, 'Proved');
+  assert.equal(resText.receipt.proofTiers.realHost.status, 'Proved');
+  assert.equal(resText.receipt.proofTiers.adversarial.status, 'Not proved');
+
+  // 3. Add base-trusted adversarial recipe (via tier: "adversarial") -> all 3 tiers Proved!
+  const repoAdv = seed('pdd-prove-tiers-adv-', {
+    'package.json': JSON.stringify({ name: 'tiers-adv', type: 'module', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'pdd.json': JSON.stringify({
+      verify: {
+        test: 'node --test',
+        paths: [
+          { id: 'cli-smoke', when: ['src/**'], run: 'node -e "process.exit(0)"' },
+          { id: 'break-it', tier: 'adversarial', when: ['src/**'], run: 'node -e "process.exit(0)"' },
+        ],
+      },
+    }, null, 2) + '\n',
+    'src/app.mjs': 'export const ok = () => true;\n',
+    'test/app.test.mjs': 'import test from "node:test"; import assert from "node:assert/strict"; import { ok } from "../src/app.mjs"; test("ok", () => assert.equal(ok(), true));\n',
+  });
+  execFileSync('git', ['checkout', '-q', '-b', 'feat/adv-pass'], { cwd: repoAdv });
+  writeFileSync(join(repoAdv, 'src/app.mjs'), 'export const ok = () => Boolean(1);\n');
+  commitAll(repoAdv, 'touch app');
+
+  const jsonOut = makeSink();
+  const resAdv = runProve({ cwd: repoAdv, json: true }, { stdout: jsonOut, stderr: makeSink() });
+  assert.equal(resAdv.exitCode, 0, jsonOut.text);
+  const parsedAdv = JSON.parse(jsonOut.text);
+  assert.equal(parsedAdv.proofTiers.simulated.status, 'Proved');
+  assert.equal(parsedAdv.proofTiers.realHost.status, 'Proved');
+  assert.equal(parsedAdv.proofTiers.adversarial.status, 'Proved');
+  assert.deepEqual(parsedAdv.proofTiers.adversarial.runs, ['break-it']);
+
+  // 4. Failing adversarial recipe -> adversarial run=Failed and overall Failed (exit 1)
+  const repoFail = seed('pdd-prove-tiers-fail-', {
+    'package.json': JSON.stringify({ name: 'tiers-fail', type: 'module', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'pdd.json': JSON.stringify({
+      verify: {
+        test: 'node --test',
+        paths: [
+          { id: 'break-it', scope: 'adversarial', when: ['src/**'], run: 'node -e "process.exit(1)"' },
+        ],
+      },
+    }, null, 2) + '\n',
+    'src/app.mjs': 'export const ok = () => true;\n',
+    'test/app.test.mjs': 'import test from "node:test"; import assert from "node:assert/strict"; import { ok } from "../src/app.mjs"; test("ok", () => assert.equal(ok(), true));\n',
+  });
+  execFileSync('git', ['checkout', '-q', '-b', 'feat/adv-fail'], { cwd: repoFail });
+  writeFileSync(join(repoFail, 'src/app.mjs'), 'export const ok = () => Boolean(1);\n');
+  commitAll(repoFail, 'touch app');
+
+  const failErr = makeSink();
+  const resFail = runProve({ cwd: repoFail, json: false }, { stdout: makeSink(), stderr: failErr });
+  assert.equal(resFail.exitCode, 1);
+  assert.equal(resFail.receipt.proofTiers.simulated.status, 'Proved');
+  assert.equal(resFail.receipt.proofTiers.realHost.status, 'Not proved');
+  assert.equal(resFail.receipt.proofTiers.adversarial.status, 'Failed');
+  assert.match(failErr.text, /Proof tiers: simulated=Proved, real-host run=Not proved, adversarial run=Failed/);
+});

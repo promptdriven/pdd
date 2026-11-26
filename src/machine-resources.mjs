@@ -1,4 +1,4 @@
-// Generated from prompts/cli/machine-resources.prompt.md (sha256: 9a0d9394d184fd41f0ef3712c333fabf1b78f274507cc8e6fd0b3e57b8a84893).
+// Prompt: prompts/cli/machine-resources.prompt.md
 import * as files from 'node:fs';
 import { readFileSync, statfsSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';

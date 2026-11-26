@@ -101,17 +101,17 @@ jobs:
               if (status !== 200 || !issue || issue.pull_request) continue;
               if (issue.repository_url && !String(issue.repository_url).toLowerCase().endsWith(`/repos/${repo.toLowerCase()}`)) continue;
               if (issue.state === 'open') {
-                await gh(`/repos/${repo}/issues/${issueNum}`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ state: 'closed', state_reason: 'completed' }),
-                });
                 await gh(`/repos/${repo}/issues/${issueNum}/comments`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     body: `Closed automatically when https://github.com/${repo}/pull/${pr.number} merged into \`${baseRef}\`${viaPr !== pr.number ? ` (from https://github.com/${repo}/pull/${viaPr})` : ''}.`,
                   }),
+                });
+                await gh(`/repos/${repo}/issues/${issueNum}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ state: 'closed', state_reason: 'completed' }),
                 });
               }
               const labels = (issue.labels ?? []).map(l => typeof l === 'string' ? l : l?.name).filter(Boolean);

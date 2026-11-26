@@ -4541,3 +4541,113 @@ test('S4 Stage 1: runMcp preserves raw JSON-RPC stdout framing (no hint rewritin
   await assert.rejects(() => tools.call('try_state', {}), /stop-after-check/);
   assert.equal(saveDoorCaseBound, 'checked');
 });
+
+test('#3660: cold runMcp / createTryTools / readTryOwner compile Short JSON via withScenarioOverlay and preserve full-format v1 neighbor', async t => {
+  const { Readable } = await import('node:stream');
+  const { writeFileSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const { harbor, fakeRuntime, portsFor } = await import('./helpers/runtime-fake.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+
+  const shortDoc = {
+    entry_path: 'prompts/place_order.prompt.md',
+    initial_world: {},
+    steps: [
+      {
+        id: 'sam-orders-espressos-and-a-muffin',
+        op: 'place_order',
+        input: {
+          customerName: 'Sam',
+          pickupAt: '08:30',
+          items: [
+            { itemId: 'espresso', size: 'S', quantity: 2 },
+            { itemId: 'muffin', size: 'L', quantity: 1 },
+          ],
+        },
+        checks: {
+          '1': [['result', '/totalCents', '=', 900]],
+          '2': [['result', '/customerName', '=', 'Sam']],
+          '3': [['result', '/items/0/itemId', '=', 'espresso']],
+        },
+      },
+    ],
+  };
+  const shortRaw = `${JSON.stringify(shortDoc, null, 2)}\n`;
+  const h = harbor(t, repo => {
+    writeFileSync(join(repo, 'tests/place-order.json'), shortRaw);
+  });
+
+  const makeFake = () => fakeRuntime(t, entry => {
+    if (entry.method === 'POST' && entry.command === 'lint') return { status: 200, json: fake.lint(entry.request.requestId) };
+    if (entry.method === 'POST' && entry.command === 'try') return { status: 200, json: fake.tryJob(entry.request.requestId) };
+    if (entry.method === 'GET' && entry.url.endsWith('/model')) {
+      return {
+        status: 200,
+        json: {
+          entries: [{ entry_path: 'prompts/place_order.prompt.md', operation: 'place_order', cli: false, errors: [] }],
+          calls: { cap: 400, remaining: 400 },
+          source_sha256: 'a'.repeat(64),
+          engine_sha: 'eae2202a68d00ab762fcbbf1eba0d8607a132a15',
+        },
+      };
+    }
+    if (entry.method === 'GET' && entry.url.endsWith('/state')) {
+      return { status: 200, json: { world: { orders: [] }, actions: [] } };
+    }
+    return fake.normal(entry);
+  });
+  const fake = await makeFake();
+
+  const env = {
+    HOME: h.home,
+    PDD_STATE_DIR: h.state,
+    PDD_RUNTIME_URL: fake.origin,
+    PDD_NO_UPDATE_CHECK: '1',
+  };
+  const { ports } = portsFor(env);
+  const lines = [];
+  const rawStdout = {
+    write(chunk) {
+      lines.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+      return true;
+    },
+  };
+  const reqs = [
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'mcp-test', version: '1.0' } } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'try_open', arguments: { story: 'place-order' } } },
+    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'try_state', arguments: { story: 'place-order' } } },
+  ];
+  const code = await seam.runMcp(
+    { cwd: h.repo, words: [] },
+    { ...ports, stdin: Readable.from([`${reqs.map(r => JSON.stringify(r)).join('\n')}\n`]), stdout: rawStdout },
+  );
+  assert.equal(code, 0);
+  const resps = lines.join('').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(resps.length, 3);
+  assert.equal(resps[1].result?.isError ?? false, false, `cold try_open on Short JSON failed: ${JSON.stringify(resps[1])}`);
+  const opened = resps[1].result.structuredContent;
+  assert.ok(opened?.try_id, 'try_open must return a try_id');
+  assert.ok(Array.isArray(opened?.criteria) && opened.criteria.length > 0, 'try_open must return nonempty compiled criteria');
+  assert.equal(resps[2].result?.isError ?? false, false, `cold try_state on Short JSON failed: ${JSON.stringify(resps[2])}`);
+  assert.equal(resps[2].result.structuredContent?.try_id, opened.try_id);
+  assert.equal(resps[2].result.structuredContent?.criteria?.length, opened.criteria.length);
+  assert.equal(readFileSync(join(h.repo, 'tests/place-order.json'), 'utf8'), shortRaw, 'source Short JSON on disk must remain untouched');
+
+  // Direct createTryTools on a fresh cold state dir also succeeds on Short JSON.
+  const coldToolsEnv = { ...env, PDD_STATE_DIR: join(h.sandbox, 'state-tools') };
+  const tools = seam.createTryTools({ cwd: h.repo, words: [], env: coldToolsEnv }, portsFor(coldToolsEnv).ports);
+  const directOpen = await tools.call('try_open', { story: 'place-order' });
+  assert.ok(directOpen.try_id);
+  assert.ok(directOpen.criteria.length > 0);
+
+  // Neighbor control: full-format v1 Story still opens cleanly and stays untouched on disk.
+  const hFull = harbor(t);
+  const fullBefore = readFileSync(join(hFull.repo, 'tests/place-order.json'), 'utf8');
+  const fullEnv = { HOME: hFull.home, PDD_STATE_DIR: hFull.state, PDD_RUNTIME_URL: fake.origin, PDD_NO_UPDATE_CHECK: '1' };
+  const fullTools = seam.createTryTools({ cwd: hFull.repo, words: [], env: fullEnv }, portsFor(fullEnv).ports);
+  const fullOpen = await fullTools.call('try_open', { story: 'place-order' });
+  assert.ok(fullOpen.try_id);
+  assert.ok(fullOpen.criteria.length > 0);
+  assert.equal(readFileSync(join(hFull.repo, 'tests/place-order.json'), 'utf8'), fullBefore, 'full-format v1 JSON must remain untouched');
+  void execFileSync;
+});

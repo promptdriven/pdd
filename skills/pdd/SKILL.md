@@ -2,7 +2,7 @@
 name: pdd
 description: Prompt-driven development workflow. Use when planning a product, fixing a bug, adding a feature, or making a small non-product change in a repository that uses PDD.
 metadata:
-  pdd-skills: 0.1.52
+  pdd-skills: 0.1.53
 ---
 
 # PDD
@@ -62,6 +62,9 @@ Load [references/verification.md](references/verification.md) before finalizing 
 | Stories, compact scenario JSON, targets, operators, schemas & budgets | [references/stories.md](references/stories.md) |
 | Multi-part product maps, plans, contracts & `--through prompt-pr` | [references/product.md](references/product.md) |
 | External fakes, DB/HTTP/CLI, `--live-local`, 3-Port Rule, telemetry & `pdd mcp` | [references/ports-and-cli.md](references/ports-and-cli.md) |
-| Single-file plain-prose UI, optional `app-map.json`, `.ui.svg` & direct `pdd` | [references/ui-and-screens.md](references/ui-and-screens.md) |
+| Plain-prose UI screens, `.ui.svg` layout drawings & direct `pdd` | [references/ui-and-screens.md](references/ui-and-screens.md) |
 | Native tests, Feature Map (`verify.paths`), `pdd prove` & Deliberate-Break Probe | [references/verification.md](references/verification.md) |
 | Code-bound formal verification (zero-install PRNG/grid default, 3-tier stack & mutation control) | [references/formal.md](references/formal.md) |
+| Root-cause issue fixing, 10-line Fork Cards & real-artifact verification | [references/SOLVE.md](references/SOLVE.md) |
+| Clean-context independent break-testing & 4-item evidence standard | [references/BREAK-IT.md](references/BREAK-IT.md) |
+| One-pass advisory prompt & Story design review checklist (12 rules) | [references/PROMPT-REVIEW-RULES.md](references/PROMPT-REVIEW-RULES.md) |

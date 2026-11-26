@@ -1,0 +1,10 @@
+diff --git a/tests_py/test_calc.py b/tests_py/test_calc.py
+--- a/tests_py/test_calc.py
++++ b/tests_py/test_calc.py
+@@ -1,5 +1,6 @@
+ from app.calc import add
+ 
+ 
++@pytest.mark.only
+ def test_add() -> None:
+     assert add(2, 3) == 5

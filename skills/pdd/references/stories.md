@@ -45,7 +45,7 @@ As a person who keeps a to-do list in the terminal, I want to mark a task as don
 Place `<slug>.json` in `tests/` or `test/` (use `tests/runtime/` or `test/runtime/` when the repo keeps native tests in `tests/` or `test/`). Keep compact scenario JSON directly on disk (`/v1/check`, `/v1/lint`, `/v1/try` accept it natively):
 
 - Omit `schema_version`, `story_path`, and `criteria` so PDD infers `user_stories/<slug>.md` and binds numbered criteria automatically to current `ac-sha256-...` IDs.
-- Set top-level `"entry_path"` (override per step when calling another prompt; add `"app_maps": ["app-map.json"]` only when using one).
+- Set top-level `"entry_path"` (override per step when calling another prompt).
 - Use top-level `"seeds"` + step `"from"` + `"patch"` to template repeated step inputs cleanly (do not combine `"from"` and `"input"` on the same step). All steps execute against top-level `"initial_world"` (carrying world mutations forward across sequential steps). Because `"patch"` uses RFC 7396 JSON Merge Patch (where `null` deletes keys), use `"set": {"/a/b": null}` to assign literal `null` or replace array elements.
 - Chain `{"$step": "step-id#/field"}` or mutate shared `"initial_world"` only for persistence criteria.
 - Keep scenarios compact: **every criterion needs at least one exact check** (one cohesive step may verify multiple criteria; `5–8` steps typical, cap `15` steps, `<= 10` moves/rows/calls per step, `10` min server cap per step). Omit step `"model"`.
@@ -89,7 +89,7 @@ Place `<slug>.json` in `tests/` or `test/` (use `tests/runtime/` or `test/runtim
 
 ## 4. Check targets, operators, schemas, and dates
 
-- **4 targets:** `result`, `error` (shorthand `["error", "=", "code"]`), `world`, `calls` (never `output`), plus HTML shorthands (see [ui-and-screens.md §4](ui-and-screens.md#4-html-checks-and-prompt-interpreter-rules)). `input` is valid only as a `ref_target` reference source.
+- **4 targets:** `result`, `error` (shorthand `["error", "=", "code"]`), `world`, `calls` (never `output`), plus HTML shorthands (see [ui-and-screens.md §3](ui-and-screens.md#3-html-checks-and-prompt-interpreter-rules)). `input` is valid only as a `ref_target` reference source.
 - **14 exact operators:** `equals` (`=`), `not_equals` (`!=`), `not_contains`, `count`, `one_of`, `all_in`, `equals_ignore_case`, `at_least` (`>=`), `at_most` (`<=`), `lt` (`<`), `lte`, `gt` (`>`), `gte`, `integer_relation` (plus `html_exists`, `len>=`, `len<=`).
 - **2 supplemental operators** (pair with at least one exact check on the same criterion): `contains` (`contains_all`), non-HTML `exists`.
 - **Exact integer conservation (`integer_relation`):** check object `{"target": "result", "path": "", "op": "integer_relation", "value": {"left": <expr>, "compare": "eq"|"le"|"ge", "right": <expr>}}` (or tuple `["result", "", "integer_relation", {"left": <expr>, "compare": "eq"|"le"|"ge", "right": <expr>}]`) across `result`, `input`, and `world` using `field`, `ref_target`/`ref_path`, `integer`, `sum`, `product`.

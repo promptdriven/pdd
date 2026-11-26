@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-config.prompt.md (sha256: e830b36b3d0d196731a22a938e13fb29f9ce61d6c967e63894d1f8729b28a026).
+// Prompt: prompts/cli/agent-config.prompt.md
 import {constants,lstatSync,openSync,fstatSync,readSync,closeSync} from 'node:fs';
 import {resolve,join,dirname,isAbsolute} from 'node:path';
 import {createHash} from 'node:crypto';

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Generated from prompts/cli/bin-entry.prompt.md (sha256: e0db2323c30ba39aa5aeb612feb9da6a09cff685fa559f4e55bfa1407922416f).
+// Prompt: prompts/cli/bin-entry.prompt.md
 // Check Node before anything loads: an old Node fails on pdd's modules with a raw error.
 // So this file uses no static import, no top-level await and no newer syntax.
 const major = Number(process.versions.node.split('.')[0]);

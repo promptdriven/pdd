@@ -1,4 +1,4 @@
-// Generated from prompts/cli/codex-limits.prompt.md (sha256: ac0b69b21808e53f1d3cfaeda407adaf8b6ad44a36106a8a133419abc2dfb1dc).
+// Prompt: prompts/cli/codex-limits.prompt.md
 import { spawn } from 'node:child_process';
 const unknown = () => ({ state: 'unknown', resetAt: null, usedPercent: null });
 const unknownWindows = () => ({

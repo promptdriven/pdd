@@ -1,4 +1,4 @@
-// Generated from prompts/cli/github-calls.prompt.md (sha256: 0f3abce287e251af878cfc10ab710bfac501127ba81e0bddcd8d08f2e3cc4235).
+// Prompt: prompts/cli/github-calls.prompt.md
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';

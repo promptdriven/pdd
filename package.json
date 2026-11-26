@@ -1,6 +1,6 @@
 {
   "name": "@promptdriven/pdd",
-  "version": "0.1.52",
+  "version": "0.1.53",
   "description": "PDD: local Prompting guide, skills and recipes for your coding agent",
   "type": "module",
   "repository": {
@@ -30,6 +30,7 @@
     "docs/runtime-boundaries.md",
     "docs/build-a-whole-product.md",
     "docs/autopilot-factory.md",
+    "docs/autopilot-issue-refinement.md",
     "docs/metrics.md",
     "docs/ISSUES.md",
     "docs/lint-capacity.md",
@@ -43,7 +44,8 @@
   ],
   "scripts": {
     "test": "files=$(node scripts/list-tests.mjs) && [ -n \"$files\" ] && node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test $files",
-    "check:arch": "node scripts/check-architecture.mjs",
+    "lint:js": "oxlint -c .oxlintrc.json src bin",
+    "check:arch": "oxlint -c .oxlintrc.json src bin && depcruise src bin --config .dependency-cruiser.cjs --ignore-known .dependency-cruiser-known-violations.json --output-type err-long",
     "version": "node scripts/sync-pypi-version.mjs && git add python/pyproject.toml python/pdd_cli/__init__.py",
     "release:publish": "node scripts/publish-release.mjs"
   },
@@ -56,5 +58,9 @@
   "license": "MIT",
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "dependency-cruiser": "18.9.0",
+    "oxlint": "1.95.0"
   }
 }

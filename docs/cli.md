@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.52, as `pdd --help` and `pdd <command> --help` show it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help catalog is on this page.
+This page lists every command of pdd 0.1.53, as `pdd --help` and `pdd <command> --help` show it. The command tables below are generated from `PUBLIC_COMMAND_MANIFEST` (`src/command-catalog.mjs`) by `node scripts/generate-cli-docs.mjs` and verified by `test/docs-commands.test.mjs` (`node scripts/generate-cli-docs.mjs --check`).
 
 You need the pdd command for local inspection (`pdd status`, `pdd files`, `pdd owner`, `pdd update`, `pdd lint`, `pdd prove`), remote checks and direct prompt execution (`pdd test`, `pdd lint --remote`, `pdd <PROMPT.md|STORY|.>`), and headless Autopilot issue runs (`pdd autopilot`). Install the single `/pdd` skill globally with `pdd setup` (or `npx skills add promptdriven/pdd -g`), and set up each repository once with `pdd init`. For sessions that your agent drives, use the Try tools in `pdd mcp`. Call the skill with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -8,13 +8,18 @@ Typing `pdd check`, `pdd try`, `pdd simulate`, `pdd sim`, `pdd workflow`, or `pd
 
 ## Set up your machine and repo
 
+<!-- BEGIN GENERATED: cli-commands:setup -->
 | Command | What it does |
 |---|---|
-| `pdd setup [--yes] [--skills-dir PATH] [--upgrade]` | Laptop setup: check `gh` authentication (non-blocking), install or refresh the bundled [PDD skill](USAGE.md#4-the-pdd-skills) in user agent skill folders (respecting Claude Code plugin installs while cleaning retired PDD skills and symlinks, or targeting optional `--skills-dir PATH`), preview and register PDD Prompt Interpreter MCP tools in detected agents (Codex, Claude Code, Gemini CLI, Antigravity), and report any PATH conflict. Pass `--upgrade` to sync skills and silently refresh only already-registered stale MCP entries without prompting or creating new registrations. Never edits repository files or asks Autopilot questions |
-| `pdd init` | One-time per-repository setup: add or update the 4-line PDD block between `<!-- pdd:start -->` and `<!-- pdd:end -->` in `CLAUDE.md` (if it exists) else `AGENTS.md` (creating `AGENTS.md` if neither exists), detect project language and test command, and keep all other bytes untouched |
-| `pdd status [PATH...] [--changed] [--json]` | Offline repository overview: inspect prompts, Stories, tests, file ownership, PDD block status, and `pdd.json` `verify.paths` Feature Map coverage without network or AI calls |
-| `pdd upgrade [--main]` | Update a user-owned global npm or Volta `@promptdriven/pdd` installation from npm (with GitHub tag fallback, or the pinned `main` commit with `--main`) using `--ignore-scripts`, run the installed binary's `pdd setup --upgrade` to refresh user PDD skills and already-registered stale MCP entries, warn on competing `pdd` installs or login-shell PATH splits, and clear cached release notices |
-| `pdd doctor [--json]` | Read-only host health check: inspect CLI and Node.js (`>=22.16.0`) runtime, competing `pdd` installs across `PATH` and version managers, login-subshell (`zsh -lc`, `bash -lc`) PATH parity, user agent skills, agent MCP configs, and `gh` sign-in without writing any files. Exits 0 when healthy, 1 when actionable issues are found, 2 on invalid arguments |
+| `pdd setup [--yes] [--skills-dir PATH] [--upgrade]` | Install or refresh global PDD skills (~/.agents/skills, ~/.claude/skills, ~/.gemini/config/skills; plugin-aware for Claude Code; or custom PATH with --skills-dir), remove retired PDD skills, and offer Prompt Interpreter MCP registration for detected Codex, Claude Code, Gemini and Antigravity configs. Never edits repositories or Autopilot settings. Pass --yes to register previewed MCP tools without prompting, or --upgrade to sync skills and refresh only already-registered stale MCP entries silently. |
+| `pdd init` | Add or refresh the 4-line PDD block in this repository's CLAUDE.md (else AGENTS.md) and report detected language and test command; never edits root .gitignore. |
+| `pdd status [PATH...] [--changed] [--json]` | Show a compact offline overview of prompts, Stories, tests, file ownership and the pdd.json Feature Map; --changed inspects branch-diff and working-tree changes. No network or AI calls. |
+| `pdd files [--json]` | List prompts, Stories, tests and refusal reasons; no network calls. |
+| `pdd owner PATH... [--json]` | Show which prompt owns each file, from pdd-bindings.json and top-of-file Prompt / Generated from headers; reads local files only. |
+| `pdd update [FILE...] [--from RANGE] [--branch] [--all] [--check] [--json]` | Inspect changed code files against their owning prompts and changed symbols using local Git and working files only (read-only, zero AI calls). Use --branch to diff from merge-base(defaultBranch, HEAD), --all for all mapped files, and --check to fail on drift. |
+| `pdd upgrade [--main]` | Upgrade a user-owned global npm @promptdriven/pdd installation from npm (with GitHub tag fallback, or pinned main commit with --main) and refresh installed user PDD skills. |
+| `pdd doctor [--json]` | Run read-only health checks for Node, competing pdd installs, login-shell PATH splits, agent skills, MCP configs, and gh sign-in. Exits 0 when healthy, 1 when actionable issues are found. |
+<!-- END GENERATED: cli-commands:setup -->
 
 `pdd setup` copies the bundled `/pdd` skill to `~/.agents/skills` (Codex and Gemini CLI), `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path, cleaning retired PDD skills and symlinks and skipping duplicate `/pdd` copies when Claude Code already has the PDD plugin installed in `installed_plugins.json`), and `~/.gemini/config/skills` when Antigravity (`agy` on PATH, `~/.gemini/antigravity-cli`, `~/.gemini/config/mcp_config.json`, or existing PDD skills in `~/.gemini/config/skills`) is present. Pass `--skills-dir PATH` to target a custom skill folder instead of the default roots. Setup also updates existing PDD-managed folders in `~/.codex/skills` and `$CODEX_HOME/skills`. After an update of the pdd command, `pdd setup`, `pdd upgrade`, and the once-per-version automatic sync on normal `pdd` commands recognize real PDD-managed folders carrying `.pdd-skill.json` or `pdd-skills:` frontmatter, replacing older or same-version differing copies with a `.pdd-skill.json`-marked copy, adding missing bundled skills, removing PDD-managed retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`, `pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`), and unlinking retired symlinks that are dangling or point into another user agent skill directory. Do not hand-edit PDD-managed folders because updates replace managed copies; folders lacking both `.pdd-skill.json` and `pdd-skills:` frontmatter, symlinks into developer git checkouts, and unrelated custom skills are never modified. When `pdd --version` or `pdd setup` reports older or retired skills, it names each affected skill and advises `pdd setup` for user folders (or `npx skills add` for project folders). Discovery commands (`pdd files`, `pdd status`, `pdd owner`, default `pdd lint`) make no network calls and write nothing to the repository (`pdd lint --local` may still save local assessment state under `$PDD_STATE_DIR` when assessing scenario JSONs).
 
@@ -38,13 +43,15 @@ Setup also reports PATH conflicts, competing `pdd` installs across version manag
 
 Manage Autopilot repository mode and trust directly with `pdd autopilot`:
 
+<!-- BEGIN GENERATED: cli-commands:autopilot-settings -->
 | Command | What it does |
-| --- | --- |
-| `pdd autopilot off` | Save mode `off` |
-| `pdd autopilot observe` | Save mode `observe` |
-| `pdd autopilot auto` | Save mode `auto` |
-| `pdd autopilot trust NAME...` | Add one or more explicitly trusted GitHub names |
-| `pdd autopilot untrust NAME` | Remove one explicitly trusted GitHub name |
+|---|---|
+| `pdd autopilot observe` | Set the repository Autopilot mode to observe. |
+| `pdd autopilot auto` | Set the repository Autopilot mode to auto. |
+| `pdd autopilot off` | Set the repository Autopilot mode to off. |
+| `pdd autopilot trust NAME...` | Add explicitly trusted GitHub names. |
+| `pdd autopilot untrust NAME` | Remove an explicitly trusted GitHub name. |
+<!-- END GENERATED: cli-commands:autopilot-settings -->
 
 Settings live in the repository's `pdd.json`, for example `{"autopilot":{"mode":"off","trust":[]}}`. Other settings are preserved. Autopilot on this machine reads `pdd.json` of this checkout. Its job worktrees, other machines and other people read `pdd.json` of the default branch on GitHub. So `pdd autopilot off`, `observe`, `auto`, `trust` and `untrust` also update `pdd.json` on the default branch, through the GitHub API with your `gh` sign-in. Each command makes only its own change on GitHub: a mode command sets `autopilot.mode`, `trust` adds its names to `autopilot.trust`, and `untrust` removes its name. All other keys and fields keep the GitHub values, also when your checkout is behind. The commit message says what changed, and the commit changes only those bytes of `pdd.json`: the indent and the key order of the file stay. They do not touch your current branch or your uncommitted work. More lines tell the result:
 
@@ -235,29 +242,31 @@ Run Autopilot commands inside the repo folder. Each repo has its own Autopilot o
 each machine. Autopilot runs the [core engine](#core-engine). Its tick
 makes no AI call. Each issue gets one headless Codex, Claude, Gemini, or Antigravity job with a log file.
 
+<!-- BEGIN GENERATED: cli-commands:autopilot -->
 | Command | What it does |
 |---|---|
-| `pdd autopilot doctor` | Read-only prerequisite checks, one line per item. A WARN or FAIL line also gives a fix command. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--issues N,M] [--issue N] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow\|active] [--share PERCENT] [--agent codex\|claude\|gemini\|agy] [--auto-update release\|main\|off]` | Run doctor, check the sign-ins, start the user timer and run the first tick now. The timer runs a tick every 10 minutes. `--label NAME` sets the opt-in label, for example `pdd:autopilot`: Autopilot takes only the issues with this label unless `--intake active` selects vetted ready issues without a label. `--issues N,M` or `--issue N` limits this machine to those issue numbers (`off`, `all`, or `clear` clears the allowlist). `--mode`, `--report`, `--decisions` and `--intake` set this machine's mode, report mode, [decision mode](#core-engine) and [intake mode](#intake-cards-shadow) for this repo. These machine values win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--share PERCENT` (1 to 100, default 50) saves the part of this machine's CPU and memory that Autopilot may use; a later start without it keeps it (see [the machine guard](#core-engine)). `--agent` sets or replaces this machine's coordinator agent and sign-in profile. `--auto-update release\|main\|off` (default `release`) updates a user-owned global `pdd` install and its PDD skills between ticks when no job is publishing or merging. `--runs N` and `--checks N` save this machine's run and heavy-check limits; a start without them removes them |
-| `pdd autopilot suite --command COMMAND [--timeout MIN]` | Run a full test suite through the shared machine queue without workflow dependencies (machine-sized check slots, 30-minute default timeout; `--timeout 0` runs with no time limit) |
-| `pdd autopilot stop` | Save this repo as disabled on this machine, stop its timer and its intake card jobs, and let the current step finish |
-| `pdd autopilot graph [--open] [--issue N] [--repo OWNER/REPO]` | Read native issue dependencies or open the local graph viewer (alias: `pdd graph`) |
+| `pdd autopilot doctor` | Read-only first-start checks and fix commands; no AI call or GitHub write. |
+| `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--issues N,M] [--issue N] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow\|active] [--share PERCENT] [--agent codex\|claude\|gemini\|agy] [--auto-update release\|main\|off]` | Start this repo with headless agent jobs (the core engine): check now and every 10 minutes, with no AI call on empty ticks. Autopilot works on issues with an opt-in label (--label NAME or autopilot.label in pdd.json) or on vetted ready cards when --intake active is enabled; without --intake active, a start with no label starts nothing. --issues N,M or --issue N limits this machine to those issue numbers (pass off, all or clear to clear). --runs and --checks override machine-sized run and heavy-check limits; --label, --mode and --report save this machine's opt-in label, mode and report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --decisions saves this machine's decision mode (ask asks a person only for a big decision; decide, the default, never asks); --intake saves this machine's intake mode (shadow writes local intake cards that never change what starts; active selects ready cards, refines improve cards via read-only repo inspection and groups related small work; off is the default). --share saves the percent of this machine's CPU and memory that Autopilot may use (1-100, default 50; it sets the automatic slots, the room check and the timer's memory limit). --agent saves or replaces this machine's agent and sign-in profile. --auto-update saves this machine's between-tick self-update mode for a user-owned global pdd install and its skills when no job is publishing or merging (release is the default; main tracks promptdriven/pdd main; off disables self-update). |
+| `pdd autopilot suite --command COMMAND [--timeout MIN]` | Run a full test suite through the shared machine queue without workflow dependencies (machine-sized check slots, 30-minute default timeout; --timeout 0 runs with no time limit). |
+| `pdd autopilot status [--all] [--json]` | Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder. |
+| `pdd autopilot logs [ISSUE] [--follow\|-f] [--lines N] [--json]` | List current headless Autopilot workers with stage, owned process state, suite queue position, blockers and saved log or evidence paths, or inspect and follow one issue worker live (--follow / -f detaches cleanly on Ctrl-C without stopping the worker or changing observe mode). Read-only; no GitHub write or approval effect. |
+| `pdd autopilot logs --issue N [--follow\|-f] [--lines N] [--json]` | Select one worker explicitly with --issue N (number, #N, owner/repo#N or issue URL) to inspect saved progress or stream live updates. |
+| `pdd autopilot stop` | Stop this machine's timer; let the current agent step finish. |
+| `pdd autopilot add N...` | Mark named old issues with pdd:autopilot so Autopilot may take them. |
+| `pdd autopilot release ISSUE` | Release this machine's claim and remove pdd:working and pdd:stuck; keep the run folder, branch and PRs. |
+| `pdd autopilot intake [--json]` | Print this machine's local intake cards for this repo (shadow mode), the would-pick list and today's changes; no AI call or GitHub write. |
+| `pdd autopilot graph [--open] [--issue N] [--repo OWNER/REPO]` | Read native issue dependencies or open the local graph viewer (alias: pdd graph). |
+| `pdd autopilot report` | List the local Autopilot report drafts of this machine; no GitHub call. |
+| `pdd autopilot report send FINGERPRINT` | File one local report draft to promptdriven/pdd, or count it on the matching open report. |
+| `pdd autopilot regressions [--json] [--file PATH]` | Read core merge history and GitHub regression evidence; optionally save a local report, without GitHub writes or reverts. |
+| `pdd autopilot investigate [--date YYYY-MM-DD] [--json] [--write-issues] [--max-issues N]` | Run the deterministic 4-bucket Autopilot incident investigator against local history, post-merge regressions, flakes, and report drafts (read-only by default; pass --write-issues to auto-file deduplicated strong-evidence GitHub issues up to --max-issues N). |
+| `pdd autopilot alerts set [--destination autopilot\|infrastructure]` | Read a Discord or Slack incoming webhook URL from stdin and save it for this machine outside every repository, readable only by you; the URL is never printed. Post changed causes, decisions and recoveries; an unchanged stuck review sends nothing. Send one digest of open work per repository and machine at most every 6 hours. Use --destination infrastructure to separate machine incidents. |
+| `pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot\|infrastructure]` | Use a Discord bot instead: read its token from stdin and save it readable only by you, or save CMD and run it at each send so the token is never written to disk. The token and the command output are never printed. |
+| `pdd autopilot alerts test [--destination autopilot\|infrastructure]` | Send one test message and confirm the posted message; for a bot, first show the bot name and channel name. |
+| `pdd autopilot alerts clear [--destination autopilot\|infrastructure]` | Remove the alert destination from this machine. |
+| `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered --input - [--update]` | Record one alert for a real human need or incident and send it to this machine's destination. Reads {"cause","tried","need"} JSON from stdin. usage-limit, resource, interpreter and interpreter-access are one alert per repository and machine for all blocked issues; access, decision, stuck, test-suite and long-running are one alert per issue. A repeat sends nothing unless the last send failed; --update sends a changed cause, decision or issue list, never attempt notes alone; one digest of open work per repository and machine is sent at most every 6 hours; recovered sends one recovery and closes the matching alerts. |
 | `pdd autopilot check-base RUN PR` | Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only. |
-| `pdd autopilot status [--all] [--json]` | Show this machine's Autopilot for this repo: enabled or disabled, the timer, the next tick, the jobs, an [alert](#alerts) that was not delivered and the last tick. `--all` lists every repository with Autopilot on this machine, from any folder. `--json` prints the [local cost report](#local-issue-costs) |
-| `pdd autopilot logs [ISSUE] [--follow\|-f] [--lines N] [--json]` | List current headless Autopilot workers for this repository with stage, owned process state, suite queue position, blockers, last activity and saved log or evidence paths, or inspect and follow one worker live (`--follow` / `-f` detaches on Ctrl-C without stopping the worker or changing `observe` mode). Read-only; no GitHub call or approval effect |
-| `pdd autopilot logs --issue N [--follow\|-f] [--lines N] [--json]` | Select one worker explicitly with `--issue N` (issue number, `#N`, `owner/repo#N`, or GitHub issue URL) to inspect saved progress or stream live updates |
-| `pdd autopilot add N...` | Create the `pdd:autopilot` label when it is missing and add it to each named issue of this repository. Use it to choose the issues that Autopilot may take |
-| `pdd autopilot release ISSUE` | Release this machine's claim and remove `pdd:working` and `pdd:stuck`; keep the run folder, branch and PRs |
-| `pdd autopilot regressions [--json] [--file PATH]` | Read core merge history and GitHub CI, parent checks, revert, reopen and issue-link evidence. Classify each merge as ok, suspect or proven; count distinct proven PRs per UTC evidence day. Issue-body attribution uses issue creation time even if added in a later edit; these buckets require a consumer confirmation policy before use as daily scorecard counts. At most 100 GitHub requests per scan; rate exhaustion or Retry-After stops further reads, preserving collected evidence and marking missing evidence incomplete. --json prints structured results; --file exclusively creates a local report without overwriting existing files. No GitHub writes or reverts. Incomplete reads exit 1; complete scans exit 0 even when they detect regressions |
-| `pdd autopilot investigate [--date YYYY-MM-DD] [--json] [--write-issues] [--max-issues N]` | Run the deterministic 4-bucket Autopilot incident investigator against local history, post-merge regressions, flakes, and report drafts. Read-only by default; `--json` prints structured JSON; `--write-issues` opts in to auto-filing deduplicated strong-evidence GitHub issues capped at `--max-issues N` (1..20) with secret redaction |
-| `pdd autopilot report` | List this machine's local Autopilot report drafts. No GitHub call |
-| `pdd autopilot report send FINGERPRINT` | File one local report draft to promptdriven/pdd, or count it on the matching open report |
-| `pdd autopilot intake [--json]` | Print this machine's [intake cards](#intake-cards-shadow) for this repo, the would-pick list and today's changes. Local files only: no AI call and no GitHub call |
-| `pdd autopilot alerts set [--destination autopilot\|infrastructure]` | Read your Discord or Slack incoming webhook URL from stdin and save it for this machine |
-| `pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot\|infrastructure]` | Use a Discord bot in one channel: read its token from stdin, or save CMD and run it at each send to get the token |
-| `pdd autopilot alerts test [--destination autopilot\|infrastructure]` | Send one test message and confirm that it was posted; for a bot, first check and show the bot name and channel name |
-| `pdd autopilot alerts clear [--destination autopilot\|infrastructure]` | Remove the alert destination from this machine |
-| `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered --input - [--update]` | Record one alert and send it to this machine's destination. See [Alerts](#alerts) |
+<!-- END GENERATED: cli-commands:autopilot -->
 
 Outside a Git repository, `start`, `stop`, `status`, `logs`, `add`, `off`, `observe`,
 `auto`, `trust` and `untrust` stop with exit code 1 and say: `This folder is not a
@@ -382,30 +391,37 @@ machine and sends one alert; see [Core engine](#core-engine).
 of `@openai/codex` (isolated in `$PDD_STATE_DIR/codex-home`, default `~/.local/state/pdd/codex-home`, leaving `~/.codex/auth.json` untouched) and `@anthropic-ai/claude-code`
 (isolated in `$PDD_STATE_DIR/claude-home`, leaving `~/.claude/settings.json` and `~/.claude.json` untouched). PDD never spends or triggers usage-reset credits.
 
+<!-- BEGIN GENERATED: cli-commands:accounts -->
 | Command | What it does |
 |---|---|
-| `pdd accounts [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling`, `paused`, or `reauth_required`), refresh status, and pending invites |
-| `pdd accounts list [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling`, `paused`, or `reauth_required`), refresh status, and pending invites |
-| `pdd accounts status [--json]` | Show Cloud account enrollment, isolated Codex home path, shell auto-switch status, active leases, and token refresh and expiry health |
-| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside a disposable folder (`--device-auth` for headless Codex, interactive TTY `claude setup-token` for Claude), upload the credential bundle to PDD Cloud over TLS, delete temporary login files immediately, materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `$PDD_STATE_DIR/claude-home` without touching `~/.codex/auth.json` or `~/.claude/settings.json`, and optionally enroll multiple accounts (`--loop`), replace an existing owned label (`--replace`), or share (`--with`) |
-| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--replace] [--with USER\|ORG/TEAM[,...]]` | Import an external (`--from PATH`) or local Codex `auth.json` or Claude token into PDD Cloud, scrub the single-use `refresh_token` from the imported local Codex `auth.json` after upload so local `codex` cannot collide with Cloud refresh (prefer `pdd accounts add` for a fresh OAuth session), materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `$PDD_STATE_DIR/claude-home`, and optionally replace an existing owned label (`--replace`) or share (`--with`) |
-| `pdd accounts use LABEL [--provider codex\|claude]` | Pin `LABEL` (matching `+` and `-` punctuation, scoped by `--provider` when both Codex and Claude use `LABEL`) and materialize its leased pass in `$PDD_STATE_DIR/codex-home` (`0600`) or `$PDD_STATE_DIR/claude-home` (`0600`) |
-| `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch to the next ready account sorted by soonest weekly reset |
+| `pdd accounts [--json]` | List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites. |
+| `pdd accounts list [--json]` | List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites. |
+| `pdd accounts status [--json]` | Show Cloud account enrollment, isolated Codex home, shell auto-switch status, active leases, and token refresh/expiry health. |
+| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside an isolated folder, upload the encrypted bundle to PDD Cloud, materialize in PDD's isolated Codex home or Claude home, and optionally enroll in a loop, replace an existing label, or share immediately. |
+| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--replace] [--with USER\|ORG/TEAM[,...]]` | Import a local or external Codex auth.json or Claude token into PDD Cloud, materialize in PDD's isolated Codex home or Claude home, and optionally replace an existing label or share immediately. |
+| `pdd accounts use LABEL [--provider codex\|claude]` | Pin and materialize LABEL in PDD's isolated Codex home or Claude home. |
+| `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch to the next ready account sorted by soonest weekly reset. |
+| `pdd accounts codex [ARGS...]` | Launch an interactive Codex session with live Cloud account quota monitoring and automatic mid-session resume rotation. |
+| `pdd accounts sync [--provider codex\|claude] [--quiet] [--timeout-ms MS]` | Refresh the PDD-managed login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline. |
+| `pdd accounts auto on\|off\|status` | Manage the opt-in fail-open shell wrapper in ~/.zshrc, ~/.bashrc, and ~/.config/fish/config.fish for plain terminal codex and claude launches (off by default). |
+| `pdd accounts pause LABEL [--provider codex\|claude]` | Pause automatic leasing for LABEL. |
+| `pdd accounts unpause LABEL [--provider codex\|claude]` | Resume automatic leasing for LABEL. |
+| `pdd accounts share LABEL [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share LABEL with GitHub users, organization teams, or @ORG targets without exposing raw credentials. |
+| `pdd accounts share --all [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or @ORG targets. |
+| `pdd accounts accept INVITE` | Accept a pending Cloud account share invite. |
+| `pdd accounts unshare LABEL [--provider codex\|claude] --user USER` | Revoke shared access to LABEL for USER. |
+| `pdd accounts unshare [LABEL] [--all] [--provider codex\|claude] [--user USER] [--with USER\|ORG/TEAM[,...]]` | Revoke shared access for users, organization teams, or @ORG targets across LABEL or all owned accounts. |
+| `pdd accounts leave LABEL [--provider codex\|claude]` | Leave a shared Cloud account. |
+| `pdd accounts remove LABEL [--provider codex\|claude]` | Delete LABEL from PDD Cloud and revoke active leases. |
+| `pdd accounts log LABEL [--provider codex\|claude] [--json]` | Show the lease and sharing audit log for LABEL. |
+<!-- END GENERATED: cli-commands:accounts -->
+
+Standalone gateway launchers:
+
+| Command | What it does |
+|---|---|
 | `pdd-codex [CODEX_ARGS...]` | Launch your installed `codex` binary through the PDD Cloud `/backend-api` gateway using your `~/.codex` chats, skills, plugins, and `config.toml` while sharing one temporary machine runtime lease and leaving personal `~/.codex/auth.json` untouched (`--account LABEL` pins a single account; `pdd-codex logout` revokes the runtime lease only) |
 | `pdd-claude [CLAUDE_ARGS...]` | Launch your installed `claude` binary through the PDD Cloud `/v1/claude-gateway` gateway using a private `0600` temporary `--settings` file while keeping your `~/.claude` chats, plugins, skills, hooks, MCP servers, Claude in Chrome, and `~/.claude/settings.json` untouched (`--account LABEL` pins a single account; `pdd-claude logout` revokes the runtime lease only) |
-| `pdd accounts codex [ARGS...]` | Launch an interactive Codex session with live Cloud account quota monitoring and automatic mid-session `codex resume` rotation |
-| `pdd accounts sync [--provider codex\|claude] [--quiet] [--timeout-ms MS]` | Return in 0 ms when the cached lease is below 100% on both windows and more than 15 minutes from expiry; else lease a fresh pass within `--timeout-ms` (default 1200 ms) and fail open when offline |
-| `pdd accounts auto on\|off\|status` | Turn on, turn off or inspect the opt-in fail-open shell wrapper in `~/.zshrc`, `~/.bashrc`, and `~/.config/fish/config.fish` for plain terminal `codex` and `claude` commands (off by default) |
-| `pdd accounts pause LABEL [--provider codex\|claude]` | Pause automatic leasing for `LABEL` |
-| `pdd accounts unpause LABEL [--provider codex\|claude]` | Resume automatic leasing for `LABEL` |
-| `pdd accounts share LABEL [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share `LABEL` with GitHub users, organization teams, or `@ORG` targets without exposing raw owner credentials |
-| `pdd accounts share --all [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or `@ORG` targets |
-| `pdd accounts accept INVITE` | Accept a pending Cloud account share invite and materialize the shared grant if no account is pinned for that provider |
-| `pdd accounts unshare LABEL [--provider codex\|claude] --user USER` | Revoke shared access to `LABEL` for `USER` |
-| `pdd accounts unshare [LABEL] [--all] [--provider codex\|claude] [--user USER] [--with USER\|ORG/TEAM[,...]]` | Revoke shared access for users, organization teams, or `@ORG` targets across `LABEL` or all owned accounts |
-| `pdd accounts leave LABEL [--provider codex\|claude]` | Leave a shared Cloud account and clean up its local gateway configuration |
-| `pdd accounts remove LABEL [--provider codex\|claude]` | Delete `LABEL` from PDD Cloud and revoke active leases |
-| `pdd accounts log LABEL [--provider codex\|claude] [--json]` | Show the lease and sharing audit log for `LABEL` |
 
 - **Encrypted vault, zero-plaintext gateway grants, and constant gateway URLs.** PDD
   Cloud encrypts each account's refresh credential with envelope encryption bound
@@ -662,34 +678,40 @@ and it cannot enter the complete-pass cache. PDD uses the engine's exemption
 format in the uploaded scenario copy. It leaves authored files unchanged.
 Changed criterion text and other malformed test rules still refuse the test.
 
+<!-- BEGIN GENERATED: cli-commands:interpreter -->
 | Command | What it does |
 |---|---|
-| `pdd test --target code [STORY...] [--json]` | Run the selected Story scenarios on their declared real CLI commands, with 0 AI calls. Compare arguments, optional stdin, exit code, stdout and stderr using the same cases. Save one result per Story with the commit. Unsupported steps say `not run` with a reason and cannot pass. |
-| `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every Story affected by local changes against the unique saved-run base or HEAD, including all variants and criteria (also accepts `--fresh` and `--batch-timeout MIN`). Uncertain scope keeps complete coverage. Read omitted baseline obligations from local original Check history in a separate historical report. Status describes selected checks only. Required full-pass gates still apply. |
-| `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--fresh] [--json] [--details] [--timeout MIN] [--batch-timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. `--fresh` bypasses local cache reuse and server-side saved check answers (`fresh: true`; also accepted with `--affected` and `--journeys`) without discarding other cached Stories. `--timeout MIN` bounds each Story wait and `--batch-timeout MIN` bounds the whole batch wait. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
-| `pdd test [PATH\|STORY...] --live-local --command-manifest PATH [--allow-live-writes] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check Stories against allow-listed local commands defined in `PATH` on your machine (read-only by default; `--allow-live-writes` enables manifest write commands with a fresh terminal `yes` confirmation per write). Keep the manifest file excluded from uploaded Git source |
-| `pdd test [PATH\|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]` | Cap logical interpreter calls across all selected Stories and any permitted `service-restarted` replacement (`--max-total-calls` 1..999999), or decline automatic `service-restarted` replacement (`--no-restart-replacement`, saved across `--read` and `--retry`). Also accepted with `--affected`, `--journeys` and `--batch-timeout MIN` |
-| `pdd test --read [BATCH\|CALL_ID] [--json] [--details] [--timeout MIN]` | Read saved results (`--details` includes full step and check detail, outputs, errors, calls and draft interfaces; also accepts `--batch-timeout MIN`); a normal Check held for lint may continue its original checks. Other reads send no work |
-| `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps (also accepts `--batch-timeout MIN`). Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
-| `pdd test --reconcile REQUEST_ID\|BATCH [--json]` | Read-only reconciliation of a historical CHECK request UUID against `GET /v1/runs/<REQUEST_ID>/reconciliation` without replaying checks, changing saved batches or releasing reservations, or reconciliation of unresolved prior reservations for a saved local batch ID without replaying checks |
-| `pdd test --reconcile-stale [--json]` | Reconcile unresolved stale prior batch reservations for this repository, settling confirmed receipts or expiring reservations past TTL without replaying checks |
-| `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
-| `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest, byte sizes and `source_sha256`. No network; `--app-map` previews the Prompt Interpreter's app map |
-| `pdd lint [STORY...] [--diff [BASE]] [--json]` | Run deterministic offline PDD structural, SVG layout, and optional diff checks across prompts, Stories, `app-map.json`, and `pdd.json` project rules with 0 AI/network calls and 0 batch-state writes |
-| `pdd lint --local [STORY...] [--json]` | Run offline local structural, Short JSON scenario, criterion-binding and native-evidence lint checks with 0 AI/network calls |
-| `pdd lint --remote [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Run interpreter lint with 0 AI calls across selected prompts, Stories, tests (including native Short JSON and compact `app-map.json`) and whole-program cross-prompt unification (shared port signatures, mocked-port owner parity, `contracts/*.md` schema reconciliation and unwired cross-cutting advisories). Requires network access |
-| `pdd lint --codex [STORY...] [--issue N\|FILE] [--json] [--timeout MIN]` | Run local deterministic lint plus read-only Codex readability, semantic Story-vs-Prompt alignment, and optional `--issue N\|FILE` issue-coverage checks on selected prompts and Stories with per-file `PASS` / `FAIL` verdicts (`schema_version: "pdd.codex-lint.v1"` with `--json`), exiting 0 when all pass and 1 when any file or issue-coverage check fails |
-| `pdd lint --emit-v1 [STORY...] [--write] [--json]` | Compile Short JSON Story scenarios (or omitted-`criteria` `program-scenario.v1` scenarios, passing explicit `program-scenario.v1` scenarios through unchanged in dry-run mode) locally with 0 AI calls and no network/authentication; prints the expanded `program-scenario.v1` JSON by default, or with `--write` compiles and binds matching legacy non-`ac-sha256-...` criterion IDs to current Story `ac-sha256-...` content IDs and updates each changed selected test file on disk atomically (refusing symlinks, stale `ac-sha256-...` IDs, or mismatched criterion text without modifying files) |
-| `pdd lint --bind-criteria [STORY...] [--json]` | Bind legacy non-`ac-sha256-...` criterion IDs (or omitted `criteria`) on disk to current Story `ac-sha256-...` content IDs when every criterion text matches the Story word-for-word, preserving check expectations for `git diff` review; refuses without modifying files when any criterion text differs or has a stale `ac-sha256-...` ID. 0 AI calls and no network/authentication |
-| `pdd prove [--base REF] [--timeout MIN] [--json]` | Run offline lint, diff checks, repository test command, and merge-base trusted `verify.paths` recipes against `REF`; exits `0` Proved, `1` Failed, `2` Usage, `3` Not proved |
-| `pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]` | Run isolated base-vs-head bug-contrast proof in temporary worktrees: proves `CMD` fails on base with `TEXT` and passes on head; exits `0` Proved, `1` Failed, `2` Usage, `3` Not proved |
-| `pdd product contracts` | List shared product records, their users and Stories stale since their last check (alias: `pdd contracts`); local working files only |
-| `pdd test --screen URL --drawing PATH [--look] [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport (`--look` also checks canvas color, painted card/section boxes, box size and spacing within tolerance, without pixel equality; `pdd test --screen URL --drawing PATH [--json]` checks parts only). No AI or interpreter call; missing/hidden parts, order, region or look differences fail |
-| `pdd [OPTIONS] <PROMPT.md\|app-map.json> [ARGS...]` | Run a prompt program directly on the PDD interpreter (Python-style: options before the file belong to `pdd`; trailing args pass verbatim to CLI or typed prompts, or use `--` to force passthrough). Prefix options include `--fresh`, `--new`, `--data FILE`, `--show-data`, `-q`/`--quiet`, `--page`, `--cli`, `--shell`, `--serve [PORT]`, `--max-calls N`, `--tab`, `--app-map PATH`, `--no-open`, `--no-wait`, `--agent NAME`, and `--stop`. |
-| `pdd <PROMPT.md\|STORY\|.> [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--fresh] [--no-open] [--no-wait] [--agent NAME]` | Automatically open a shell for command-line programs, localhost with an example request for HTTP routes, or the Prompt Interpreter page (Screen tab for `app-map.json` or single-file plain-prose `render`/`handle_event` UI prompts with zero `app-map.json`, zero `Runtime interface` and optional Story; Form tab for other typed operations). Pass `.` to open the whole project (or the sole `.prompt.md` when no Stories exist). `--fresh` requests fresh uncached interpreter execution (`fresh: true`; also accepted with `--page`, `--cli` and `--serve`). |
-| `pdd <STORY\|.> --live-local --command-manifest PATH [--allow-live-writes] [--new] [--max-calls N] [--tab call\|screen\|terminal\|world] [--no-open]` | Run a Story or project session on the Prompt Interpreter against allow-listed local commands defined in `PATH` on your machine (stays in the foreground; read-only by default; `--allow-live-writes` enables manifest write commands with a fresh terminal `yes` confirmation per write). Keep the manifest file excluded from uploaded Git source |
-| `pdd <PROMPT.md\|STORY\|.> --page [--new] [--fresh]` | Open the Prompt Interpreter browser page explicitly (`--fresh` bypasses saved answer caches) |
-| `pdd --stop [STORY\|PROMPT.md]` | Stop the open Prompt Interpreter link of a Story, prompt, or exact Try ID |
+| `pdd test --target code [STORY...] [--json]` | Run Story cases against declared CLI code without AI calls. |
+| `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every affected Story with conservative full fallback and a separate historical baseline report; required full-pass gates still apply. Also accepts --fresh and --batch-timeout MIN. |
+| `pdd test --journeys [JOURNEY] [--max-calls N]` | Check all root product journeys or one journey. Also accepts --fresh and --batch-timeout MIN. |
+| `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--fresh] [--json] [--details] [--timeout MIN] [--batch-timeout MIN] [--max-calls N]` | Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers), --fresh bypasses local cache reuse and server-side saved answers (fresh: true; also accepted with --affected and --journeys); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no default limit in any shell; --timeout MIN caps each Story wait and --batch-timeout MIN caps the whole batch wait) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000. |
+| `pdd test [PATH\|STORY...] --live-local --command-manifest PATH [--allow-live-writes] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check Stories against allow-listed local commands defined in PATH on your machine (read-only by default; --allow-live-writes enables manifest write commands with a fresh terminal yes confirmation per write). Keep the manifest excluded from uploaded Git source. |
+| `pdd test [PATH\|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]` | Cap logical interpreter calls across all selected Stories and any permitted service-restarted replacement (--max-total-calls 1..999999), or decline automatic service-restarted replacement (--no-restart-replacement; saved across --read and --retry). Also accepted with --affected, --journeys and --batch-timeout MIN. |
+| `pdd test --read [BATCH\|CALL_ID] [--json] [--details] [--timeout MIN]` | Read saved results (--details includes step and check detail, outputs, errors, calls and draft interfaces; also accepts --batch-timeout MIN); a normal Check held for lint may continue its original checks. Other reads send no work. |
+| `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks from a saved batch, with the same source and call caps (also accepts --batch-timeout MIN); preserve completed and uncertain runs. |
+| `pdd test --reconcile REQUEST_ID\|BATCH [--json]` | Read-only reconciliation of a historical CHECK request UUID against the PDD interpreter, or reconcile unresolved prior reservations for a saved local batch ID without replaying checks. |
+| `pdd test --reconcile-stale [--json]` | Reconcile unresolved stale prior batch reservations for this repository, settling confirmed receipts or expiring reservations past TTL without replaying checks. |
+| `pdd test --explain-bindings [STORY...] [--json]` | Explain local resource edges, fixture selection and repairs before any paid call. |
+| `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload files and byte sizes; no network. --app-map selects the Prompt Interpreter's app map. |
+| `pdd test --screen URL --drawing PATH [--look] [--json]` | Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium (--look also checks main colors, painted boxes and spacing within tolerance); no AI or interpreter calls. |
+| `pdd lint [STORY...] [--diff [BASE]] [--json]` | Run fast offline structural, SVG layout, and optional diff checks (0 AI, 0 network). |
+| `pdd lint --local [STORY...] [--json]` | Run offline local structural, compact scenario JSON, criterion-binding, and native-evidence checks (0 AI, 0 network). |
+| `pdd lint --remote [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Run hosted PDD interpreter cross-prompt lint (0 AI calls) on selected Stories and dependencies; --max-calls (1..1000) previews call budgets. |
+| `pdd lint --codex [STORY...] [--issue N\|FILE] [--json] [--timeout MIN]` | Run local deterministic lint plus read-only Codex readability, Story-vs-Prompt alignment, and optional issue-coverage checks. |
+| `pdd lint --emit-v1 [STORY...] [--write] [--json]` | Expand compact scenario JSON files to full scenario JSON offline (--write updates each selected test file on disk). |
+| `pdd lint --bind-criteria [STORY...] [--json]` | Bind matching Story acceptance criteria in selected test files to current content-hash IDs on disk; 0 AI/network calls. |
+| `pdd prove [--base REF] [--timeout MIN] [--json]` | Run offline lint, diff checks, repository tests, and merge-base trusted verify.paths recipes against REF (default timeout: 10 min per step). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved. |
+| `pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]` | Run isolated base-vs-head bug-contrast proof in temporary worktrees: proves CMD fails on base with TEXT and passes on head (default timeout: 10 min per phase; --overlay adds extra files alongside changed tests). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved. |
+| `pdd [OPTIONS] <PROMPT.md\|app-map.json> [ARGS...]` | Run a prompt program directly on the PDD interpreter (Python-style: options before the file belong to pdd; trailing args pass verbatim to CLI or typed prompts, or use -- to force passthrough). Prefix options include --fresh, --new, --data FILE, --show-data, -q/--quiet, --page, --cli, --shell, --serve [PORT], --max-calls N, --tab, --app-map PATH, --no-open, --no-wait, --agent NAME, and --stop. |
+| `pdd <PROMPT.md\|STORY\|.> [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--fresh] [--no-open] [--no-wait] [--agent NAME]` | Open the prompt, Story, or whole project (.) automatically on the Prompt Interpreter: a command-line program opens a shell, HTTP routes start on localhost with an example request, screens (including single-file plain-prose UI prompts without app-map.json or Runtime interface) open the Prompt Interpreter Screen page, and typed operations open its Form tab. Make a session on the PDD interpreter with your gh login; it ends in 24 hours. A new session defaults to 400 calls; --max-calls accepts 1 to 1000. --fresh requests fresh uncached interpreter execution (fresh: true; also accepted with --page, --cli and --serve). With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each saved test case to the Story's test file. |
+| `pdd <STORY\|.> --live-local --command-manifest PATH [--allow-live-writes] [--new] [--max-calls N] [--tab call\|screen\|terminal\|world] [--no-open]` | Run a Story or project session on the Prompt Interpreter against allow-listed local commands defined in PATH on your machine (stays in the foreground; read-only by default; --allow-live-writes enables manifest write commands with fresh terminal yes confirmation). |
+| `pdd <PROMPT.md\|STORY\|.> --page [--new] [--fresh]` | Open the Prompt Interpreter browser page explicitly. |
+| `pdd <PROMPT.md\|STORY\|.> --cli [--shell] [--max-calls N] [--new] [--fresh]` | Run your program in your terminal through a Prompt Interpreter session; prints a PATH line, or opens a shell with --shell. Use --shell alone to open the shell. |
+| `pdd <PROMPT.md\|STORY\|.> --serve [PORT] [--max-calls N] [--new] [--fresh]` | Serve real HTTP requests through your Prompt Interpreter session on localhost (default port 8080). |
+| `pdd --product [--parts PARTS] [--journey JOURNEY] [--max-calls N] [--no-open] [--no-wait]` | Compose declared product maps, data and planned operations into one Prompt Interpreter session. |
+| `pdd --save-last [STORY]` | Save the last terminal command and its output in the original Story test file. |
+| `pdd --stop [STORY\|PROMPT.md]` | Stop the open Prompt Interpreter link of a Story, prompt, or exact Try ID. |
+<!-- END GENERATED: cli-commands:interpreter -->
 
 For `--target code`, each tested Runtime entry declares
 `"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}`. The command
@@ -776,23 +798,30 @@ The Prompt Interpreter's agent fills the fields directly when supported. It runs
 
 ## Try tools for your agent
 
+<!-- BEGIN GENERATED: cli-commands:mcp -->
 | Command | What it does |
 |---|---|
-| `pdd mcp` | Start the stdio MCP server for the current repository; select the Story through tool input. Your agent can open a session, inspect its state, run input, check the result against the Story and save a case |
+| `pdd mcp` | Serve the current repository’s Try tools over stdio MCP. |
+<!-- END GENERATED: cli-commands:mcp -->
 
 The tools are `try_open`, `try_state`, `try_run`, `try_observe`, `try_check` and `try_save_case`. `try_open` and `try_state` include `source_sha256`, `engine_sha` and `server_commit` for the open Try. Supply `try_id` to bind an existing running session without opening or reopening one, and use `try_observe` to read call and session state without replaying a run. Use them when the person asks to try behavior. Runs count against the session call budget and appear in the Prompt Interpreter. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
 
 ## Other commands
 
+<!-- BEGIN GENERATED: cli-commands:other -->
 | Command | What it does |
 |---|---|
-| `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the grouped command overview, quick-start examples, focused-help hint (`pdd <command> --help`), and the full paths of the installed PDD skill and Prompting guide |
-| `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the PDD skill and Prompting guide |
-| `pdd --version` | Print the version, `0.1.52`. When the PDD skills that your agent finds are older, also print the update command on stderr |
-| `pdd -V` | Same version and local diagnostics as `pdd --version` |
-| `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
-| `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
-| `pdd jobs` | List active slots and waiting interpreter jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or interpreter call |
+| `pdd jobs` | List active and waiting interpreter jobs on this machine without contacting the interpreter. |
+| `pdd completion bash\|zsh` | Print local shell completion. |
+| `pdd` | Show local commands. |
+| `pdd --help` | Show local commands. |
+| `pdd -h` | Show local commands. |
+| `pdd help` | Show local commands. |
+| `pdd help prompting` | Show how to write prompts, Stories and tests, and where the guide is. |
+| `pdd --version` | Show this package version. |
+| `pdd -V` | Show this package version. |
+| `pdd -VV` | Show this package version and the interpreter build and supported formats; unknown when unavailable. Uses existing gh sign-in, with no AI call. |
+<!-- END GENERATED: cli-commands:other -->
 
 `pdd -VV` skips PATH and skill diagnostics. It reads the existing token with a
 two-second limit, then sends at most one `GET /v1/version` to the configured
@@ -846,10 +875,13 @@ Before sending work, pdd asks whether the interpreter has room. During announced
 
 ## Shared records
 
+<!-- BEGIN GENERATED: cli-commands:contracts -->
 | Command | What it does |
 |---|---|
-| `pdd contracts` | List shared records in working files, their prompt/test users, changed records and Stories needing a new check. Local; no interpreter calls |
-| `pdd contracts sync [--write]` | Preview replacing inline copies with references. `--write` applies unambiguous proposals and adopts the shared shape; ambiguous matches warn and stay unchanged |
+| `pdd contracts` | List shared records, their users and Stories stale since their last check; local working files only. |
+| `pdd contracts sync [--write]` | Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls. |
+| `pdd product contracts` | List shared product records, their users and Stories stale since their last check (alias: pdd contracts); local working files only. |
+<!-- END GENERATED: cli-commands:contracts -->
 
 Link `contracts/*.md` under `## Dependencies` in plain Markdown prompts; in JSON schemas (such as `state_schema` or an optional explicit Runtime interface), use `{"$contract":"contracts/phone-server.md#order_in"}`.
 The Markdown section has a `### order_in` heading and one JSON code block;
@@ -881,11 +913,17 @@ usual.
 
 ## Product plans
 
+<!-- BEGIN GENERATED: cli-commands:product -->
 | Command | What it does |
 |---|---|
-| `pdd product status [--json] [--through prompt-pr\|code]` | Count Stories by part and slice from current saved checks; identify stale results and remote evidence from PRs; `--through prompt-pr\|code` sets the completion target. Makes no interpreter calls |
-| `pdd product next [--through prompt-pr\|code]` | Show ready planned runs and their start commands; `--through prompt-pr\|code` sets the completion target; parallel starts are optional |
-| `pdd product start RUN [--no-run] [--agent codex\|claude\|gemini\|agy\|ENTRY] [--through prompt-pr\|code] [--base BRANCH]` | Create or reuse the scoped run issue and print a `/pdd` handoff prompt; `--no-run` only prepares the issue; `--through` sets the completion target; `--base` selects an existing origin branch. ENTRY is an entry name from `~/.config/pdd/agents.json` |
+| `pdd product status [--json] [--through prompt-pr\|code]` | Count Stories by part and slice from the product plan; --through prompt-pr\|code selects the completion target; no interpreter calls. |
+| `pdd product next [--through prompt-pr\|code]` | Show ready planned runs and their start commands; --through prompt-pr\|code selects the completion target; no interpreter calls. |
+| `pdd product start RUN [--no-run] [--agent codex\|claude\|gemini\|agy\|ENTRY] [--through prompt-pr\|code] [--base BRANCH]` | Create or reuse the scoped run issue and print a /pdd handoff prompt; --no-run only prepares the issue; --through prompt-pr\|code sets the completion target; --base selects an existing origin branch; ENTRY is a name from ~/.config/pdd/agents.json. No interpreter calls. |
+| `pdd graph` | Read native dependencies and saved reviews without AI. |
+| `pdd graph --open` | Open the local viewer. |
+| `pdd graph --issue N` | Select a root issue. |
+| `pdd graph --open --issue N --repo OWNER/REPO` | Open a selected issue in an explicit repository, including outside a checkout. |
+<!-- END GENERATED: cli-commands:product -->
 
 See [Build a whole product](build-a-whole-product.md).
 
@@ -895,12 +933,16 @@ Show prompt and Story changes in chat or on a GitHub pull request before asking 
 
 ## Metrics
 
-- `pdd metrics [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--standup] [--json] [--html] [--file PATH]`
-- `pdd metrics stages [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--standup] [--json] [--html] [--file PATH]`
-- `pdd metrics skills [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--standup] [--json] [--html] [--file PATH]`
-- `pdd metrics full [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--standup] [--json] [--html] [--file PATH]`
-- `pdd metrics on [--repo OWNER/REPO] [--json]`
-- `pdd metrics off [--repo OWNER/REPO] [--json]`
+<!-- BEGIN GENERATED: cli-commands:metrics -->
+| Command | What it does |
+|---|---|
+| `pdd metrics [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--standup] [--json] [--html] [--file PATH]` | Show Autopilot overview metrics (Last 24h and Week Mon-Sun, or 9am-9am standup window with --standup) across active repositories on this machine, or per repository with --repos. |
+| `pdd metrics stages [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--standup] [--json] [--html] [--file PATH]` | Show Autopilot gate pass rates (Prompt tests, Vectors, Formal, Suite, Review, CI), merges, reopens, and non-merged status counts. |
+| `pdd metrics skills [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--standup] [--json] [--html] [--file PATH]` | Show Autopilot work mix (small-change, bug, feature, Total) with merge conversion and median completion time. |
+| `pdd metrics full [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--standup] [--json] [--html] [--file PATH]` | Show all three Autopilot metrics views (Overview, Stages, and Skills) together. |
+| `pdd metrics on [--repo OWNER/REPO] [--json]` | Enable Autopilot metrics recording on this machine (or for one repository). |
+| `pdd metrics off [--repo OWNER/REPO] [--json]` | Pause Autopilot metrics recording on this machine (or for one repository) while keeping existing history. |
+<!-- END GENERATED: cli-commands:metrics -->
 
 See [Metrics](metrics.md) for the three Autopilot views, local state layout, and recording switch.
 
@@ -1405,6 +1447,8 @@ most 40 a tick. The cards cover every
 open issue in scope: unlike the core, they do not skip issues that cool down after a
 no-result or whose blocker is named only in the text. `pdd autopilot intake` prints
 the cards and today's changes; `--json` prints them as JSON.
+See [Autopilot issue refinement](autopilot-issue-refinement.md) for the active
+refiner step and for a template of an issue that is ready at the first check.
 
 
 ## Explain resource bindings

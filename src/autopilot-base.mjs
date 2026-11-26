@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-base.prompt.md (sha256: 9e6669a86756b7ba2c76552e81a1173c48b98b0600b371a5928fa3bf6bec4c3a).
+// Prompt: prompts/cli/autopilot-base.prompt.md
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';

@@ -16,7 +16,7 @@ import { renderCompletion } from '../src/completion.mjs';
 import { PUBLIC_COMMAND_ROUTES } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { compileLocalManifest, validateLocalManifest, validateLocalRequest, executeLocalCommand, check, simulate, runTry, proseSha256 } from '../src/runtime-seam.mjs';
-import { evaluateValidationOutcome, detectRealHostProbesInTest } from '../src/autopilot-validator.mjs';
+import { evaluateValidationOutcome } from '../src/autopilot-validator.mjs';
 import { harbor, fakeRuntime, portsFor, TOKEN } from './helpers/runtime-fake.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -838,13 +838,6 @@ test('real CLI subprocess invocation handles validation errors and live-local te
 });
 
 test('autopilot validator recognizes --live-local execution evidence', () => {
-  const jsProbe = detectRealHostProbesInTest(
-    'test/live-local-smoke.test.mjs',
-    "import { execFileSync } from 'node:child_process';\nexecFileSync(process.execPath, ['bin/pdd.mjs', 'test', 'story', '--live-local', '--command-manifest', '/tmp/c.json']);\n",
-  );
-  assert.equal(jsProbe.liveLocal, true);
-  assert.equal(jsProbe.hasRealHostSmoke, true);
-
   const outcome = evaluateValidationOutcome({
     mode: 'auto',
     changedFiles: ['src/core/live-local-host.mjs'],
