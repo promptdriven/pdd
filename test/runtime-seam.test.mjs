@@ -931,7 +931,7 @@ registerHooks({
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
   const coveredLocals = new Set([
-    'help', 'version', 'version-detailed', 'completion', 'setup', 'init', 'status', 'lint', 'prove', 'project-files', 'file-owner', 'update-sync',
+    'help', 'version', 'version-detailed', 'completion', 'setup', 'init', 'status', 'lint', 'vector-export', 'prove', 'project-files', 'file-owner', 'update-sync',
     'runtime-check', 'runtime-try', 'contracts', 'contracts-sync', 'runtime-jobs', 'mcp', 'metrics',
     'issue-dependency-graph',
     'product-status', 'product-next', 'product-start',
@@ -964,6 +964,7 @@ registerHooks({
     ['cli:update', [bin, 'update', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
+    ['cli:vector-export', [bin, 'vector', 'export', '--json'], repo],
     ['cli:prove', [bin, 'prove', '--json'], repo],
     ['cli:direct-try', [bin, '--stop', 'a'], repo],
     ['cli:contracts', [bin, 'contracts'], repo],
@@ -994,7 +995,7 @@ registerHooks({
   ];
 
   const ACYCLIC_ENTRIES = new Set([
-    'cli:--help', 'cli:doctor', 'cli:owner', 'cli:update', 'cli:files',
+    'cli:--help', 'cli:doctor', 'cli:owner', 'cli:update', 'cli:files', 'cli:vector-export',
     'lib:svg-layout.mjs',
     'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
@@ -1003,7 +1004,7 @@ registerHooks({
   ]);
   const LIGHT_ENTRIES = new Set([
     'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion', 'cli:doctor',
-    'cli:files', 'cli:owner', 'cli:update',
+    'cli:files', 'cli:owner', 'cli:update', 'cli:vector-export',
     'cli:jobs', 'cli:contracts', 'cli:contracts-sync', 'cli:direct-try', 'cli:mcp',
     'child:try-doors-launcher',
     'lib:svg-layout.mjs', 'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',

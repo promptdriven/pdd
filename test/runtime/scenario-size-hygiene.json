@@ -1,0 +1,139 @@
+{
+  "entry_path": "prompts/cli/scenario-hygiene.prompt.md",
+  "initial_world": {},
+  "steps": [
+    {
+      "id": "oversized-16-steps",
+      "op": "evaluateScenarioHygiene",
+      "input": {
+        "doc": {
+          "entry_path": "prompts/ledger.prompt.md",
+          "initial_world": { "balance": 100 },
+          "steps": [
+            { "id": "s1", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s2", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s3", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s4", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s5", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s6", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s7", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s8", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s9", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s10", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s11", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s12", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s13", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s14", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s15", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s16", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } }
+          ]
+        },
+        "options": { "path": "tests/ledger.json" }
+      },
+      "checks": {
+        "1": [
+          ["result", "/oversized", "=", true],
+          ["result", "/metrics/steps", "=", 16],
+          ["result", "/finding/code", "=", "scenario-oversized"],
+          ["result", "/finding/defaultSeverity", "=", "warn"],
+          ["result", "/finding/detail", "contains", "16 scenario steps (limit: 15)"],
+          ["result", "/finding/fix", "contains", "tests/ledger.<focus>.json"]
+        ]
+      }
+    },
+    {
+      "id": "healthy-15-steps",
+      "op": "evaluateScenarioHygiene",
+      "input": {
+        "doc": {
+          "entry_path": "prompts/ledger.prompt.md",
+          "initial_world": { "balance": 100 },
+          "steps": [
+            { "id": "s1", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s2", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s3", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s4", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s5", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s6", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s7", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s8", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s9", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s10", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s11", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s12", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s13", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s14", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s15", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } }
+          ]
+        },
+        "options": { "path": "tests/ledger.json" }
+      },
+      "checks": {
+        "2": [
+          ["result", "/oversized", "=", false],
+          ["result", "/metrics/steps", "=", 15],
+          ["result", "/finding", "=", null]
+        ]
+      }
+    },
+    {
+      "id": "oversized-state-bytes",
+      "op": "evaluateScenarioHygiene",
+      "input": {
+        "doc": {
+          "entry_path": "prompts/ledger.prompt.md",
+          "initial_world": { "payload": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+          "steps": [
+            { "id": "s1", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } }
+          ]
+        },
+        "options": { "path": "tests/ledger.big.json", "maxSteps": 15, "maxWorldBytes": 32 }
+      },
+      "checks": {
+        "3": [
+          ["result", "/oversized", "=", true],
+          ["result", "/metrics/state_bytes", ">", 32],
+          ["result", "/finding/code", "=", "scenario-oversized"],
+          ["result", "/finding/defaultSeverity", "=", "warn"],
+          ["result", "/finding/detail", "contains", "limit: 32"]
+        ]
+      }
+    },
+    {
+      "id": "custom-max-steps-10",
+      "op": "evaluateScenarioHygiene",
+      "input": {
+        "doc": {
+          "entry_path": "prompts/ledger.prompt.md",
+          "initial_world": {},
+          "steps": [
+            { "id": "s1", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s2", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s3", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s4", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s5", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s6", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s7", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s8", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s9", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s10", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s11", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "s12", "op": "inc", "input": {}, "checks": { "1": [["result", "/ok", "=", true]] } }
+          ]
+        },
+        "options": { "path": "tests/ledger.json", "maxSteps": 10 }
+      },
+      "checks": {
+        "4": [
+          ["result", "/oversized", "=", true],
+          ["result", "/metrics/steps", "=", 12],
+          ["result", "/finding/detail", "contains", "12 scenario steps (limit: 10)"]
+        ],
+        "5": [
+          ["result", "/finding/code", "=", "scenario-oversized"],
+          ["result", "/finding/defaultSeverity", "=", "warn"]
+        ]
+      }
+    }
+  ]
+}

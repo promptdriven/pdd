@@ -296,7 +296,7 @@ const NATIVE_STORY_MARKER_RE = /^(?:##\s+Native\s+validation\b|kind:\s*native\b)
 const SKIP_SKILL_SYNC_ROUTES = new Set([
   'help', 'version', 'version-detailed', 'completion',
   'autopilot-alerts', 'autopilot-alert',
-  'project-files', 'file-owner', 'status', 'init', 'lint', 'prove', 'update-sync',
+  'project-files', 'file-owner', 'status', 'init', 'lint', 'prove', 'update-sync', 'vector-export',
   'mcp', 'setup', 'doctor', 'upgrade', 'autopilot-logs',
 ]);
 
@@ -1001,6 +1001,27 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return 2;
       }
     }
+    case 'vector-export': {
+      try {
+        const { runVectorExport } = await import('./core/lint/vector-export.mjs');
+        return runVectorExport({
+          cwd,
+          inputPath: plan.operands[0] ?? null,
+          outPath: plan.options['--out'] ?? null,
+          storyPath: plan.options['--story'] ?? null,
+          entryPath: plan.options['--entry'] ?? null,
+          op: plan.options['--op'] ?? null,
+          criterion: plan.options['--criterion'] ?? null,
+          ...(plan.options['--max-steps'] !== undefined ? { maxSteps: Number(plan.options['--max-steps']) } : {}),
+          split: plan.options['--split'] === true,
+          write: plan.options['--write'] === true,
+          json: plan.options['--json'] === true,
+        }, { stdout, stderr, stdin });
+      } catch (error) {
+        line(stderr, `Vector export failed.${reason(error)}`);
+        return 2;
+      }
+    }
     case 'prove': {
       try {
         const mod = proveRunner ?? await import('./core/prove.mjs');
@@ -1195,7 +1216,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
     } catch { /* Post-upgrade skill sync never blocks or fails a CLI command. */ }
   }
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'doctor', 'init', 'status', 'lint', 'prove'].includes(plan.local) && !quietDirect && !(plan.local === 'runtime-check' && plan.options['--files'] === true) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync', 'project-files', 'setup', 'doctor', 'init', 'status', 'lint', 'prove', 'vector-export'].includes(plan.local) && !quietDirect && !(plan.local === 'runtime-check' && plan.options['--files'] === true) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

@@ -14,7 +14,7 @@ const RULE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const VALID_TARGETS = new Set(['prompt', 'story', 'test', 'code', 'all']);
 const VALID_SEVERITIES = new Set(['off', 'warn', 'error']);
 
-function mergeLintConfigSection(rawLint, { sourcePath, allowCommands = true, disabledRules, ruleSeverities, customRuleMap, commandMap, mutationCommandRef, configErrors }) {
+function mergeLintConfigSection(rawLint, { sourcePath, allowCommands = true, disabledRules, ruleSeverities, customRuleMap, commandMap, mutationCommandRef, scenarioConfigRef, configErrors }) {
   const addConfigError = detail => configErrors.push({
     filePath: sourcePath,
     line: 1,
@@ -49,6 +49,27 @@ function mergeLintConfigSection(rawLint, { sourcePath, allowCommands = true, dis
         ruleSeverities.set(id, sev);
         if (sev === 'off') disabledRules.add(id);
         else disabledRules.delete(id);
+      }
+    }
+  }
+
+  if (rawLint.scenario !== undefined) {
+    if (!rawLint.scenario || typeof rawLint.scenario !== 'object' || Array.isArray(rawLint.scenario)) {
+      addConfigError(`"lint.scenario" in ${sourcePath} must be a JSON object with optional positive integers "max_steps" and "max_world_bytes".`);
+    } else {
+      for (const [k, v] of Object.entries(rawLint.scenario)) {
+        if (k !== 'max_steps' && k !== 'max_world_bytes') {
+          addConfigError(`Unknown key "${k}" in "lint.scenario" (${sourcePath}); allowed keys are "max_steps" and "max_world_bytes".`);
+          continue;
+        }
+        if (!Number.isSafeInteger(v) || v < 1 || v > 1_000_000_000) {
+          addConfigError(`"lint.scenario.${k}" in ${sourcePath} must be a positive integer.`);
+          continue;
+        }
+        if (scenarioConfigRef) {
+          if (k === 'max_steps') scenarioConfigRef.maxSteps = v;
+          if (k === 'max_world_bytes') scenarioConfigRef.maxWorldBytes = v;
+        }
       }
     }
   }
@@ -244,9 +265,9 @@ function loadWorkspaceLintRuleFiles(realRoot, target) {
 }
 
 export function loadProjectLintConfig(rootOrObject) {
-  const empty = { configured: false, disabledRules: new Set(), ruleSeverities: new Map(), customRules: [], commands: [], mutationCommand: null, configErrors: [] };
+  const empty = { configured: false, disabledRules: new Set(), ruleSeverities: new Map(), customRules: [], commands: [], mutationCommand: null, scenarioConfig: { maxSteps: null, maxWorldBytes: null }, configErrors: [] };
   if (!rootOrObject) return empty;
-  const target = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, configErrors: [] };
+  const target = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, scenarioConfigRef: { maxSteps: null, maxWorldBytes: null }, configErrors: [] };
   const finalize = configured => ({
     configured,
     disabledRules: target.disabledRules,
@@ -254,6 +275,7 @@ export function loadProjectLintConfig(rootOrObject) {
     customRules: [...target.customRuleMap.values()],
     commands: [...target.commandMap.values()],
     mutationCommand: target.mutationCommandRef.value,
+    scenarioConfig: { ...target.scenarioConfigRef },
     configErrors: target.configErrors,
   });
 
@@ -352,7 +374,7 @@ export function loadBaseTrustedLintCommands(root, { baseRef } = {}) {
 }
 
 export function loadBaseTrustedLintOverrides(root, { baseRef } = {}) {
-  const empty = { baseAvailable: false, baseSha: null, disabledRules: new Set(), ruleSeverities: new Map() };
+  const empty = { baseAvailable: false, baseSha: null, disabledRules: new Set(), ruleSeverities: new Map(), scenarioConfig: { maxSteps: null, maxWorldBytes: null } };
   if (!root || typeof root !== 'string') return empty;
   let realRoot;
   try { realRoot = realpathSync(root); } catch { return empty; }
@@ -365,7 +387,7 @@ export function loadBaseTrustedLintOverrides(root, { baseRef } = {}) {
   if (mb.status !== 0 || !mb.stdout.trim()) return empty;
   const baseSha = mb.stdout.trim();
 
-  const target = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), configErrors: [] };
+  const target = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), scenarioConfigRef: { maxSteps: null, maxWorldBytes: null }, configErrors: [] };
   const lsRules = spawnSync('git', ['ls-tree', '--name-only', baseSha, '--', 'rules/lint/'], {
     cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -401,7 +423,7 @@ export function loadBaseTrustedLintOverrides(root, { baseRef } = {}) {
     } catch {}
   }
 
-  return { baseAvailable: true, baseSha, disabledRules: target.disabledRules, ruleSeverities: target.ruleSeverities };
+  return { baseAvailable: true, baseSha, disabledRules: target.disabledRules, ruleSeverities: target.ruleSeverities, scenarioConfig: { ...target.scenarioConfigRef } };
 }
 
 export function matchesAnyCustomRule(customRules, kind, filePath) {

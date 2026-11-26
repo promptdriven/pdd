@@ -37,6 +37,13 @@ export {
   parseRegexSafe,
 } from './core/lint/regex-safety.mjs';
 export {
+  DEFAULT_SCENARIO_MAX_STEPS,
+  DEFAULT_SCENARIO_MAX_WORLD_BYTES,
+  computeDefaultScenarioCallCap,
+  evaluateScenarioHygiene,
+  collectScenarioHygieneFindings,
+} from './core/lint/scenario-hygiene.mjs';
+export {
   runLocalLint,
 } from './core/lint/run-local-lint.mjs';
 export {

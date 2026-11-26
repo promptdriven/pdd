@@ -914,7 +914,7 @@ const REGISTERED_E2E_ROUTES = Object.freeze([
   // Discovery, help, version, completion
   'help', 'version', 'version.detailed', 'completion',
   // Core PDD workflow
-  'setup', 'init', 'status', 'check', 'lint', 'prove', 'try', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'doctor',
+  'setup', 'init', 'status', 'check', 'lint', 'vector.export', 'prove', 'try', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade', 'doctor',
   // Cloud accounts
   'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use',
   'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause',
@@ -1895,6 +1895,30 @@ test('removed commands, quiet aliases, and invalid flag/operand errors return ex
   const stopHelp = await fx.cli(['--stop', '--help']);
   assert.equal(stopHelp.code, 0, stopHelp.stderr);
   assert.equal(stopHelp.stdout, dotHelp.stdout);
+});
+
+test('vector.export converts pdd.formal-vectors.v1 JSON into a lint-clean Short JSON companion vector offline', async () => {
+  markExecuted('vector.export');
+  const fx = makeIsolatedFixture('vector-export');
+  const specPath = join(fx.repo, 'formal-grid.json');
+  writeFileSync(
+    specPath,
+    JSON.stringify({
+      schema_version: 'pdd.formal-vectors.v1',
+      entry_path: 'prompts/calc.prompt.md',
+      default_op: 'add',
+      cases: [
+        { id: 'c1', input: { a: 1, b: 2 }, expect: { '/sum': 3 } },
+      ],
+    }, null, 2),
+  );
+  const dry = await fx.cli(['vector', 'export', 'formal-grid.json', '--json']);
+  assert.equal(dry.code, 0, dry.stderr);
+  const parsed = JSON.parse(dry.stdout);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.written, false);
+  assert.equal(parsed.files.length, 1);
+  assert.equal(parsed.files[0].step_count, 1);
 });
 });
 

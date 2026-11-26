@@ -70,7 +70,7 @@ Dispatch catalog dispositions `autopilot.off`, `autopilot.observe`, `autopilot.a
 
 Dispatch `issue-dependency-graph` (both `pdd graph` and `pdd autopilot graph`) to injected `issueGraph` (default `src/issue-dependency-graph.mjs`) module function `runIssueGraph({cwd,repository,issue,open}, issueGraphPorts)`, mapping repository and issue from the corresponding options and open to a Boolean. Print its message to stdout on exit 0, stderr otherwise, and return its exitCode. On a throw, print a finite diagnostic and return 1.
 
-Dispatch default `lint` offline (`pdd lint [STORY...] [--diff [BASE]] [--json]`) directly to `src/core/lint/run-local-lint.mjs` (`runLocalLint`) with 0 AI calls, 0 network calls, and 0 batch-state writes; `pdd lint --local` also uses `runLocalLint` unless repo-wide `--local` or the selected `--local` targets exercise scenario `.json` files (or explicit prompt targets in a scenario-bearing repo), in which case `--local` forwards to [Runtime seam](runtime-seam.prompt.md) `lint` for offline local scenario/criterion assessment (0 AI/network calls) while using upfront `resolveLintScope` for deterministic project error collection. Forward `--codex` to [Codex lint](codex-lint.prompt.md) and `--remote`, `--emit-v1`, `--write`, or `--bind-criteria` to [Runtime seam](runtime-seam.prompt.md) `lint`. Dispatch `prove` directly to [Stateless proof](prove.prompt.md) `runProve`.
+Dispatch default `lint` offline (`pdd lint [STORY...] [--diff [BASE]] [--json]`) directly to `src/core/lint/run-local-lint.mjs` (`runLocalLint`) with 0 AI calls, 0 network calls, and 0 batch-state writes; `pdd lint --local` also uses `runLocalLint` unless repo-wide `--local` or the selected `--local` targets exercise scenario `.json` files (or explicit prompt targets in a scenario-bearing repo), in which case `--local` forwards to [Runtime seam](runtime-seam.prompt.md) `lint` for offline local scenario/criterion assessment (0 AI/network calls) while using upfront `resolveLintScope` for deterministic project error collection. Forward `--codex` to [Codex lint](codex-lint.prompt.md) and `--remote`, `--emit-v1`, `--write`, or `--bind-criteria` to [Runtime seam](runtime-seam.prompt.md) `lint`. Dispatch `vector-export` offline directly to [Formal-to-Vector Short JSON export](vector-export.prompt.md) `runVectorExport` (0 AI calls, 0 network calls; skips skill sync and release notice). Dispatch `prove` directly to [Stateless proof](prove.prompt.md) `runProve`.
 
 Dispatch `autopilot-suite` directly to `runTestSuite` in `src/test-suite-queue.mjs` with `cwd`, `env`, `command` from `--command`, optional integer `timeout` from `--timeout`, and `{ say }` writing live queue lines to stdout; require a nonblank `--command` (exit 2 otherwise) before importing execution. For `autopilot-start`, forward `--issues` as `allowedIssues` and `--issue` as `issue` to `runAutopilotLauncher`.
 
@@ -116,6 +116,7 @@ otherwise, and catch unexpected errors with one finite stderr line and exit 1.
 - [Compiled Story checker](compiled-test.prompt.md): required native generation and verification context for code-target dispatch.
 - [Codex readability and quality lint](codex-lint.prompt.md): required native generation and verification context for `pdd lint --codex` dispatch.
 - [Repo hygiene and extensible project lint](repo-hygiene-lint.prompt.md): required native generation and verification context for default-on deterministic structural error rules and `pdd.json` `"lint"` error-severity rule enforcement.
+- [Formal-to-Vector Short JSON export](vector-export.prompt.md): required native generation and verification context for offline `pdd vector export` dispatch.
 
 - [Detailed version](interpreter-version.prompt.md): required generation, runtime and verification context for the single detailed-version call and result.
 
@@ -246,7 +247,7 @@ reply.
 {
   "kind": "partial",
   "status": "draft",
-  "prose_sha256": "7f7464c01d017ef27b73d3183eeec21bd1339c21f42677dfc60029e6c6894900",
+  "prose_sha256": "4daa6405d1071935ddfeb08e61ea2064089046d7de01284d22b175b49105c841",
   "entries": [
     {
       "operation": "runPdd",
