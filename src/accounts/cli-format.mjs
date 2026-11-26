@@ -130,17 +130,6 @@ export function renderAccountsTable(accounts, pendingInvites, activeByProvider, 
   return lines.join('\n');
 }
 
-export function shortenHomePath(filePath, env = {}) {
-  if (typeof filePath !== 'string' || !filePath) return String(filePath ?? '');
-  const rawHome = typeof env?.HOME === 'string' ? env.HOME.trim() : '';
-  const home = rawHome.replace(/[\\/]+$/, '');
-  if (!home || /^[A-Za-z]:$/.test(home)) return filePath;
-  if (filePath === home) return '~';
-  if (filePath.startsWith(`${home}/`) || filePath.startsWith(`${home}\\`)) {
-    return `~${filePath.slice(home.length)}`;
-  }
-  return filePath;
-}
 
 export function sanitizeStatusText(value) {
   if (typeof value !== 'string') return '';
@@ -220,11 +209,8 @@ export function formatExpiryRemaining(iso, nowMs) {
   if (typeof iso !== 'string' || !iso.trim()) return 'unknown';
   const expMs = Date.parse(iso);
   if (!Number.isFinite(expMs)) return sanitizeStatusText(iso) || 'unknown';
-  const utc = formatUtcTimestamp(iso);
   const remainingMs = expMs - nowMs;
-  return remainingMs <= 0
-    ? `expired (${utc})`
-    : `valid (${formatHumanDuration(remainingMs)} left, exp ${utc})`;
+  return remainingMs <= 0 ? 'expired' : `valid (${formatHumanDuration(remainingMs)} left)`;
 }
 
 export function decodeJwtPayload(jwt) {
