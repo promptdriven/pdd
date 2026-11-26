@@ -851,9 +851,9 @@ A saved Prompt Interpreter setup is read by its original request ID before any n
 
 Use the program in your own terminal. Copy the printed PATH line or run the absolute shim path (`--fresh` bypasses saved answer caches).
 
-`pdd <PROMPT.md|STORY|.> --serve [PORT] [--max-calls N] [--new] [--fresh]`
+`pdd <PROMPT.md|STORY|.> --serve [PORT] [--allow-origins CSV] [--trust-proxy] [--serve-token TOKEN] [--serve-header NAME] [--max-calls N] [--new] [--fresh]`
 
-Serve the prompt, Story, or whole project on localhost (default 8080; `--fresh` bypasses saved answer caches).
+Serve the prompt, Story, or whole project on `127.0.0.1` (default 8080; `--fresh` bypasses saved answer caches; opt-in `--allow-origins`, `--trust-proxy`, and `--serve-token` with optional `--serve-header` permit cross-origin, tunneled, or token-gated requests).
 
 `pdd --save-last [STORY]`
 

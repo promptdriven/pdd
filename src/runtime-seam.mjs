@@ -3126,6 +3126,10 @@ function classifyPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
     opts['--cli'] ||
     opts['--shell'] ||
     opts['--serve'] !== undefined ||
+    opts['--allow-origins'] !== undefined ||
+    opts['--trust-proxy'] !== undefined ||
+    opts['--serve-token'] !== undefined ||
+    opts['--serve-header'] !== undefined ||
     opts['--stop'] ||
     opts['--save-last'] ||
     opts['--product'] ||
@@ -4083,6 +4087,12 @@ export async function simulate(input = {}, ports = {}) {
   else if (input?.mode === 'serve' && options['--serve'] === undefined) options['--serve'] = input?.port ?? true;
   else if (input?.mode === 'save-last') options['--save-last'] = true;
   else if (input?.mode === 'stop') options['--stop'] = true;
+  if (input?.allowOrigins !== undefined && options['--allow-origins'] === undefined) {
+    options['--allow-origins'] = Array.isArray(input.allowOrigins) ? input.allowOrigins.join(',') : input.allowOrigins;
+  }
+  if (input?.trustProxy === true && options['--trust-proxy'] === undefined) options['--trust-proxy'] = true;
+  if (input?.serveToken !== undefined && options['--serve-token'] === undefined) options['--serve-token'] = input.serveToken;
+  if (input?.serveHeader !== undefined && options['--serve-header'] === undefined) options['--serve-header'] = input.serveHeader;
   const testWord =
     typeof input?.test === 'string' && input.test.length > 0
       ? input.test
