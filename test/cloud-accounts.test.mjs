@@ -2965,11 +2965,16 @@ test('3445 T4: reauth_required (401 / token_revoked / invalid_grant) visibility,
 
   const statusHuman = await invokeCli(['accounts', 'status'], sb, { now: () => cloud.state.nowMs });
   assert.equal(statusHuman.exit, 0, statusHuman.stderr);
-  assert.match(statusHuman.stdout, /Codex isolated home:/);
-  assert.match(statusHuman.stdout, /codex-home/);
-  assert.match(statusHuman.stdout, /Active codex: healthy-cx/);
-  assert.match(statusHuman.stdout, /last refresh: 2026-11-15T00:45Z/);
-  assert.match(statusHuman.stdout, /Re-authentication required: "revoked-cx"/);
+  assert.match(statusHuman.stdout, /PDD Cloud Accounts/);
+  assert.match(statusHuman.stdout, /Auto-switch:\s+off/);
+  assert.doesNotMatch(statusHuman.stdout, /Codex home:/);
+  assert.match(statusHuman.stdout, /Active Seats/);
+  assert.match(statusHuman.stdout, /codex\s+healthy-cx\s+\[ready\]/);
+  assert.match(statusHuman.stdout, /Lease:\s+valid \(/);
+  assert.doesNotMatch(statusHuman.stdout, /Refreshed:/);
+  assert.match(statusHuman.stdout, /Action Required/);
+  assert.match(statusHuman.stdout, /Re-authenticate "revoked-cx" \(codex\):/);
+  assert.match(statusHuman.stdout, /pdd accounts add --provider codex --label revoked-cx/);
 
   const statusJsonRes = await invokeCli(['accounts', 'status', '--json'], sb, { now: () => cloud.state.nowMs });
   assert.equal(statusJsonRes.exit, 0, statusJsonRes.stderr);
