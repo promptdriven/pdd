@@ -20,8 +20,9 @@ const directRoute = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'try');
 const DIRECT_TRAILING_OPTIONS = new Set([
   '--agent', '--tab', '--new', '--fresh',
   '--live-local', '--command-manifest', '--allow-live-writes',
-  '--page', '--cli', '--shell', '--serve', '--max-calls',
-  '--no-open', '--stop', '--app-map', '--no-wait',
+  '--page', '--cli', '--shell', '--serve',
+  '--allow-origins', '--trust-proxy', '--serve-token', '--serve-header',
+  '--max-calls', '--no-open', '--stop', '--app-map', '--no-wait',
 ]);
 const DIRECT_SESSION_CONTROL_OPTIONS = ['--stop', '--save-last', '--product'];
 const matches = (route, words) => route.prefix.every((token, index) => words[index] === token);
