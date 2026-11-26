@@ -4,6 +4,7 @@
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
+import { resolveCodexSeatNotice } from './accounts/codex-seat-visibility.mjs';
 import {
   assertSafeRuntimeDir,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
@@ -12,6 +13,8 @@ import {
   parseWrapperLeadingArgs,
   readJsonObjectQuiet,
   registerProcessCleanupHooks,
+  resolveCodexRuntimeRoot,
+  sharedCodexRuntimeDirPath,
   signalToExitCode,
   spawnWrappedBinary,
   startLeaseHeartbeat,
@@ -37,7 +40,6 @@ import {
   releaseCloudLease,
   resolveCodexGatewayEndpoints,
   resolveEffectiveSqliteHome,
-  resolvePddStateBase,
   stopCodexAppServerDaemon,
   stripCodexCliEnvExcludeArgs,
   syncManagedCodexHomeLinks,
@@ -197,27 +199,15 @@ function inspectCodexInvocation(codexArgs = []) {
   return { subcommand, subArgs, hasHelpOrVersion };
 }
 
-/**
- * Resolve the per-user runtime root (`~/.local/state/pdd/codex-runtime` by default,
- * never `/tmp` so Linux stock Codex can create helper binaries cleanly).
- */
-function resolveRuntimeRoot({ env = process.env, tmpRoot = null } = {}) {
-  if (typeof tmpRoot === 'string' && tmpRoot.trim()) return tmpRoot.trim();
-  if (typeof env?.PDD_CODEX_RUNTIME_ROOT === 'string' && env.PDD_CODEX_RUNTIME_ROOT.trim()) {
-    return env.PDD_CODEX_RUNTIME_ROOT.trim();
-  }
-  return join(resolvePddStateBase(env), 'codex-runtime');
+function resolveRuntimeRoot(opts = {}) {
+  return resolveCodexRuntimeRoot(opts);
 }
 
 /**
  * Resolve the per-user shared machine runtime folder (`~/.local/state/pdd/codex-runtime/pdd-codex-<uid>`).
  */
-export function sharedRuntimeDirPath({ env = process.env, tmpRoot = null, uid = null } = {}) {
-  const root = resolveRuntimeRoot({ env, tmpRoot });
-  const effectiveUid = uid !== null && uid !== undefined
-    ? String(uid)
-    : (typeof process.getuid === 'function' ? String(process.getuid()) : 'user');
-  return join(resolve(root), `pdd-codex-${effectiveUid}`);
+export function sharedRuntimeDirPath(opts = {}) {
+  return sharedCodexRuntimeDirPath(opts);
 }
 
 function withCodexRuntimeLock(fs, runtimeDir, fn, ports = {}) {
@@ -301,7 +291,27 @@ export function prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir) {
   };
 }
 
-function readReusableRuntimeLease(fs, runtimeDir, { now }) {
+function resolveOwnerMetadata(source, fallbackAccount = null) {
+  let isOwner = null;
+  if (typeof source?.is_owner === 'boolean') {
+    isOwner = source.is_owner;
+  } else if (typeof source?.shared === 'boolean') {
+    isOwner = !source.shared;
+  } else if (
+    fallbackAccount?.account_id
+    && source?.account_id
+    && fallbackAccount.account_id === source.account_id
+    && typeof fallbackAccount.is_owner === 'boolean'
+  ) {
+    isOwner = fallbackAccount.is_owner;
+  }
+  const ownerLogin = typeof source?.owner_login === 'string' && source.owner_login.trim()
+    ? source.owner_login.trim()
+    : null;
+  return { isOwner, ownerLogin };
+}
+
+function readReusableRuntimeLease(fs, runtimeDir, { now, fallbackAccount = null }) {
   const meta = readJsonObjectQuiet(fs, join(runtimeDir, 'lease.json'));
   const auth = readJsonObjectQuiet(fs, join(runtimeDir, 'auth.json'));
   if (!meta || !auth) return null;
@@ -315,10 +325,14 @@ function readReusableRuntimeLease(fs, runtimeDir, { now }) {
     return null;
   }
   rememberSecrets(grantToken);
+  const { isOwner, ownerLogin } = resolveOwnerMetadata(meta, fallbackAccount);
   return {
     leaseId: meta.lease_id.trim(),
     accountId: meta.account_id ?? null,
     label: meta.label ?? null,
+    isOwner,
+    ownerLogin,
+    autoRotate: meta.auto_rotate === true,
     backendApiUrl: meta.backend_api_url.trim(),
     nativeBackendApi: meta.native_backend_api !== false,
     expiresAt: meta.expires_at,
@@ -326,7 +340,7 @@ function readReusableRuntimeLease(fs, runtimeDir, { now }) {
   };
 }
 
-function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
+function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now, pid = null, fallbackAccount = null }) {
   const lease = leaseReply?.lease;
   const account = leaseReply?.account ?? {};
   if (!lease || lease.delivery_mode !== 'gateway_grant') {
@@ -341,11 +355,14 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
   }
   const nowIso = new Date(now()).toISOString();
   const planType = lease.plan_type ?? account.plan_type ?? account.plan ?? null;
+  const { isOwner, ownerLogin } = resolveOwnerMetadata(account, fallbackAccount);
   const authPayload = buildGatewayAuthJson({ grantToken, planType, now });
   const metaPayload = {
     lease_id: lease.lease_id ?? null,
     account_id: account.account_id ?? null,
     label: account.label ?? null,
+    is_owner: isOwner,
+    owner_login: ownerLogin,
     backend_api_url: backendApiUrl,
     native_backend_api: nativeBackendApi,
     expires_at: lease.expires_at ?? null,
@@ -354,6 +371,7 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
     auto_rotate: Boolean(autoRotate),
     obtained_at: nowIso,
     last_heartbeat_at: nowIso,
+    ...(Number.isSafeInteger(pid) && pid > 0 ? { pid } : {}),
   };
   writeAtomicPrivate(fs, join(runtimeDir, 'auth.json'), `${JSON.stringify(authPayload, null, 2)}\n`);
   writeAtomicPrivate(fs, join(runtimeDir, 'lease.json'), `${JSON.stringify(metaPayload, null, 2)}\n`);
@@ -361,6 +379,9 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
     leaseId: metaPayload.lease_id,
     accountId: metaPayload.account_id,
     label: metaPayload.label,
+    isOwner,
+    ownerLogin,
+    autoRotate: metaPayload.auto_rotate,
     backendApiUrl,
     nativeBackendApi,
     expiresAt: metaPayload.expires_at,
@@ -408,7 +429,7 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
         && savedActiveCodex.state !== 'reauth_required'
         ? savedActiveCodex.account_id
         : null;
-      const existing = readReusableRuntimeLease(fs, runtimeDir, { now: nowFn });
+      const existing = readReusableRuntimeLease(fs, runtimeDir, { now: nowFn, fallbackAccount: savedActiveCodex });
       const seatMatchesOrShared = existingLivePids.length > 0
         || !savedActiveId
         || !existing?.accountId
@@ -445,7 +466,11 @@ export async function acquireSharedRuntimeSession({ cwd = process.cwd(), env = p
         );
       }
 
-      const leaseInfo = writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate: true, now: nowFn });
+      const leaseInfo = writeLeaseFiles(fs, runtimeDir, leaseReply, {
+        autoRotate: true,
+        now: nowFn,
+        fallbackAccount: savedActiveCodex,
+      });
       const homeInfo = prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir);
       stopCodexAppServerDaemon(runtimeDir, { env, fs, spawnSync: ports.spawnSync, codexBin: ports.codexBin });
       return {
@@ -536,7 +561,15 @@ export async function acquirePinnedRuntimeSession(preferredLabel, { cwd = proces
       throw new CloudAccountsError(`Codex account "${preferredLabel}" is not available in PDD Cloud.`, { code: 'no_account_available' });
     }
 
-    const leaseInfo = writeLeaseFiles(fs, pinDir, leaseReply, { autoRotate: false, now: nowFn });
+    const savedActiveCodex = (() => {
+      try { return readCloudAccountsState({ env }, { fs })?.active?.codex ?? null; } catch { return null; }
+    })();
+    const leaseInfo = writeLeaseFiles(fs, pinDir, leaseReply, {
+      autoRotate: false,
+      now: nowFn,
+      pid: myPid,
+      fallbackAccount: savedActiveCodex,
+    });
     const homeInfo = prepareRuntimeCodexHome(fs, userCodexHome, pinDir);
     return {
       reused: false,
@@ -672,6 +705,29 @@ function startBackgroundHeartbeat(session, { cwd, env }, ports = {}) {
       if (currentMeta && currentMeta.lease_id === targetLeaseId) {
         currentMeta.expires_at = reply.expires_at;
         currentMeta.last_heartbeat_at = new Date(nowFn()).toISOString();
+        const beatAcc = reply.account && typeof reply.account === 'object' ? reply.account : reply;
+        const nextAccId = typeof beatAcc?.account_id === 'string' && beatAcc.account_id.trim()
+          ? beatAcc.account_id.trim()
+          : null;
+        const switched = Boolean(nextAccId && currentMeta.account_id && nextAccId !== currentMeta.account_id);
+        if (nextAccId) currentMeta.account_id = nextAccId;
+        if (typeof beatAcc?.label === 'string' && beatAcc.label.trim()) {
+          currentMeta.label = beatAcc.label.trim();
+        } else if (switched) {
+          currentMeta.label = null;
+        }
+        if (typeof beatAcc?.is_owner === 'boolean') {
+          currentMeta.is_owner = beatAcc.is_owner;
+        } else if (typeof beatAcc?.shared === 'boolean') {
+          currentMeta.is_owner = !beatAcc.shared;
+        } else if (switched) {
+          currentMeta.is_owner = null;
+        }
+        if (typeof beatAcc?.owner_login === 'string' && beatAcc.owner_login.trim()) {
+          currentMeta.owner_login = beatAcc.owner_login.trim();
+        } else if (switched) {
+          currentMeta.owner_login = null;
+        }
         writeAtomicPrivate(fs, metaPath, `${JSON.stringify(currentMeta, null, 2)}\n`);
       }
     },
@@ -729,7 +785,7 @@ async function runPddCodexLogout({ cwd, env, stdout }, ports = {}) {
  */
 export async function runPddCodexCli(
   argv = process.argv.slice(2),
-  { cwd = process.cwd(), env = process.env, stdout = process.stdout, stderr = process.stderr } = {},
+  { cwd = process.cwd(), env = process.env, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr } = {},
   ports = {},
 ) {
   const fs = ports.fs ?? nativeFs;
@@ -938,6 +994,21 @@ export async function runPddCodexCli(
     });
     const forwardedCodexArgs = stripCodexCliEnvExcludeArgs(codexArgs);
     const childEnv = buildCleanChildEnv(env, session.runtimeDir, { grantToken: session.grantToken });
+    const seatNotice = resolveCodexSeatNotice({
+      codexArgs,
+      isInteractiveTty: Boolean(stdin?.isTTY && stdout?.isTTY),
+      seat: {
+        label: session.label,
+        accountId: session.accountId,
+        pinned: session.pinned === true,
+        autoRotate: typeof session.autoRotate === 'boolean' ? session.autoRotate : !session.pinned,
+        isOwner: typeof session.isOwner === 'boolean' ? session.isOwner : null,
+        ownerLogin: session.ownerLogin ?? null,
+      },
+    });
+    if (seatNotice.shouldPrint && seatNotice.notice) {
+      stderr?.write?.(`${redactSecrets(seatNotice.notice)}\n`);
+    }
     const res = await spawnCodexProcess(
       codexBin,
       [...cliFlags, ...forwardedCodexArgs],

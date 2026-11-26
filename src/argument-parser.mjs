@@ -19,6 +19,7 @@ const explicitRoutes = [...PUBLIC_COMMAND_ROUTES]
 const directRoute = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'try');
 const DIRECT_TRAILING_OPTIONS = new Set([
   '--agent', '--tab', '--new', '--fresh',
+  '--live-local', '--command-manifest', '--allow-live-writes',
   '--page', '--cli', '--shell', '--serve',
   '--allow-origins', '--trust-proxy', '--serve-token', '--serve-header',
   '--max-calls', '--no-open', '--stop', '--app-map', '--no-wait',
