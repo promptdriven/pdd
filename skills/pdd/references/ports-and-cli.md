@@ -59,3 +59,34 @@ Inject outside-world boundaries (databases, filesystem, HTTP, clocks, randomness
 - A CLI program has one program prompt (`# <cmd>`, avoiding `pdd`, `node`, `gh`, `git`) exposing `main({ argv, stdin? }) -> { exit_code, stdout, stderr }` (never exit `125`; end output lines with `\n`).
 - Run CLI prompts directly (`pdd prompts/<app>.prompt.md <args...>`), use `pdd <STORY|.> --cli [--shell]` to test a CLI in a terminal, `pdd <STORY|.> --serve [PORT]` for local HTTP routes (`curl`/`fetch`), and `pdd --save-last` to append the last observed run for review.
 - With `pdd setup`, your coding agent can drive Prompt Interpreter sessions directly through `pdd mcp` (`try_open`, `try_state`, `try_run`, `try_check`, and `try_save_case` only when the person asks).
+
+## 4. Owner-local commands (`--live-local`)
+
+Run Stories against real allow-listed commands on your own machine (under your own login) instead of simulated port replies:
+
+```bash
+# Read-only local commands (default)
+pdd test <STORY> --live-local --command-manifest /path/to/local-commands.json
+
+# Foreground interactive Story session with local commands
+pdd <STORY> --live-local --command-manifest /path/to/local-commands.json --new
+
+# Opt into manifest write commands (each write asks you to type `yes` in your terminal)
+pdd test <STORY> --live-local --command-manifest /path/to/local-commands.json --allow-live-writes
+```
+
+- **Keep the manifest out of uploaded Git source:** Store the manifest outside the repository (or in an ignored path excluded from `pdd test --files`). `pdd` refuses any manifest that resolves (directly, by symlink, or by hardlink) to an uploaded repository file.
+- **Concise command-map shorthand (`pdd.local-commands.v1`):** Map `<resource>.<operation>` directly to a fixed executable and argument template (placeholders like `{ref}` are typed parameters; shells/interpreters like `sh`, `bash`, `node`, `python`, `env` are refused and `shell: false` is always enforced):
+
+```json
+{
+  "schema_version": "pdd.local-commands.v1",
+  "commands": {
+    "git.branch": ["git", "rev-parse", "--abbrev-ref", "{ref}"],
+    "gh.whoami": { "cmd": ["gh", "api", "user", "--jq", ".login"], "env": ["GH_HOST"] }
+  }
+}
+```
+
+- **Expanded manifest (`pdd.live-local-manifest.v1`):** Also accepted when you need explicit `selection.resources`, per-parameter bounds (`enum`, `pattern`, `maxLength`, `minimum`, `maximum`), `cwd`, or stream/timeout caps.
+- **Safety rules:** Writes require both `--allow-live-writes` and an interactive terminal `yes` confirmation (headless/piped input fails closed). Every variable listed in `env` is registered as sensitive and redacted/blocked in receipts (list only credentials or narrow auth variables, not short flags like `1`). Output is redacted locally before upload, live reports are private by default, and `--read` / `--retry` on saved live batches stay strictly observational (zero new local commands run).
