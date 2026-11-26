@@ -136,7 +136,7 @@ test('Test A: standalone spec model without production imports classifies as pro
 
   // 2. Real `pdd prove` MUST NOT return Proved; classifies as proved_spec_model (Not proved, exit 3).
   const out = makeSink(), err = makeSink();
-  const proveRes = runProve({ cwd: repo, base: 'main', json: true }, { stdout: out, stderr: err });
+  const proveRes = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: out, stderr: err });
   assert.equal(proveRes.exitCode, EXIT_NOT_PROVED, out.text || err.text);
   assert.equal(proveRes.outcome, OUTCOME_NOT_PROVED);
   assert.equal(proveRes.receipt.formal.tier, 'proved_spec_model');
@@ -185,7 +185,7 @@ test('Test A: standalone spec model without production imports classifies as pro
 // ---------------------------------------------------------------------------
 // Test B: Real zero-dep code-bound formal/property test (JS + Python pytest)
 // ---------------------------------------------------------------------------
-test('Test B (JS): real zero-dep seeded PRNG code-bound formal test passes pdd prove, auto-links on prod edit, and kills mutation control', t => {
+test('Test B (JS): real zero-dep seeded PRNG code-bound formal test passes pdd prove, auto-links on prod edit, and kills mutation control', async t => {
   const repo = initGitRepo(t, 'pdd-formal-test-b-js-');
   const nodeBin = JSON.stringify(process.execPath);
   mkdirSync(join(repo, 'src'), { recursive: true });
@@ -230,7 +230,7 @@ test('Test B (JS): real zero-dep seeded PRNG code-bound formal test passes pdd p
 
   // 1. Real `pdd prove` (human mode + JSON mode) passes cleanly with Formal: bounded (code-bound)!
   const humanOut = makeSink(), humanErr = makeSink();
-  const proveHuman = runProve({ cwd: repo, base: 'main', json: false }, { stdout: humanOut, stderr: humanErr });
+  const proveHuman = await runProve({ cwd: repo, base: 'main', json: false }, { stdout: humanOut, stderr: humanErr });
   assert.equal(proveHuman.exitCode, EXIT_PROVED, humanOut.text || humanErr.text);
   assert.equal(proveHuman.outcome, OUTCOME_PROVED);
   assert.match(humanOut.text, /Formal: bounded \(1 passed, code-bound\)/);
@@ -266,14 +266,14 @@ test('Test B (JS): real zero-dep seeded PRNG code-bound formal test passes pdd p
   execFileSync('git', ['merge', '-q', '--ff-only', 'feat-formal-js'], { cwd: repo });
   execFileSync('git', ['checkout', '-q', '-b', 'break-clamp'], { cwd: repo });
   writeFileSync(join(repo, 'src', 'calc.mjs'), 'export const add = (a, b) => Number(a) + Number(b);\nexport const clamp = (v, lo, hi) => v;\n');
-  const broken = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const broken = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(broken.exitCode, EXIT_FAILED);
   assert.equal(broken.outcome, OUTCOME_FAILED);
   assert.equal(broken.receipt.formal.state, 'failed');
   assert.equal(broken.receipt.formal.files[0].file, 'test/calc.formal.test.mjs');
 });
 
-test('Test B (Python live): real zero-dep Python formal test passes pdd prove with PYTHONPATH=src + JUnit XML, kills mutation, and rejects fake Python spec model', { skip: !HAS_PYTHON3 }, t => {
+test('Test B (Python live): real zero-dep Python formal test passes pdd prove with PYTHONPATH=src + JUnit XML, kills mutation, and rejects fake Python spec model', { skip: !HAS_PYTHON3 }, async t => {
   const repo = initGitRepo(t, 'pdd-formal-test-b-py-');
   mkdirSync(join(repo, 'src'), { recursive: true });
   mkdirSync(join(repo, 'tests'), { recursive: true });
@@ -313,7 +313,7 @@ test('Test B (Python live): real zero-dep Python formal test passes pdd prove wi
 
   // Real live pytest run via pdd prove!
   const out = makeSink(), err = makeSink();
-  const proved = runProve({ cwd: repo, base: 'main', json: true }, { stdout: out, stderr: err });
+  const proved = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: out, stderr: err });
   assert.equal(proved.exitCode, EXIT_PROVED, out.text || err.text);
   assert.equal(proved.outcome, OUTCOME_PROVED);
   assert.equal(proved.receipt.formal.tier, 'bounded');
@@ -347,7 +347,7 @@ test('Test B (Python live): real zero-dep Python formal test passes pdd prove wi
     '    for x in range(50):',
     '        assert x + 1 > x',
   ].join('\n') + '\n');
-  const fakeProve = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const fakeProve = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(fakeProve.exitCode, EXIT_NOT_PROVED);
   assert.equal(fakeProve.receipt.formal.tier, 'proved_spec_model');
   assert.equal(fakeProve.receipt.formal.satisfiesCodeVerification, false);
@@ -356,7 +356,7 @@ test('Test B (Python live): real zero-dep Python formal test passes pdd prove wi
 // ---------------------------------------------------------------------------
 // Test C: Pure docs/UI PR with zero invariants -> Formal: not-applicable (exit 0)
 // ---------------------------------------------------------------------------
-test('Test C: docs/UI PR with no invariants passes pdd prove cleanly with Formal: not-applicable and zero busywork', t => {
+test('Test C: docs/UI PR with no invariants passes pdd prove cleanly with Formal: not-applicable and zero busywork', async t => {
   const repo = initGitRepo(t, 'pdd-formal-test-c-');
   const nodeBin = JSON.stringify(process.execPath);
   mkdirSync(join(repo, 'docs'), { recursive: true });
@@ -372,7 +372,7 @@ test('Test C: docs/UI PR with no invariants passes pdd prove cleanly with Formal
   commitAll(repo, 'update docs');
 
   const out = makeSink(), err = makeSink();
-  const res = runProve({ cwd: repo, base: 'main', json: false }, { stdout: out, stderr: err });
+  const res = await runProve({ cwd: repo, base: 'main', json: false }, { stdout: out, stderr: err });
   assert.equal(res.exitCode, EXIT_PROVED, out.text || err.text);
   assert.equal(res.outcome, OUTCOME_PROVED);
   assert.equal(res.receipt.formal.applicable, false);
@@ -394,7 +394,7 @@ test('Test C: docs/UI PR with no invariants passes pdd prove cleanly with Formal
 // ---------------------------------------------------------------------------
 // Test E: Security / Merge-base trust for verify.formal_command & symlink refusal
 // ---------------------------------------------------------------------------
-test('Test E: untrusted PR-added verify.formal_command is NEVER executed, while merge-base trusted verify.formal_command runs cleanly', t => {
+test('Test E: untrusted PR-added verify.formal_command is NEVER executed, while merge-base trusted verify.formal_command runs cleanly', async t => {
   const repo = initGitRepo(t, 'pdd-formal-test-e-');
   const nodeBin = JSON.stringify(process.execPath);
   mkdirSync(join(repo, 'src'), { recursive: true });
@@ -424,7 +424,7 @@ test('Test E: untrusted PR-added verify.formal_command is NEVER executed, while 
   writeFileSync(join(repo, 'src', 'app.mjs'), 'export const x = 2;\n');
   commitAll(repo, 'untrusted formal_command edit');
 
-  const untrusted = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const untrusted = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(untrusted.exitCode, EXIT_NOT_PROVED);
   assert.equal(existsSync(join(repo, '.pwned-formal')), false, 'untrusted PR verify.formal_command MUST NEVER execute');
   assert.equal(existsSync(join(repo, '.pwned-mut')), false, 'untrusted PR verify.mutation_command MUST NEVER execute');
@@ -445,7 +445,7 @@ test('Test E: untrusted PR-added verify.formal_command is NEVER executed, while 
   writeFileSync(join(repo, 'src', 'app.mjs'), 'export const x = 3;\n');
   commitAll(repo, 'change app');
 
-  const trusted = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const trusted = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(trusted.exitCode, EXIT_PROVED, JSON.stringify(trusted.receipt));
   assert.equal(existsSync(join(repo, '.trusted-formal-ran')), true, 'merge-base trusted verify.formal_command executes');
   assert.equal(trusted.receipt.formal.tier, 'bounded');
@@ -547,7 +547,7 @@ test('Adversarial P0-1/P0-3/P0-4/P0-5/P1-2/P1-7: blocks tracked .venv RCE, tampe
   assert.equal(resolvePytestBinary(venvRepo), 'pytest', 'git-tracked .venv/bin/pytest MUST be refused');
   const hits = detectShadowBinaries(venvRepo, { touchedFiles: ['.venv/bin/pytest'], baseSha: 'main' });
   assert.ok(hits.some(h => h.path === '.venv/bin/pytest'), 'detectShadowBinaries MUST flag tracked .venv/bin/pytest');
-  const venvProve = runProve({ cwd: venvRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const venvProve = await runProve({ cwd: venvRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(venvProve.exitCode, EXIT_FAILED);
   assert.equal(existsSync(rceMarker), false, 'PR-tracked .venv/bin/pytest MUST NEVER execute during pdd prove');
 
@@ -562,7 +562,7 @@ test('Adversarial P0-1/P0-3/P0-4/P0-5/P1-2/P1-7: blocks tracked .venv RCE, tampe
   const scriptMarker = join(scriptRepo, 'script-pwned.txt');
   writeFileSync(join(scriptRepo, 'tools', 'formal.mjs'), `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(scriptMarker)}, 'pwned');\n`);
   commitAll(scriptRepo, 'tamper tools/formal.mjs');
-  const tamperRes = runProve({ cwd: scriptRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const tamperRes = await runProve({ cwd: scriptRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(tamperRes.exitCode, EXIT_NOT_PROVED);
   assert.equal(existsSync(scriptMarker), false, 'PR-tampered verify-referenced script MUST NEVER execute');
   assert.ok(tamperRes.receipt.notProvedReasons.some(r => r.includes('tools/formal.mjs')));

@@ -23,6 +23,7 @@ import {
   OUTCOME_PROVED,
   detectRepoTestCommand,
   runProve,
+  summarizeTestOutput,
 } from '../../src/core/prove.mjs';
 
 function makeSink() {
@@ -94,7 +95,7 @@ test('verify-paths validates pdd.json verify schema, matches globs linearly, and
   assert.ok(bad.errors.length >= 3, JSON.stringify(bad.errors));
 });
 
-test('G1/G2 zero-flag prove emits Proved, Failed, and Not proved honestly across mapped, unmapped, missing-capability, and base-trust scenarios', t => {
+test('G1/G2 zero-flag prove emits Proved, Failed, and Not proved honestly across mapped, unmapped, missing-capability, and base-trust scenarios', async t => {
   const repo = initGitRepo(t, 'pdd-prove-zero-');
   mkdirSync(join(repo, 'src', 'billing'), { recursive: true });
   mkdirSync(join(repo, 'src', 'ui'), { recursive: true });
@@ -132,7 +133,7 @@ test('G1/G2 zero-flag prove emits Proved, Failed, and Not proved honestly across
   // 1. Mapped change -> Proved (exit 0) with structured provenance JSON receipt.
   writeFileSync(join(repo, 'src', 'billing', 'calc.mjs'), 'export const sum = (a, b) => Number(a) + Number(b);\n');
   const provedOut = makeSink(), provedErr = makeSink();
-  const proved = runProve({ cwd: repo, json: true }, { stdout: provedOut, stderr: provedErr });
+  const proved = await runProve({ cwd: repo, json: true }, { stdout: provedOut, stderr: provedErr });
   assert.equal(proved.exitCode, EXIT_PROVED);
   assert.equal(proved.outcome, OUTCOME_PROVED);
   assert.equal(provedErr.text, '');
@@ -149,7 +150,7 @@ test('G1/G2 zero-flag prove emits Proved, Failed, and Not proved honestly across
   // 2. Unmapped production surface -> Not proved (exit 3), NEVER fakes Proved!
   writeFileSync(join(repo, 'src', 'other', 'worker.mjs'), 'export const tick = () => 2;\n');
   const unmappedOut = makeSink(), unmappedErr = makeSink();
-  const unmapped = runProve({ cwd: repo, json: true }, { stdout: unmappedOut, stderr: unmappedErr });
+  const unmapped = await runProve({ cwd: repo, json: true }, { stdout: unmappedOut, stderr: unmappedErr });
   assert.equal(unmapped.exitCode, EXIT_NOT_PROVED);
   assert.equal(unmapped.outcome, OUTCOME_NOT_PROVED);
   assert.ok(unmapped.receipt.notProvedReasons.some(r => r.includes('src/other/worker.mjs')));
@@ -159,32 +160,32 @@ test('G1/G2 zero-flag prove emits Proved, Failed, and Not proved honestly across
   writeFileSync(join(repo, 'src', 'ui', 'view.mjs'), 'export const render = () => "v2";\n');
 
   // 3. Missing required capability -> Not proved (exit 3) with explicit missing capability reason.
-  const noCap = runProve({ cwd: repo, json: true, capabilities: [] }, { stdout: makeSink(), stderr: makeSink() });
+  const noCap = await runProve({ cwd: repo, json: true, capabilities: [] }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(noCap.exitCode, EXIT_NOT_PROVED);
   assert.equal(noCap.outcome, OUTCOME_NOT_PROVED);
   assert.equal(noCap.receipt.paths.find(p => p.id === 'ui-browser').status, 'not-proved');
   assert.deepEqual(noCap.receipt.paths.find(p => p.id === 'ui-browser').missingCapabilities, ['browser', 'custom:display']);
 
   // 4. Supplying required capabilities -> Proved (exit 0)!
-  const withCap = runProve({ cwd: repo, json: true, capabilities: ['browser', 'custom:display'] }, { stdout: makeSink(), stderr: makeSink() });
+  const withCap = await runProve({ cwd: repo, json: true, capabilities: ['browser', 'custom:display'] }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(withCap.exitCode, EXIT_PROVED);
   assert.equal(withCap.outcome, OUTCOME_PROVED);
 
   // 5. Base-trust protection: weakening pdd.json on the branch CANNOT bypass base verify.paths!
   writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ verify: { test: `${nodeBin} -e "process.exit(0)"`, paths: [{ id: 'ui-browser', when: ['src/ui/**'], run: `${nodeBin} -e "process.exit(0)"` }] } }) + '\n');
-  const trusted = runProve({ cwd: repo, json: true, capabilities: [] }, { stdout: makeSink(), stderr: makeSink() });
+  const trusted = await runProve({ cwd: repo, json: true, capabilities: [] }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(trusted.exitCode, EXIT_NOT_PROVED, 'must enforce merge-base verify.paths with needs:[browser, custom:display]');
   assert.match(trusted.receipt.configSource, /:pdd\.json$/);
 
   // 6. Failing test suite -> Failed (exit 1).
   writeFileSync(join(repo, 'src', 'billing', 'calc.mjs'), 'export const sum = (a, b) => a - b;\n');
-  const failed = runProve({ cwd: repo, json: true, capabilities: ['browser', 'custom:display'] }, { stdout: makeSink(), stderr: makeSink() });
+  const failed = await runProve({ cwd: repo, json: true, capabilities: ['browser', 'custom:display'] }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(failed.exitCode, EXIT_FAILED);
   assert.equal(failed.outcome, OUTCOME_FAILED);
   assert.equal(failed.receipt.test.ok, false);
 });
 
-test('G1 zero-flag prove marks branch-only verify.paths as Not proved when merge base has no verify config', t => {
+test('G1 zero-flag prove marks branch-only verify.paths as Not proved when merge base has no verify config', async t => {
   const repo = initGitRepo(t, 'pdd-prove-branch-cfg-');
   mkdirSync(join(repo, 'src'), { recursive: true });
   writeFileSync(join(repo, 'src', 'app.mjs'), 'export const v = 1;\n');
@@ -199,13 +200,13 @@ test('G1 zero-flag prove marks branch-only verify.paths as Not proved when merge
   writeFileSync(join(repo, 'src', 'app.mjs'), 'export const v = 2;\n');
   commitAll(repo, 'add verify.paths on branch');
 
-  const res = runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const res = await runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(res.exitCode, EXIT_NOT_PROVED);
   assert.equal(res.outcome, OUTCOME_NOT_PROVED);
   assert.ok(res.receipt.notProvedReasons.some(r => r.includes('not yet trusted on merge base')));
 });
 
-test('G1 bug-contrast mode fixes all 5 brownfield bugs: colocated tests, offline --base, uncommitted overlay, scrubbed env + isolated --setup, and honest causal --expect', t => {
+test('G1 bug-contrast mode fixes all 5 brownfield bugs: colocated tests, offline --base, uncommitted overlay, scrubbed env + isolated --setup, and honest causal --expect', async t => {
   const repo = initGitRepo(t, 'pdd-prove-bug-');
   mkdirSync(join(repo, 'src'), { recursive: true });
 
@@ -250,7 +251,7 @@ test('G1 bug-contrast mode fixes all 5 brownfield bugs: colocated tests, offline
   // Fixes #1, #2, #3, #4 (scrubbed env + isolated --setup never mutating caller repo!) + #5 (causal --expect).
   const setupCmd = `${nodeBin} -e "require('node:fs').writeFileSync('.setup-marker', 'isolated')"`;
   const okOut = makeSink(), okErr = makeSink();
-  const proved = runProve(
+  const proved = await runProve(
     {
       cwd: repo,
       base: 'main',
@@ -276,7 +277,7 @@ test('G1 bug-contrast mode fixes all 5 brownfield bugs: colocated tests, offline
     join(repo, 'src', 'broken-import.test.mjs'),
     "import { nope } from './nonexistent-dep-xyz.mjs';\nconsole.log(nope);\n",
   );
-  const setupFail = runProve(
+  const setupFail = await runProve(
     {
       cwd: repo,
       base: 'main',
@@ -291,7 +292,7 @@ test('G1 bug-contrast mode fixes all 5 brownfield bugs: colocated tests, offline
   assert.equal(setupFail.receipt.reason, 'setup-error');
 
   // Fix #5b: Base fails for WRONG reason (symptom absent from output) -> Not proved (wrong-reason).
-  const wrongReason = runProve(
+  const wrongReason = await runProve(
     {
       cwd: repo,
       base: 'main',
@@ -306,7 +307,7 @@ test('G1 bug-contrast mode fixes all 5 brownfield bugs: colocated tests, offline
   assert.equal(wrongReason.receipt.reason, 'wrong-reason');
 
   // Fix #5c: Base passes -> Failed (base-passes).
-  const basePasses = runProve(
+  const basePasses = await runProve(
     {
       cwd: repo,
       base: 'main',
@@ -321,7 +322,7 @@ test('G1 bug-contrast mode fixes all 5 brownfield bugs: colocated tests, offline
   assert.equal(basePasses.receipt.reason, 'base-passes');
 });
 
-test('G1/G2 polyglot prove works offline on real Python (pytest/pyproject.toml) and Go (go test/go.mod) repositories', t => {
+test('G1/G2 polyglot prove works offline on real Python (pytest/pyproject.toml) and Go (go test/go.mod) repositories', async t => {
   // 1. Python repo auto-detection (`pyproject.toml` -> `pytest`) + zero-flag verify.paths + bug-contrast.
   const pyRepo = initGitRepo(t, 'pdd-prove-py-');
   mkdirSync(join(pyRepo, 'pkg'), { recursive: true });
@@ -347,7 +348,7 @@ test('G1/G2 polyglot prove works offline on real Python (pytest/pyproject.toml) 
     'import unittest\nfrom pkg.tax import calc\nclass T(unittest.TestCase):\n    def test_calc(self):\n        self.assertEqual(calc(100), 100)\n    def test_neg(self):\n        with self.assertRaisesRegex(ValueError, "NEGATIVE_CENTS"):\n            calc(-1)\n',
   );
 
-  const pyContrast = runProve(
+  const pyContrast = await runProve(
     { cwd: pyRepo, base: 'main', test: 'python3 -m unittest tests/test_tax.py', expect: 'ValueError not raised', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -357,7 +358,7 @@ test('G1/G2 polyglot prove works offline on real Python (pytest/pyproject.toml) 
   const pyShimDir = mkdtempSync(join(tmpdir(), 'pdd-prove-pyshim-'));
   t.after(() => rmSync(pyShimDir, { recursive: true, force: true }));
   writeFileSync(join(pyShimDir, 'pytest'), '#!/bin/sh\nexec python3 -m unittest discover -s tests\n', { mode: 0o755 });
-  const pyZero = runProve(
+  const pyZero = await runProve(
     { cwd: pyRepo, json: true, env: { ...process.env, PATH: `${pyShimDir}${delimiter}${process.env.PATH ?? ''}` } },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -383,21 +384,45 @@ test('G1/G2 polyglot prove works offline on real Python (pytest/pyproject.toml) 
     'package demo\nimport "testing"\nfunc TestAdd(t *testing.T) { if got := Add(2, 3); got != 5 { t.Fatalf("WANT_FIVE got %d", got) } }\n',
   );
 
-  const goContrast = runProve(
-    { cwd: goRepo, base: 'main', test: 'go test ./...', expect: 'WANT_FIVE', json: true },
+  const goShimDir = mkdtempSync(join(tmpdir(), 'pdd-prove-goshim-'));
+  t.after(() => rmSync(goShimDir, { recursive: true, force: true }));
+  writeFileSync(
+    join(goShimDir, 'go'),
+    [
+      '#!/bin/sh',
+      'if [ "$1" = "test" ] && [ -f calc.go ] && [ -f calc_test.go ]; then',
+      '  if grep -q "a - b" calc.go; then',
+      '    echo "--- FAIL: TestAdd (0.00s)"',
+      '    echo "    calc_test.go:3: WANT_FIVE got -1"',
+      '    echo "FAIL"',
+      '    printf "FAIL\\texample.com/demo\\t0.001s\\n"',
+      '    exit 1',
+      '  fi',
+      '  printf "ok  \\texample.com/demo\\t0.001s\\n"',
+      '  exit 0',
+      'fi',
+      'echo "unexpected fake go invocation: $*" >&2',
+      'exit 2',
+    ].join('\n') + '\n',
+    { mode: 0o755 },
+  );
+  const goEnv = { ...process.env, PATH: `${goShimDir}${delimiter}${process.env.PATH ?? ''}` };
+
+  const goContrast = await runProve(
+    { cwd: goRepo, base: 'main', test: 'go test ./...', expect: 'WANT_FIVE', json: true, env: goEnv },
     { stdout: makeSink(), stderr: makeSink() },
   );
   assert.equal(goContrast.exitCode, EXIT_PROVED, JSON.stringify(goContrast.receipt));
   assert.equal(goContrast.outcome, OUTCOME_PROVED);
   assert.deepEqual(goContrast.receipt.overlayPaths, ['calc_test.go']);
 
-  const goZero = runProve({ cwd: goRepo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const goZero = await runProve({ cwd: goRepo, json: true, env: goEnv }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(goZero.exitCode, EXIT_PROVED, JSON.stringify(goZero.receipt));
   assert.equal(goZero.receipt.test.command, 'go test ./...');
   assert.equal(readFileSync(join(goRepo, 'calc.go'), 'utf8').includes('a + b'), true);
 });
 
-test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-auth block, symlink/dangling overlay refusal, deleted-test parity & zero checkout mutation, Go [build failed] & signal setup-error, broad env scrubbing, negative capability override, and .svg/.github surfaces', t => {
+test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-auth block, symlink/dangling overlay refusal, deleted-test parity & zero checkout mutation, Go [build failed] & signal setup-error, broad env scrubbing, negative capability override, and .svg/.github surfaces', async t => {
   const nodeBin = JSON.stringify(process.execPath);
 
   // #7 Negative capability override: { browser: false } MUST remove 'browser' even when PDD_CAPABILITIES lists it!
@@ -422,7 +447,7 @@ test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-a
   writeFileSync(join(repo, 'src', 'app.mjs'), 'export const v = 1;\n');
   commitAll(repo, 'base without pdd.json');
 
-  const badBase = runProve({ cwd: repo, base: 'refs/heads/nonexistent-ref', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const badBase = await runProve({ cwd: repo, base: 'refs/heads/nonexistent-ref', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(badBase.exitCode, EXIT_NOT_PROVED);
   assert.equal(badBase.outcome, OUTCOME_NOT_PROVED);
 
@@ -432,7 +457,7 @@ test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-a
     JSON.stringify({ verify: { test: `${nodeBin} -e "process.exit(0)"`, paths: [{ id: 'app', when: ['src/**'], run: `${nodeBin} -e "process.exit(0)"` }] } }) + '\n',
   );
   writeFileSync(join(repo, 'src', 'app.mjs'), 'export const v = 2;\n');
-  const selfAuth = runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const selfAuth = await runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(selfAuth.exitCode, EXIT_NOT_PROVED, 'uncommitted pdd.json when baseSha===headSha MUST NOT self-authorize');
   assert.ok(selfAuth.receipt.notProvedReasons.some(r => r.includes('not yet trusted on merge base')));
 
@@ -458,7 +483,7 @@ test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-a
   execFileSync('git', ['checkout', '-q', '-b', 'delete-failing-test'], { cwd: parityRepo });
   // Deleting the failing test on head MUST mirror into baseWorktree -> base ALSO passes -> Failed (base-passes), NEVER Proved!
   rmSync(join(parityRepo, 'test', 'failing.test.mjs'));
-  const delCheat = runProve(
+  const delCheat = await runProve(
     {
       cwd: parityRepo,
       base: 'main',
@@ -485,7 +510,7 @@ test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-a
   execFileSync('git', ['checkout', '-q', '-b', 'fix-crash'], { cwd: sigRepo });
   writeFileSync(join(sigRepo, 'app.mjs'), 'export const crash = false;\n');
   writeFileSync(join(sigRepo, 'app.test.mjs'), "import { crash } from './app.mjs';\nif (crash) { console.error('EXPECTED_MSG'); process.kill(process.pid, 'SIGKILL'); }\n");
-  const sigRes = runProve(
+  const sigRes = await runProve(
     { cwd: sigRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'EXPECTED_MSG', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -500,12 +525,33 @@ test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-a
   execFileSync('git', ['checkout', '-q', '-b', 'add-newfunc'], { cwd: goBuildRepo });
   writeFileSync(join(goBuildRepo, 'calc.go'), 'package b\nfunc Add(a, b int) int { return a + b }\nfunc NewFunc() int { return 7 }\n');
   writeFileSync(join(goBuildRepo, 'calc_test.go'), 'package b\nimport "testing"\nfunc TestNew(t *testing.T) { if NewFunc() != 7 { t.Fatal("bad") } }\n');
-  const goBuildFail = runProve(
-    { cwd: goBuildRepo, base: 'main', test: 'go test ./...', expect: 'build failed', json: true },
+  const goBuildShimDir = mkdtempSync(join(tmpdir(), 'pdd-prove-gobuildshim-'));
+  t.after(() => rmSync(goBuildShimDir, { recursive: true, force: true }));
+  writeFileSync(
+    join(goBuildShimDir, 'go'),
+    [
+      '#!/bin/sh',
+      'if [ "$1" = "test" ] && [ -f calc.go ] && [ -f calc_test.go ]; then',
+      '  if ! grep -q "NewFunc" calc.go; then',
+      '    echo "# example.com/b [example.com/b.test]" >&2',
+      '    echo "./calc_test.go:3: undefined: NewFunc" >&2',
+      '    printf "FAIL\\texample.com/b [build failed]\\n"',
+      '    exit 2',
+      '  fi',
+      '  printf "ok  \\texample.com/b\\t0.001s\\n"',
+      '  exit 0',
+      'fi',
+      'exit 2',
+    ].join('\n') + '\n',
+    { mode: 0o755 },
+  );
+  const goBuildFail = await runProve(
+    { cwd: goBuildRepo, base: 'main', test: 'go test ./...', expect: 'build failed', json: true, env: { ...process.env, PATH: `${goBuildShimDir}${delimiter}${process.env.PATH ?? ''}` } },
     { stdout: makeSink(), stderr: makeSink() },
   );
   assert.equal(goBuildFail.exitCode, EXIT_NOT_PROVED, JSON.stringify(goBuildFail.receipt));
   assert.equal(goBuildFail.receipt.reason, 'setup-error');
+  assert.match(goBuildFail.receipt.base.setupError, /\[build failed\]/);
 
   // #3 Overlay symlink traversal / dangling destination symlink -> refused (`setup-error`, NEVER writes outside)!
   const outsideDir = mkdtempSync(join(tmpdir(), 'pdd-prove-outside-'));
@@ -519,7 +565,7 @@ test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-a
   execFileSync('git', ['checkout', '-q', '-b', 'replace-symlink'], { cwd: symRepo });
   rmSync(join(symRepo, 'test', 'dangling.test.mjs'));
   writeFileSync(join(symRepo, 'test', 'dangling.test.mjs'), 'console.log("pwned");\n');
-  const symRes = runProve(
+  const symRes = await runProve(
     { cwd: symRepo, base: 'main', test: `${nodeBin} -e "process.exit(0)"`, expect: 'x', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -528,7 +574,7 @@ test('Astra #1-#8 regressions: fail-closed bad base, uncommitted pdd.json self-a
   assert.equal(existsSync(join(outsideDir, 'escaped.txt')), false, 'dangling symlink destination MUST NEVER be written through');
 });
 
-test('Astra R2 #1-#6 regressions: no HEAD default base, merge-base required on orphan ref, --no-renames overlay parity + exec bits, shell signal exit 137/143, extra env scrubs, and requirements.txt/CMakeLists.txt/src/docs surfaces', t => {
+test('Astra R2 #1-#6 regressions: no HEAD default base, merge-base required on orphan ref, --no-renames overlay parity + exec bits, shell signal exit 137/143, extra env scrubs, and requirements.txt/CMakeLists.txt/src/docs surfaces', async t => {
   const nodeBin = JSON.stringify(process.execPath);
 
   // R2 #6: requirements.txt, CMakeLists.txt, and src/docs/route.ts MUST stay production surfaces!
@@ -548,7 +594,7 @@ test('Astra R2 #1-#6 regressions: no HEAD default base, merge-base required on o
   writeFileSync(join(noMainRepo, 'pdd.json'), JSON.stringify({ lint: { commands: ['echo untrusted'] }, verify: { test: `${nodeBin} -e "process.exit(0)"` } }) + '\n');
   commitAll(noMainRepo, 'only custom-dev');
   assert.equal(resolveDefaultBaseRef(noMainRepo), null);
-  assert.equal(runProve({ cwd: noMainRepo, json: true }, { stdout: makeSink(), stderr: makeSink() }).exitCode, EXIT_NOT_PROVED);
+  assert.equal((await runProve({ cwd: noMainRepo, json: true }, { stdout: makeSink(), stderr: makeSink() })).exitCode, EXIT_NOT_PROVED);
   const untrustedNoBase = loadBaseTrustedLintCommands(noMainRepo);
   assert.deepEqual(untrustedNoBase.commands, []);
   assert.equal(untrustedNoBase.skippedUntrusted, true);
@@ -562,7 +608,7 @@ test('Astra R2 #1-#6 regressions: no HEAD default base, merge-base required on o
   writeFileSync(join(orphanRepo, 'pdd.json'), JSON.stringify({ lint: { commands: ['echo unrelated'] } }) + '\n');
   commitAll(orphanRepo, 'unrelated root');
   execFileSync('git', ['checkout', '-q', 'main'], { cwd: orphanRepo });
-  assert.equal(runProve({ cwd: orphanRepo, base: 'unrelated-base', json: true }, { stdout: makeSink(), stderr: makeSink() }).exitCode, EXIT_NOT_PROVED);
+  assert.equal((await runProve({ cwd: orphanRepo, base: 'unrelated-base', json: true }, { stdout: makeSink(), stderr: makeSink() })).exitCode, EXIT_NOT_PROVED);
   assert.deepEqual(loadBaseTrustedLintCommands(orphanRepo, { baseRef: 'unrelated-base' }).commands, []);
 
   // R2 #3: Renamed test file uses --no-renames (old path deleted from baseWorktree!) + executable script preserves +x mode bits + R2 #5 extra env scrubs!
@@ -580,7 +626,7 @@ test('Astra R2 #1-#6 regressions: no HEAD default base, merge-base required on o
     '#!/bin/sh\nfor v in "$CLAUDE_CONFIG_DIR" "$SSH_AUTH_SOCK" "$SSH_AGENT_PID" "$GPG_AGENT_INFO" "$NPM_TOKEN" "$GEMINI_API_KEY" "$GOOGLE_APPLICATION_CREDENTIALS" "$ANTIGRAVITY_TOKEN"; do\n  if [ -n "$v" ]; then echo "LEAK:$v" >&2; exit 2; fi\ndone\nexit 0\n',
   );
   chmodSync(join(renameRepo, 'test', 'run-check.sh'), 0o755);
-  const renameRes = runProve(
+  const renameRes = await runProve(
     {
       cwd: renameRepo,
       base: 'main',
@@ -606,7 +652,7 @@ test('Astra R2 #1-#6 regressions: no HEAD default base, merge-base required on o
   execFileSync('git', ['checkout', '-q', '-b', 'fix-sigexit'], { cwd: sigExitRepo });
   writeFileSync(join(sigExitRepo, 'x.mjs'), 'export const bad = false;\n');
   writeFileSync(join(sigExitRepo, 'x.test.mjs'), "import { bad } from './x.mjs';\nif (bad) { console.error('KILLED_MSG'); process.exit(137); }\n");
-  const sigExitRes = runProve(
+  const sigExitRes = await runProve(
     { cwd: sigExitRepo, base: 'main', test: `${nodeBin} x.test.mjs`, expect: 'KILLED_MSG', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -614,7 +660,7 @@ test('Astra R2 #1-#6 regressions: no HEAD default base, merge-base required on o
   assert.equal(sigExitRes.receipt.reason, 'setup-error');
 });
 
-test('#3575 multi-part integration guard: product/plan.md with >=2 parts requires cross-part integration recipe in pdd.json verify.paths (single-part unaffected)', t => {
+test('#3575 multi-part integration guard: product/plan.md with >=2 parts requires cross-part integration recipe in pdd.json verify.paths (single-part unaffected)', async t => {
   const nodeBin = JSON.stringify(process.execPath);
   const mapText = [
     '# Equity Ledger: map',
@@ -662,7 +708,7 @@ test('#3575 multi-part integration guard: product/plan.md with >=2 parts require
   execFileSync('git', ['checkout', '-q', '-b', 'feat-ledger'], { cwd: repo });
   writeFileSync(join(repo, 'src', 'ledger', 'cap.mjs'), 'export const issue = () => 2;\n');
 
-  const missing = runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const missing = await runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(missing.exitCode, EXIT_NOT_PROVED, JSON.stringify(missing.receipt));
   assert.equal(missing.outcome, OUTCOME_NOT_PROVED);
   const guardReason = missing.receipt.notProvedReasons.find(r => r.includes('[multi-part-integration-missing]'));
@@ -689,7 +735,7 @@ test('#3575 multi-part integration guard: product/plan.md with >=2 parts require
   execFileSync('git', ['checkout', '-q', '-b', 'feat-ledger-2'], { cwd: repo });
   writeFileSync(join(repo, 'src', 'ledger', 'cap.mjs'), 'export const issue = () => 3;\n');
 
-  const covered = runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const covered = await runProve({ cwd: repo, json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(covered.exitCode, EXIT_PROVED, JSON.stringify(covered.receipt));
   assert.equal(covered.outcome, OUTCOME_PROVED);
   assert.deepEqual(covered.receipt.notProvedReasons, []);
@@ -708,12 +754,12 @@ test('#3575 multi-part integration guard: product/plan.md with >=2 parts require
   execFileSync('git', ['checkout', '-q', '-b', 'solo-change'], { cwd: singleRepo });
   writeFileSync(join(singleRepo, 'src', 'ledger', 'cap.mjs'), 'export const v = 2;\n');
 
-  const solo = runProve({ cwd: singleRepo, json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const solo = await runProve({ cwd: singleRepo, json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(solo.exitCode, EXIT_PROVED, JSON.stringify(solo.receipt));
   assert.equal(solo.outcome, OUTCOME_PROVED);
 });
 
-test('live-repo polish: prove summary extracts failure/pass tail, --overlay restricts strictly, configSource=auto-detected, pdd.json excluded from surfaces, Python src layout uses PYTHONPATH=src', t => {
+test('live-repo polish: prove summary extracts failure/pass tail, --overlay restricts strictly, configSource=auto-detected, pdd.json excluded from surfaces, Python src layout uses PYTHONPATH=src', async t => {
   const nodeBin = JSON.stringify(process.execPath);
   // 1. detectRepoTestCommand adds PYTHONPATH=src for Python src/-layout repos
   const pySrcRepo = initGitRepo(t, 'pdd-prove-py-src-');
@@ -733,7 +779,7 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
   commitAll(repo, 'base');
   execFileSync('git', ['checkout', '-q', '-b', 'feat-polish'], { cwd: repo });
   writeFileSync(join(repo, 'pdd.json'), '{}\n');
-  const vRes = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const vRes = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(vRes.receipt.configSource, 'auto-detected');
   assert.deepEqual(vRes.receipt.changedSurfaces, [], 'pdd.json must not be classified as a production surface');
   assert.match(vRes.receipt.test.summary, /12 passed in 0\.42s/, `expected summary tail, got: ${vRes.receipt.test.summary}`);
@@ -749,7 +795,7 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
   writeFileSync(join(bcRepo, 'lib.mjs'), 'export const val = () => 2;\n');
   writeFileSync(join(bcRepo, 'data', 'expected.json'), '{"value":2}\n');
   writeFileSync(join(bcRepo, 'test', 'a.test.mjs'), "import assert from 'node:assert/strict'; import { readFileSync } from 'node:fs'; import { val } from '../lib.mjs'; const exp = JSON.parse(readFileSync('data/expected.json', 'utf8')).value; assert.equal(val(), exp, 'EXPECTED_A');\n");
-  const ov = runProve(
+  const ov = await runProve(
     { cwd: bcRepo, base: 'main', test: `${nodeBin} test/a.test.mjs`, expect: 'EXPECTED_A', overlay: 'data/**', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -759,7 +805,7 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
   // 4. Verify mode records dirty/proofScope accurately and reports timeouts as Not proved with --timeout hint
   assert.equal(vRes.receipt.dirty, true);
   assert.equal(vRes.receipt.proofScope, 'working-tree');
-  const timedOutProve = runProve(
+  const timedOutProve = await runProve(
     { cwd: repo, base: 'main', timeoutMinutes: 2, json: true },
     {
       stdout: makeSink(),
@@ -781,7 +827,7 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
     join(synRepo, 'app.test.mjs'),
     "import { broken } from './app.mjs';\nif (broken) { console.log('running order total tests'); console.error('SyntaxError: invalid syntax'); process.exit(1); }\n",
   );
-  const synBanner = runProve(
+  const synBanner = await runProve(
     { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'order total', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -789,7 +835,7 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
   assert.equal(synBanner.receipt.reason, 'setup-error');
 
   // When --expect explicitly targets the SyntaxError error line itself, bug-contrast proves cleanly.
-  const synTargeted = runProve(
+  const synTargeted = await runProve(
     { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'SyntaxError: invalid syntax', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -801,14 +847,14 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
     join(synRepo, 'app.test.mjs'),
     "import { broken } from './app.mjs';\nif (broken) { console.log('SyntaxError: order total banner'); console.error('SyntaxError: invalid syntax'); process.exit(1); }\n",
   );
-  const spoofBanner = runProve(
+  const spoofBanner = await runProve(
     { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'SyntaxError: order total', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
   assert.equal(spoofBanner.exitCode, EXIT_NOT_PROVED, JSON.stringify(spoofBanner.receipt));
   assert.equal(spoofBanner.receipt.reason, 'setup-error');
 
-  const bareClass = runProve(
+  const bareClass = await runProve(
     { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'SyntaxError', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -819,7 +865,7 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
     join(synRepo, 'app.test.mjs'),
     "import { broken } from './app.mjs';\nif (broken) { console.log('# FileNotFoundError: [Errno 2] conf.yml'); process.exit(1); }\n",
   );
-  const tapDiag = runProve(
+  const tapDiag = await runProve(
     { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'FileNotFoundError: [Errno 2] conf.yml', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -830,7 +876,7 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
     join(synRepo, 'app.test.mjs'),
     "import { broken } from './app.mjs';\nif (broken) { console.error('ImportError: cannot import foo from bar'); process.exit(127); }\n",
   );
-  const exit127Diag = runProve(
+  const exit127Diag = await runProve(
     { cwd: synRepo, base: 'main', test: `${nodeBin} app.test.mjs`, expect: 'ImportError: cannot import foo from bar', json: true },
     { stdout: makeSink(), stderr: makeSink() },
   );
@@ -852,7 +898,7 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
   const origPath = process.env.PATH;
   process.env.PATH = `${fakeBin}:${origPath}`;
   try {
-    const failedStatus = runProve({ cwd: cleanRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+    const failedStatus = await runProve({ cwd: cleanRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
     assert.equal(failedStatus.exitCode, EXIT_NOT_PROVED, JSON.stringify(failedStatus.receipt));
     assert.equal(failedStatus.receipt.dirty, true);
     assert.equal(failedStatus.receipt.proofScope, 'unknown');
@@ -861,7 +907,7 @@ test('live-repo polish: prove summary extracts failure/pass tail, --overlay rest
   }
 });
 
-test('#3633 honest proof-tier labels: pdd prove surfaces simulated, real-host run, and adversarial run in JSON and text without fabricating unexecuted tiers', t => {
+test('#3633 honest proof-tier labels: pdd prove surfaces simulated, real-host run, and adversarial run in JSON and text without fabricating unexecuted tiers', async t => {
   const seed = (prefix, files) => {
     const dir = initGitRepo(t, prefix);
     for (const [rel, body] of Object.entries(files)) {
@@ -901,7 +947,7 @@ test('#3633 honest proof-tier labels: pdd prove surfaces simulated, real-host ru
   commitAll(repo, 'update greeting');
 
   const textOut = makeSink();
-  const resText = runProve({ cwd: repo, json: false }, { stdout: textOut, stderr: makeSink() });
+  const resText = await runProve({ cwd: repo, json: false }, { stdout: textOut, stderr: makeSink() });
   assert.equal(resText.exitCode, 0, textOut.text);
   assert.match(textOut.text, /Proof tiers: simulated=Proved, real-host run=Proved, adversarial run=Not proved/);
   assert.equal(resText.receipt.proofTiers.simulated.status, 'Proved');
@@ -928,7 +974,7 @@ test('#3633 honest proof-tier labels: pdd prove surfaces simulated, real-host ru
   commitAll(repoAdv, 'touch app');
 
   const jsonOut = makeSink();
-  const resAdv = runProve({ cwd: repoAdv, json: true }, { stdout: jsonOut, stderr: makeSink() });
+  const resAdv = await runProve({ cwd: repoAdv, json: true }, { stdout: jsonOut, stderr: makeSink() });
   assert.equal(resAdv.exitCode, 0, jsonOut.text);
   const parsedAdv = JSON.parse(jsonOut.text);
   assert.equal(parsedAdv.proofTiers.simulated.status, 'Proved');
@@ -955,10 +1001,397 @@ test('#3633 honest proof-tier labels: pdd prove surfaces simulated, real-host ru
   commitAll(repoFail, 'touch app');
 
   const failErr = makeSink();
-  const resFail = runProve({ cwd: repoFail, json: false }, { stdout: makeSink(), stderr: failErr });
+  const resFail = await runProve({ cwd: repoFail, json: false }, { stdout: makeSink(), stderr: failErr });
   assert.equal(resFail.exitCode, 1);
   assert.equal(resFail.receipt.proofTiers.simulated.status, 'Proved');
   assert.equal(resFail.receipt.proofTiers.realHost.status, 'Not proved');
   assert.equal(resFail.receipt.proofTiers.adversarial.status, 'Failed');
   assert.match(failErr.text, /Proof tiers: simulated=Proved, real-host run=Not proved, adversarial run=Failed/);
+});
+
+
+test('#3723 universal environment-aware runner discovery prefers repo-local environments and supports polyglot fallbacks', t => {
+  const mkDir = prefix => {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    return dir;
+  };
+
+  // 1. Node lockfile-aware detection (pnpm, yarn, bun, npm, and bun without scripts.test).
+  for (const [lockfile, expected] of [
+    ['pnpm-lock.yaml', 'pnpm test'],
+    ['yarn.lock', 'yarn test'],
+    ['bun.lockb', 'bun run test'],
+    ['bun.lock', 'bun run test'],
+    [null, 'npm test'],
+  ]) {
+    const dir = mkDir('pdd-detect-node-');
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'demo', scripts: { test: 'node --test' } }));
+    if (lockfile) writeFileSync(join(dir, lockfile), '');
+    assert.equal(detectRepoTestCommand(dir), expected, `lockfile=${lockfile}`);
+  }
+  const bunNoScript = mkDir('pdd-detect-bun-');
+  writeFileSync(join(bunNoScript, 'package.json'), JSON.stringify({ name: 'demo' }));
+  writeFileSync(join(bunNoScript, 'bun.lock'), '');
+  assert.equal(detectRepoTestCommand(bunNoScript), 'bun test');
+
+  // 2. Python discovery priority: .venv/bin/pytest > venv/bin/pytest > uv run pytest > poetry run pytest > python3 -m pytest > pytest (+ PYTHONPATH=src).
+  const pyVenv = initGitRepo(t, 'pdd-detect-py-venv-');
+  writeFileSync(join(pyVenv, '.gitignore'), '.venv/\nvenv/\n');
+  writeFileSync(join(pyVenv, 'pyproject.toml'), '[project]\nname = "demo"\n');
+  mkdirSync(join(pyVenv, 'src'), { recursive: true });
+  commitAll(pyVenv, 'base');
+  mkdirSync(join(pyVenv, '.venv', 'bin'), { recursive: true });
+  writeFileSync(join(pyVenv, '.venv', 'bin', 'pytest'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  assert.equal(detectRepoTestCommand(pyVenv), 'PYTHONPATH=src .venv/bin/pytest');
+
+  // Falls through to venv/bin/pytest when .venv is absent.
+  rmSync(join(pyVenv, '.venv'), { recursive: true, force: true });
+  mkdirSync(join(pyVenv, 'venv', 'bin'), { recursive: true });
+  writeFileSync(join(pyVenv, 'venv', 'bin', 'pytest'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  assert.equal(detectRepoTestCommand(pyVenv), 'PYTHONPATH=src venv/bin/pytest');
+
+  // Git-tracked .venv/bin/pytest MUST be refused (fail-closed RCE defense).
+  const trackedVenv = initGitRepo(t, 'pdd-detect-tracked-venv-');
+  writeFileSync(join(trackedVenv, 'pyproject.toml'), '[project]\nname = "demo"\n');
+  mkdirSync(join(trackedVenv, '.venv', 'bin'), { recursive: true });
+  writeFileSync(join(trackedVenv, '.venv', 'bin', 'pytest'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  commitAll(trackedVenv, 'tracked evil venv');
+  assert.equal(detectRepoTestCommand(trackedVenv, { probe: () => false }), 'pytest');
+
+  // uv.lock + uv available -> uv run pytest.
+  const pyUv = mkDir('pdd-detect-py-uv-');
+  writeFileSync(join(pyUv, 'pyproject.toml'), '[project]\nname = "demo"\n');
+  writeFileSync(join(pyUv, 'uv.lock'), 'version = 1\n');
+  assert.equal(detectRepoTestCommand(pyUv, { probe: bin => bin === 'uv' }), 'uv run pytest');
+
+  // poetry.lock + poetry available -> poetry run pytest.
+  const pyPoetry = mkDir('pdd-detect-py-poetry-');
+  writeFileSync(join(pyPoetry, 'pyproject.toml'), '[project]\nname = "demo"\n');
+  writeFileSync(join(pyPoetry, 'poetry.lock'), '');
+  assert.equal(detectRepoTestCommand(pyPoetry, { probe: bin => bin === 'poetry' }), 'poetry run pytest');
+
+  // python3 -m pytest when pytest binary is absent on PATH but python3 has pytest module.
+  const pyMod = mkDir('pdd-detect-py-mod-');
+  writeFileSync(join(pyMod, 'pyproject.toml'), '[project]\nname = "demo"\n');
+  assert.equal(detectRepoTestCommand(pyMod, { probe: bin => bin === 'python3 -m pytest' }), 'python3 -m pytest');
+  assert.equal(detectRepoTestCommand(pyMod, { probe: bin => bin === 'pytest' || bin === 'python3 -m pytest' }), 'pytest');
+
+  // 3. Polyglot fallbacks: Cargo, Ruby RSpec, Swift, Gradle wrapper, Maven, CTest.
+  const rustDir = mkDir('pdd-detect-rust-');
+  writeFileSync(join(rustDir, 'Cargo.toml'), '[package]\nname = "demo"\n');
+  assert.equal(detectRepoTestCommand(rustDir), 'cargo test');
+
+  const rubyDir = mkDir('pdd-detect-ruby-');
+  writeFileSync(join(rubyDir, 'Gemfile'), 'gem "rspec"\n');
+  assert.equal(detectRepoTestCommand(rubyDir), 'bundle exec rspec');
+
+  const swiftDir = mkDir('pdd-detect-swift-');
+  writeFileSync(join(swiftDir, 'Package.swift'), '// swift-tools-version:5.9\n');
+  assert.equal(detectRepoTestCommand(swiftDir), 'swift test');
+
+  const gradleDir = mkDir('pdd-detect-gradle-');
+  writeFileSync(join(gradleDir, 'gradlew'), '#!/bin/sh\n', { mode: 0o755 });
+  assert.equal(detectRepoTestCommand(gradleDir), './gradlew test');
+
+  const mavenDir = mkDir('pdd-detect-maven-');
+  writeFileSync(join(mavenDir, 'pom.xml'), '<project></project>\n');
+  assert.equal(detectRepoTestCommand(mavenDir), 'mvn test');
+
+  const cmakeDir = mkDir('pdd-detect-cmake-');
+  writeFileSync(join(cmakeDir, 'CMakeLists.txt'), 'cmake_minimum_required(VERSION 3.20)\n');
+  assert.equal(detectRepoTestCommand(cmakeDir), 'ctest');
+});
+
+test('#3723 missing test runner (exit 127/ENOENT/No module named pytest) ALWAYS reports Not proved (exit 3) and warning lines never shadow test.summary', async t => {
+  // 1. Unit checks on summarizeTestOutput with PytestWarning, DeprecationWarning, and WARN lines.
+  const pytestOut = [
+    '============================= test session starts ==============================',
+    'collected 12 items',
+    'tests/test_app.py ............                                           [100%]',
+    '======================== 12 passed, 1 warning in 0.42s =========================',
+  ].join('\n');
+  const pytestErr = 'PytestWarning: (rm_rf) error removing /tmp/pytest-of-user/pytest-0/tmp\nDeprecationWarning: legacy error hook\nWARN: cleanup error ignored\n';
+  const summary = summarizeTestOutput(pytestOut, pytestErr, '', false);
+  assert.match(summary, /12 passed, 1 warning in 0\.42s/, `warning line must not shadow real summary: ${summary}`);
+  assert.doesNotMatch(summary, /PytestWarning|DeprecationWarning|WARN/);
+
+  // 2. Real Python repo where pytest is NOT on PATH -> exit 127 -> Not proved (exit 3), NEVER Failed (exit 1)!
+  const pyRepo = initGitRepo(t, 'pdd-prove-missing-runner-');
+  mkdirSync(join(pyRepo, 'tests'), { recursive: true });
+  writeFileSync(join(pyRepo, 'pyproject.toml'), '[project]\nname = "demo"\n');
+  writeFileSync(join(pyRepo, 'tests', 'test_ok.py'), 'def test_ok():\n    assert 1 + 1 == 2\n');
+  commitAll(pyRepo, 'base python repo');
+  execFileSync('git', ['checkout', '-q', '-b', 'touch-test'], { cwd: pyRepo });
+  writeFileSync(join(pyRepo, 'tests', 'test_ok.py'), 'def test_ok():\n    assert 2 + 2 == 4\n');
+
+  // Construct an isolated PATH containing only /bin:/usr/bin (no pytest binary) or a nonexistent runner bin.
+  const emptyBin = mkdtempSync(join(tmpdir(), 'pdd-empty-bin-'));
+  t.after(() => rmSync(emptyBin, { recursive: true, force: true }));
+  const missingRes = await runProve(
+    { cwd: pyRepo, base: 'main', json: true, env: { ...process.env, PATH: emptyBin } },
+    { stdout: makeSink(), stderr: makeSink(), probeRunner: () => false },
+  );
+  assert.equal(missingRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(missingRes.receipt));
+  assert.equal(missingRes.outcome, OUTCOME_NOT_PROVED);
+  assert.equal(missingRes.receipt.test.exitCode, 127);
+  assert.equal(missingRes.receipt.test.notProved, true);
+  assert.equal(missingRes.receipt.proofTiers.simulated.status, 'Not proved');
+  assert.ok(missingRes.receipt.notProvedReasons.some(r => r.includes('[test-runner-unavailable]') && /Fix:/.test(r)));
+
+  // 3. End-to-end passing test with trailing PytestWarning on stderr -> Proved (exit 0) + real summary preserved!
+  const nodeBin = JSON.stringify(process.execPath);
+  const warnRepo = initGitRepo(t, 'pdd-prove-warn-summary-');
+  writeFileSync(
+    join(warnRepo, 'pdd.json'),
+    JSON.stringify({
+      verify: {
+        test: `${nodeBin} -e "console.log('=== 12 passed, 1 warning in 0.42s ==='); console.error('PytestWarning: (rm_rf) error removing /tmp/x');"`,
+        paths: [],
+      },
+    }, null, 2) + '\n',
+  );
+  writeFileSync(join(warnRepo, 'docs.md'), '# Notes\n');
+  commitAll(warnRepo, 'base warn repo');
+  execFileSync('git', ['checkout', '-q', '-b', 'doc-edit'], { cwd: warnRepo });
+  writeFileSync(join(warnRepo, 'docs.md'), '# Updated notes\n');
+
+  const warnRes = await runProve({ cwd: warnRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  assert.equal(warnRes.exitCode, EXIT_PROVED, JSON.stringify(warnRes.receipt));
+  assert.equal(warnRes.outcome, OUTCOME_PROVED);
+  assert.match(warnRes.receipt.test.summary, /12 passed, 1 warning in 0\.42s/);
+  assert.doesNotMatch(warnRes.receipt.test.summary, /PytestWarning/);
+
+  // 4. Missing runner in verify.paths recipe -> Not proved (exit 3), NEVER Failed (exit 1); genuine test assertion failure still exits 1!
+  const pathMissRepo = initGitRepo(t, 'pdd-prove-path-missing-');
+  mkdirSync(join(pathMissRepo, 'src'), { recursive: true });
+  writeFileSync(
+    join(pathMissRepo, 'pdd.json'),
+    JSON.stringify({
+      verify: {
+        test: `${nodeBin} -e "process.exit(0)"`,
+        paths: [{ id: 'missing-tool', when: ['src/**'], run: 'pdd_definitely_missing_binary_xyz --check' }],
+      },
+    }, null, 2) + '\n',
+  );
+  writeFileSync(join(pathMissRepo, 'src', 'a.mjs'), 'export const a = 1;\n');
+  commitAll(pathMissRepo, 'base');
+  execFileSync('git', ['checkout', '-q', '-b', 'edit-a'], { cwd: pathMissRepo });
+  writeFileSync(join(pathMissRepo, 'src', 'a.mjs'), 'export const a = 2;\n');
+
+  const pathMiss = await runProve({ cwd: pathMissRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  assert.equal(pathMiss.exitCode, EXIT_NOT_PROVED, JSON.stringify(pathMiss.receipt));
+  assert.equal(pathMiss.outcome, OUTCOME_NOT_PROVED);
+  assert.equal(pathMiss.receipt.paths[0].status, 'not-proved');
+  assert.ok(pathMiss.receipt.notProvedReasons.some(r => r.includes('[verify-path-runner-unavailable]')));
+});
+
+test('#3724 streaming execution, fast-checks-first ordering, and progress-aware LLM stuck-watcher + offline fallback', async t => {
+  const nodeBin = JSON.stringify(process.execPath);
+
+  // 1. Fast-checks-first ordering: verify.paths executes BEFORE the full test suite, and actively progressing suite completes with 0 LLM calls!
+  const orderRepo = initGitRepo(t, 'pdd-prove-stream-order-');
+  mkdirSync(join(orderRepo, 'src'), { recursive: true });
+  const orderLog = join(orderRepo, '.order.log');
+  writeFileSync(join(orderRepo, '.gitignore'), '.order.log\n');
+  writeFileSync(
+    join(orderRepo, 'pdd.json'),
+    JSON.stringify({
+      verify: {
+        test: `${nodeBin} -e "const fs = require('node:fs'); fs.appendFileSync('.order.log', 'test\\n'); let i = 0; const iv = setInterval(() => { console.log('step ' + (++i)); if (i >= 5) { clearInterval(iv); console.log('5 passed in 0.3s'); process.exit(0); } }, 55);"`,
+        paths: [
+          {
+            id: 'fast-path',
+            when: ['src/**'],
+            run: `${nodeBin} -e "require('node:fs').appendFileSync('.order.log', 'path\\n'); process.exit(0);"`,
+          },
+        ],
+      },
+    }, null, 2) + '\n',
+  );
+  writeFileSync(join(orderRepo, 'src', 'app.mjs'), 'export const v = 1;\n');
+  commitAll(orderRepo, 'base order repo');
+  execFileSync('git', ['checkout', '-q', '-b', 'feat-order'], { cwd: orderRepo });
+  writeFileSync(join(orderRepo, 'src', 'app.mjs'), 'export const v = 2;\n');
+
+  let llmCallsProgress = 0;
+  const orderRes = await runProve(
+    { cwd: orderRepo, base: 'main', idleTimeoutMs: 140, json: true },
+    {
+      stdout: makeSink(),
+      stderr: makeSink(),
+      checkStuck: async () => {
+        llmCallsProgress += 1;
+        return { verdict: 'stuck', reason: 'should not be called while output arrives' };
+      },
+    },
+  );
+  assert.equal(orderRes.exitCode, EXIT_PROVED, JSON.stringify(orderRes.receipt));
+  assert.equal(llmCallsProgress, 0, 'actively progressing run must make 0 LLM stuck-check calls');
+  assert.deepEqual(
+    readFileSync(orderLog, 'utf8').trim().split('\n'),
+    ['path', 'test'],
+    'fast verify.paths check must run before the full test suite',
+  );
+  assert.deepEqual(
+    orderRes.receipt.completedPhases.map(p => p.phase),
+    ['lint', 'diff', 'paths', 'formal', 'test'],
+  );
+
+  // 2. LLM stuck-check returns "progress" once on a slow silent compile step, then command finishes -> Proved (exit 0)!
+  const slowCompileRepo = initGitRepo(t, 'pdd-prove-llm-continue-');
+  writeFileSync(
+    join(slowCompileRepo, 'pdd.json'),
+    JSON.stringify({
+      verify: {
+        test: `${nodeBin} -e "console.log('compiling large target...'); setTimeout(() => { console.log('3 passed in 0.4s'); process.exit(0); }, 280);"`,
+        paths: [],
+      },
+    }, null, 2) + '\n',
+  );
+  writeFileSync(join(slowCompileRepo, 'README.md'), '# Demo\n');
+  commitAll(slowCompileRepo, 'base');
+  execFileSync('git', ['checkout', '-q', '-b', 'doc-slow'], { cwd: slowCompileRepo });
+  writeFileSync(join(slowCompileRepo, 'README.md'), '# Demo v2\n');
+
+  const continueChecks = [];
+  const continueRes = await runProve(
+    { cwd: slowCompileRepo, base: 'main', idleTimeoutMs: 120, json: true },
+    {
+      stdout: makeSink(),
+      stderr: makeSink(),
+      checkStuck: async info => {
+        continueChecks.push(info);
+        return { verdict: 'progress', reason: 'compiling large target' };
+      },
+    },
+  );
+  assert.equal(continueRes.exitCode, EXIT_PROVED, JSON.stringify(continueRes.receipt));
+  assert.ok(continueChecks.length >= 1, 'LLM stuck-check must be invoked on silent window');
+  assert.equal(continueChecks[0].trigger, 'idle');
+  assert.ok(continueChecks[0].tailLines.some(l => l.includes('compiling large target')));
+
+  // 3. LLM stuck-check returns "stuck" on a silent hung command -> killed cleanly, Not proved (exit 3), reports aborted phase, completed phases, and frozen tail!
+  const hungRepo = initGitRepo(t, 'pdd-prove-llm-stuck-');
+  mkdirSync(join(hungRepo, 'src'), { recursive: true });
+  writeFileSync(
+    join(hungRepo, 'pdd.json'),
+    JSON.stringify({
+      verify: {
+        test: `${nodeBin} -e "console.log('running test_socket_lock...'); setInterval(() => {}, 10000);"`,
+        paths: [{ id: 'quick-check', when: ['src/**'], run: `${nodeBin} -e "process.exit(0)"` }],
+      },
+    }, null, 2) + '\n',
+  );
+  writeFileSync(join(hungRepo, 'src', 'net.mjs'), 'export const port = 1;\n');
+  commitAll(hungRepo, 'base');
+  execFileSync('git', ['checkout', '-q', '-b', 'hang-test'], { cwd: hungRepo });
+  writeFileSync(join(hungRepo, 'src', 'net.mjs'), 'export const port = 2;\n');
+
+  const stuckRes = await runProve(
+    { cwd: hungRepo, base: 'main', idleTimeoutMs: 120, json: true },
+    {
+      stdout: makeSink(),
+      stderr: makeSink(),
+      checkStuck: async () => ({ verdict: 'stuck', reason: 'deadlocked waiting on socket' }),
+    },
+  );
+  assert.equal(stuckRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(stuckRes.receipt));
+  assert.equal(stuckRes.outcome, OUTCOME_NOT_PROVED);
+  assert.equal(stuckRes.receipt.abortedPhase, 'test');
+  assert.equal(stuckRes.receipt.test.stuck, true);
+  assert.equal(stuckRes.receipt.proofTiers.simulated.status, 'Not proved');
+  assert.ok(stuckRes.receipt.test.frozenTail.some(l => l.includes('running test_socket_lock')));
+  assert.deepEqual(stuckRes.receipt.completedPhases.map(p => p.phase), ['lint', 'diff', 'paths', 'formal']);
+  assert.ok(stuckRes.receipt.notProvedReasons.some(r => r.includes('deadlocked waiting on socket') && r.includes('paths (1/1 ok)')));
+
+  // 4. Repeat-loop detection -> invokes checkStuck with trigger='repeat-loop' and kills looping process cleanly!
+  const loopRepo = initGitRepo(t, 'pdd-prove-loop-stuck-');
+  writeFileSync(
+    join(loopRepo, 'pdd.json'),
+    JSON.stringify({
+      verify: {
+        test: `${nodeBin} -e "setInterval(() => console.log('retrying connection to db...'), 15);"`,
+        paths: [],
+      },
+    }, null, 2) + '\n',
+  );
+  writeFileSync(join(loopRepo, 'README.md'), '# Loop\n');
+  commitAll(loopRepo, 'base');
+  execFileSync('git', ['checkout', '-q', '-b', 'loop-edit'], { cwd: loopRepo });
+  writeFileSync(join(loopRepo, 'README.md'), '# Loop v2\n');
+
+  let loopTrigger = null;
+  const loopRes = await runProve(
+    { cwd: loopRepo, base: 'main', idleTimeoutMs: 5000, repeatLoopThreshold: 6, json: true },
+    {
+      stdout: makeSink(),
+      stderr: makeSink(),
+      checkStuck: async info => {
+        loopTrigger = info.trigger;
+        return { verdict: 'stuck', reason: 'infinite retry loop' };
+      },
+    },
+  );
+  assert.equal(loopRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(loopRes.receipt));
+  assert.equal(loopTrigger, 'repeat-loop');
+  assert.equal(loopRes.receipt.test.stuck, true);
+  assert.ok(loopRes.receipt.test.frozenTail.some(l => l.includes('retrying connection to db')));
+
+  // 5. Offline / no-LLM fallback (`PDD_PROVE_LLM_WATCH=0`): silent hung process is killed on idle cutoff as Not proved!
+  const offlineRes = await runProve(
+    { cwd: hungRepo, base: 'main', idleTimeoutMs: 120, json: true, env: { ...process.env, PDD_PROVE_LLM_WATCH: '0' } },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(offlineRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(offlineRes.receipt));
+  assert.equal(offlineRes.receipt.test.stuck, true);
+  assert.ok(offlineRes.receipt.notProvedReasons.some(r => /no output for/i.test(r)));
+});
+
+test('#3724 zero-friction bug-contrast worktrees symlink unchanged local node_modules/.venv without --setup and skip when manifests change', async t => {
+  const nodeBin = JSON.stringify(process.execPath);
+  const repo = initGitRepo(t, 'pdd-prove-dep-symlink-');
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, '.gitignore'), 'node_modules/\n.venv/\n');
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'dep-demo', type: 'module' }, null, 2) + '\n');
+  writeFileSync(join(repo, 'src', 'fmt.mjs'), "import { prefix } from 'local-dep';\nexport const fmt = s => prefix(s);\n");
+  commitAll(repo, 'base buggy');
+
+  // Install local untracked dependency inside repo root node_modules/ (never tracked in git).
+  mkdirSync(join(repo, 'node_modules', 'local-dep'), { recursive: true });
+  writeFileSync(join(repo, 'node_modules', 'local-dep', 'package.json'), JSON.stringify({ name: 'local-dep', type: 'module', main: 'index.mjs' }));
+  writeFileSync(join(repo, 'node_modules', 'local-dep', 'index.mjs'), 'export const prefix = s => `TAG:${s}`;\n');
+
+  execFileSync('git', ['checkout', '-q', '-b', 'fix-fmt'], { cwd: repo });
+  writeFileSync(join(repo, 'src', 'fmt.mjs'), "import { prefix } from 'local-dep';\nexport const fmt = s => prefix(String(s).trim());\n");
+  writeFileSync(
+    join(repo, 'src', 'fmt.test.mjs'),
+    [
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { fmt } from './fmt.mjs';",
+      "test('trims before prefixing', () => {",
+      "  assert.equal(fmt('  ok  '), 'TAG:ok', 'EXPECTED_TRIM_TAG');",
+      '});',
+    ].join('\n') + '\n',
+  );
+
+  // 1. Without --setup and unchanged package.json -> auto-symlinks node_modules and proves cleanly!
+  const ok = await runProve(
+    { cwd: repo, base: 'main', test: `${nodeBin} --test src/fmt.test.mjs`, expect: 'EXPECTED_TRIM_TAG', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(ok.exitCode, EXIT_PROVED, JSON.stringify(ok.receipt));
+  assert.deepEqual(ok.receipt.linkedDependencyDirs, ['node_modules']);
+  assert.equal(existsSync(join(repo, 'node_modules', 'local-dep', 'index.mjs')), true, 'caller node_modules must stay completely intact after worktree cleanup');
+
+  // 2. When package.json changes in diff -> skips auto-symlinking so stale deps are never reused!
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'dep-demo', version: '1.0.1', type: 'module' }, null, 2) + '\n');
+  const skipped = await runProve(
+    { cwd: repo, base: 'main', test: `${nodeBin} --test src/fmt.test.mjs`, expect: 'EXPECTED_TRIM_TAG', json: true },
+    { stdout: makeSink(), stderr: makeSink() },
+  );
+  assert.equal(skipped.exitCode, EXIT_NOT_PROVED, JSON.stringify(skipped.receipt));
+  assert.equal(skipped.receipt.reason, 'setup-error');
+  assert.equal(skipped.receipt.linkedDependencyDirs, undefined, 'must skip dependency symlinking when package.json changed');
 });
