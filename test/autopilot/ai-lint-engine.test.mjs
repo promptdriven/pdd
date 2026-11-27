@@ -708,3 +708,99 @@ test('ai-lint-engine: CLI strict 2-command UX, hidden plumbing round-trip (--ai-
   assert.equal(capped.findings.length, 7);
   assert.equal(capped.cap7_dropped, 2);
 });
+
+test('ai-lint-engine: accepts scenario .json, .ui.svg, app-map.json, app/maps/*.json, product/*.md, and owned code files as explicit targets while refusing ENOENT', async t => {
+  const { repo, env } = makeTempRepo(t, 'pdd-ai-any-target-');
+
+  writeRepoFile(repo, 'prompts/tempconv.prompt.md', '# Tempconv\n\nConvert Celsius to Fahrenheit.\n\n## Dependencies\n\nNone.\n');
+  writeRepoFile(repo, 'user_stories/tempconv.md', '# Tempconv\n\nAs a scientist, I convert temperatures.\n\n## Acceptance criteria\n\n1. 0 C returns 32 F.\n');
+  writeRepoFile(repo, 'tests/tempconv.json', JSON.stringify({ entry_path: 'prompts/tempconv.prompt.md', steps: [{ id: 's1', op: 'convert', input: { c: 0 } }] }, null, 2));
+
+  writeRepoFile(repo, 'prompts/dashboard/metrics.prompt.md', '# Metrics\n\nRender ![Metrics](../dashboard/views/metrics__stacked.ui.svg).\n\n## Dependencies\n\nNone.\n');
+  writeRepoFile(repo, 'prompts/dashboard/views/metrics__stacked.ui.svg', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400"><title>Metrics</title></svg>\n');
+  writeRepoFile(repo, 'app/maps/barista.json', JSON.stringify({
+    screens: [{ id: 'metrics', prompt_path: 'prompts/dashboard/metrics.prompt.md', drawing_path: 'prompts/dashboard/views/metrics__stacked.ui.svg' }],
+  }, null, 2));
+  writeRepoFile(repo, 'app-map.json', JSON.stringify({
+    screens: [{ id: 'root', prompt_path: 'prompts/tempconv.prompt.md' }],
+  }, null, 2));
+
+  writeRepoFile(repo, 'prompts/delivery.prompt.md', '# Delivery\n\nOwn `src/delivery.mjs` and `bin/pdd.mjs`. Deliver messages safely.\n\n## Dependencies\n\nNone.\n');
+  writeRepoFile(repo, 'src/delivery.mjs', '// Prompt: prompts/delivery.prompt.md\n\nexport const deliver = () => "sent";\n');
+  writeRepoFile(repo, 'bin/pdd.mjs', '#!/usr/bin/env node\nconsole.log("pdd");\n');
+  writeRepoFile(repo, 'pdd-bindings.json', JSON.stringify({
+    schema_version: 'pdd.bindings.v1',
+    modules: [{ module: 'bin/pdd.mjs', prompt: 'prompts/delivery.prompt.md' }],
+  }, null, 2));
+  writeRepoFile(repo, 'user_stories/delivery.md', '# Delivery\n\nAs an operator, I deliver notifications.\n\n## Acceptance criteria\n\n1. Deliver returns sent.\n');
+  writeRepoFile(repo, 'tests/delivery.json', JSON.stringify({ entry_path: 'prompts/delivery.prompt.md', steps: [] }, null, 2));
+  writeRepoFile(repo, 'product/map.md', '# Product Map\n\n- Core converter: `prompts/tempconv.prompt.md`\n');
+  initGitRepo(repo);
+
+  const emitPackFor = async words => {
+    const out = sink(), err = sink();
+    const code = await runAdaptiveAiLint(
+      { cwd: repo, words, emitPack: true, env: { ...env, PDD_AI_LINT_NO_CACHE: '1' } },
+      { stdout: out, stderr: err },
+    );
+    return { code, err: err.text, pack: code === 0 ? JSON.parse(out.text) : null };
+  };
+
+  // 1. Scenario .json target -> content in pack, paired prompt & Story discovered, trace auto-selected
+  const scRes = await emitPackFor(['tests/tempconv.json']);
+  assert.equal(scRes.code, 0, scRes.err);
+  assert.equal(scRes.pack.targets[0].path, 'tests/tempconv.json');
+  assert.equal(scRes.pack.targets[0].kind, 'scenario');
+  assert.match(scRes.pack.prompt, /"entry_path": "prompts\/tempconv\.prompt\.md"/);
+  assert.ok(scRes.pack.manifest.outgoing_links.includes('prompts/tempconv.prompt.md'));
+  assert.ok(scRes.pack.manifest.paired_stories.includes('user_stories/tempconv.md'));
+  assert.ok(scRes.pack.checklists.includes('trace'));
+
+  // 2. .ui.svg target -> content in pack, linking prompt & app-map discovered, interfaces auto-selected
+  const svgRes = await emitPackFor(['prompts/dashboard/views/metrics__stacked.ui.svg']);
+  assert.equal(svgRes.code, 0, svgRes.err);
+  assert.equal(svgRes.pack.targets[0].kind, 'svg');
+  assert.match(svgRes.pack.prompt, /viewBox="0 0 800 400"/);
+  assert.ok(svgRes.pack.manifest.incoming_links.includes('prompts/dashboard/metrics.prompt.md'));
+  assert.ok(svgRes.pack.manifest.incoming_links.includes('app/maps/barista.json'));
+  assert.ok(svgRes.pack.checklists.includes('interfaces'));
+
+  // 3. app/maps/barista.json & app-map.json targets -> content in pack, prompts & svgs discovered, interfaces auto-selected
+  const baristaRes = await emitPackFor(['app/maps/barista.json']);
+  assert.equal(baristaRes.code, 0, baristaRes.err);
+  assert.equal(baristaRes.pack.targets[0].kind, 'app-map');
+  assert.ok(baristaRes.pack.manifest.outgoing_links.includes('prompts/dashboard/metrics.prompt.md'));
+  assert.ok(baristaRes.pack.manifest.svg_drawings.includes('prompts/dashboard/views/metrics__stacked.ui.svg'));
+  assert.ok(baristaRes.pack.checklists.includes('interfaces'));
+
+  const rootMapRes = await emitPackFor(['app-map.json']);
+  assert.equal(rootMapRes.code, 0, rootMapRes.err);
+  assert.equal(rootMapRes.pack.targets[0].kind, 'app-map');
+  assert.ok(rootMapRes.pack.manifest.outgoing_links.includes('prompts/tempconv.prompt.md'));
+  assert.ok(rootMapRes.pack.manifest.paired_stories.includes('user_stories/tempconv.md'));
+  assert.ok(rootMapRes.pack.checklists.includes('interfaces'));
+
+  // 4. Owned code files (// Prompt: header AND pdd-bindings.json) -> content in pack, owning prompt + paired Story/scenario discovered, interfaces + trace auto-selected
+  for (const codePath of ['src/delivery.mjs', 'bin/pdd.mjs']) {
+    const codeRes = await emitPackFor([codePath]);
+    assert.equal(codeRes.code, 0, `${codePath}: ${codeRes.err}`);
+    assert.equal(codeRes.pack.targets[0].path, codePath);
+    assert.equal(codeRes.pack.targets[0].kind, 'code');
+    assert.ok(codeRes.pack.manifest.outgoing_links.includes('prompts/delivery.prompt.md'), `${codePath} links owning prompt`);
+    assert.ok(codeRes.pack.manifest.paired_stories.includes('user_stories/delivery.md'), `${codePath} links paired Story`);
+    assert.ok(codeRes.pack.manifest.paired_scenarios.includes('tests/delivery.json'), `${codePath} links paired scenario`);
+    assert.ok(codeRes.pack.checklists.includes('interfaces'));
+    assert.ok(codeRes.pack.checklists.includes('trace'));
+  }
+
+  // 5. product/map.md target discovers backticked prompt path
+  const mapRes = await emitPackFor(['product/map.md']);
+  assert.equal(mapRes.code, 0, mapRes.err);
+  assert.ok(mapRes.pack.manifest.outgoing_links.includes('prompts/tempconv.prompt.md'));
+  assert.ok(mapRes.pack.checklists.includes('trace'));
+
+  // 6. Non-existent path (ENOENT) STILL fails with exit 2
+  const missingRes = await emitPackFor(['prompts/does-not-exist.prompt.md']);
+  assert.equal(missingRes.code, 2);
+  assert.match(missingRes.err, /Target path not found/);
+});

@@ -54,8 +54,9 @@ const MIN_TIMEOUT_MIN = 0.1;
 const MAX_TIMEOUT_MIN = 120;
 
 const PRODUCT_DOC_RE = /^product\/(?:map|plan)\.md$/i;
-const APP_MAP_RE = /(?:^|\/)(?:app-map|[^/]+\.app-map)\.json$/i;
+const APP_MAP_RE = /(?:^|\/)(?:app-map|[^/]+\.app-map)\.json$|(?:^|\/)app\/maps\/[^/]+\.json$/i;
 const SVG_RE = /\.ui\.svg$/i;
+const CODE_EXT_RE = /\.(?:[cm]?[jt]s|[jt]sx|py|go|rs|rb|java|kt|cs|php|sh|zsh|bash|c|cc|cpp|h|hpp|swift|scala|sql)$/i;
 const AUTH_TRUST_RE = /\b(?:auth|oauth|jwt|token|session|credential|password|passwd|rbac|acl|permission|role|trust|tenant|sign(?:ature|ed|ing)?|hmac|verify_token|caller[-_ ]?trust|enrolled|enrollment|secret|api[_-]?key|cookie|csrf|cors)\b/i;
 const MONEY_PRICING_RE = /\b(?:money|price|pricing|billing|invoice|payment|ledger|balance|credit|debit|refund|charge|fee|discount|tax|currency|cents|minor[_ ]?units|arbitrage|quota|cap|payout|escrow|wallet|subscription)\b/i;
 const SECURITY_RE = /\b(?:security|sandbox|symlink|traversal|injection|sql|xss|ssrf|rce|escape|redact|redaction|encrypt|decrypt|hash|sha256|tls|ssl|cert|certificate|rate[-_ ]?limit|idempoten(?:t|cy)|audit[-_ ]?log|fail[-_ ]?closed|privilege)\b/i;
@@ -246,16 +247,75 @@ function isPrimaryTargetPath(filePath) {
 }
 
 function isExplicitTargetPath(filePath) {
-  if (filePath.startsWith('.pdd/')) return false;
-  return isPrimaryTargetPath(filePath) || isContractDocPath(filePath) || PRODUCT_DOC_RE.test(filePath);
+  if (filePath.startsWith('.pdd/') || FIXTURE_DIR.test(filePath)) return false;
+  return isPrimaryTargetPath(filePath)
+    || isContractDocPath(filePath)
+    || PRODUCT_DOC_RE.test(filePath)
+    || TEST_SCENARIO_JSON_RE.test(filePath)
+    || APP_MAP_RE.test(filePath)
+    || SVG_RE.test(filePath);
 }
 
 function targetKind(filePath) {
   if (filePath.endsWith('.prompt.md')) return 'prompt';
   if (isLintableStoryPath(filePath)) return 'story';
+  if (TEST_SCENARIO_JSON_RE.test(filePath)) return 'scenario';
+  if (APP_MAP_RE.test(filePath)) return 'app-map';
+  if (SVG_RE.test(filePath)) return 'svg';
   if (isContractDocPath(filePath)) return 'contract';
   if (PRODUCT_DOC_RE.test(filePath)) return 'product';
-  return 'doc';
+  if (isCustomRuleTestFile(filePath)) return 'test';
+  if (CODE_EXT_RE.test(filePath)) return 'code';
+  return 'file';
+}
+
+function extractAppMapRefs(doc, appMapPath, allowedSet) {
+  const prompts = new Set();
+  const svgs = new Set();
+  const stories = new Set();
+  const baseDir = posix.dirname(appMapPath);
+  const tryResolve = raw => {
+    if (typeof raw !== 'string') return null;
+    const cleaned = raw.split('#')[0].split('?')[0].trim().replace(/^\.\//, '');
+    if (!cleaned || /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(cleaned)) return null;
+    const cands = [posix.normalize(cleaned)];
+    if (baseDir !== '.') cands.push(posix.normalize(posix.join(baseDir, cleaned)));
+    for (const c of cands) {
+      if (canonicalRepoPath(c) && allowedSet.has(c)) return c;
+    }
+    return null;
+  };
+  const visit = (val, depth) => {
+    if (depth > 12 || val === null || val === undefined) return;
+    if (typeof val === 'string') {
+      const hit = tryResolve(val);
+      if (!hit) return;
+      if (hit.endsWith('.prompt.md')) prompts.add(hit);
+      else if (SVG_RE.test(hit)) svgs.add(hit);
+      else if (isLintableStoryPath(hit)) stories.add(hit);
+      return;
+    }
+    if (Array.isArray(val)) {
+      for (const item of val) visit(item, depth + 1);
+      return;
+    }
+    if (typeof val === 'object') {
+      for (const v of Object.values(val)) visit(v, depth + 1);
+    }
+  };
+  visit(doc, 0);
+  return { prompts: [...prompts].sort(), svgs: [...svgs].sort(), stories: [...stories].sort() };
+}
+
+function extractMentionedRepoPaths(rawText, allowedSet) {
+  const found = new Set();
+  const tokenRe = /(?:prompts|user_stories|contracts|views|tests|test|app|product|src|bin)\/[A-Za-z0-9_./-]+/g;
+  let m;
+  while ((m = tokenRe.exec(String(rawText ?? ''))) !== null) {
+    const clean = m[0].replace(/[.,:;!?)]+$/, '');
+    if (canonicalRepoPath(clean) && allowedSet.has(clean)) found.add(clean);
+  }
+  return [...found].sort();
 }
 
 function extractAllRelativeLinks(rawText, filePath) {
@@ -377,7 +437,11 @@ export function collectLinkedManifest({ realRoot, allowedFiles, targets }) {
   for (const f of mdFiles) {
     const raw = readCached(f);
     if (typeof raw !== 'string') continue;
-    const links = extractAllRelativeLinks(raw, f).filter(target => allowedSet.has(target));
+    const relLinks = extractAllRelativeLinks(raw, f).filter(target => allowedSet.has(target));
+    const extraLinks = PRODUCT_DOC_RE.test(f)
+      ? extractMentionedRepoPaths(raw, allowedSet).filter(target => target !== f)
+      : [];
+    const links = [...new Set([...relLinks, ...extraLinks])].sort();
     outgoingAll.set(f, links);
     for (const dst of links) {
       if (!incomingAll.has(dst)) incomingAll.set(dst, new Set());
@@ -395,6 +459,8 @@ export function collectLinkedManifest({ realRoot, allowedFiles, targets }) {
   const scenariosByStory = new Map();
   const storiesByPrompt = new Map();
   const promptsByStory = new Map();
+  const storyByScenario = new Map();
+  const promptsByScenario = new Map();
   const addMapSet = (map, key, val) => {
     if (!map.has(key)) map.set(key, new Set());
     map.get(key).add(val);
@@ -408,49 +474,58 @@ export function collectLinkedManifest({ realRoot, allowedFiles, targets }) {
       const storyPath = inferScenarioStoryPath(doc, sf, storiesByStem);
       const refs = scenarioPromptRefs(doc).filter(r => allowedSet.has(r));
       if (storyPath && allowedSet.has(storyPath)) {
+        storyByScenario.set(sf, storyPath);
         addMapSet(scenariosByStory, storyPath, sf);
         for (const r of refs) {
           addMapSet(promptsByStory, storyPath, r);
           addMapSet(storiesByPrompt, r, storyPath);
         }
       }
-      for (const r of refs) addMapSet(scenariosByPrompt, r, sf);
+      for (const r of refs) {
+        addMapSet(scenariosByPrompt, r, sf);
+        addMapSet(promptsByScenario, sf, r);
+      }
     } catch {}
   }
 
+  const appMapRefsByPath = new Map();
   for (const am of allowedFiles.filter(p => !FIXTURE_DIR.test(p) && !p.startsWith('.pdd/') && APP_MAP_RE.test(p))) {
     const raw = readCached(am);
     if (typeof raw !== 'string') continue;
     try {
       const doc = JSON.parse(raw);
-      const refs = [
-        ...(Array.isArray(doc?.screens) ? doc.screens.map(s => s?.prompt_path) : []),
-        ...(Array.isArray(doc?.handlers) ? doc.handlers.map(h => h?.handler?.prompt_path) : []),
-        ...(Array.isArray(doc?.timers) ? doc.timers.map(t => t?.handler?.prompt_path) : []),
-      ].filter(p => typeof p === 'string').map(p => p.trim().replace(/^\.\//, '')).filter(p => allowedSet.has(p));
-      for (const r of refs) {
+      const amRefs = extractAppMapRefs(doc, am, allowedSet);
+      appMapRefsByPath.set(am, amRefs);
+      for (const r of [...amRefs.prompts, ...amRefs.svgs, ...amRefs.stories]) {
         if (!incomingAll.has(r)) incomingAll.set(r, new Set());
         incomingAll.get(r).add(am);
       }
     } catch {}
   }
 
-  // 3. Scan owned code files (`// Prompt:` header + `pdd-bindings.json`) for target prompts.
+  // 3. Scan owned code files (`// Prompt:` header + `pdd-bindings.json`) bidirectionally for target prompts and target code files.
   const ownedCodeByPrompt = new Map();
+  const promptsByCode = new Map();
   const bindingsRaw = allowedSet.has('pdd-bindings.json') ? readCached('pdd-bindings.json') : null;
   if (typeof bindingsRaw === 'string') {
     for (const b of extractBoundModules(bindingsRaw)) {
-      if (b.prompt && allowedSet.has(b.module)) addMapSet(ownedCodeByPrompt, b.prompt, b.module);
+      if (b.prompt && allowedSet.has(b.module)) {
+        addMapSet(ownedCodeByPrompt, b.prompt, b.module);
+        if (allowedSet.has(b.prompt)) addMapSet(promptsByCode, b.module, b.prompt);
+      }
     }
   }
   const targetPromptSet = new Set(targetPaths.filter(p => p.endsWith('.prompt.md')));
-  if (targetPromptSet.size > 0) {
-    for (const f of allowedFiles) {
+  const targetNonDocSet = new Set(targetPaths.filter(p => !p.endsWith('.md') && !p.endsWith('.json') && !SVG_RE.test(p)));
+  if (targetPromptSet.size > 0 || targetNonDocSet.size > 0) {
+    const scanFiles = targetPromptSet.size > 0 ? allowedFiles : [...targetNonDocSet];
+    for (const f of scanFiles) {
       if (f.startsWith('.pdd/') || f.endsWith('.md') || f.endsWith('.json') || SVG_RE.test(f)) continue;
       const head = readSafeHeadUtf8(realRoot, f);
       if (!head) continue;
       for (const entry of headerEntries(head)) {
         if (targetPromptSet.has(entry.prompt)) addMapSet(ownedCodeByPrompt, entry.prompt, f);
+        if (targetNonDocSet.has(f) && allowedSet.has(entry.prompt)) addMapSet(promptsByCode, f, entry.prompt);
       }
     }
   }
@@ -465,6 +540,11 @@ export function collectLinkedManifest({ realRoot, allowedFiles, targets }) {
   const svgDrawingsSet = new Set();
   const ownedCodeSet = new Set();
 
+  const attachPromptPairings = promptPath => {
+    for (const st of storiesByPrompt.get(promptPath) ?? []) if (!targetSet.has(st)) pairedStoriesSet.add(st);
+    for (const sc of scenariosByPrompt.get(promptPath) ?? []) if (!targetSet.has(sc)) pairedScenariosSet.add(sc);
+  };
+
   for (const tp of targetPaths) {
     for (const out of outgoingAll.get(tp) ?? []) {
       if (!targetSet.has(out)) outgoingSet.add(out);
@@ -476,12 +556,36 @@ export function collectLinkedManifest({ realRoot, allowedFiles, targets }) {
       if (!targetSet.has(inc)) incomingSet.add(inc);
       if (isContractDocPath(inc)) contractsSet.add(inc);
       if (isLintableStoryPath(inc) && !targetSet.has(inc)) pairedStoriesSet.add(inc);
+      if (SVG_RE.test(tp) && inc.endsWith('.prompt.md')) attachPromptPairings(inc);
     }
-    for (const st of storiesByPrompt.get(tp) ?? []) if (!targetSet.has(st)) pairedStoriesSet.add(st);
-    for (const sc of scenariosByPrompt.get(tp) ?? []) pairedScenariosSet.add(sc);
-    for (const sc of scenariosByStory.get(tp) ?? []) pairedScenariosSet.add(sc);
+    attachPromptPairings(tp);
+    for (const sc of scenariosByStory.get(tp) ?? []) if (!targetSet.has(sc)) pairedScenariosSet.add(sc);
     for (const pr of promptsByStory.get(tp) ?? []) if (!targetSet.has(pr)) outgoingSet.add(pr);
     for (const code of ownedCodeByPrompt.get(tp) ?? []) ownedCodeSet.add(code);
+
+    // Scenario target -> paired Story + referenced prompts
+    const scStory = storyByScenario.get(tp);
+    if (scStory && !targetSet.has(scStory)) pairedStoriesSet.add(scStory);
+    for (const pr of promptsByScenario.get(tp) ?? []) if (!targetSet.has(pr)) outgoingSet.add(pr);
+
+    // App-map target -> referenced prompts, .ui.svg drawings, and Stories
+    const amRefs = appMapRefsByPath.get(tp);
+    if (amRefs) {
+      for (const pr of amRefs.prompts) {
+        if (!targetSet.has(pr)) outgoingSet.add(pr);
+        attachPromptPairings(pr);
+      }
+      for (const svg of amRefs.svgs) {
+        if (!targetSet.has(svg)) { outgoingSet.add(svg); svgDrawingsSet.add(svg); }
+      }
+      for (const st of amRefs.stories) if (!targetSet.has(st)) pairedStoriesSet.add(st);
+    }
+
+    // Owned code file target -> owning prompt(s) + their paired Stories & scenarios
+    for (const ownerPrompt of promptsByCode.get(tp) ?? []) {
+      if (!targetSet.has(ownerPrompt)) outgoingSet.add(ownerPrompt);
+      attachPromptPairings(ownerPrompt);
+    }
   }
 
   // Match native test files by stem or content reference to target prompts / owned code.
@@ -589,8 +693,13 @@ export function selectReviewChecklists({ mode = 'adaptive', targets = [], manife
   if ((manifest.incoming_links?.length ?? 0) > 0) add('interfaces', `incoming_links(${manifest.incoming_links.length})`);
   if ((manifest.contracts?.length ?? 0) > 0 || targets.some(t => isContractDocPath(t.path))) add('interfaces', 'contracts');
   if ((graphFacts.native_only_targets?.length ?? 0) > 0 || targets.some(t => t.nativeOnly)) add('interfaces', 'native_only');
+  if (targets.some(t => t.kind === 'svg')) add('interfaces', 'target_svg');
+  if (targets.some(t => t.kind === 'app-map')) add('interfaces', 'target_app_map');
+  if (targets.some(t => t.kind === 'code')) add('interfaces', 'target_code');
 
   if (targets.some(t => t.kind === 'story')) add('trace', 'target_story');
+  if (targets.some(t => t.kind === 'scenario')) add('trace', 'target_scenario');
+  if (targets.some(t => t.kind === 'test')) add('trace', 'target_test');
   if (targets.some(t => PRODUCT_DOC_RE.test(t.path))) add('trace', 'product_doc');
   if ((manifest.paired_stories?.length ?? 0) > 0) add('trace', `paired_stories(${manifest.paired_stories.length})`);
   if ((manifest.paired_scenarios?.length ?? 0) > 0) add('trace', `paired_scenarios(${manifest.paired_scenarios.length})`);
@@ -1094,8 +1203,9 @@ async function readPlumbingInput(pathOrDash, cwdBase, stdin) {
   return readFileSync(abs, 'utf8');
 }
 
-function resolveAdaptiveTargets({ realRoot, cwdBase, allowedFiles, words, isDiff, baseSha, reviewScope }) {
+function resolveAdaptiveTargets({ realRoot, cwdBase, allowedFiles, words, isDiff, baseSha, reviewScope, policy = null }) {
   const allowedSet = new Set(allowedFiles);
+  const extraAllowed = new Set();
   const storiesByStem = new Map();
   for (const f of allowedFiles) {
     if (!isLintableStoryPath(f)) continue;
@@ -1116,13 +1226,24 @@ function resolveAdaptiveTargets({ realRoot, cwdBase, allowedFiles, words, isDiff
       if (!word) return { ok: false, unknown: rawWord };
       const relCwd = relative(realRoot, resolve(cwdBase, word)).split(sep).join('/').replace(/^\.\//, '');
       let matched = false;
-      for (const cand of [word.replace(/^\.\//, ''), relCwd].filter(canonicalRepoPath)) {
-        if (allowedSet.has(cand) && isExplicitTargetPath(cand)) { chosen.add(cand); matched = true; }
-        else {
-          const prefix = `${cand.replace(/\/+$/, '')}/`;
-          const under = allowedFiles.filter(f => f.startsWith(prefix) && isPrimaryTargetPath(f));
-          if (under.length) { under.forEach(f => chosen.add(f)); matched = true; }
+      for (const cand of new Set([word.replace(/^\.\//, ''), relCwd].filter(canonicalRepoPath))) {
+        if (allowedSet.has(cand)) {
+          chosen.add(cand);
+          matched = true;
+          break;
         }
+        if (!isSecretPath(cand) && (!policy || workspace.allows(policy, cand)) && readSafeUtf8(realRoot, cand) !== null) {
+          chosen.add(cand);
+          allowedSet.add(cand);
+          extraAllowed.add(cand);
+          matched = true;
+          break;
+        }
+        const prefix = `${cand.replace(/\/+$/, '')}/`;
+        const primaryUnder = allowedFiles.filter(f => f.startsWith(prefix) && isPrimaryTargetPath(f));
+        if (primaryUnder.length) { primaryUnder.forEach(f => chosen.add(f)); matched = true; break; }
+        const anyUnder = allowedFiles.filter(f => f.startsWith(prefix) && !f.startsWith('.pdd/') && !FIXTURE_DIR.test(f));
+        if (anyUnder.length) { anyUnder.forEach(f => chosen.add(f)); matched = true; break; }
       }
       if (!matched) {
         const stemMatches = storiesByStem.get(word.replace(/\.md$/i, '')) ?? [];
@@ -1158,7 +1279,7 @@ function resolveAdaptiveTargets({ realRoot, cwdBase, allowedFiles, words, isDiff
       nativeOnly: kind === 'prompt' ? isNativeOnlyPrompt(raw) : false,
     });
   }
-  return { ok: true, targets, changedSupportFiles };
+  return { ok: true, targets, changedSupportFiles, extraAllowed: [...extraAllowed] };
 }
 
 function redactFindingForOutput(finding, redact) {
@@ -1315,17 +1436,18 @@ export async function runAdaptiveAiLint(
   const { baseSha } = resolveMergeBaseSha(realRoot, resolvedBaseRef);
   const reviewScope = loadBaseTrustedReviewScope(realRoot, { baseRef: resolvedBaseRef, baseSha });
 
-  const resolved = resolveAdaptiveTargets({ realRoot, cwdBase, allowedFiles, words, isDiff, baseSha, reviewScope });
-  if (!resolved.ok) { writeErr(`Unknown Story or prompt path: ${resolved.unknown}.`); return 2; }
-  const { targets, changedSupportFiles } = resolved;
+  const resolved = resolveAdaptiveTargets({ realRoot, cwdBase, allowedFiles, words, isDiff, baseSha, reviewScope, policy });
+  if (!resolved.ok) { writeErr(`Target path not found: ${resolved.unknown}.`); return 2; }
+  const { targets, changedSupportFiles, extraAllowed } = resolved;
+  const effectiveAllowedFiles = extraAllowed?.length ? [...new Set([...allowedFiles, ...extraAllowed])].sort() : allowedFiles;
 
   const targetPromptPaths = targets.filter(t => t.kind === 'prompt').map(t => t.path);
-  const targetStoryPaths = targets.filter(t => t.kind === 'story').map(t => t.path);
+  const targetStoryPaths = targets.filter(t => t.kind === 'story' || t.kind === 'scenario').map(t => t.path);
   const hasExplicitFilter = words.length > 0 || isDiff;
   const deterministic = (targets.length > 0 || !hasExplicitFilter)
     ? lintRepoProject({
         root: realRoot,
-        files: allowedFiles,
+        files: effectiveAllowedFiles,
         promptPaths: hasExplicitFilter ? targetPromptPaths : undefined,
         tests: hasExplicitFilter ? targetStoryPaths : undefined,
       })
@@ -1333,7 +1455,7 @@ export async function runAdaptiveAiLint(
   const tier0Errors = deterministic.errors ?? [];
   const tier0Warnings = deterministic.warnings ?? [];
 
-  const { manifest, graphFacts } = collectLinkedManifest({ realRoot, allowedFiles, targets });
+  const { manifest, graphFacts } = collectLinkedManifest({ realRoot, allowedFiles: effectiveAllowedFiles, targets });
   const { checklists, reasons: checklistReasons } = selectReviewChecklists({
     mode: resolvedMode, targets, manifest, graphFacts, changedSupportFiles,
   });

@@ -18,8 +18,8 @@ Run adaptive, advisory-only AI prompt and Story lint for `pdd lint --ai` and its
 - Require a Git repository root (`git rev-parse --show-toplevel`, exit `2` otherwise). Enforce `workspace.policy({root})`, canonical in-repo paths, `!isSecretPath`, and safe regular non-symlink UTF-8 reads.
 - Load optional `review.scope` from merge-base `pdd.json` (`git show <merge-base>:pdd.json`, falling back to working-tree `pdd.json` only when no base commit exists). Accept either an array of include globs or `{include?: string[], exclude?: string[]}`. Working-tree edits on a feature branch never override merge-base `review.scope`.
 - Target modes:
-  - Explicit `words`: match repo-relative or `cwd`-relative files, directories, or Story stems; refuse any unmatched word with exit `2`.
-  - `--diff [BASE]` / `--base REF`: select changed and untracked PDD targets against merge-base, recording changed supporting files (scenarios, `product/map.md`, `product/plan.md`, native tests) and marking added/untracked prompts as `isNew: true`.
+  - Explicit `words`: accept ANY existing regular non-symlink, non-secret repo-relative or `cwd`-relative file (prompts, Stories, scenario `.json`, `app-map.json` / `app/maps/*.json`, `.ui.svg` drawings, `product/*.md`, `contracts/*.md`, owned code files via `// Prompt:` header or `pdd-bindings.json`, or any other existing repo file), plus directories and Story stems. Keep every targeted file in `targets` with its content in the pack; refuse with exit `2` only when a requested path does not exist on disk (`ENOENT`) or violates workspace/symlink/secret safety.
+  - `--diff [BASE]` / `--base REF`: select changed and untracked PDD targets (prompts, Stories, contracts, product docs, scenarios, app-maps, `.ui.svg`, and owned code) against merge-base, recording other changed supporting files (such as native tests) and marking added/untracked prompts as `isNew: true`.
   - Default repo-wide: select all non-fixture Git-visible `.prompt.md` and lintable Story files matching `review.scope`, marking prompts absent from merge-base (or untracked) as `isNew: true`.
 
 ### Unbounded linked-file manifest and compact graph facts
@@ -32,6 +32,7 @@ For the selected target set, scan all allowed repo files with **no neighbor cap*
 - `paired_stories`, `paired_scenarios`, `paired_tests`: all Stories, scenario JSONs, and matching native test files paired with targets or owned code.
 - `svg_drawings`: all `.ui.svg` drawings linked by any target.
 - `owned_code`: all code files owned by target prompts (`// Prompt:` header or `pdd-bindings.json`).
+- Bidirectional discovery for non-prompt targets: scenario `.json` targets link their paired Story and referenced prompts; `.ui.svg` targets link their referencing prompts, app-maps, and paired Stories/scenarios; `app-map.json` / `app/maps/*.json` targets link their referenced prompts, `.ui.svg` drawings, and Stories; owned code targets link their owning prompt(s) (via `// Prompt:` header or `pdd-bindings.json`) and those prompts' paired Stories/scenarios/tests; `product/map.md` and `product/plan.md` link both Markdown links and backticked/in-repo PDD paths.
 - `all_linked`: sorted deduplicated union of every linked path above (never truncated to 4 or any fixed cap).
 - Compact `graph_facts`: target `kind` (`native-only` vs `checkable` vs `story`), `declared_links` (`## Dependencies`), directed `cycles`, `layering_violations` (`checkable -> native-only`), and `native_only_targets`.
 
@@ -40,8 +41,8 @@ For the selected target set, scan all allowed repo files with **no neighbor cap*
 | Checklist | `single` / `single-verify` | `adaptive` auto-selection rule |
 |---|---|---|
 | `contract` | Always | Always |
-| `interfaces` | Off | Any target has outgoing links, incoming links, linked/target contracts, or `kind: native-only` target/neighbor |
-| `trace` | Off | Any target is a Story, or Stories/scenarios/`product/map.md`/`product/plan.md`/tests are changed or paired with target prompts |
+| `interfaces` | Off | Any target is a contract, `.ui.svg`, app-map, or code file, OR has outgoing links, incoming links, linked contracts, or `kind: native-only` target/neighbor |
+| `trace` | Off | Any target is a Story, scenario `.json`, `product/map.md`/`product/plan.md`, or test file, OR Stories/scenarios/product docs/tests are changed or paired with targets |
 | `abuse` | Off | Any target prompt is `kind: native-only`, declares ports, or touches auth/trust, money/pricing, or security rules |
 | `design` | Off | Only when at least one target `.prompt.md` is brand-new (`isNew`) or huge (`> 350` lines); never on ordinary edits |
 
