@@ -19,7 +19,7 @@ import {
   readPytestTestpaths,
 } from '../src/shared/test-paths.mjs';
 
-test('#3631 all 6 reopen rows: tests_py/, trusted-base pytest testpaths, narrow pyproject.toml manifest rule, and test-helper private imports', t => {
+test('#3631 all 6 reopen rows: tests_py/, trusted-base pytest testpaths, narrow pyproject.toml manifest rule, and test-helper private imports', async t => {
   // Row 1: file-owner + changed-map recognize tests_py/ helpers.
   assert.equal(isTestOwnedPath('tests_py/pdd_harness.py'), true);
   assert.equal(isTestOwnedPath('tests_py/conftest.py'), true);
@@ -159,7 +159,7 @@ test('#3631 all 6 reopen rows: tests_py/, trusted-base pytest testpaths, narrow 
   writeFileSync(join(repo, 'pyproject.toml'), `${basePyproject.replace('["tests_py"]', '["tests_py", "py_suite"]')}addopts = ["-k", "test_smoke"]\n`);
   const outF3 = { text: '', write(s) { this.text += s; return true; } };
   const errF3 = { text: '', write(s) { this.text += s; return true; } };
-  const proveF3 = runProve({ cwd: repo, base: baseSha, json: true }, { stdout: outF3, stderr: errF3, spawnSync: () => ({ status: 0, stdout: '1 passed\n', stderr: '' }) });
+  const proveF3 = await runProve({ cwd: repo, base: baseSha, json: true }, { stdout: outF3, stderr: errF3, spawnSync: () => ({ status: 0, stdout: '1 passed\n', stderr: '' }) });
   assert.equal(proveF3.receipt.changedSurfaces.includes('pyproject.toml'), true, 'pytest addopts edit must stay in changedSurfaces');
   assert.equal(proveF3.receipt.notProvedReasons.some(r => r.includes('pytest configuration')), true, 'untrusted pytest config edit must block proof');
 
@@ -172,7 +172,7 @@ test('#3631 all 6 reopen rows: tests_py/, trusted-base pytest testpaths, narrow 
   writeFileSync(join(repo, 'pyproject.toml'), `${basePyproject.replace('["tests_py"]', '["tests_py", "py_suite"]')}\n[tool.ruff]\nline-length = 100\n`);
   const out = { text: '', write(s) { this.text += s; return true; } };
   const err = { text: '', write(s) { this.text += s; return true; } };
-  const proveRes = runProve({ cwd: repo, base: baseSha, json: true }, { stdout: out, stderr: err, spawnSync: () => ({ status: 0, stdout: '1 passed\n', stderr: '' }) });
+  const proveRes = await runProve({ cwd: repo, base: baseSha, json: true }, { stdout: out, stderr: err, spawnSync: () => ({ status: 0, stdout: '1 passed\n', stderr: '' }) });
   assert.equal(proveRes.receipt.changedSurfaces.includes('tests_py/pdd_harness.py'), false);
   assert.equal(proveRes.receipt.changedSurfaces.includes('pyproject.toml'), false);
   assert.equal(proveRes.receipt.notProvedReasons.some(r => r.includes('tests_py/pdd_harness.py') || r.includes('pyproject.toml')), false);

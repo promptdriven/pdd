@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import {cpSync,mkdtempSync,mkdirSync,readFileSync,realpathSync,writeFileSync,rmSync,existsSync,readdirSync,symlinkSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,readFileSync,realpathSync,writeFileSync,rmSync,existsSync,readdirSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve,dirname} from 'node:path';
 import {fork,execFileSync,execFile} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
-import {gitTemplateDir,rewriteGitConfigUrl} from '../git-template.mjs';
+import {copyTemplateDir,gitTemplateDir,rewriteGitConfigUrl} from '../git-template.mjs';
 import {proseSha256} from '../../../src/runtime-seam.mjs';
 import {analysisFor} from '../autopilot-github-world.mjs';
 import {runAutopilotAlerts} from '../../../src/autopilot-alerts.mjs';
@@ -40,7 +40,7 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
   const tpl=gitTemplateDir(`factory-${repository}-${codeOnly?1:0}`,d=>{
     const tplRepo=join(d,'repo'),tplRemote=join(d,'origin.git'),tplMerge=join(d,'merge');
     mkdirSync(tplRepo,{recursive:true});
-    w.git(tplRepo,'init','-q','-b','main');w.git(tplRepo,'config','user.email','factory@example.invalid');w.git(tplRepo,'config','user.name','Factory');
+    w.git(tplRepo,'init','-q','-b','main');w.git(tplRepo,'config','gc.auto','0');w.git(tplRepo,'config','maintenance.auto','false');w.git(tplRepo,'config','user.email','factory@example.invalid');w.git(tplRepo,'config','user.name','Factory');
     put(tplRepo,'pdd.json',{autopilot:{mode:'auto',trust:['example'],base:'main',parking:{hours:24,maxParked:20}}});
     put(tplRepo,'AGENTS.md','<!-- pdd:start -->\nUse the installed PDD skills.\n<!-- pdd:end -->\n');
     put(tplRepo,'value.mjs','export const value = 1;\n');
@@ -49,13 +49,13 @@ export async function factoryWorld(t,{workflow='small-change',repository='exampl
     put(tplRepo,'CONTRIBUTING.md','Run node --test test/value.test.mjs. Open PRs against main.\n');
     put(tplRepo,'package.json',{type:'module',scripts:{test:'node --test test/value.test.mjs'}});
     w.git(tplRepo,'add','.');w.git(tplRepo,'commit','-qm','Initial synthetic project');
-    w.git(d,'clone','-q','--bare',tplRepo,tplRemote);w.git(tplRepo,'remote','add','origin',`https://github.com/${repository}.git`);
+    w.git(d,'clone','-q','--bare',tplRepo,tplRemote);w.git(tplRemote,'config','gc.auto','0');w.git(tplRemote,'config','maintenance.auto','false');w.git(tplRepo,'remote','add','origin',`https://github.com/${repository}.git`);
     w.git(tplRepo,'fetch','-q',tplRemote,'main:refs/remotes/origin/main');
-    w.git(d,'clone','-q',tplRemote,tplMerge);w.git(tplMerge,'config','user.email','factory@example.invalid');w.git(tplMerge,'config','user.name','Factory');
+    w.git(d,'clone','-q',tplRemote,tplMerge);w.git(tplMerge,'config','gc.auto','0');w.git(tplMerge,'config','maintenance.auto','false');w.git(tplMerge,'config','user.email','factory@example.invalid');w.git(tplMerge,'config','user.name','Factory');
   });
-  cpSync(join(tpl,'repo'),w.cwd,{recursive:true});
-  cpSync(join(tpl,'origin.git'),w.remote,{recursive:true});
-  cpSync(join(tpl,'merge'),w.mergeCheckout,{recursive:true});
+  copyTemplateDir(join(tpl,'repo'),w.cwd);
+  copyTemplateDir(join(tpl,'origin.git'),w.remote);
+  copyTemplateDir(join(tpl,'merge'),w.mergeCheckout);
   rewriteGitConfigUrl(join(w.remote,'config'),join(tpl,'repo'),w.cwd);
   rewriteGitConfigUrl(join(w.mergeCheckout,'.git/config'),join(tpl,'origin.git'),w.remote);
   w.commonDir=join(realpathSync(w.cwd),'.git');

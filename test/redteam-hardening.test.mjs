@@ -58,7 +58,7 @@ const HELPERS_PROMPT = [
   'None.',
 ].join('\n') + '\n';
 
-test('Attack 6 (all 10 bypasses): YAML 1.2 zero-indent, Port Endpoint col, return-type call, post-colon bullet, SQL collision, JSON native-only, zero deps, non-contract docs, and base-trusted lint config', t => {
+test('Attack 6 (all 10 bypasses): YAML 1.2 zero-indent, Port Endpoint col, return-type call, post-colon bullet, SQL collision, JSON native-only, zero deps, non-contract docs, and base-trusted lint config', async t => {
   const dep = [{ path: 'prompts/helpers.prompt.md', text: HELPERS_PROMPT, isPrompt: true }];
 
   // 1. YAML 1.2 zero-indented block list under ports:
@@ -237,14 +237,14 @@ test('Attack 6 (all 10 bypasses): YAML 1.2 zero-indent, Port Endpoint col, retur
   assert.ok(diffPayload.problems.some(p => p.includes('[native-only-unknown-port]')));
   assert.ok(diffPayload.warnings.some(w => w.includes('[lint-config-untrusted]')));
 
-  const proveRes = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const proveRes = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(proveRes.exitCode, EXIT_FAILED);
   assert.equal(proveRes.outcome, OUTCOME_FAILED);
   assert.ok(proveRes.receipt.lint.errors.some(e => e.includes('[native-only-unknown-port]')));
   assert.ok(proveRes.receipt.notProvedReasons.some(r => r.includes('lint overrides')));
 });
 
-test('Attack 2 & Attack 1 Probe A: shadow node_modules/.bin/node fails closed, package.json scripts.test tamper -> Not proved, pdd.json/rules/lint in HARNESS_PATH, and assertionDrops/newSkips/removedTests -> Not proved', t => {
+test('Attack 2 & Attack 1 Probe A: shadow node_modules/.bin/node fails closed, package.json scripts.test tamper -> Not proved, pdd.json/rules/lint in HARNESS_PATH, and assertionDrops/newSkips/removedTests -> Not proved', async t => {
   const nodeBin = JSON.stringify(process.execPath);
   const repo = initGitRepo(t, 'pdd-redteam-atk2-', {
     '.gitignore': 'node_modules/\n',
@@ -271,7 +271,7 @@ test('Attack 2 & Attack 1 Probe A: shadow node_modules/.bin/node fails closed, p
   assert.equal(shadowLint.ok, false);
   assert.ok(shadowLint.errors.some(e => e.code === 'diff-shadow-bin' && e.path === 'node_modules/.bin/node'));
 
-  const shadowProve = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const shadowProve = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(shadowProve.exitCode, EXIT_FAILED);
   assert.equal(shadowProve.outcome, OUTCOME_FAILED);
   assert.equal(shadowProve.receipt.test, null, 'must fail closed before executing shadowed test command');
@@ -283,7 +283,7 @@ test('Attack 2 & Attack 1 Probe A: shadow node_modules/.bin/node fails closed, p
     'package.json': JSON.stringify({ name: 'atk2', type: 'module', scripts: { test: 'true' } }),
     'src/app.mjs': 'export const add = (a, b) => a - b;\n',
   });
-  const pkgProve = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const pkgProve = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(pkgProve.exitCode, EXIT_NOT_PROVED);
   assert.equal(pkgProve.outcome, OUTCOME_NOT_PROVED);
   assert.ok(pkgProve.receipt.notProvedReasons.some(r => r.includes('package.json test scripts')));
@@ -308,13 +308,13 @@ test('Attack 2 & Attack 1 Probe A: shadow node_modules/.bin/node fails closed, p
       '});',
     ].join('\n') + '\n',
   });
-  const dropProve = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const dropProve = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(dropProve.exitCode, EXIT_NOT_PROVED);
   assert.equal(dropProve.outcome, OUTCOME_NOT_PROVED);
   assert.ok(dropProve.receipt.notProvedReasons.some(r => r.includes('[diff-assertion-drops]')));
 });
 
-test('Attack 5: fail-closed multi-part plan/map aliases, unparseable plan/boundaries, and prove blocks unwired boundaries', t => {
+test('Attack 5: fail-closed multi-part plan/map aliases, unparseable plan/boundaries, and prove blocks unwired boundaries', async t => {
   const nodeBin = JSON.stringify(process.execPath);
   const mapBullets = [
     '# ShopFlow: map',
@@ -369,7 +369,7 @@ test('Attack 5: fail-closed multi-part plan/map aliases, unparseable plan/bounda
   });
   assert.equal(audit.unwiredBoundaries.length, 1);
 
-  const pv = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const pv = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(pv.exitCode, EXIT_NOT_PROVED);
   assert.equal(pv.outcome, OUTCOME_NOT_PROVED);
   assert.ok(pv.receipt.notProvedReasons.some(r => r.includes('[multi-part-integration-missing]')));
@@ -387,7 +387,7 @@ test('Attack 5: fail-closed multi-part plan/map aliases, unparseable plan/bounda
   assert.match(unparseableGuard.reason, /\[multi-part-plan-unparseable\]/);
 });
 
-test('Attack 4: mock-only I/O & subprocess boundary tests flagged in Core diff & prove while real unmocked boundary tests pass cleanly', t => {
+test('Attack 4: mock-only I/O & subprocess boundary tests flagged in Core diff & prove while real unmocked boundary tests pass cleanly', async t => {
   const nodeBin = JSON.stringify(process.execPath);
   const repo = initGitRepo(t, 'pdd-redteam-atk4-', {
     'package.json': JSON.stringify({ name: 'atk4', type: 'module', scripts: { test: `${nodeBin} --test test/*.test.mjs` } }),
@@ -408,7 +408,7 @@ test('Attack 4: mock-only I/O & subprocess boundary tests flagged in Core diff &
       "test('mocked only', () => { assert.ok(mockFetch); });",
     ].join('\n') + '\n',
   });
-  const pvMockOnly = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const pvMockOnly = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(pvMockOnly.exitCode, EXIT_NOT_PROVED);
   assert.equal(pvMockOnly.outcome, OUTCOME_NOT_PROVED);
   assert.ok(pvMockOnly.receipt.notProvedReasons.some(r => r.includes('[diff-mock-only-boundary]')));
@@ -425,7 +425,7 @@ test('Attack 4: mock-only I/O & subprocess boundary tests flagged in Core diff &
       '});',
     ].join('\n') + '\n',
   });
-  const pvReal = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const pvReal = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(pvReal.exitCode, EXIT_PROVED, JSON.stringify(pvReal.receipt));
   assert.equal(pvReal.outcome, OUTCOME_PROVED);
 
@@ -437,7 +437,7 @@ test('Attack 4: mock-only I/O & subprocess boundary tests flagged in Core diff &
   assert.deepEqual(pureDiff.mockOnlyBoundaryTests, []);
 });
 
-test('Attack 3: Story with unbound acceptance criteria in paired runtime JSON fires [story-unbound-criteria] and blocks prove on touched Story', t => {
+test('Attack 3: Story with unbound acceptance criteria in paired runtime JSON fires [story-unbound-criteria] and blocks prove on touched Story', async t => {
   const nodeBin = JSON.stringify(process.execPath);
   const repo = initGitRepo(t, 'pdd-redteam-atk3-', {
     'package.json': JSON.stringify({ name: 'atk3', type: 'module', scripts: { test: `${nodeBin} -e "process.exit(0)"` } }),
@@ -471,7 +471,7 @@ test('Attack 3: Story with unbound acceptance criteria in paired runtime JSON fi
   const lintRes = lintRepoProject({ root: repo });
   assert.ok(lintRes.findings.some(f => f.code === 'story-unbound-criteria' && f.message.includes('#3')));
 
-  const pvUnbound = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const pvUnbound = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(pvUnbound.exitCode, EXIT_NOT_PROVED);
   assert.equal(pvUnbound.outcome, OUTCOME_NOT_PROVED);
   assert.ok(pvUnbound.receipt.notProvedReasons.some(r => r.includes('[story-unbound-criteria]')));
@@ -487,7 +487,7 @@ test('Attack 3: Story with unbound acceptance criteria in paired runtime JSON fi
       ],
     }, null, 2) + '\n',
   });
-  const pvBound = runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  const pvBound = await runProve({ cwd: repo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
   assert.equal(pvBound.exitCode, EXIT_PROVED, JSON.stringify(pvBound.receipt));
   assert.equal(pvBound.outcome, OUTCOME_PROVED);
 });
