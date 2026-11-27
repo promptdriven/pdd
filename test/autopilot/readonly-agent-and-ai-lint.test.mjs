@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   CODEX_DISABLED_FEATURES,
+  CODEX_TOOL_LOCKOUT_FEATURES,
   READONLY_PROVIDERS,
   buildReadonlyAgentArgs,
   extractJsonObject,
@@ -23,8 +24,8 @@ const sink = () => {
   return { write(chunk) { text += String(chunk); return true; }, get text() { return text; } };
 };
 
-test('readonly-agent builds OS read-only sandbox flags for all 4 providers, zero hardcoded models, configurable Gemini sandbox (#13), and strict provider/model validation (#12)', async () => {
-  assert.deepEqual(READONLY_PROVIDERS, ['codex', 'claude', 'gemini', 'agy']);
+test('readonly-agent builds OS read-only sandbox flags for codex/claude/gemini (dropping standalone agy), zero hardcoded models, configurable Gemini sandbox (#13), and strict provider/model validation (#12)', async () => {
+  assert.deepEqual(READONLY_PROVIDERS, ['codex', 'claude', 'gemini']);
 
   const codex = buildReadonlyAgentArgs({ provider: 'codex', outputFile: '/tmp/out.json' });
   assert.equal(codex.command, 'codex');
@@ -32,6 +33,10 @@ test('readonly-agent builds OS read-only sandbox flags for all 4 providers, zero
   assert.equal(codex.args[codex.args.indexOf('--sandbox') + 1], 'read-only');
   assert.ok(codex.args.includes('--ignore-rules'));
   for (const feat of CODEX_DISABLED_FEATURES) assert.ok(codex.args.includes(`features.${feat}=false`));
+  assert.deepEqual(CODEX_TOOL_LOCKOUT_FEATURES, ['shell_tool', 'unified_exec', 'code_mode', 'code_mode_host']);
+  for (const feat of CODEX_TOOL_LOCKOUT_FEATURES) assert.equal(codex.args.includes(`features.${feat}=false`), false, 'disableTools=false allows read-only sandbox file inspection');
+  const codexLocked = buildReadonlyAgentArgs({ provider: 'codex', disableTools: true });
+  for (const feat of CODEX_TOOL_LOCKOUT_FEATURES) assert.ok(codexLocked.args.includes(`features.${feat}=false`), 'disableTools=true locks out shell_tool, unified_exec, code_mode, and code_mode_host');
   assert.deepEqual(codex.args.slice(-2), ['--', '-']);
   assert.equal(codex.args.includes('--model'), false);
 
@@ -52,11 +57,7 @@ test('readonly-agent builds OS read-only sandbox flags for all 4 providers, zero
   const geminiNoSandbox = buildReadonlyAgentArgs({ provider: 'gemini', sandbox: false });
   assert.equal(geminiNoSandbox.args.includes('--sandbox'), false, 'Gemini --sandbox is configurable (#13)');
 
-  const agy = buildReadonlyAgentArgs({ provider: 'agy' });
-  assert.equal(agy.args[agy.args.indexOf('--mode') + 1], 'plan');
-  assert.ok(agy.args.includes('--sandbox'));
-  assert.ok(agy.args.includes('--disable-slash-commands'));
-
+  assert.throws(() => buildReadonlyAgentArgs({ provider: 'agy' }), /Unsupported read-only agent provider/);
   assert.throws(() => buildReadonlyAgentArgs({ provider: 'unknown-cli' }), /Unsupported read-only agent provider/);
   assert.throws(() => buildReadonlyAgentArgs({ provider: 'codex', model: '--injected' }), /Invalid model name/);
 
@@ -151,7 +152,7 @@ setInterval(() => {}, 1000);`,
   );
   const fakeCli = join(scratch, 'fake-cli.sh');
   writeFileSync(fakeCli, `#!/bin/sh\nexec "${process.execPath}" "${hangScript}"\n`, { mode: 0o755 });
-  const timedOut = await runReadonlyAgent({ provider: 'agy', command: fakeCli, cwd: scratch, env: { PATH: process.env.PATH, HOME: scratch }, timeoutMs: 350 });
+  const timedOut = await runReadonlyAgent({ provider: 'claude', command: fakeCli, cwd: scratch, env: { PATH: process.env.PATH, HOME: scratch }, timeoutMs: 350 });
   assert.equal(timedOut.ok, false);
   assert.match(timedOut.error, /timeout/i);
   await new Promise(r => setTimeout(r, 1400));

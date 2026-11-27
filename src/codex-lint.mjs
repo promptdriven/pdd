@@ -5,6 +5,7 @@ export {
   buildCodexLintPrompt,
   groupAiLintBatches,
   groupCodexLintBatches,
+  runAdaptiveAiLint,
   runAiLint,
   runCodexLint,
 } from './autopilot/ai-lint.mjs';

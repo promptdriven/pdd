@@ -227,3 +227,18 @@ test('3537 CLI: pdd --help omits approve, pdd approve exits 2 cleanly, and lefto
   assert.equal(proveRes.status, 0, `prove stderr: ${proveRes.stderr}\nstdout: ${proveRes.stdout}`);
   assert.match(proveRes.stdout, /^Proved:/);
 });
+
+test('3751 CLI: rejects --model without --ai (on pdd lint and pdd test) matching --provider', async () => {
+  for (const argv of [
+    ['lint', '--model', 'gpt-5'],
+    ['lint', '--local', '--model', 'gpt-5'],
+    ['lint', '--codex', '--model', 'gpt-5'],
+    ['test', '--model', 'gpt-5'],
+  ]) {
+    const out = capture(), err = capture();
+    const code = await runPdd(argv, { stdout: out, stderr: err });
+    assert.equal(code, 2, `${argv.join(' ')} must exit 2`);
+    assert.equal(out.text, '');
+    assert.match(err.text, /--ai/);
+  }
+});
