@@ -1,6 +1,6 @@
 # Codex readability and quality lint
 
-Own `src/codex-lint.mjs`. Export `runCodexLint({cwd, words, issue, timeoutMinutes, json, env}, ports)`, `buildCodexLintPrompt(files, options)`, and `groupCodexLintBatches(targetEntries, promptsByStory, maxPerBatch)`. Run local deterministic project lint together with read-only Codex readability, semantic Story-vs-Prompt alignment, and optional issue-coverage checks on selected `.prompt.md` and `user_stories/*.md` files, printing clear per-file `PASS` / `FAIL` verdicts, an optional `Issue coverage` verdict, and a final summary line (or `schema_version: "pdd.codex-lint.v1"` JSON with `--json`).
+Own `src/codex-lint.mjs`. Export `runCodexLint({cwd, words, issue, timeoutMinutes, json, env}, ports)`, `buildCodexLintPrompt(files, options)`, `groupCodexLintBatches(targetEntries, promptsByStory, maxPerBatch)`, `runAiLint`, `buildAiLintPrompt`, `groupAiLintBatches`, and `runAdaptiveAiLint` (re-exported from `src/autopilot/ai-lint.mjs`; read-only providers are `codex`, `claude`, and `gemini`). Run local deterministic project lint together with read-only Codex readability, semantic Story-vs-Prompt alignment, and optional issue-coverage checks on selected `.prompt.md` and `user_stories/*.md` files, printing clear per-file `PASS` / `FAIL` verdicts, an optional `Issue coverage` verdict, and a final summary line (or `schema_version: "pdd.codex-lint.v1"` JSON with `--json`).
 
 ## Selection and workspace safety
 

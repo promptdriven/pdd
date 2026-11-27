@@ -32,7 +32,7 @@ In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned mo
 - **Pure code bugs:** Check ownership first and state `Defect:` and `Not caught because:`. If the owning prompt is already right (a pure code bug), skip Step 3's pre-code pause and go straight to Red→Green TDD (failing regression test on unpatched code → fix → pass).
 - **Features and prompt bugs:** Load [references/prompting.md](references/prompting.md) and [references/stories.md](references/stories.md) on demand (plus [references/ports-and-cli.md](references/ports-and-cli.md) for external ports/CLIs and [references/ui-and-screens.md](references/ui-and-screens.md) for UI screens).
 - Keep **100% Truth**: an owned file's `.prompt.md` covers 100% of that file with a top-of-file `// Prompt: <path>` header (first 4 KiB, followed by a blank line). Hybrid brownfield PRs may pair clean PDD modules with surgical unowned legacy wiring verified natively.
-- Run offline `pdd lint` first, then `pdd test` (inspect receipts with `pdd test --read --details`). Expected values come from the Story and the person — never weaken a criterion or test to force a pass.
+- Run offline `pdd lint` first (blocking structural facts), optional advisory `pdd lint --ai` (inside `/pdd`, run `--ai-emit-pack` / `--ai-emit-verify` / `--ai-apply` with a native fresh read-only subagent instead of spawning nested CLIs), then `pdd test` (inspect receipts with `pdd test --read --details`). Expected values come from the Story and the person — never weaken a criterion or test to force a pass.
 
 ## Step 3 — Pre-code check, prompt approval, and 1 PR
 
@@ -68,3 +68,4 @@ Load [references/verification.md](references/verification.md) before finalizing 
 | Root-cause issue fixing, 10-line Fork Cards & real-artifact verification | [references/SOLVE.md](references/SOLVE.md) |
 | Clean-context independent break-testing & 4-item evidence standard | [references/BREAK-IT.md](references/BREAK-IT.md) |
 | One-pass advisory prompt & Story design review checklist (12 rules) | [references/PROMPT-REVIEW-RULES.md](references/PROMPT-REVIEW-RULES.md) |
+| Adaptive AI lint checklists (`contract`, `interfaces`, `trace`, `abuse`, `design`) | [contract](references/review/contract.md), [interfaces](references/review/interfaces.md), [trace](references/review/trace.md), [abuse](references/review/abuse.md), [design](references/review/design.md) |

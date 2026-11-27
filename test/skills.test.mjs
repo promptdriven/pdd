@@ -22,6 +22,13 @@ const EXPECTED_REFERENCES = [
   'ui-and-screens.md',
   'verification.md',
 ];
+const EXPECTED_REVIEW_CHECKLISTS = [
+  'abuse.md',
+  'contract.md',
+  'design.md',
+  'interfaces.md',
+  'trace.md',
+];
 
 const filesUnder = dir => readdirSync(dir, { withFileTypes: true })
   .flatMap(entry => entry.isDirectory() ? filesUnder(join(dir, entry.name)) : [join(dir, entry.name)]);
@@ -47,12 +54,19 @@ test('SKILLS1: literally one visible /pdd skill, with legacy split skill folders
 });
 
 test('SKILLS2: skills/pdd co-located references exist, stay bounded, and contain zero dead commands', () => {
-  assert.deepEqual(readdirSync(join(skills, 'pdd/references')).sort(), EXPECTED_REFERENCES);
+  assert.deepEqual(readdirSync(join(skills, 'pdd/references')).sort(), [...EXPECTED_REFERENCES, 'review'].sort());
+  assert.deepEqual(readdirSync(join(skills, 'pdd/references/review')).sort(), EXPECTED_REVIEW_CHECKLISTS);
   const pddSkill = read('pdd/SKILL.md');
   for (const ref of EXPECTED_REFERENCES) {
     assert.ok(pddSkill.includes(`references/${ref}`), `skills/pdd/SKILL.md links references/${ref}`);
     const bytes = statSync(join(skills, 'pdd/references', ref)).size;
     assert.ok(bytes > 200 && bytes <= 32768, `references/${ref} size (${bytes} bytes) within bounds`);
+  }
+  for (const checklist of EXPECTED_REVIEW_CHECKLISTS) {
+    assert.ok(pddSkill.includes(`references/review/${checklist}`), `skills/pdd/SKILL.md links references/review/${checklist}`);
+    const text = read(`pdd/references/review/${checklist}`);
+    const words = text.trim().split(/\s+/).filter(Boolean).length;
+    assert.ok(words > 40 && words <= 400, `references/review/${checklist} word count (${words}) must be <= 400`);
   }
 
   for (const file of filesUnder(join(skills, 'pdd'))) {

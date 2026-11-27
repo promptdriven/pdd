@@ -499,7 +499,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, autopilotInvestigate, autopilotInvestigatePorts = {}, issueGraph, issueGraphPorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents, workflowAgentPorts = {}, setupSkills,
   setupProject, initProject, projectStatus, localLint, localLintPorts = {}, proveRunner, proveRunnerPorts = {}, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills, syncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, doctor, doctorPorts = {}, hostInstallWarnings, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
+  readPackageVersion = defaultReadPackageVersion, findSkills, syncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, doctor, doctorPorts = {}, hostInstallWarnings, codexLint, codexLintPorts = {}, aiLint, aiLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv, { resolveTarget: word => resolveLocalDirectTarget(word, cwd) }); }
   catch (error) {
@@ -883,6 +883,46 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, `This mix of options does not work together. Run pdd ${NAMES.lint} --help.`);
         return 2;
       }
+      const plumbingCount = (plan.options['--ai-emit-pack'] === true ? 1 : 0)
+        + (plan.options['--ai-emit-verify'] !== undefined ? 1 : 0)
+        + (plan.options['--ai-apply'] !== undefined ? 1 : 0);
+      if (plumbingCount > 1) {
+        line(stderr, `Use only one of --ai-emit-pack, --ai-emit-verify, or --ai-apply at a time.`);
+        return 2;
+      }
+      const isAdaptiveAi = plan.options['--ai'] === true || plumbingCount > 0;
+      if (plan.options['--provider'] !== undefined && !isAdaptiveAi) {
+        line(stderr, `Use --provider only with pdd ${NAMES.lint} --ai [STORY...] [--diff [BASE]] [--provider codex|claude|gemini] [--json] [--timeout MIN].`);
+        return 2;
+      }
+      if (isAdaptiveAi) {
+        const allowedAiKeys = new Set(['--lint', '--ai', '--provider', '--model', '--ai-emit-pack', '--ai-emit-verify', '--ai-apply', '--diff', '--base', '--json', '--timeout']);
+        if (Object.keys(plan.options).some(key => !allowedAiKeys.has(key))) {
+          line(stderr, `pdd ${NAMES.lint} --ai accepts Story or prompt paths, --diff [BASE], --base REF, --provider codex|claude|gemini, --json, and --timeout MIN.`);
+          return 2;
+        }
+        try {
+          const module = aiLint ?? await import('./autopilot/ai-lint-engine.mjs');
+          const diffOpt = plan.options['--diff'];
+          return await module.runAdaptiveAiLint({
+            cwd,
+            words: [...plan.operands],
+            ...(diffOpt !== undefined ? { diff: diffOpt } : {}),
+            ...(plan.options['--base'] !== undefined ? { baseRef: plan.options['--base'] } : {}),
+            ...(plan.options['--provider'] !== undefined ? { provider: plan.options['--provider'] } : {}),
+            ...(plan.options['--model'] !== undefined ? { model: plan.options['--model'] } : {}),
+            ...(plan.options['--timeout'] !== undefined ? { timeoutMinutes: Number(plan.options['--timeout']) } : {}),
+            json: plan.options['--json'] === true,
+            emitPack: plan.options['--ai-emit-pack'] === true,
+            ...(plan.options['--ai-emit-verify'] !== undefined ? { emitVerifyPath: plan.options['--ai-emit-verify'] } : {}),
+            ...(plan.options['--ai-apply'] !== undefined ? { applyPath: plan.options['--ai-apply'] } : {}),
+            env,
+          }, { stdout, stderr, stdin, ...aiLintPorts });
+        } catch (error) {
+          line(stderr, `AI lint incomplete/unavailable.${reason(error)}`);
+          return 1;
+        }
+      }
       if (plan.options['--issue'] !== undefined && plan.options['--codex'] !== true) {
         line(stderr, `Use --issue only with pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`);
         return 2;
@@ -1077,6 +1117,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           return 2;
         }
       }
+      if (plan.local === 'runtime-check' && (plan.options['--ai'] === true || plan.options['--provider'] !== undefined || plan.options['--ai-emit-pack'] === true || plan.options['--ai-emit-verify'] !== undefined || plan.options['--ai-apply'] !== undefined)) {
+        line(stderr, `Use pdd ${NAMES.lint} --ai [STORY...] [--diff [BASE]] [--provider codex|claude|gemini] [--json] [--timeout MIN].`);
+        return 2;
+      }
       if (plan.local === 'runtime-check' && (plan.options['--issue'] !== undefined || plan.options['--codex'] === true)) {
         line(stderr, `Use pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`);
         return 2;
@@ -1197,6 +1241,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     && !quietDirect
     && !(plan.local === 'runtime-check' && plan.options['--files'] === true)
     && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
+    && !(plan.local === 'lint' && (plan.options['--ai-emit-pack'] === true || plan.options['--ai-emit-verify'] !== undefined || plan.options['--ai-apply'] !== undefined))
     && plan.options['--json'] !== true
     && !argv.includes('--json')) {
     try {

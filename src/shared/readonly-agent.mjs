@@ -6,12 +6,13 @@ import { join, resolve } from 'node:path';
 import { runAgentProcess } from './agent-process.mjs';
 import { causeText, readBoundedUtf8 } from './safe-read.mjs';
 
-export const READONLY_PROVIDERS = Object.freeze(['codex', 'claude', 'gemini', 'agy']);
+export const READONLY_PROVIDERS = Object.freeze(['codex', 'claude', 'gemini']);
 export const CODEX_DISABLED_FEATURES = Object.freeze([
   'hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external',
   'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2',
-  'shell_tool', 'unified_exec', 'code_mode', 'code_mode_host',
+  'code_mode', 'code_mode_host',
 ]);
+export const CODEX_TOOL_LOCKOUT_FEATURES = Object.freeze(['shell_tool', 'unified_exec']);
 export const GEMINI_DENY_ALL_POLICY = '[[rule]]\ntoolName = "*"\ndecision = "deny"\npriority = 900\n';
 
 const MAX_TIMER_MS = 2_147_483_647, DEFAULT_TIMEOUT_MS = 120_000, DEFAULT_MAX_BYTES = 262_144;
@@ -92,13 +93,14 @@ export function buildReadonlyAgentArgs({
   const cleanPolicy = typeof adminPolicy === 'string' && adminPolicy.trim() && !/[\x00-\x1f\x7f]/.test(adminPolicy) ? adminPolicy.trim() : null;
 
   if (kind === 'codex') {
+    const disabled = disableTools ? [...CODEX_DISABLED_FEATURES, ...CODEX_TOOL_LOCKOUT_FEATURES] : CODEX_DISABLED_FEATURES;
     return {
       provider: kind, command: bin,
       args: [
         'exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never',
         ...(ignoreRules ? ['--ignore-rules'] : []),
         '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}',
-        ...CODEX_DISABLED_FEATURES.flatMap(name => ['-c', `features.${name}=false`]),
+        ...disabled.flatMap(name => ['-c', `features.${name}=false`]),
         ...(cleanModel ? ['--model', cleanModel] : []),
         ...(outputFile ? ['--output-last-message', outputFile] : []), '--', '-',
       ],
@@ -116,20 +118,14 @@ export function buildReadonlyAgentArgs({
       ],
     };
   }
-  if (kind === 'gemini') {
-    return {
-      provider: kind, command: bin,
-      args: [
-        '-p', '', '--output-format', outputFormat || 'json', ...(sandbox ? ['--sandbox'] : []),
-        '--approval-mode', 'plan', '--extensions', 'none', '--allowed-mcp-server-names', 'pdd-disabled-none',
-        ...cleanDirs.flatMap(dir => ['--include-directories', dir]),
-        ...(cleanPolicy ? ['--admin-policy', cleanPolicy] : []), ...(cleanModel ? ['--model', cleanModel] : []),
-      ],
-    };
-  }
   return {
     provider: kind, command: bin,
-    args: ['--input-format', 'text', '--output-format', outputFormat || 'json', '--mode', 'plan', '--sandbox', '--disable-slash-commands', ...(cleanModel ? ['--model', cleanModel] : [])],
+    args: [
+      '-p', '', '--output-format', outputFormat || 'json', ...(sandbox ? ['--sandbox'] : []),
+      '--approval-mode', 'plan', '--extensions', 'none', '--allowed-mcp-server-names', 'pdd-disabled-none',
+      ...cleanDirs.flatMap(dir => ['--include-directories', dir]),
+      ...(cleanPolicy ? ['--admin-policy', cleanPolicy] : []), ...(cleanModel ? ['--model', cleanModel] : []),
+    ],
   };
 }
 
