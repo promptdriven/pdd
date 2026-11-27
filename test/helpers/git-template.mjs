@@ -2,6 +2,8 @@ import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const TRANSIENT_GIT_LOCK_RE = /(?:^|[\\/])objects[\\/]maintenance(?:~pid)?\.lock$/;
+
 const templates = new Map();
 process.on('exit', () => {
   for (const dir of templates.values()) {
@@ -20,8 +22,18 @@ export function gitTemplateDir(key, build) {
   return dir;
 }
 
+export function copyTemplateDir(src, target) {
+  try {
+    cpSync(src, target, { recursive: true });
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+    rmSync(target, { recursive: true, force: true });
+    cpSync(src, target, { recursive: true, filter: p => !TRANSIENT_GIT_LOCK_RE.test(p) });
+  }
+}
+
 export function copyGitTemplate(key, target, build) {
-  cpSync(gitTemplateDir(key, build), target, { recursive: true });
+  copyTemplateDir(gitTemplateDir(key, build), target);
 }
 
 export function rewriteGitConfigUrl(configPath, fromUrl, toUrl) {

@@ -134,6 +134,45 @@
           ["result", "/finding/defaultSeverity", "=", "warn"]
         ]
       }
+    },
+    {
+      "id": "healthy-6-steps-10-ports",
+      "op": "evaluateScenarioHygiene",
+      "input": {
+        "doc": {
+          "entry_path": "prompts/connector.prompt.md",
+          "initial_world": { "ok": true },
+          "simulation": {
+            "port1.call": { "action": "port.write", "world_pointer": "/ok" },
+            "port2.call": { "action": "port.write", "world_pointer": "/ok" },
+            "port3.call": { "action": "port.write", "world_pointer": "/ok" },
+            "port4.call": { "action": "port.write", "world_pointer": "/ok" },
+            "port5.call": { "action": "port.write", "world_pointer": "/ok" },
+            "port6.call": { "action": "port.write", "world_pointer": "/ok" },
+            "port7.call": { "action": "port.write", "world_pointer": "/ok" },
+            "port8.call": { "action": "port.write", "world_pointer": "/ok" },
+            "port9.call": { "action": "port.write", "world_pointer": "/ok" },
+            "port10.call": { "action": "port.write", "world_pointer": "/ok" }
+          },
+          "steps": [
+            { "id": "p1", "op": "run", "input": { "step": 1 }, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "p2", "op": "run", "input": { "step": 2 }, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "p3", "op": "run", "input": { "step": 3 }, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "p4", "op": "run", "input": { "step": 4 }, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "p5", "op": "run", "input": { "step": 5 }, "checks": { "1": [["result", "/ok", "=", true]] } },
+            { "id": "p6", "op": "run", "input": { "step": 6 }, "checks": { "1": [["result", "/ok", "=", true]] } }
+          ]
+        },
+        "options": { "path": "tests/connector.approved-chat.json" }
+      },
+      "checks": {
+        "6": [
+          ["result", "/oversized", "=", false],
+          ["result", "/metrics/steps", "=", 6],
+          ["result", "/metrics/simulated_ports", "=", 10],
+          ["result", "/finding", "=", null]
+        ]
+      }
     }
   ]
 }

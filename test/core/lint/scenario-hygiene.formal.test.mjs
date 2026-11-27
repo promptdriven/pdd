@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_SCENARIO_MAX_STEPS,
   DEFAULT_SCENARIO_MAX_WORLD_BYTES,
-  computeDefaultScenarioCallCap,
   evaluateScenarioHygiene,
 } from '../../../src/core/lint/scenario-hygiene.mjs';
 
@@ -31,30 +30,44 @@ function makeSteps(count, positiveCallChecksPerStep = 0) {
   }));
 }
 
+function makeSimulation(portCount) {
+  if (portCount <= 0) return {};
+  return Object.fromEntries(
+    Array.from({ length: portCount }, (_, i) => [`port.op${i}`, { action: 'port.write', world_pointer: '/ok' }]),
+  );
+}
+
 test('formal grid: exact threshold classification across steps (0..25) and state byte boundaries', () => {
-  for (let steps = 0; steps <= 25; steps++) {
-    const doc = {
-      entry_path: 'prompts/mod.prompt.md',
-      initial_world: { k: 'v' },
-      steps: makeSteps(steps),
-    };
-    const res = evaluateScenarioHygiene(doc, {
-      path: 'tests/grid.json',
-      maxSteps: DEFAULT_SCENARIO_MAX_STEPS,
-      maxWorldBytes: DEFAULT_SCENARIO_MAX_WORLD_BYTES,
-    });
-    assert.equal(res.metrics.steps, steps);
-    assert.equal(res.oversized, steps > DEFAULT_SCENARIO_MAX_STEPS);
-    if (steps > DEFAULT_SCENARIO_MAX_STEPS) {
-      assert.equal(res.finding.code, 'scenario-oversized');
-      assert.equal(res.finding.defaultSeverity, 'warn');
-    } else {
-      assert.equal(res.finding, null);
+  for (const ports of [0, 1, 10, 16]) {
+    for (let steps = 0; steps <= 25; steps++) {
+      const doc = {
+        entry_path: 'prompts/mod.prompt.md',
+        initial_world: { k: 'v' },
+        simulation: makeSimulation(ports),
+        steps: makeSteps(steps),
+      };
+      const res = evaluateScenarioHygiene(doc, {
+        path: 'tests/grid.json',
+        maxSteps: DEFAULT_SCENARIO_MAX_STEPS,
+        maxWorldBytes: DEFAULT_SCENARIO_MAX_WORLD_BYTES,
+      });
+      assert.equal(res.metrics.steps, steps);
+      assert.equal(res.metrics.simulated_ports, ports);
+      assert.equal(res.oversized, steps > DEFAULT_SCENARIO_MAX_STEPS);
+      if (steps > DEFAULT_SCENARIO_MAX_STEPS) {
+        assert.equal(res.finding.code, 'scenario-oversized');
+        assert.equal(res.finding.defaultSeverity, 'warn');
+        assert.doesNotMatch(res.finding.detail, /default per-request cap/i);
+        if (ports > 0) {
+          const expectedNote = `(${ports} simulated ${ports === 1 ? 'port' : 'ports'})`;
+          assert.ok(res.finding.detail.includes(expectedNote), `missing ${expectedNote} in ${res.finding.detail}`);
+        } else {
+          assert.doesNotMatch(res.finding.detail, /simulated port/i);
+        }
+      } else {
+        assert.equal(res.finding, null);
+      }
     }
-    const cap = computeDefaultScenarioCallCap(doc);
-    assert.equal(res.metrics.default_call_cap, cap);
-    if (steps === 0) assert.equal(cap, 0);
-    else assert.ok(cap >= 18 && cap <= 1000, `cap out of bounds: ${cap}`);
   }
 
   // Exact byte-limit boundary check: bytes == limit stays clean, bytes == limit + 1 warns.
@@ -84,11 +97,13 @@ test('formal PRNG (300 seeded worlds): monotonicity, non-mutation, and exact pre
     const maxSteps = 5 + Math.floor(rng() * 18);
     const maxWorldBytes = 64 + Math.floor(rng() * 2048);
     const payloadSize = Math.floor(rng() * 2400);
+    const portCount = Math.floor(rng() * 17);
     const posCallsPerStep = Math.floor(rng() * 8);
 
     const doc = {
       entry_path: 'prompts/mod.prompt.md',
       initial_world: payloadSize > 0 ? { blob: 'z'.repeat(payloadSize) } : {},
+      simulation: makeSimulation(portCount),
       steps: makeSteps(steps, posCallsPerStep),
     };
     const snapshot = JSON.stringify(doc);
@@ -100,13 +115,21 @@ test('formal PRNG (300 seeded worlds): monotonicity, non-mutation, and exact pre
     });
     // Zero input mutation
     assert.equal(JSON.stringify(doc), snapshot);
+    assert.equal(res.metrics.simulated_ports, portCount);
 
-    // Exact predicate equivalence
+    // Exact structural predicate equivalence (never depends on port count or call assertions)
     const expectedOver =
       res.metrics.steps > maxSteps ||
-      res.metrics.state_bytes > maxWorldBytes ||
-      (res.metrics.default_call_cap > 0 && res.metrics.min_estimated_calls > res.metrics.default_call_cap);
+      res.metrics.state_bytes > maxWorldBytes;
     assert.equal(res.oversized, expectedOver, `trial ${trial}: oversized predicate mismatch`);
+
+    // Port-count invariance: adding 12 more declared simulation ports never flips oversized
+    const morePorts = evaluateScenarioHygiene(
+      { ...doc, simulation: makeSimulation(portCount + 12) },
+      { path: `tests/story-${trial}.focus.json`, maxSteps, maxWorldBytes },
+    );
+    assert.equal(morePorts.oversized, res.oversized, `trial ${trial}: simulated port count flipped oversized`);
+    assert.equal(morePorts.metrics.simulated_ports, portCount + 12);
 
     if (res.oversized) {
       assert.equal(res.finding.code, 'scenario-oversized');

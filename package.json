@@ -43,7 +43,7 @@
     "user_stories/fake-*.md"
   ],
   "scripts": {
-    "test": "files=$(node scripts/list-tests.mjs) && [ -n \"$files\" ] && node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test $files",
+    "test": "unit=$(node scripts/list-tests.mjs --unit) && serial=$(node scripts/list-tests.mjs --serial) && [ -n \"$unit$serial\" ] && { [ -z \"$unit\" ] || node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test $unit; } && for f in $serial; do node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test \"$f\" || exit $?; done",
     "lint:js": "oxlint -c .oxlintrc.json src bin",
     "check:arch": "oxlint -c .oxlintrc.json src bin && depcruise src bin --config .dependency-cruiser.cjs --ignore-known .dependency-cruiser-known-violations.json --output-type err-long",
     "version": "node scripts/sync-pypi-version.mjs && git add python/pyproject.toml python/pdd_cli/__init__.py",
