@@ -112,8 +112,14 @@ test('runLocalLint integrates upstream linters in full-repo mode while preservin
   execFileSync('git', ['add', '.'], { cwd: dir });
   execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
 
+  // Default offline pdd lint skips slow upstream compilers unless explicitly requested.
+  const defOut = makeSink(), defErr = makeSink();
+  assert.equal(runLocalLint({ cwd: dir, json: true, env: { PATH: '' } }, { stdout: defOut, stderr: defErr }), 0);
+  assert.equal(JSON.parse(defOut.text).upstream_linters, undefined);
+
+  // Explicit includeUpstream: true runs upstream linter detection and preserves pdd.local-lint.v1 contract.
   const out = makeSink(), err = makeSink();
-  const code = runLocalLint({ cwd: dir, json: true, env: { PATH: '' } }, { stdout: out, stderr: err });
+  const code = runLocalLint({ cwd: dir, json: true, includeUpstream: true, env: { PATH: '' } }, { stdout: out, stderr: err });
   assert.equal(code, 0);
   const parsed = JSON.parse(out.text);
   assert.equal(parsed.schema_version, 'pdd.local-lint.v1');

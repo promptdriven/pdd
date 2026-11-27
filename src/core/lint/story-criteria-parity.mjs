@@ -21,7 +21,7 @@ const normalizeCriterionText = text =>
     .trim()
     .toLowerCase();
 
-function isCandidateScenarioJson(relPath) {
+export function isCandidateScenarioJson(relPath) {
   if (!TEST_JSON_RE.test(relPath) || NON_SCENARIO_TEST_SUBDIR_RE.test(relPath)) return false;
   const base = posix.basename(relPath).toLowerCase();
   if (TOOLING_CONFIG_JSON.has(base) || /^tsconfig.*\.json$/.test(base)) return false;
@@ -82,6 +82,19 @@ export function collectStoryUnboundCriteriaFindings({ realRoot, storyPaths = [],
       if (!byStem.has(s)) byStem.set(s, []);
       byStem.get(s).push(jp);
     }
+    const doc = getDoc(jp);
+    if (
+      doc
+      && !Array.isArray(doc.cases)
+      && !String(doc.schema_version ?? '').startsWith('pdd.native-cases.')
+      && Array.isArray(doc.steps)
+      && typeof doc.story_path === 'string'
+      && doc.story_path.trim()
+    ) {
+      const explicitStory = doc.story_path.trim().replace(/^\.\//, '');
+      if (!byExplicitStory.has(explicitStory)) byExplicitStory.set(explicitStory, []);
+      byExplicitStory.get(explicitStory).push(jp);
+    }
   }
 
   const findings = [];
@@ -108,7 +121,7 @@ export function collectStoryUnboundCriteriaFindings({ realRoot, storyPaths = [],
     for (const jp of [...matchedCandidates].sort()) {
       const doc = getDoc(jp);
       if (!doc) continue;
-      if (Array.isArray(doc.cases) || /^pdd\.native-cases\./.test(String(doc.schema_version ?? ''))) continue;
+      if (Array.isArray(doc.cases) || String(doc.schema_version ?? '').startsWith('pdd.native-cases.')) continue;
       if (!Array.isArray(doc.steps)) continue;
       const explicitStory = typeof doc.story_path === 'string' ? doc.story_path.trim().replace(/^\.\//, '') : '';
       if (explicitStory && explicitStory !== storyPath) continue;
@@ -162,10 +175,7 @@ export function collectStoryUnboundCriteriaFindings({ realRoot, storyPaths = [],
     }
 
     if (!matchedFiles.length) continue;
-    // Skip only when a single-AC shorthand scenario has implicit checks without explicit criterion_id.
     if (acs.length === 1 && hasSingleImplicitCheck && !hasBoundOrCheckedScenario) continue;
-    // Honor valid v1 subset-criteria tests in `pdd lint --local` when every explicitly declared criterion is covered
-    // (while `pdd prove` passes `allowExplicitSubset: false` to verify full Story coverage before merge).
     if (allowExplicitSubset && allExplicitV1Subsets && declaredCriteriaIds.size > 0
       && [...declaredCriteriaIds].every(cid => coveredIds.has(cid) || coveredIdsLower.has(cid.toLowerCase()))) {
       continue;

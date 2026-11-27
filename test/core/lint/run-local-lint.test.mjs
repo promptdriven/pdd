@@ -38,7 +38,7 @@ function initCleanRepo(t) {
   return { repo, stateDir };
 }
 
-test('runLocalLint runs 100% offline in <1s, writes 0 batch-state files, and emits clean 0 warnings summary with empty stderr', t => {
+test('runLocalLint runs 100% offline in <1s, writes 0 batch-state files, and emits unmistakable offline summary with empty stderr', t => {
   const { repo, stateDir } = initCleanRepo(t);
   const stdout = makeSink(), stderr = makeSink();
 
@@ -51,11 +51,10 @@ test('runLocalLint runs 100% offline in <1s, writes 0 batch-state files, and emi
 
   assert.equal(exitCode, 0);
   assert.equal(stderr.text, '', 'clean repo must leave stderr completely empty');
-  assert.match(stdout.text, /^Local lint: 0 errors, 0 warnings\. \(0 AI calls, 0 network calls\)\n$/);
+  assert.match(stdout.text, /^Lint OK: 1 prompt\(s\), 1 story\/scenario\(s\), 0 app-map\(s\), 0 drawing\(s\) validated offline \(0 errors, 0 warnings\)\n$/);
   assert.deepEqual(readdirSync(stateDir), [], 'local lint must write 0 batch-state files');
   assert.ok(elapsedMs < 1000, `expected <1s offline run, took ${elapsedMs.toFixed(1)}ms`);
 
-  // JSON mode outputs structured offline receipt.
   const jOut = makeSink(), jErr = makeSink();
   const jCode = runLocalLint({ cwd: repo, json: true }, { stdout: jOut, stderr: jErr });
   assert.equal(jCode, 0);
@@ -65,22 +64,22 @@ test('runLocalLint runs 100% offline in <1s, writes 0 batch-state files, and emi
   assert.equal(parsed.ok, true);
   assert.equal(parsed.exit_code, 0);
   assert.equal(parsed.local_only, true);
+  assert.deepEqual(parsed.counts, { prompts: 1, stories: 1, scenarios: 0, app_maps: 0, drawings: 0 });
   assert.deepEqual(parsed.problems, []);
   assert.deepEqual(parsed.warnings, []);
 });
 
-test('runLocalLint supports --diff hard gates (.only / conflicts) and opt-in lint.commands delegation', t => {
+test('runLocalLint supports --diff hard gates (conflict markers) and opt-in lint.commands delegation', t => {
   const { repo } = initCleanRepo(t);
   mkdirSync(join(repo, 'test'), { recursive: true });
-  writeFileSync(join(repo, 'test', 'price.test.mjs'), "test.only('focused', () => {});\n");
+  writeFileSync(join(repo, 'test', 'price.test.mjs'), '<<<<<<< HEAD\nconst a = 1;\n=======\nconst a = 2;\n>>>>>>> main\n');
 
   const diffOut = makeSink(), diffErr = makeSink();
   const diffCode = runLocalLint({ cwd: repo, diff: true, baseRef: 'main' }, { stdout: diffOut, stderr: diffErr });
   assert.equal(diffCode, 1);
-  assert.match(diffErr.text, /\[diff-focus-only\]/);
+  assert.match(diffErr.text, /\[diff-conflict-marker\]/);
   assert.match(diffErr.text, /Fix:.*Rerun: `pdd lint --diff`/);
 
-  // Remove .only and verify Astra #9: untrusted working-tree lint.commands are SKIPPED unless committed on base or --trust-working-tree!
   writeFileSync(join(repo, 'test', 'price.test.mjs'), "test('clean', () => {});\n");
   writeFileSync(
     join(repo, 'pdd.json'),
@@ -93,14 +92,12 @@ test('runLocalLint supports --diff hard gates (.only / conflicts) and opt-in lin
   assert.equal(untrustedCode, 0, 'untrusted working-tree lint.commands must NOT execute by default');
   assert.match(untrustedOut.text, /\[lint-commands-untrusted\]/);
 
-  // Explicit trustWorkingTree: true opts in locally.
   const optInOut = makeSink(), optInErr = makeSink();
   const optInCode = runLocalLint({ cwd: repo, runCommands: true, trustWorkingTree: true }, { stdout: optInOut, stderr: optInErr });
   assert.equal(optInCode, 1);
   assert.match(optInErr.text, /\[lint-command-failed(?::[^\]]+)?\]/);
   assert.match(optInErr.text, /custom linter failed/);
 
-  // Once committed on merge base (`main`), base-trusted lint.commands run automatically without --trust-working-tree.
   execFileSync('git', ['commit', '-q', '-m', 'trust lint command on base'], { cwd: repo });
   const baseOut = makeSink(), baseErr = makeSink();
   const baseCode = runLocalLint({ cwd: repo, runCommands: true }, { stdout: baseOut, stderr: baseErr });

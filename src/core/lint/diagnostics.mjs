@@ -33,7 +33,7 @@ export const canonicalRepoPath = value =>
   && !/[\\\x00-\x1f\x7f]/.test(value)
   && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
 
-function openRegularInRoot(realRoot, relPath, maxBytes) {
+function openRegularInRoot(realRoot, relPath, maxBytes, verifiedDirs = null) {
   if (!canonicalRepoPath(relPath)) return null;
   const parts = relPath.split('/');
   let cur = realRoot;
@@ -41,10 +41,13 @@ function openRegularInRoot(realRoot, relPath, maxBytes) {
   try {
     for (let i = 0; i < parts.length; i++) {
       cur = join(cur, parts[i]);
+      if (i < parts.length - 1 && verifiedDirs?.has(cur)) continue;
       const st = lstatSync(cur);
       if (st.isSymbolicLink()) return null;
-      if (i < parts.length - 1 && !st.isDirectory()) return null;
-      if (i === parts.length - 1) {
+      if (i < parts.length - 1) {
+        if (!st.isDirectory()) return null;
+        if (verifiedDirs) verifiedDirs.add(cur);
+      } else {
         if (!st.isFile() || (maxBytes !== null && st.size > maxBytes)) return null;
         observed = st;
       }
@@ -65,8 +68,8 @@ function openRegularInRoot(realRoot, relPath, maxBytes) {
   }
 }
 
-export function readSafeUtf8(realRoot, relPath, maxBytes = MAX_FILE_BYTES) {
-  const opened = openRegularInRoot(realRoot, relPath, maxBytes);
+export function readSafeUtf8(realRoot, relPath, maxBytes = MAX_FILE_BYTES, verifiedDirs = null) {
+  const opened = openRegularInRoot(realRoot, relPath, maxBytes, verifiedDirs);
   if (!opened) return null;
   const { fd, size } = opened;
   try {
@@ -87,8 +90,8 @@ export function readSafeUtf8(realRoot, relPath, maxBytes = MAX_FILE_BYTES) {
   }
 }
 
-export function readSafeHeadUtf8(realRoot, relPath, limit = HEAD_BYTES + 1) {
-  const opened = openRegularInRoot(realRoot, relPath, null);
+export function readSafeHeadUtf8(realRoot, relPath, limit = HEAD_BYTES + 1, verifiedDirs = null) {
+  const opened = openRegularInRoot(realRoot, relPath, null, verifiedDirs);
   if (!opened) return null;
   const { fd, size } = opened;
   try {

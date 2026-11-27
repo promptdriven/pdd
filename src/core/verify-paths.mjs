@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { isTestOwnedPath } from '../file-owner.mjs';
 import { isConfiguredTestPath, isNonProductionPyprojectEdit, readPytestTestpaths } from '../shared/test-paths.mjs';
 import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8 } from './lint/diagnostics.mjs';
-import { compileGlobMatcher } from './lint/regex-safety.mjs';
+import { compileGlobMatcher } from '../shared/glob-match.mjs';
 import { SHARED_SURFACE_COLS, clean, csv, findSectionLines, isSeparatorRow, tableCells } from './product/markdown-utils.mjs';
 
 const MAX_VERIFY_PATHS = 100;

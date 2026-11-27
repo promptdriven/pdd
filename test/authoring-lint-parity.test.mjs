@@ -94,14 +94,13 @@ test('3459 lint: surfaces undeclared simulation_overrides port, missing world_po
   const elapsedMs = performance.now() - start;
 
   assert.ok(elapsedMs < 200, `expected fast deterministic local lint, got ${elapsedMs.toFixed(1)}ms`);
-  assert.ok(warnings.some(w => w.includes('simulation_overrides port "storage.save" is not mentioned in reachable prompt prose')), warnings.join('\n'));
   assert.ok(warnings.some(w => w.includes('world_pointer "/missing_saves" is missing from initial_world')), warnings.join('\n'));
   assert.ok(warnings.some(w => w.includes('failure_quote "quota exceeded" is absent from criterion AC1')), warnings.join('\n'));
 
   const streams = captureStreams();
   const code = await lint({ cwd: root, local: true }, { stdout: streams.stdout, stderr: streams.stderr, env: process.env });
   assert.equal(code, 0);
-  assert.match(`${streams.out}\n${streams.err}`, /storage\.save/);
+  assert.match(`${streams.out}\n${streams.err}`, /missing_saves/);
 });
 
 test('3459 lint: aligned plain-Markdown port prose and canonical simulation_overrides array produce zero warnings', t => {
@@ -300,6 +299,19 @@ test('3459 lint --local: validates app-map.json timers, screen prompt_path, and 
       '## Domain decisions',
       '',
       'Advance the snake on each timer tick while `running` is true.',
+      '',
+      '<details><summary>Runtime interface</summary>',
+      '',
+      '```json',
+      JSON.stringify({
+        status: 'draft',
+        prose_sha256: '',
+        entries: [{ operation: 'render' }, { operation: 'step_tick' }],
+        calls: [],
+        resources: [],
+      }),
+      '```',
+      '</details>',
       '',
     ].join('\n'),
     'user_stories/play-snake.md': [

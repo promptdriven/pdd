@@ -1,10 +1,15 @@
 // Generated from prompts/cli/svg-layout.prompt.md.
-// Inert XML reader and workspace-guarded file read for .ui.svg layout lint.
-import { lstatSync, readFileSync } from 'node:fs';
+// Inert XML safety, finite/sane viewBox validation, and workspace-guarded exact-case file reads for .ui.svg lint.
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import { runtimeWorkspaceSlice, workspace } from '../../shared/workspace-policy.mjs';
 
 const { requireRuntimePath } = runtimeWorkspaceSlice();
+
+const MAX_VIEWBOX_ASPECT_RATIO = 50;
+const MAX_VIEWBOX_COORD = 1_000_000;
+const MIN_VIEWBOX_DIM = 1e-3;
+const STRICT_NUMBER_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
 
 export function decodeXml(text) {
   if (/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[\da-f]+);)/i.test(text)) throw Error('invalid XML entity');
@@ -17,16 +22,43 @@ export function decodeXml(text) {
   });
 }
 
-export function safeRead(root, path, policy = null) {
+function hasExactCaseSegment(dirPath, segment, dirCache) {
+  let entries = dirCache?.get(dirPath);
+  if (!entries) {
+    try {
+      entries = new Set(readdirSync(dirPath));
+    } catch {
+      return false;
+    }
+    if (dirCache) dirCache.set(dirPath, entries);
+  }
+  return entries.has(segment);
+}
+
+export function safeRead(root, path, policy = null, dirCache = null) {
   requireRuntimePath(policy ?? workspace.policy({ root }), { path, from: 'SVG advice' });
-  const full = resolve(root, path);
-  const rel = relative(resolve(root), full);
-  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || resolve(root, rel) !== full) throw Error('path escapes repository');
+  const absRoot = resolve(root);
+  const full = resolve(absRoot, path);
+  const rel = relative(absRoot, full);
+  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || resolve(absRoot, rel) !== full) throw Error('path escapes repository');
   const parts = rel.split(sep);
-  for (let i = 1; i <= parts.length; i++) {
-    const stat = lstatSync(resolve(root, ...parts.slice(0, i)));
+  let cur = absRoot;
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i];
+    if (!hasExactCaseSegment(cur, seg, dirCache)) {
+      const nextPath = resolve(cur, seg);
+      try {
+        lstatSync(nextPath);
+        throw Error(`case mismatch on disk for "${rel.split(sep).join('/')}" (fails on case-sensitive Linux CI)`);
+      } catch (err) {
+        if (err?.message?.startsWith('case mismatch')) throw err;
+        throw err;
+      }
+    }
+    cur = resolve(cur, seg);
+    const stat = lstatSync(cur);
     if (stat.isSymbolicLink()) throw Error('symlink paths are not allowed');
-    if (i === parts.length && !stat.isFile()) throw Error('not a regular file');
+    if (i === parts.length - 1 && !stat.isFile()) throw Error('not a regular file');
   }
   return readFileSync(full, 'utf8');
 }
@@ -41,25 +73,61 @@ export function markupTokens(source) {
   return tokens;
 }
 
-// An inert XML reader: no document type, entity expansion, execution or resource loading.
-export function partsOf(source) {
+export function stripComments(source) {
+  return markupTokens(String(source ?? '')).filter(token => !token.startsWith('<!--')).join('');
+}
+
+/**
+ * Validate SVG viewBox attribute: must parse to 4 finite numbers (minX minY width height),
+ * width > 0, height > 0, sane coordinate magnitude (<= 1_000_000, dim >= 1e-3), and aspect ratio <= 50:1.
+ */
+export function validateSvgViewBox(rawViewBox) {
+  const trimmed = String(rawViewBox ?? '').trim();
+  if (!trimmed || /^,|,$|,\s*,/.test(trimmed)) {
+    return `invalid viewBox ${JSON.stringify(rawViewBox)}: expected 4 finite numbers "minX minY width height"`;
+  }
+  const tokens = trimmed.split(/[\s,]+/).filter(Boolean);
+  if (tokens.length !== 4 || tokens.some(t => !STRICT_NUMBER_RE.test(t))) {
+    return `invalid viewBox ${JSON.stringify(rawViewBox)}: expected 4 finite numbers "minX minY width height"`;
+  }
+  const [minX, minY, width, height] = tokens.map(Number);
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(width) || !Number.isFinite(height)) {
+    return `invalid viewBox ${JSON.stringify(rawViewBox)}: all 4 numbers must be finite`;
+  }
+  if (width <= 0 || height <= 0) {
+    return `invalid viewBox ${JSON.stringify(rawViewBox)}: width (${width}) and height (${height}) must be positive`;
+  }
+  if (width < MIN_VIEWBOX_DIM || height < MIN_VIEWBOX_DIM) {
+    return `invalid viewBox ${JSON.stringify(rawViewBox)}: dimensions (${width}x${height}) are below minimum usable size`;
+  }
+  const ratio = Math.max(width / height, height / width);
+  if (!Number.isFinite(ratio) || ratio > MAX_VIEWBOX_ASPECT_RATIO) {
+    return `invalid viewBox ${JSON.stringify(rawViewBox)}: aspect ratio ${ratio.toFixed(1)}:1 exceeds ${MAX_VIEWBOX_ASPECT_RATIO}:1 limit`;
+  }
+  if (Math.abs(minX) > MAX_VIEWBOX_COORD || Math.abs(minY) > MAX_VIEWBOX_COORD || width > MAX_VIEWBOX_COORD || height > MAX_VIEWBOX_COORD) {
+    return `invalid viewBox ${JSON.stringify(rawViewBox)}: coordinate magnitude exceeds ${MAX_VIEWBOX_COORD} (risks <1px hairline collapse)`;
+  }
+  return null;
+}
+
+// An inert XML validator: no document type, entity expansion, execution or external resource loading.
+export function validateSvgXml(source) {
   const tokens = markupTokens(source);
   const active = tokens.filter(token => !token.startsWith('<!--') && !token.startsWith('<![CDATA[')).join('\n');
-  const styles = [...active.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)].flatMap(match =>
-    [...match[1].replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(rule =>
-      rule[1].split(',').map(selector => ({ selector: selector.trim(), style: rule[2] })),
-    ),
-  );
-  if (styles.some(rule => !/^(?:[\w-]+|[.#][\w-]+)$/.test(rule.selector))) throw Error('unsupported SVG stylesheet selector in static lint');
-  for (const match of active.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)) {
-    if (/@import|url\s*\(/i.test(match[1].replace(/url\(\s*(['"]?)#[^)'"\s]+\1\s*\)/gi, ''))) throw Error('external SVG stylesheet resources are not allowed');
+  for (const match of active.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)) {
+    if (/@import|url\s*\(/i.test(match[1].replace(/url\(\s*(['"]?)#[^)'"\s]+\1\s*\)/gi, ''))) {
+      throw Error('external SVG stylesheet resources are not allowed');
+    }
   }
   const stack = [];
-  const parts = [];
   let roots = 0;
+  let rootViewBox = undefined;
   for (const token of tokens) {
     if (token.startsWith('<!--')) continue;
-    if (token.startsWith('<?')) { if (!/^<\?xml\s[\s\S]*\?>$/.test(token)) throw Error('unsafe SVG processing instruction'); continue; }
+    if (token.startsWith('<?')) {
+      if (!/^<\?xml\s[\s\S]*\?>$/.test(token)) throw Error('unsafe SVG processing instruction');
+      continue;
+    }
     if (token.startsWith('</')) {
       const close = /^<\/([\w:-]+)\s*>$/.exec(token);
       if (!close || stack.pop()?.tag !== close[1]) throw Error('malformed XML closing tag');
@@ -68,7 +136,9 @@ export function partsOf(source) {
       if (!match) throw Error('malformed XML element');
       const [, tag, raw, self] = match;
       const attrs = {};
-      if (['script', 'foreignobject', 'iframe', 'object', 'embed'].includes(tag.split(':').at(-1).toLowerCase())) throw Error('unsafe SVG content');
+      if (['script', 'foreignobject', 'iframe', 'object', 'embed'].includes(tag.split(':').at(-1).toLowerCase())) {
+        throw Error('unsafe SVG content');
+      }
       let remainder = raw.trim();
       while (remainder) {
         const attr = /^([\w:-]+)\s*=\s*("[^"]*"|'[^']*')\s*/.exec(remainder);
@@ -77,37 +147,31 @@ export function partsOf(source) {
         remainder = remainder.slice(attr[0].length);
       }
       if (Object.keys(attrs).some(name => /^on/i.test(name))) throw Error('unsafe SVG content');
-      if (!stack.length && (tag !== 'svg' || roots++)) throw Error('expected one SVG root');
+      if (!stack.length) {
+        if (tag !== 'svg' || roots++) throw Error('expected one SVG root');
+        if (Object.hasOwn(attrs, 'viewBox')) rootViewBox = attrs.viewBox;
+      }
       const resourceValues = Object.values(attrs).join(' ').replace(/url\(\s*(['"]?)#[^)'"\s]+\1\s*\)/gi, '');
-      if (Object.entries(attrs).some(([name, value]) => /^(?:href|xlink:href|src)$/i.test(name) && !value.startsWith('#')) || /(?:@import|url\s*\()/i.test(resourceValues)) {
+      if (
+        Object.entries(attrs).some(([name, value]) => /^(?:href|xlink:href|src)$/i.test(name) && !value.startsWith('#'))
+        || /(?:@import|url\s*\()/i.test(resourceValues)
+      ) {
         throw Error('external SVG resources are not allowed');
       }
-      const simpleMatch = selector => selector === tag || selector === `#${attrs.id}` || (selector.startsWith('.') && (attrs.class || '').split(/\s+/).includes(selector.slice(1)));
-      const declarations = new Map(['display', 'visibility', 'opacity'].filter(name => attrs[name] !== undefined).map(name => [name, { value: attrs[name], important: false }]));
-      const specificity = rule => (rule.selector.startsWith('#') ? 100 : rule.selector.startsWith('.') ? 10 : 1);
-      for (const style of [...styles.filter(rule => simpleMatch(rule.selector)).sort((a, b) => specificity(a) - specificity(b)).map(rule => rule.style), attrs.style || '']) {
-        for (const entry of style.split(';')) {
-          const decl = /^\s*([\w-]+)\s*:\s*(.*?)\s*(!important)?\s*$/i.exec(entry);
-          if (!decl) continue;
-          const [, name, value, important] = decl;
-          const previous = declarations.get(name.toLowerCase());
-          if (!previous?.important || important) declarations.set(name.toLowerCase(), { value: value.toLowerCase().trim(), important: !!important });
-        }
-      }
-      const css = Object.fromEntries([...declarations].map(([key, declaration]) => [key, declaration.value]));
-      const hidden = stack.at(-1)?.hidden || ['title', 'desc', 'defs', 'metadata', 'style'].includes(tag) || attrs['data-context-only'] === 'true'
-        || (attrs.class || '').split(/\s+/).includes('context-only') || css.display === 'none' || ['hidden', 'collapse'].includes(css.visibility)
-        || (css.opacity !== undefined && Number(css.opacity) === 0);
-      const node = { tag, hidden, text: '', id: attrs.id };
-      if (!hidden && attrs.id) parts.push({ kind: 'id', value: attrs.id });
-      if (!hidden && tag === 'text') parts.push({ kind: 'text', node });
-      if (!self) stack.push(node);
+      if (!self) stack.push({ tag });
     } else {
       const text = token.startsWith('<![CDATA[') ? token.slice(9, -3) : decodeXml(token);
       if (!stack.length && text.trim()) throw Error('text outside SVG root');
-      if (!stack.at(-1)?.hidden) for (const node of stack) if (node.tag === 'text' && !node.hidden) node.text += text;
     }
   }
   if (stack.length || roots !== 1 || tokens.join('') !== source) throw Error('malformed SVG');
-  return parts.map(part => ({ kind: part.kind, value: part.node ? part.node.text.replace(/\s+/g, ' ').trim() : part.value })).filter(part => part.value);
+  if (rootViewBox !== undefined) {
+    const vbErr = validateSvgViewBox(rootViewBox);
+    if (vbErr) {
+      const err = Error(vbErr);
+      err.part = 'viewBox';
+      throw err;
+    }
+  }
+  return { ok: true, viewBox: rootViewBox ?? null };
 }

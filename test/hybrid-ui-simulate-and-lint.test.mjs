@@ -205,7 +205,7 @@ test('3596 pdd lint --local passes with 0 warnings on 1-file and 3-file plain-pr
   assert.equal(parsed.exit_code, 0);
   assert.deepEqual(parsed.problems, []);
   assert.deepEqual(parsed.warnings, []);
-  assert.match(parsed.summary_line, /0 AI calls/);
+  assert.match(parsed.summary_line, /Lint OK:.*validated offline \(0 errors, 0 warnings\)/);
 
   const textStreams = captureStreams();
   assert.equal(await runPdd(['lint', '--local'], { cwd: root, env, stdout: textStreams.stdout, stderr: textStreams.stderr }), 0, textStreams.err);
@@ -843,14 +843,14 @@ test('3595/3596 R1-5/6: malformed non-object state_schema warns, screens[] keeps
       initial_state: {},
       screens: [
         null,
-        { prompt_path: 'prompts/second.prompt.md', operation: 'render', result_pointer: '/html' },
+        { prompt_path: 'prompts/missing-second.prompt.md', operation: 'render', result_pointer: '/html' },
         { prompt_path: 'prompts/missing.prompt.md', operation: 'render', result_pointer: '/html' },
       ],
     },
   });
   const idxWarnings = lintSvgLayouts({ root: idxRoot, files: gitFiles(idxRoot) });
   assert.ok(idxWarnings.some(line => /screen "screen-3".*prompts\/missing\.prompt\.md/.test(line)), idxWarnings.join('\n'));
-  assert.ok(idxWarnings.some(line => /screen-2/.test(line)), `expected screen-2 in stylesheet warning, got:\n${idxWarnings.join('\n')}`);
+  assert.ok(idxWarnings.some(line => /screen "screen-2".*prompts\/missing-second\.prompt\.md/.test(line)), `expected screen-2 in missing prompt warning, got:\n${idxWarnings.join('\n')}`);
   assert.ok(!idxWarnings.some(line => /\bscreen "main"\b/.test(line)), idxWarnings.join('\n'));
 
   // R1-6: skill references document 4 top-level check targets and input as ref_target only

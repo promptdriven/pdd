@@ -1,12 +1,13 @@
 // Prompt: prompts/cli/repo-hygiene-lint.prompt.md
 
-// Frontmatter + Runtime interface metadata stripping, Markdown fence/table/dependency scanner.
+// Frontmatter + Runtime interface metadata stripping, Markdown fence/table/CommonMark relative-link scanner.
 import { posix } from 'node:path';
 import { canonicalRepoPath } from './diagnostics.mjs';
 
 const NATIVE_ONLY_KIND_LINE_RE = /^[ \t]*kind[ \t]*:[ \t]*(?:['"])?native-only(?:['"])?[ \t]*(?:#[^\r\n]*)?$/i;
 const blankPreservingLines = segment => segment.replace(/[^\r\n]/g, ' ');
 const isTagNameBoundary = ch => ch === '>' || ch === '/' || ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
+const normalizeRefLabel = text => String(text ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 
 export function findFrontmatterRange(raw) {
   const text = String(raw ?? '');
@@ -138,9 +139,6 @@ export function hasNativeOnlyFrontmatter(raw) {
   return false;
 }
 
-/**
- * Extract explicit YAML `ports: [...]` or block-list `ports:\n  - store.load` entries from frontmatter.
- */
 export function extractFrontmatterPorts(raw) {
   const fm = findFrontmatterRange(raw);
   if (!fm) return [];
@@ -157,7 +155,7 @@ export function extractFrontmatterPorts(raw) {
   let inFlowList = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const lineNo = i + 2; // line 1 is opening ---
+    const lineNo = i + 2;
     if (inFlowList) {
       const stripped = line.replace(/#[^\r\n]*$/, '').trim();
       const closeIdx = stripped.indexOf(']');
@@ -204,6 +202,7 @@ export function scanMarkdownLinesAndFences(cleanedText) {
     if (activeFence) {
       const closeMatch = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
       if (closeMatch && closeMatch[1][0] === activeFence.char && closeMatch[1].length >= activeFence.len) {
+        activeFence.closed = true;
         fences.push(activeFence);
         activeFence = null;
       } else {
@@ -235,7 +234,7 @@ export function scanMarkdownLinesAndFences(cleanedText) {
     if (openMatch && !(openMatch[1][0] === '`' && openMatch[2].includes('`'))) {
       const info = openMatch[2].trim();
       const lang = (info.split(/[\s{`~]/)[0] ?? '').toLowerCase();
-      activeFence = { openLine: lineNo, char: openMatch[1][0], len: openMatch[1].length, lang, bodyLines: [] };
+      activeFence = { openLine: lineNo, char: openMatch[1][0], len: openMatch[1].length, lang, closed: false, bodyLines: [] };
       continue;
     }
 
@@ -292,6 +291,13 @@ function stripMetadataSpans(raw, preserveLines) {
 export const stripPromptMetadataPreservingLines = raw => stripMetadataSpans(raw, true);
 export const stripPromptMetadata = raw => stripMetadataSpans(raw, false);
 
+export function stripFrontmatterPreservingLines(raw) {
+  const text = String(raw ?? '');
+  const fm = findFrontmatterRange(text);
+  if (!fm) return text;
+  return blankPreservingLines(text.slice(0, fm.end)) + text.slice(fm.end);
+}
+
 export function countPromptProseLines(raw) {
   const cleaned = stripPromptMetadata(raw).replace(/\s+$/, '');
   return cleaned ? cleaned.split(/\r?\n/).length : 0;
@@ -306,8 +312,8 @@ export function splitMarkdownTableRow(line) {
   let trimmed = line.trim();
   if (!trimmed.includes('|')) return null;
   if (trimmed.startsWith('|')) trimmed = trimmed.slice(1);
-  if (trimmed.endsWith('|')) trimmed = trimmed.slice(0, -1);
-  return trimmed.split('|').map(cell => cell.trim());
+  if (trimmed.endsWith('|') && !trimmed.endsWith('\\|')) trimmed = trimmed.slice(0, -1);
+  return trimmed.split(/(?<!\\)\|/).map(cell => cell.trim());
 }
 
 export function isMarkdownTableSeparator(line) {
@@ -316,38 +322,112 @@ export function isMarkdownTableSeparator(line) {
 }
 
 /**
- * Extract relative Markdown link targets inside `## Dependencies` with 1-based line numbers.
+ * Mask inline code spans across lines within each Markdown paragraph (CommonMark §6.1),
+ * preserving exact 1-based line numbers so backtick-quoted links never trigger false positives.
  */
-export function extractDependencyLinks(raw, promptPath) {
+export function stripInlineCodeSpansPreservingLines(proseLines) {
+  const out = [];
+  let activeTicks = 0;
+  let prevLineNo = -1;
+  for (const { lineNo, text } of proseLines) {
+    if (lineNo !== prevLineNo + 1 || !text.trim() || /^ {0,3}#{1,6}[ \t]+/.test(text)) {
+      activeTicks = 0;
+    }
+    prevLineNo = lineNo;
+    if (activeTicks === 0 && !text.includes('`')) {
+      out.push({ lineNo, text });
+      continue;
+    }
+    if (activeTicks > 0 && !text.includes('`')) {
+      out.push({ lineNo, text: ' '.repeat(text.length) });
+      continue;
+    }
+    const parts = [];
+    let i = 0;
+    while (i < text.length) {
+      const next = text.indexOf('`', i);
+      if (next < 0) {
+        parts.push(activeTicks > 0 ? ' '.repeat(text.length - i) : text.slice(i));
+        break;
+      }
+      if (next > i) {
+        parts.push(activeTicks > 0 ? ' '.repeat(next - i) : text.slice(i, next));
+      }
+      let j = next + 1;
+      while (j < text.length && text[j] === '`') j++;
+      const run = j - next;
+      if (activeTicks === 0) activeTicks = run;
+      else if (run === activeTicks) activeTicks = 0;
+      parts.push(' '.repeat(run));
+      i = j;
+    }
+    out.push({ lineNo, text: parts.join('') });
+  }
+  return out;
+}
+
+const REF_LINK_DEF_RE = /^ {0,3}\[([^\]]+)\]:\s*<?([^()\s<>#\r\n]+)(?:#[^()\s<>#\r\n]*)?>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*$/;
+
+/**
+ * Extract relative CommonMark links across a prompt (both inline and reference-style, outside
+ * code fences, HTML comments, and inline code spans), marking whether each appears under `## Dependencies`.
+ */
+export function extractRelativeMarkdownLinks(raw, promptPath) {
   const cleaned = stripPromptMetadataPreservingLines(raw);
   const { proseLines } = scanMarkdownLinesAndFences(cleaned);
+  const maskedLines = stripInlineCodeSpansPreservingLines(proseLines);
+
+  const refMap = new Map();
+  for (const { text } of maskedLines) {
+    const rm = REF_LINK_DEF_RE.exec(text);
+    if (rm) refMap.set(normalizeRefLabel(rm[1]), rm[2].trim());
+  }
+
   let inDeps = false;
   const seen = new Set();
   const links = [];
   const baseDir = posix.dirname(promptPath);
-  const linkRe = /\[[^\[\]\r\n]*\]\(\s*<?([^()\s<>#\r\n]+)(?:#[^()\s<>#\r\n]*)?>?\s*\)/g;
+  const inlineRe = /!?\[[^\[\]\r\n]*\]\(\s*<?([^()\s<>#\r\n]+)(?:#[^()\s<>#\r\n]*)?>?(?:\s+(?:"[^"\r\n]*"|'[^'\r\n]*'))?\s*\)/g;
+  const refUseRe = /!?\[([^[\]\r\n]*)\]\[([^[\]\r\n]*)\]/g;
 
-  for (const { lineNo, text: line } of proseLines) {
+  const pushTarget = (rawTarget, lineNo) => {
+    const trimmed = String(rawTarget ?? '').trim().split('?')[0].split('#')[0];
+    if (!trimmed || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#|\/)/i.test(trimmed)) return;
+    let decoded = trimmed;
+    try { decoded = decodeURIComponent(trimmed); } catch { decoded = trimmed; }
+    const resolved = posix.normalize(baseDir === '.' ? decoded : posix.join(baseDir, decoded));
+    if (resolved === promptPath) return;
+    const key = `${resolved}:${lineNo}:${inDeps ? 1 : 0}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      links.push({ rawTarget: trimmed, target: resolved, canonical: canonicalRepoPath(resolved), line: lineNo, inDependencies: inDeps });
+    }
+  };
+
+  for (const { lineNo, text: line } of maskedLines) {
     const h2 = /^ {0,3}##\s+(.+)$/.exec(line);
     if (h2) {
       inDeps = /^dependencies\b/i.test(h2[1].trim());
       continue;
     }
-    if (!inDeps) continue;
+    if (REF_LINK_DEF_RE.test(line)) continue;
     let m;
-    while ((m = linkRe.exec(line)) !== null) {
-      const rawTarget = m[1].trim();
-      if (!rawTarget || /^[a-z][a-z0-9+.-]*:/i.test(rawTarget)) continue;
-      const resolved = posix.normalize(baseDir === '.' ? rawTarget : posix.join(baseDir, rawTarget));
-      if (resolved === promptPath) continue;
-      const key = `${resolved}:${lineNo}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        links.push({ rawTarget, target: resolved, canonical: canonicalRepoPath(resolved), line: lineNo });
-      }
+    inlineRe.lastIndex = 0;
+    while ((m = inlineRe.exec(line)) !== null) pushTarget(m[1], lineNo);
+    refUseRe.lastIndex = 0;
+    while ((m = refUseRe.exec(line)) !== null) {
+      const label = normalizeRefLabel(m[2] || m[1]);
+      if (label && refMap.has(label)) pushTarget(refMap.get(label), lineNo);
     }
   }
   return links;
+}
+
+/**
+ * Extract relative Markdown link targets inside `## Dependencies` with 1-based line numbers.
+ */
+export function extractDependencyLinks(raw, promptPath) {
+  return extractRelativeMarkdownLinks(raw, promptPath).filter(l => l.inDependencies);
 }
 
 export function extractDependencyLinkTargets(raw, promptPath) {

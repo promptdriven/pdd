@@ -1,11 +1,6 @@
 // Prompt: prompts/cli/story-lint.prompt.md
 import { isAbsolute } from 'node:path';
 
-const RUNNER_CMD = /(["`])\s*(?:node|npm|pnpm|yarn|pytest|cargo|go)\s+[^"`\r\n]+\1/g;
-const GENERIC_ROLE = /\bAs\s+(?:a|an|the)\s+(?:(?:end[- ])?user|system|caller)(?=\s*(?:[,;.]|$|\bI\s+(?:want|can|need)\b))/i;
-const UI_LITERAL = /"[^"\r\n]+"|(?<![A-Za-z0-9])'[^'\r\n]+'(?![A-Za-z0-9])/g;
-const GROUNDED_OUTCOME = /\b(?:exits?\s+with\s+(?:code|status)\s+\d+|HTTP\s+\d{3}|status\s+(?:code\s+)?\d+|\d+\s+times?|saves\s+nothing)\b/i;
-const VAGUE_CRITERION = /\b(?:works?\s+correctly|handled?\s+gracefully|properly\s+handled|as\s+expected|seamlessly|gracefully|properly|correctly)\b/i;
 const NUMBERED_ITEM = /^\s*\d+[.)]\s+\S/;
 const BULLET_ITEM = /^ {0,3}[-*+]\s+\S/;
 
@@ -29,40 +24,12 @@ const trimExcerpt = line => {
   return trimmed.length <= 140 ? trimmed : `${trimmed.slice(0, 139)}…`;
 };
 
-function findVagueCriterion(line) {
-  const withoutCmds = line.replace(RUNNER_CMD, ' ');
-  const unquoted = withoutCmds.replace(UI_LITERAL, ' ');
-  const match = VAGUE_CRITERION.exec(unquoted);
-  if (!match) return null;
-  UI_LITERAL.lastIndex = 0;
-  if (UI_LITERAL.test(withoutCmds) || GROUNDED_OUTCOME.test(unquoted)) return null;
-  return match[0];
-}
-
 export function lintStory(text, { path = 'user_stories/story.md', criteriaHygiene = true } = {}) {
   const cleaned = String(text ?? '').replace(/<!--[\s\S]*?-->/g, comment => comment.replace(/[^\r\n]/g, ' '));
   const rawLines = String(text ?? '').split(/\r?\n/), lines = cleaned.split(/\r?\n/);
   const problems = [];
   const numberedCriteria = [], bulletCriteria = [];
   let fence = null, section = 'intro', criteriaHeadingLine = null, criteriaHeadingRaw = '';
-
-  const checkLine = (line, rawLine, lineNo, activeSection) => {
-    if (!line.trim()) return;
-    const excerpt = trimExcerpt(rawLine);
-    const push = (code, message, fix) => problems.push({ path, line: lineNo, code, message, fix, excerpt });
-
-    const role = GENERIC_ROLE.exec(line)?.[0];
-    if (role) push('story-generic-role',
-      `Generic role "${role}" hides who uses the behavior. Name a real person or role (for example "As a customer", "As a shop owner" or "As a developer who runs pdd test").`,
-      `Replace "${role}" at ${path}:${lineNo} with a specific actor role (for example "As a customer" or "As a developer")`);
-
-    if (activeSection === 'criteria') {
-      const vague = findVagueCriterion(line);
-      if (vague) push('story-vague-criterion',
-        `Vague phrase "${vague}" cannot be checked directly. State the exact output, message, state change or exit code that shows it worked.`,
-        `Replace "${vague}" at ${path}:${lineNo} with a concrete output, state change, or exit code`);
-    }
-  };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i], rawLine = rawLines[i] ?? line;
@@ -80,25 +47,21 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
       }
     }
     if (fence) continue;
-    if (/^#\s+/.test(line)) {
-      checkLine(line, rawLine, i + 1, 'title');
-      section = 'intro';
-      continue;
-    }
+    if (/^#\s+/.test(line)) { section = 'intro'; continue; }
     if (/^##\s+/.test(line)) {
       const heading = line.replace(/^##\s+/, '').trim().toLowerCase();
       if (heading === 'acceptance criteria' || heading === 'acceptance') {
         section = 'criteria';
         if (criteriaHeadingLine === null) { criteriaHeadingLine = i + 1; criteriaHeadingRaw = rawLine; }
-      } else if (heading === 'what must not change' || heading === 'must not change') section = 'must-not-change';
-      else section = 'other';
+      } else {
+        section = 'other';
+      }
       continue;
     }
     if (section === 'criteria') {
       if (NUMBERED_ITEM.test(line)) numberedCriteria.push({ line: i + 1, raw: rawLine });
       else if (BULLET_ITEM.test(line)) bulletCriteria.push({ line: i + 1, raw: rawLine });
     }
-    if (section === 'intro' || section === 'criteria' || section === 'must-not-change') checkLine(line, rawLine, i + 1, section);
   }
 
   if (criteriaHygiene) {
@@ -121,28 +84,6 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
         message: '"## Acceptance criteria" lists 0 acceptance items. Add 1 to 6 concrete, user-observable numbered or bulleted acceptance items.',
         fix: `Add 1 to 6 numbered acceptance criteria under "## Acceptance criteria" in ${path}`,
         excerpt: trimExcerpt(criteriaHeadingRaw),
-      });
-    } else if (items.length > 6) {
-      const seventh = items[6];
-      problems.push({
-        path,
-        line: seventh.line,
-        code: 'story-bloated-criteria',
-        message: `"## Acceptance criteria" lists ${items.length} items (recommended at most 6). Keep 1 Story per cohesive user loop and move technical invariants to .prompt.md "## Domain decisions" or "## Rules to check".`,
-        fix: `Trim ${path} to at most 6 criteria by splitting separate user loops or moving technical edge cases to .prompt.md "## Domain decisions"`,
-        excerpt: trimExcerpt(seventh.raw),
-      });
-    }
-    let lineCount = rawLines.length;
-    while (lineCount > 0 && rawLines[lineCount - 1].trim() === '') lineCount--;
-    if (lineCount > 35) {
-      problems.push({
-        path,
-        line: 36,
-        code: 'story-too-long',
-        message: `Story is ${lineCount} lines long (recommended at most 35 lines). Move technical invariants, schemas or edge-case matrices to .prompt.md "## Domain decisions" or test JSON fixtures.`,
-        fix: `Shorten ${path} to <= 35 lines by moving schemas, fixtures, and technical edge cases into the owning .prompt.md or scenario JSON`,
-        excerpt: trimExcerpt(rawLines[35] ?? ''),
       });
     }
   }

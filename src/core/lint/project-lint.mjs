@@ -1,6 +1,6 @@
 // Prompt: prompts/cli/repo-hygiene-lint.prompt.md
 
-// Single-pass PDD-files-only project lint orchestrator (Layer-1 Core: ZERO autopilot/, ZERO runtime-seam/).
+// Single-pass structural PDD-files-only project lint orchestrator (Layer-1 Core: ZERO autopilot/, ZERO runtime-seam/).
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { posix } from 'node:path';
@@ -16,19 +16,14 @@ import {
   EXAMPLE_DIR,
   FIXTURE_DIR,
   extractBoundModules,
-  isContractDocPath,
-  isCustomRuleTestFile,
   isEligibleProductionCodeFile,
   scenarioPromptRefs,
 } from './lint-scope.mjs';
-import { collectNativeOnlyPortParityFindings } from './native-port-parity.mjs';
-import { evaluateCustomRulesOnFile, loadBaseTrustedLintCommands, loadBaseTrustedLintOverrides, loadProjectLintConfig, matchesAnyCustomRule } from './project-config.mjs';
-import { extractDependencyLinkTargets, isNativeOnlyPrompt } from './prompt-metadata.mjs';
-import { collectPromptCodeBlockFindings, collectPromptDependencyFindings, collectPromptSizeFindings, collectPromptStructureFindings } from './prompt-rules.mjs';
+import { loadBaseTrustedLintCommands, loadBaseTrustedLintOverrides, loadProjectLintConfig } from './project-config.mjs';
+import { collectMarkdownIntegrityFindings, collectPromptDependencyFindings, collectPromptStructureFindings } from './prompt-rules.mjs';
 import { DEFAULT_SCENARIO_MAX_STEPS, DEFAULT_SCENARIO_MAX_WORLD_BYTES, collectScenarioHygieneFindings } from './scenario-hygiene.mjs';
-import { collectStoryUnboundCriteriaFindings } from './story-criteria-parity.mjs';
+import { collectStoryUnboundCriteriaFindings, isCandidateScenarioJson } from './story-criteria-parity.mjs';
 
-const PROMPT_SIZE_MIN_CODE_LINES = 25;
 const STORY_HARD_ERROR_RULES = new Set(['story-missing-criteria']);
 const NON_SUPPRESSIBLE_CONFIG_CODES = new Set(['lint-config-invalid', 'lint-config-untrusted']);
 
@@ -98,7 +93,7 @@ export function runConfiguredLintCommands({ root, commands = [], timeoutMs = 120
 }
 
 export function lintRepoProject({ root, files, promptPaths, tests, scope, config, workspaceRoot, workspacePolicy, trustBaseRef, enforceBaseTrust = false, requireFullStoryCriteria = false } = {}) {
-  const empty = { ok: true, configured: false, warnings: [], errors: [], findings: [], commands: [], untrustedConfigOverrides: [] };
+  const empty = { ok: true, configured: false, warnings: [], errors: [], findings: [], commands: [], untrustedConfigOverrides: [], counts: { prompts: 0, stories: 0, scenarios: 0 } };
   if (!root || typeof root !== 'string') return empty;
   let realRoot, policy;
   try {
@@ -163,7 +158,6 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
     }
   }
 
-  // Full repository lookup index (always complete so unchanged linked prompts/files resolve cleanly).
   const hasExplicitScope = Boolean(scope && scope.fullRepo === false);
   const allowedFiles = [...new Set(rawFiles)].filter(p => canonicalRepoPath(p) && !isSecretPath(p) && workspace.allows(policy, p)).sort();
   const allowedSet = new Set(allowedFiles);
@@ -181,9 +175,10 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
   const promptCache = scope?.caches?.promptCache ?? new Map();
   const headCache = scope?.caches?.headCache ?? new Map();
   const fullCache = scope?.caches?.fullCache ?? new Map();
-  const getPrompt = p => (promptCache.has(p) ? promptCache.get(p) : (promptCache.set(p, readSafeUtf8(realRoot, p)), promptCache.get(p)));
-  const getHead = p => (headCache.has(p) ? headCache.get(p) : (headCache.set(p, readSafeHeadUtf8(realRoot, p, HEAD_BYTES + 1)), headCache.get(p)));
-  const getFull = p => (fullCache.has(p) ? fullCache.get(p) : (fullCache.set(p, readSafeUtf8(realRoot, p)), fullCache.get(p)));
+  const verifiedDirs = new Set();
+  const getPrompt = p => (promptCache.has(p) ? promptCache.get(p) : (promptCache.set(p, readSafeUtf8(realRoot, p, undefined, verifiedDirs)), promptCache.get(p)));
+  const getHead = p => (headCache.has(p) ? headCache.get(p) : (headCache.set(p, readSafeHeadUtf8(realRoot, p, HEAD_BYTES + 1, verifiedDirs)), headCache.get(p)));
+  const getFull = p => (fullCache.has(p) ? fullCache.get(p) : (fullCache.set(p, readSafeUtf8(realRoot, p, undefined, verifiedDirs)), fullCache.get(p)));
 
   const rawFindings = [...lintConfig.configErrors.map(err => ({ ...err, defaultSeverity: 'error' }))];
   if (untrustedConfigOverrides.length > 0) {
@@ -240,7 +235,6 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
     }
   }
 
-  // Determine reporting scope (strictly controls WHICH files are reported, never what exists in lookup index).
   const isLegacyScoped = !hasExplicitScope && (promptPaths !== undefined || tests !== undefined);
   const isReportingScoped = hasExplicitScope || isLegacyScoped;
 
@@ -293,49 +287,18 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
         fix: v.kind === 'test-prompt-path' ? `Delete ${v.prompt} and keep test assertions in native test files` : `Remove test-file ownership (${v.targets.join(', ')}) from ${v.prompt}`,
       });
     }
-    rawFindings.push(...collectPromptDependencyFindings({ targetPrompts, allVisibleFiles: allowedFiles, getPromptText: getPrompt }));
+    rawFindings.push(...collectPromptDependencyFindings({ targetPrompts, allVisibleFiles: allowedFiles, getPromptText: getPrompt, realRoot }));
   }
 
   for (const promptPath of targetPrompts) {
     const content = getPrompt(promptPath);
     if (typeof content !== 'string') continue;
     const ownedPaths = ownedByPrompt.get(promptPath) ?? [];
-    const ownedCode = ownedPaths.map(p => ({ path: p, text: getFull(p) })).filter(r => typeof r.text === 'string');
 
     rawFindings.push(
-      ...collectPromptCodeBlockFindings(content, { path: promptPath }),
+      ...collectMarkdownIntegrityFindings(content, { path: promptPath }),
       ...collectPromptStructureFindings(content, { path: promptPath, hasOwnedCode: ownedPaths.length > 0 }),
-      ...collectPromptSizeFindings(content, ownedCode, { path: promptPath, minCodeLines: PROMPT_SIZE_MIN_CODE_LINES }),
     );
-    if (isNativeOnlyPrompt(content)) {
-      const direct = extractDependencyLinkTargets(content, promptPath).filter(p => scopedSet.has(p));
-      const directCheckable = direct.filter(t => t.endsWith('.prompt.md') && typeof getPrompt(t) === 'string' && !isNativeOnlyPrompt(getPrompt(t)));
-      const directNativePeers = direct.filter(t => t.endsWith('.prompt.md') && typeof getPrompt(t) === 'string' && isNativeOnlyPrompt(getPrompt(t)));
-      const directContracts = direct.filter(isContractDocPath);
-      const visited = new Set([promptPath]);
-      const queue = [...directCheckable.map(p => ({ path: p, isPrompt: true })), ...directContracts.map(p => ({ path: p, isPrompt: false }))];
-      const depSources = [];
-      while (queue.length) {
-        const cur = queue.shift();
-        if (visited.has(cur.path)) continue;
-        visited.add(cur.path);
-        const depText = cur.isPrompt ? getPrompt(cur.path) : readSafeUtf8(realRoot, cur.path);
-        if (typeof depText !== 'string' || (cur.isPrompt && isNativeOnlyPrompt(depText))) continue;
-        depSources.push({ path: cur.path, text: depText, isPrompt: cur.isPrompt });
-        for (const next of extractDependencyLinkTargets(depText, cur.path)) {
-          if (!visited.has(next) && scopedSet.has(next) && (next.endsWith('.prompt.md') || isContractDocPath(next))) {
-            queue.push({ path: next, isPrompt: next.endsWith('.prompt.md') });
-          }
-        }
-      }
-      const explicitFrontmatterOnly = directCheckable.length === 0 && (directNativePeers.length > 0 || directContracts.length > 0);
-      rawFindings.push(...collectNativeOnlyPortParityFindings(content, depSources, {
-        path: promptPath,
-        dependencyPaths: directCheckable,
-        explicitFrontmatterOnly,
-      }));
-    }
-    if (lintConfig.customRules.length) rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: promptPath, kind: 'prompt', rawText: content }));
   }
 
   const targetStories = hasExplicitScope
@@ -344,6 +307,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
   for (const storyPath of targetStories) {
     const content = getFull(storyPath);
     if (typeof content !== 'string') continue;
+    rawFindings.push(...collectMarkdownIntegrityFindings(content, { path: storyPath }));
     for (const problem of lintStory(content, { path: storyPath, criteriaHygiene: true }).problems) {
       rawFindings.push({
         filePath: storyPath, line: problem.line, order: 10, code: problem.code, category: 'Story hygiene',
@@ -352,7 +316,6 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
         fix: problem.fix || `Update ${storyPath}:${problem.line} to satisfy Story hygiene rule "${problem.code}" (see \`pdd help prompting\`)`,
       });
     }
-    if (lintConfig.customRules.length) rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: storyPath, kind: 'story', rawText: content }));
   }
   if (targetStories.length) {
     rawFindings.push(...collectStoryUnboundCriteriaFindings({ realRoot, storyPaths: targetStories, scopedFiles, readFile: getFull, allowExplicitSubset: !requireFullStoryCriteria }));
@@ -368,34 +331,13 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
             if (!raw) return false;
             try { return scenarioPromptRefs(JSON.parse(raw)).some(r => targetPromptSet.has(r)); } catch { return false; }
           })
-        : scopedFiles.filter(p => p.endsWith('.json'))));
+        : scopedFiles.filter(isCandidateScenarioJson)));
   if (targetScenarios.length) {
     rawFindings.push(...collectScenarioHygieneFindings({ realRoot, scenarioPaths: targetScenarios, readFile: getFull, scenarioConfig: effectiveScenarioConfig }));
   }
 
   const promptFilterSet = isReportingScoped ? targetPromptSet : null;
-  if (lintConfig.customRules.some(r => r.severity !== 'off' && (r.targets.has('test') || r.targets.has('all')))) {
-    const customTestPaths = hasExplicitScope
-      ? [...scope.testFiles].filter(p => scopedSet.has(p) && isCustomRuleTestFile(p)).sort()
-      : (isLegacyScoped ? [] : scopedFiles.filter(isCustomRuleTestFile));
-    for (const testPath of customTestPaths) {
-      if (!matchesAnyCustomRule(lintConfig.customRules, 'test', testPath)) continue;
-      const content = getFull(testPath);
-      if (typeof content === 'string') rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: testPath, kind: 'test', rawText: content }));
-    }
-  }
-  if (lintConfig.customRules.some(r => r.severity !== 'off' && (r.targets.has('code') || r.targets.has('all')))) {
-    const customCodePaths = reportCodeSet
-      ? prodCodePaths.filter(p => reportCodeSet.has(p))
-      : prodCodePaths;
-    for (const codePath of customCodePaths) {
-      if (!matchesAnyCustomRule(lintConfig.customRules, 'code', codePath)) continue;
-      const content = getFull(codePath);
-      if (typeof content === 'string') rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, { filePath: codePath, kind: 'code', rawText: content }));
-    }
-  }
 
-  // 19L Multi-app product plan audit hook (0ms when product/plan.md does not exist).
   const deletedPrompts = hasExplicitScope
     ? [...(scope.deletedOrRenamedOldPaths ?? [])].filter(p => p.endsWith('.prompt.md'))
     : [];
@@ -432,5 +374,10 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
     findings.push({ path: item.filePath, line: item.line, code: item.code, category: item.category, severity, message: item.detail, formatted });
     if (severity === 'error') errors.push(formatted); else warnings.push(formatted);
   }
-  return { ok: errors.length === 0, configured: lintConfig.configured, warnings, errors, findings, commands: effectiveCommands, mutationCommand: effectiveMutationCommand, untrustedConfigOverrides };
+  const counts = {
+    prompts: targetPrompts.length,
+    stories: targetStories.length,
+    scenarios: targetScenarios.filter(isCandidateScenarioJson).length,
+  };
+  return { ok: errors.length === 0, configured: lintConfig.configured, warnings, errors, findings, commands: effectiveCommands, mutationCommand: effectiveMutationCommand, untrustedConfigOverrides, counts };
 }

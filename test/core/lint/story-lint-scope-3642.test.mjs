@@ -77,7 +77,7 @@ test('3642 Test A: domain-rich Story with macOS (Apple Silicon), draft => publis
       assert.deepEqual(doc.problems, []);
       assert.deepEqual(doc.warnings, []);
     } else {
-      assert.match(res.stdout, /Local lint: 0 errors, 0 warnings\./);
+      assert.match(res.stdout, /Lint OK: .*validated offline \(0 errors, 0 warnings\)/);
     }
   }
 });
@@ -111,30 +111,22 @@ test('3642 Test B: missing or empty ## Acceptance criteria fails offline pdd lin
   assert.equal(emptyRes.status, 1);
   assert.match(emptyRes.stderr, /\[story-missing-criteria\]/);
 
-  // Structural/clarity warnings (bloated >6, long >35 lines, generic role, vague criterion) warn without failing exit code.
+  // Adding concrete numbered acceptance criteria clears story-missing-criteria cleanly without prose-regex false positives.
   writeRepoFile(repo, 'user_stories/no-criteria.md', [
-    '# Verbose story',
+    '# Complete story',
     '',
-    'As a user, I want many behaviors, so that everything works.',
+    'As a shopper, I want a receipt emailed after purchase, so that I keep a record.',
     '',
     '## Acceptance criteria',
     '',
-    '1. Saving handles errors gracefully.',
-    ...Array.from({ length: 6 }, (_, i) => `${i + 2}. Item ${i + 2} prints "OK ${i + 2}".`),
-    '',
-    '## Notes',
-    '',
-    ...Array.from({ length: 26 }, (_, i) => `Detail line ${i + 1}.`),
+    '1. Completing checkout emails a receipt.',
   ].join('\n') + '\n');
-  const warnRes = runCli(repo, env, ['lint', '--local', '--json']);
-  assert.equal(warnRes.status, 0, warnRes.stderr);
-  const parsed = JSON.parse(warnRes.stdout);
+  const okRes = runCli(repo, env, ['lint', '--local', '--json']);
+  assert.equal(okRes.status, 0, okRes.stderr);
+  const parsed = JSON.parse(okRes.stdout);
   assert.equal(parsed.ok, true);
   assert.deepEqual(parsed.problems, []);
-  const codes = new Set(parsed.findings.map(f => f.code));
-  for (const expected of ['story-generic-role', 'story-vague-criterion', 'story-bloated-criteria', 'story-too-long']) {
-    assert.ok(codes.has(expected), `missing expected warning ${expected} in ${JSON.stringify(parsed.findings)}`);
-  }
+  assert.deepEqual(parsed.warnings, []);
 });
 
 test('3642 Test C: 10+ prompts mentioning shared model-manifest.json and scripts/probe.py in prose emit 0 duplicate-owner warnings while explicit duplicate ownership (headers and pdd-bindings.json) IS flagged', t => {
@@ -237,7 +229,7 @@ test('3642 Test D: upfront target and --diff scoping isolates untouched broken f
     const res = runCli(repo, env, args);
     assert.equal(res.status, 0, `${args.join(' ')} failed: stdout=${res.stdout} stderr=${res.stderr}`);
     assert.equal(res.stderr, '');
-    assert.match(res.stdout, /Local lint: 0 errors, 0 warnings\./);
+    assert.match(res.stdout, /Lint OK: .*validated offline \(0 errors, 0 warnings\)/);
   }
 
   // D2: Bare `pdd lint --local` (full repo) STILL catches untouched broken files!
@@ -262,7 +254,7 @@ test('3642 Test D: upfront target and --diff scoping isolates untouched broken f
   const diffClean = runCli(repo, env, ['lint', '--diff', 'HEAD~1']);
   assert.equal(diffClean.status, 0, `stdout=${diffClean.stdout} stderr=${diffClean.stderr}`);
   assert.equal(diffClean.stderr, '');
-  assert.match(diffClean.stdout, /Local lint: 0 errors, 0 warnings\./);
+  assert.match(diffClean.stdout, /Lint OK: .*validated offline \(0 errors, 0 warnings\)/);
 
   // D4: Lookup index vs reporting scope: edit `prompts/target.prompt.md` (which links untouched `prompts/helper.prompt.md`)
   // and `src/caller.mjs` -> unchanged dependency resolves cleanly with 0 false missing-dependency errors and 0 noise from broken files!
@@ -272,7 +264,7 @@ test('3642 Test D: upfront target and --diff scoping isolates untouched broken f
   const diffLookup = runCli(repo, env, ['lint', '--diff', 'HEAD~1']);
   assert.equal(diffLookup.status, 0, `lookup index failed: stdout=${diffLookup.stdout} stderr=${diffLookup.stderr}`);
   assert.equal(diffLookup.stderr, '');
-  assert.match(diffLookup.stdout, /Local lint: 0 errors, 0 warnings\./);
+  assert.match(diffLookup.stdout, /Lint OK: .*validated offline \(0 errors, 0 warnings\)/);
 
   // D5: Deleting a prompt in a PR MUST catch untouched `src/caller.mjs` (`broken-prompt-header`) AND `prompts/dep-on-target.prompt.md` (`broken-dependency-link`)
   // while still omitting unrelated `src/old.mjs` and `user_stories/broken.md`!
@@ -576,11 +568,12 @@ test('3642 Test G: adversarial scope edge cases — rename+replacement, inverted
   });
   assert.equal(dotFromSubdir.status, 0, `stdout=${dotFromSubdir.stdout} stderr=${dotFromSubdir.stderr}`);
 
-  // G4 (P2 #7): Deleting SVG referenced via reference-style link pulls prompts/ref-svg.prompt.md into --diff scope!
+  // G4 (P2 #7): Deleting SVG referenced via reference-style link pulls prompts/ref-svg.prompt.md into --diff scope and catches broken relative link!
   unlinkSync(join(repo, 'prompts/screen.ui.svg'));
   const svgDelRes = runCli(repo, env, ['lint', '--diff', 'HEAD', '--json']);
-  assert.equal(svgDelRes.status, 0, svgDelRes.stderr);
+  assert.equal(svgDelRes.status, 1, svgDelRes.stderr);
   const svgDelDoc = JSON.parse(svgDelRes.stdout);
+  assert.ok(svgDelDoc.problems.some(p => p.includes('prompts/ref-svg.prompt.md') && p.includes('screen.ui.svg') && p.includes('[broken-relative-link]')), JSON.stringify(svgDelDoc.problems));
   assert.ok(svgDelDoc.warnings.some(w => w.includes('prompts/ref-svg.prompt.md') && w.includes('screen.ui.svg')), JSON.stringify(svgDelDoc.warnings));
   execFileSync('git', ['checkout', '--', 'prompts/screen.ui.svg'], { cwd: repo });
 
@@ -659,21 +652,8 @@ test('3642 Test H: Round 2 edge cases — non-runtime test JSONs, bare prompt sl
     screens: [{ id: 'main', prompt_path: 'prompts/missing-dot-screen.prompt.md' }],
   }, null, 2) + '\n');
 
-  // Transitive prompt hard error: tests/trans.json -> prompts/entry.prompt.md -> prompts/dep-broken.prompt.md (caught ONLY via lintRepoProject + onProjectLintResult!)
-  writeRepoFile(repo, 'pdd.json', JSON.stringify({
-    lint: {
-      custom_rules: [
-        {
-          id: 'no-forbidden-transitive-token',
-          target: 'prompt',
-          severity: 'error',
-          forbid_pattern: 'FORBIDDEN_TRANSITIVE_TOKEN',
-          message: 'Transitive prompt contains forbidden token',
-        },
-      ],
-    },
-  }, null, 2) + '\n');
-  writeRepoFile(repo, 'prompts/dep-broken.prompt.md', '# Dep Broken\n\nContains FORBIDDEN_TRANSITIVE_TOKEN.\n\n## Dependencies\n\nNone.\n');
+  // Transitive prompt hard error: tests/trans.json -> prompts/entry.prompt.md -> prompts/dep-broken.prompt.md (caught via lintRepoProject + onProjectLintResult!)
+  writeRepoFile(repo, 'prompts/dep-broken.prompt.md', '# Dep Broken\n\n```json\n{"truncated": true\n');
   writeRepoFile(repo, 'prompts/broken-slug.prompt.md', '# Broken Slug\n\n## Dependencies\n\n- [Ghost](ghost-dep.prompt.md)\n');
   writeRepoFile(repo, 'prompts/entry.prompt.md', '# Entry\n\nCalls dep.\n\n## Dependencies\n\n- [Dep](dep-broken.prompt.md)\n');
   writeRepoFile(repo, 'user_stories/trans.md', [
@@ -743,7 +723,7 @@ test('3642 Test H: Round 2 edge cases — non-runtime test JSONs, bare prompt sl
   // H2: Transitive prompt hard error in targeted `pdd lint --local user_stories/trans.md` MUST fail with exit 1 via onProjectLintResult!
   const transRes = runCli(repo, env, ['lint', '--local', 'user_stories/trans.md']);
   assert.equal(transRes.status, 1, `expected transitive error exit 1: stdout=${transRes.stdout} stderr=${transRes.stderr}`);
-  assert.match(transRes.stderr, /prompts\/dep-broken\.prompt\.md.*\[no-forbidden-transitive-token\]/);
+  assert.match(transRes.stderr, /prompts\/dep-broken\.prompt\.md.*\[truncated-markdown-fence\]/);
 
   // H3: Non-runtime test JSONs (`tests/orphan.json`, `tests/cases.json`) under `--local` exit 0 (not exit 2!).
   for (const target of ['tests/orphan.json', 'tests/cases.json']) {

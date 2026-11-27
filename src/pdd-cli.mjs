@@ -924,7 +924,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         || plan.options['--write'] === true
         || plan.options['--bind-criteria'] === true,
       );
-      const repoFeatures = (!needsRemoteOrCompiler && !localLint && plan.options['--diff'] === undefined && plan.options['--base'] === undefined)
+      const repoFeatures = (plan.options['--local'] === true && !needsRemoteOrCompiler && !localLint && plan.options['--diff'] === undefined && plan.options['--base'] === undefined)
         ? inspectLocalLintRepoFeatures(cwd)
         : { hasNativeStory: false, hasScenarioJson: false, root: cwd, files: [] };
       const needsRuntimeLocalAssessment = plan.options['--local'] === true

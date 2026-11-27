@@ -1,118 +1,20 @@
 // Prompt: prompts/cli/repo-hygiene-lint.prompt.md
 
-// Polyglot `pdd lint --diff [BASE]` spotlight: BASE..WORKTREE diff, 5 P0 inventory fixes, hard-fail .only, shadow-bin, conflict markers, & mock-only boundary check.
+// Structural `pdd lint --diff [BASE]` checks: BASE..WORKTREE diff, conflict markers, shadow binaries, and harness/snapshot edits.
 import { spawnSync } from 'node:child_process';
 import { lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { isTestOwnedPath, isTestPromptPath } from '../../file-owner.mjs';
-import { isJsTestPath } from '../../shared/test-paths.mjs';
+import { isTestPromptPath } from '../../file-owner.mjs';
 import { causeText } from '../../shared/safe-read.mjs';
-import { buildLineStarts, formatTeachingDetail, lineNumberAt, readSafeUtf8, resolveDefaultBaseRef } from './diagnostics.mjs';
+import { formatTeachingDetail, readSafeUtf8, resolveDefaultBaseRef } from './diagnostics.mjs';
 
 export { resolveDefaultBaseRef };
 
-const UTILITY_TEST_DIR = /(?:^|\/)(?:helpers?|fixtures?|mocks?|__mocks__|__fixtures__)\//i;
 const DOC_OR_FIXTURE_PATH = /(?:^|\/)(?:docs?|fixtures?|__fixtures__)\/|\.md$/i;
 const SNAPSHOT_PATH = /\.snap$|(?:^|\/)__snapshots__\//i;
 const HARNESS_PATH = /(?:^|\/)(?:pdd\.json|rules\/lint\/[^/]+\.json|package\.json|vitest\.config\.[^/]+|jest\.config\.[^/]+|pytest\.ini|pyproject\.toml|conftest\.py|tox\.ini|setup\.cfg|\.github\/workflows\/[^/]+\.ya?ml)$/i;
 const SHADOW_BIN_PATH_RE = /(?:^|\/)(?:node_modules\/\.bin|\.venv\/bin|venv\/bin)\/.+/;
 export const SHADOW_RUNTIME_BINS = ['node', 'npm', 'python', 'python3', 'pytest', 'go', 'cargo', 'sh', 'bash'];
-const PROD_CODE_EXT_RE = /\.(?:[cm]?[jt]s|[jt]sx|py|go|rs)$/i;
-const JS_BOUNDARY_IMPORT_RE = /(?:from\s+|require\s*\(\s*|import\s*\(\s*)['"`](?:node:)?(?:http|https|http2|net|tls|dgram|child_process)['"`]/;
-const JS_BOUNDARY_CALL_RE = /\b(?:http|https|http2|net|tls)\s*\.\s*createServer\s*\(|\b(?:spawn|spawnSync|execFile|execFileSync|exec|execSync|fork)\s*\(|(?<![.\w$])(?:globalThis\s*\.\s*)?fetch\s*\(/;
-const PY_BOUNDARY_RE = /\b(?:import\s+(?:subprocess|socket|http\.server|urllib\.request|aiohttp|httpx|requests)|from\s+(?:subprocess|socket|http\.server|urllib\.request|aiohttp|httpx|requests)\s+import)\b/;
-const GO_BOUNDARY_RE = /"(?:net\/http|net|os\/exec)"/;
-const RS_BOUNDARY_RE = /\b(?:std::process::Command|std::net::(?:TcpListener|TcpStream|UdpSocket)|tokio::(?:process::Command|net::))\b/;
-const TEST_BOUNDARY_MOCK_RE = /\b(?:(?:vi|jest|mock|vitest)\s*\.\s*(?:mock|doMock|module|spyOn)\s*\(|sinon\s*\.\s*(?:stub|mock|fake)\s*\(|(?:mockSpawn|createMockSpawn|fakeSpawn|stubSpawn|mockExec|mockExecFile|mockFetch|fakeFetch|stubFetch|mockServer|mockHttp|httpMock|createMockServer)\b|unittest\.mock\b|monkeypatch\.(?:setattr|delattr)\b|mock\.patch\b|MagicMock\b)|^\s*@patch\b/m;
-const CHAI_MODIFIERS = new Set(['not', 'resolves', 'rejects', 'to', 'be', 'been', 'is', 'that', 'which', 'and', 'has', 'have', 'with', 'at', 'of', 'same', 'but', 'does', 'still', 'also', 'deep', 'nested', 'own', 'ordered', 'any', 'all']);
-const CHAI_TERMINAL_PROPS = new Set(['true', 'false', 'null', 'undefined', 'NaN', 'exist', 'empty', 'ok', 'arguments', 'finite', 'extensible', 'sealed', 'frozen']);
-
-function hasExpectAssertionChain(tail) {
-  let i = 0, segments = 0, lastIdent = '', allPriorModifiers = true;
-  const limit = Math.min(tail.length, 240);
-  while (i < limit) {
-    while (i < limit && /\s/.test(tail[i])) i++;
-    if (i < limit && tail[i] === '(' && segments > 0) return true;
-    if (i >= limit || tail[i] !== '.') break;
-    i++;
-    while (i < limit && /\s/.test(tail[i])) i++;
-    const start = i;
-    while (i < limit && /[A-Za-z0-9_$]/.test(tail[i])) i++;
-    if (i === start) break;
-    if (segments > 0 && !CHAI_MODIFIERS.has(lastIdent)) allPriorModifiers = false;
-    lastIdent = tail.slice(start, i);
-    segments++;
-  }
-  return segments >= 2 && allPriorModifiers && CHAI_TERMINAL_PROPS.has(lastIdent);
-}
-
-export function detectTestLanguage(path, source = '') {
-  if (!path || UTILITY_TEST_DIR.test(path)) return null;
-  const base = path.split('/').at(-1);
-  if (isJsTestPath(path)) return 'js';
-  if (/^(?:test_.*|.*_test)\.py$/.test(base)) return 'py';
-  if (/_test\.go$/.test(base)) return 'go';
-  if (/\.rs$/.test(base)) {
-    if (/_test\.rs$/.test(base) || path.split('/').some(p => ['test', 'tests'].includes(p))) return 'rs';
-    if (typeof source === 'string' && /#\[\s*(?:cfg\s*\(\s*test\s*\)|(?:[A-Za-z_]\w*::)*test\b)/.test(source)) return 'rs';
-  }
-  return null;
-}
-
-function maskJsNonCode(source) {
-  let out = '', i = 0, prev = '';
-  const canRegex = () => !prev || '(=:,[!&|?{};+*%<>^~'.includes(prev) || /^(?:return|throw|case|in|of|typeof|void|delete|await|yield)$/.test(prev);
-  while (i < source.length) {
-    const ch = source[i], next = source[i + 1];
-    if (ch === '/' && next === '/') { const e = source.indexOf('\n', i + 2); i = e < 0 ? source.length : e; continue; }
-    if (ch === '/' && next === '*') { const e = source.indexOf('*/', i + 2); out += (e < 0 ? source.slice(i) : source.slice(i, e + 2)).replace(/[^\n]/g, ' '); i = e < 0 ? source.length : e + 2; continue; }
-    if (ch === "'" || ch === '"' || ch === '`') {
-      let j = i + 1;
-      while (j < source.length) { if (source[j] === '\\') { j += 2; continue; } if (source[j] === ch) { j++; break; } j++; }
-      const marker = ch === '`' ? '`' : 'q';
-      out += `${marker}${source.slice(i + 1, j).replace(/[^\n]/g, ' ')}`; prev = 'q'; i = j; continue;
-    }
-    if (ch === '/' && next !== '/' && next !== '*' && canRegex()) {
-      let j = i + 1, cls = false, closed = false;
-      while (j < source.length && source[j] !== '\n') {
-        if (source[j] === '\\') { j += 2; continue; }
-        if (source[j] === '[') cls = true; else if (source[j] === ']') cls = false;
-        else if (source[j] === '/' && !cls) { closed = true; j++; break; }
-        j++;
-      }
-      if (closed) { while (j < source.length && /[A-Za-z]/.test(source[j])) j++; out += 'r'; prev = 'r'; i = j; continue; }
-    }
-    if (/[A-Za-z_$]/.test(ch)) {
-      let j = i + 1; while (j < source.length && /[A-Za-z0-9_$]/.test(source[j])) j++;
-      prev = source.slice(i, j); out += prev; i = j; continue;
-    }
-    out += ch; if (!/\s/.test(ch)) prev = ch; i++;
-  }
-  return out;
-}
-
-export function findExecutableOnlyMarkers(source, filePath) {
-  if (!source || DOC_OR_FIXTURE_PATH.test(filePath) || UTILITY_TEST_DIR.test(filePath)) return [];
-  const lang = detectTestLanguage(filePath);
-  if (lang === 'py') {
-    const lines = source.split(/\r?\n/), hits = [];
-    for (let i = 0; i < lines.length; i++) {
-      if (/^\s*#/.test(lines[i])) continue;
-      if (/^\s*@pytest\.mark\.only\b/.test(lines[i])) hits.push({ path: filePath, line: i + 1, marker: '@pytest.mark.only' });
-    }
-    return hits;
-  }
-  if (lang !== 'js') return [];
-  const masked = maskJsNonCode(source), ls = buildLineStarts(masked), hits = [], seen = new Set();
-  const onlyRe = /(?<![.\w$])(?:(?:test|it|describe|suite|context)\s*\.\s*only(?:\s*\.\s*each(?=\s*[(`])|(?=\s*\())|(?:fit|fdescribe)(?=\s*\())/g;
-  for (const m of masked.matchAll(onlyRe)) {
-    const line = lineNumberAt(ls, m.index);
-    if (seen.has(line)) continue;
-    seen.add(line);
-    hits.push({ path: filePath, line, marker: m[0].replace(/\s+/g, '') });
-  }
-  return hits;
-}
 
 export function findConflictMarkers(source, filePath) {
   if (!source || DOC_OR_FIXTURE_PATH.test(filePath)) return [];
@@ -126,244 +28,6 @@ export function findConflictMarkers(source, filePath) {
     else if (/^>{7}(?:\s|$)/.test(line)) { if (!inBlock) hits.push({ path: filePath, line: i + 1 }); inBlock = false; }
   }
   return hits;
-}
-
-function countTableRows(source, lang) {
-  if (lang === 'go') return [...source.matchAll(/\bt\.Run\s*\(\s*"([^"]+)"/g)].length;
-  if (lang === 'rs') return [...source.matchAll(/#\[\s*(?:(?:[A-Za-z_]\w*::)*case|test_case)\s*\(/g)].length;
-  const re = lang === 'js' ? /\b(?:test|it|describe)\.each\s*\(\s*\[([\s\S]*?)\]\s*\)/g : /@pytest\.mark\.parametrize\s*\([^,]+,\s*\[([\s\S]*?)\]\s*\)/g;
-  let count = 0;
-  for (const m of source.matchAll(re)) if (m[1].trim()) count += m[1].trim().split(/,(?![^[\]{}()]*[\]}])/).filter(x => x.trim()).length;
-  return count;
-}
-
-function collectJsAssertions(maskedBlock) {
-  const assertions = [];
-  for (const m of maskedBlock.matchAll(/(?<![.\w$])assert\s*[.(]/g)) assertions.push(m[0]);
-  for (const m of maskedBlock.matchAll(/(?<![.\w$])expect\s*\.\s*(?:assertions|hasAssertions)\s*\(/g)) assertions.push(m[0]);
-  for (const m of maskedBlock.matchAll(/(?<![.\w$])expect\s*\(/g)) {
-    const openIdx = m.index + m[0].length - 1;
-    let depth = 0, closeIdx = -1;
-    for (let i = openIdx; i < maskedBlock.length; i++) {
-      if (maskedBlock[i] === '(') depth++;
-      else if (maskedBlock[i] === ')' && --depth === 0) { closeIdx = i; break; }
-    }
-    if (closeIdx > openIdx && hasExpectAssertionChain(maskedBlock.slice(closeIdx + 1))) assertions.push(maskedBlock.slice(m.index, closeIdx + 1));
-  }
-  return assertions;
-}
-
-export function extractTestCases(source, lang) {
-  if (!lang || !source) return { cases: [], tableCaseCount: 0 };
-  const lines = source.split(/\r?\n/), found = [];
-
-  if (lang === 'js') {
-    const maskedLines = maskJsNonCode(source).split('\n');
-    for (let at = 0; at < lines.length; at++) {
-      const rawLine = lines[at], maskLine = maskedLines[at] ?? '';
-      const decl = /^(\s*)(?:(?:test|it)(?:\.(?:only|skip|todo))?|xit|xtest)\s*\(\s*(['"`])((?:\\.|(?!\2).)*)\2/.exec(rawLine);
-      if (!decl || !/^\s*(?:(?:test|it)(?:\.(?:only|skip|todo))?|xit|xtest)\s*\(/.test(maskLine)) continue;
-      let parenDepth = 0, started = false, end = at;
-      for (let i = at; i < maskedLines.length; i++) {
-        for (const ch of maskedLines[i]) { if (ch === '(') { parenDepth++; started = true; } else if (ch === ')') parenDepth--; }
-        end = i; if (started && parenDepth <= 0) break;
-      }
-      const slice = lines.slice(at, end + 1), maskSlice = maskedLines.slice(at, end + 1);
-      const assertions = collectJsAssertions(maskSlice.join('\n'));
-      const skips = [];
-      if (/^\s*(?:(?:test|it)\.(?:skip|todo)|xit|xtest)\s*\(/.test(maskLine) || /\{\s*(?:skip|todo)\s*:\s*(?:true|q|`)/.test(maskLine)) skips.push(rawLine.trim());
-      for (let j = 1; j < maskSlice.length; j++) {
-        if (/\b(?:t|ctx)\.(?:skip|todo)\s*\(/.test(maskSlice[j])) skips.push(slice[j].trim());
-      }
-      found.push({ name: decl[3], line: at + 1, assertions, skips });
-    }
-  } else if (lang === 'py') {
-    for (let at = 0; at < lines.length; at++) {
-      const m = /^(\s*)(?:async\s+)?def\s+(test_\w+)\s*\(/.exec(lines[at]);
-      if (!m) continue;
-      let end = lines.length - 1;
-      for (let i = at + 1; i < lines.length; i++) {
-        if (lines[i].trim() && !/^\s*#/.test(lines[i]) && /^\s*/.exec(lines[i])[0].length <= m[1].length) { end = i - 1; break; }
-      }
-      const skips = [], assertions = [];
-      for (let i = at - 1; i >= 0 && /^\s*@/.test(lines[i]); i--) if (/^\s*@(?:pytest\.mark\.(?:skip|skipif|xfail)|unittest\.skip(?:If|Unless)?)\b/.test(lines[i])) skips.unshift(lines[i].trim());
-      for (let i = at + 1; i <= end; i++) {
-        const t = lines[i].trim();
-        if (!t || t.startsWith('#')) continue;
-        if (/^assert\b|\bpytest\.raises\s*\(|\bself\.assert\w*\s*\(/.test(t)) assertions.push(t);
-        if (/\bpytest\.skip\s*\(/.test(t)) skips.push(t);
-      }
-      found.push({ name: m[2], line: at + 1, assertions, skips });
-    }
-  } else if (lang === 'go') {
-    for (let at = 0; at < lines.length; at++) {
-      const m = /^func\s+(Test\w*)\s*\(/.exec(lines[at]);
-      if (!m) continue;
-      let end = lines.length - 1, depth = 0, opened = false;
-      for (let i = at; i < lines.length; i++) {
-        for (const ch of lines[i]) { if (ch === '{') { depth++; opened = true; } else if (ch === '}') depth--; }
-        end = i; if (opened && depth <= 0) break;
-      }
-      const assertions = [], skips = [], subtests = [];
-      for (let i = at + 1; i <= end; i++) {
-        const t = lines[i].trim();
-        if (!t || t.startsWith('//')) continue;
-        const sub = /\bt\.Run\s*\(\s*"([^"]+)"\s*,/.exec(t);
-        if (sub) {
-          let sEnd = end, sd = 0, sOpen = false;
-          for (let j = i; j <= end; j++) {
-            for (const ch of lines[j]) { if (ch === '{') { sd++; sOpen = true; } else if (ch === '}') sd--; }
-            sEnd = j; if (sOpen && sd <= 0) break;
-          }
-          const sAsserts = [], sSkips = [];
-          for (let j = i + 1; j <= sEnd; j++) {
-            const st = lines[j].trim();
-            if (!st || st.startsWith('//')) continue;
-            if (/\b(?:t\.(?:Error|Errorf|Fatal|Fatalf|Fail|FailNow)|(?:assert|require)\.[A-Z]\w*)\s*\(/.test(st)) sAsserts.push(st);
-            if (/\bt\.Skip(?:f|Now)?\s*\(/.test(st)) sSkips.push(st);
-          }
-          subtests.push({ name: sub[1], line: i + 1, assertions: sAsserts, skips: sSkips });
-          i = sEnd;
-          continue;
-        }
-        if (/\b(?:t\.(?:Error|Errorf|Fatal|Fatalf|Fail|FailNow)|(?:assert|require)\.[A-Z]\w*)\s*\(/.test(t)) assertions.push(t);
-        if (/\bt\.Skip(?:f|Now)?\s*\(/.test(t)) skips.push(t);
-      }
-      found.push({ name: m[1], line: at + 1, assertions, skips });
-      found.push(...subtests);
-    }
-  } else if (lang === 'rs') {
-    const stripRustComments = line => line.replace(/\/\/.*$/, '');
-    const RS_TEST_ATTR_RE = /^#\[\s*(?:(?:[A-Za-z_]\w*::)*test(?:\s*\([^)]*\))?|test_case\s*\(|rstest(?:\s*\([^)]*\))?)\s*\]$/;
-    const RS_IGNORE_ATTR_RE = /^#\[\s*ignore(?:\s*=\s*.*|\s*\([^)]*\))?\s*\]$/;
-    const RS_SHOULD_PANIC_RE = /^#\[\s*should_panic(?:\s*\([^)]*\))?\s*\]$/;
-    const RS_ASSERT_RE = /\b(?:assert|assert_eq|assert_ne|debug_assert|debug_assert_eq|debug_assert_ne|matches|panic|unreachable|unimplemented)!\s*[(\[{]/;
-    const RS_FN_RE = /^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(/;
-    let inBlockComment = false;
-    const cleanLines = lines.map(raw => {
-      let out = '', i = 0;
-      while (i < raw.length) {
-        if (inBlockComment) {
-          const close = raw.indexOf('*/', i);
-          if (close < 0) { i = raw.length; break; }
-          inBlockComment = false; i = close + 2; continue;
-        }
-        if (raw[i] === '/' && raw[i + 1] === '/') break;
-        if (raw[i] === '/' && raw[i + 1] === '*') { inBlockComment = true; i += 2; continue; }
-        out += raw[i++];
-      }
-      return out;
-    });
-    for (let at = 0; at < lines.length; at++) {
-      const m = RS_FN_RE.exec(cleanLines[at]);
-      if (!m) continue;
-      const attrs = [];
-      for (let i = at - 1; i >= 0; i--) {
-        const t = cleanLines[i].trim();
-        if (!t) continue;
-        if (t.startsWith('#[')) { attrs.unshift(t); continue; }
-        break;
-      }
-      if (!attrs.some(a => RS_TEST_ATTR_RE.test(a))) continue;
-      const skips = attrs.filter(a => RS_IGNORE_ATTR_RE.test(a));
-      const assertions = attrs.filter(a => RS_SHOULD_PANIC_RE.test(a));
-      let end = lines.length - 1, depth = 0, opened = false;
-      for (let i = at; i < lines.length; i++) {
-        const code = stripRustComments(cleanLines[i]).replace(/"(?:\\.|[^"\\])*"/g, '""');
-        for (const ch of code) {
-          if (ch === '{') { depth++; opened = true; }
-          else if (ch === '}') depth--;
-        }
-        end = i;
-        if (opened && depth <= 0) break;
-      }
-      for (let i = at; i <= end; i++) {
-        const t = cleanLines[i].trim();
-        if (!t) continue;
-        if (RS_ASSERT_RE.test(t)) assertions.push(t);
-      }
-      found.push({ name: m[1], line: at + 1, assertions, skips });
-    }
-  }
-  return { cases: found, tableCaseCount: countTableRows(source, lang) };
-}
-
-function stripLineAndBlockComments(source, lang) {
-  if (lang === 'py') return String(source ?? '').replace(/#[^\r\n]*/g, ' ');
-  return String(source ?? '')
-    .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\r\n]/g, ' '))
-    .replace(/\/\/[^\r\n]*/g, ' ');
-}
-
-function hasProductionBoundaryPrimitives(filePath, source) {
-  if (!filePath || !source || !PROD_CODE_EXT_RE.test(filePath) || isTestOwnedPath(filePath) || DOC_OR_FIXTURE_PATH.test(filePath) || UTILITY_TEST_DIR.test(filePath)) {
-    return false;
-  }
-  if (/\.py$/i.test(filePath)) return PY_BOUNDARY_RE.test(stripLineAndBlockComments(source, 'py'));
-  if (/\.go$/i.test(filePath)) return GO_BOUNDARY_RE.test(stripLineAndBlockComments(source, 'go'));
-  if (/\.rs$/i.test(filePath)) return RS_BOUNDARY_RE.test(stripLineAndBlockComments(source, 'rs'));
-  const noComments = stripLineAndBlockComments(source, 'js');
-  if (JS_BOUNDARY_IMPORT_RE.test(noComments)) return true;
-  const masked = maskJsNonCode(source);
-  return JS_BOUNDARY_CALL_RE.test(masked);
-}
-
-function analyzeTestBoundaryCoverage(source, lang) {
-  if (!source || !lang) return { hasMock: false, hasRealUnmockedBoundary: false };
-  const noComments = stripLineAndBlockComments(source, lang);
-  const hasMock = TEST_BOUNDARY_MOCK_RE.test(noComments);
-
-  if (lang === 'py') {
-    const importsRealSubproc = /\b(?:import\s+subprocess|from\s+subprocess\s+import)\b/.test(noComments);
-    const importsRealNet = /\b(?:import\s+(?:socket|urllib\.request|http\.client|requests|httpx)|from\s+(?:socket|urllib\.request|http\.client|requests|httpx)\s+import)\b/.test(noComments);
-    const pyRealCallRe = /\b(?:subprocess\.(?:run|Popen|check_output|check_call)|socket\.create_connection|urlopen|HTTPServer)\s*\(/;
-    const callsReal = pyRealCallRe.test(noComments);
-    if (!callsReal || (!importsRealSubproc && !importsRealNet)) {
-      return { hasMock, hasRealUnmockedBoundary: false };
-    }
-    if (!hasMock) return { hasMock: false, hasRealUnmockedBoundary: true };
-    // Check per-test-function so a file mixing mocked unit tests and a genuine unmocked subprocess/network test passes.
-    const pyLines = noComments.split(/\r?\n/);
-    const pyMockUseRe = /\b(?:mock\.patch|patch\s*\(|monkeypatch\.(?:setattr|delattr)|MagicMock\b)/;
-    for (let at = 0; at < pyLines.length; at++) {
-      const m = /^(\s*)(?:async\s+)?def\s+(test_\w+)\s*\(/.exec(pyLines[at]);
-      if (!m) continue;
-      let start = at;
-      while (start > 0 && /^\s*@/.test(pyLines[start - 1])) start--;
-      let end = pyLines.length - 1;
-      for (let i = at + 1; i < pyLines.length; i++) {
-        if (pyLines[i].trim() && /^\s*/.exec(pyLines[i])[0].length <= m[1].length) { end = i - 1; break; }
-      }
-      const fnText = pyLines.slice(start, end + 1).join('\n');
-      if (pyRealCallRe.test(fnText) && !pyMockUseRe.test(fnText)) {
-        return { hasMock, hasRealUnmockedBoundary: true };
-      }
-    }
-    return { hasMock, hasRealUnmockedBoundary: false };
-  }
-  if (lang === 'go') {
-    const callsReal = /\b(?:httptest\.NewServer|net\.Listen|exec\.Command)\s*\(/.test(noComments);
-    return { hasMock, hasRealUnmockedBoundary: callsReal };
-  }
-  if (lang === 'rs') {
-    const callsReal = /\b(?:Command::new|TcpListener::bind)\s*\(/.test(noComments);
-    return { hasMock, hasRealUnmockedBoundary: callsReal };
-  }
-
-  const masked = maskJsNonCode(source);
-  const mockedModules = new Set();
-  for (const m of noComments.matchAll(/\b(?:vi|jest|mock|vitest)\s*\.\s*(?:mock|doMock|module)\s*\(\s*['"`](?:node:)?([a-z0-9_/-]+)['"`]/g)) {
-    mockedModules.add(m[1]);
-  }
-  const importsChildProc = /(?:from\s+|require\s*\(\s*|import\s*\(\s*)['"`](?:node:)?child_process['"`]/.test(noComments);
-  const importsHttpOrNet = /(?:from\s+|require\s*\(\s*|import\s*\(\s*)['"`](?:node:)?(?:http|https|http2|net|tls)['"`]/.test(noComments);
-  const realChildProc = importsChildProc && !mockedModules.has('child_process')
-    && /(?<![.\w$])(?:spawnSync|execFileSync|execSync|execFile|spawn|fork)\s*\(|\.\s*(?:spawnSync|execFileSync|execSync|execFile|spawn|fork)\s*\(/.test(masked);
-  const realHttpOrNet = importsHttpOrNet && !mockedModules.has('http') && !mockedModules.has('https') && !mockedModules.has('net')
-    && (/(?<![.\w$])createServer\s*\(|\.\s*createServer\s*\(/.test(masked) || /\.\s*listen\s*\(/.test(masked));
-  const mocksGlobalFetch = /\b(?:stubGlobal\s*\(\s*['"`]fetch['"`]|spyOn\s*\(\s*(?:globalThis|global)\s*,\s*['"`]fetch['"`]|(?:globalThis|global)\s*\.\s*fetch\s*=)/.test(noComments);
-  const realFetch = !mocksGlobalFetch && /(?<![.\w$])(?:globalThis\s*\.\s*)?fetch\s*\(/.test(masked);
-  return { hasMock, hasRealUnmockedBoundary: Boolean(realChildProc || realHttpOrNet || realFetch) };
 }
 
 export function detectShadowBinaries(root, { touchedFiles = [], baseSha = null } = {}) {
@@ -423,10 +87,7 @@ export function detectShadowBinaries(root, { touchedFiles = [], baseSha = null }
 }
 
 export function analyzeDiffEntries(entries = []) {
-  const removedByName = new Map(), addedByName = new Map();
-  const removedTests = [], addedTests = [], movedTests = [], newSkips = [], assertionDrops = [], tableDrops = [], snapshotEdits = [], harnessEdits = [], mockOnlyBoundaryTests = [], errors = [];
-  const boundaryProdFiles = [], mockedBoundaryTestFiles = [];
-  let anyRealUnmockedBoundaryTest = false;
+  const snapshotEdits = [], harnessEdits = [], errors = [];
 
   for (const entry of entries) {
     const newPath = entry.newPath || '', oldPath = entry.oldPath || '', activePath = newPath || oldPath;
@@ -439,10 +100,6 @@ export function analyzeDiffEntries(entries = []) {
       errors.push({ path: newPath, line: 1, code: 'diff-shadow-bin', formatted: `Error: diff gate: ${newPath}:1 [diff-shadow-bin] ${detail}` });
     }
     if (newPath && entry.after) {
-      for (const hit of findExecutableOnlyMarkers(entry.after, newPath)) {
-        const detail = formatTeachingDetail({ invariant: `Executable focus marker "${hit.marker}(" in ${hit.path}:${hit.line} skips the rest of the test suite`, fix: `Remove ".only" / "${hit.marker}" at ${hit.path}:${hit.line}`, rerun: 'pdd lint --diff' });
-        errors.push({ path: hit.path, line: hit.line, code: 'diff-focus-only', formatted: `Error: diff gate: ${hit.path}:${hit.line} [diff-focus-only] ${detail}` });
-      }
       for (const hit of findConflictMarkers(entry.after, newPath)) {
         const detail = formatTeachingDetail({ invariant: `Unresolved merge conflict marker at ${hit.path}:${hit.line}`, fix: `Resolve the conflict block at ${hit.path}:${hit.line} and remove conflict markers`, rerun: 'pdd lint --diff' });
         errors.push({ path: hit.path, line: hit.line, code: 'diff-conflict-marker', formatted: `Error: diff gate: ${hit.path}:${hit.line} [diff-conflict-marker] ${detail}` });
@@ -450,9 +107,6 @@ export function analyzeDiffEntries(entries = []) {
       if (isTestPromptPath(newPath)) {
         const detail = formatTeachingDetail({ invariant: `Misplaced test prompt "${newPath}" violates PDD ownership (prompts own production modules, not test files)`, fix: `Delete ${newPath} and keep test assertions in native test files`, rerun: 'pdd lint --diff' });
         errors.push({ path: newPath, line: 1, code: 'misplaced-test-prompt', formatted: `Error: diff gate: ${newPath}:1 [misplaced-test-prompt] ${detail}` });
-      }
-      if (hasProductionBoundaryPrimitives(newPath, entry.after)) {
-        boundaryProdFiles.push(newPath);
       }
     }
 
@@ -464,71 +118,26 @@ export function analyzeDiffEntries(entries = []) {
         if (changed) harnessEdits.push(`${activePath} (scripts.test)`);
       } else harnessEdits.push(activePath);
     }
-
-    const oldLang = detectTestLanguage(oldPath, entry.before || ''), newLang = detectTestLanguage(newPath, entry.after || '');
-    if (!oldLang && !newLang) continue;
-    if (newPath && newLang && entry.after) {
-      const cov = analyzeTestBoundaryCoverage(entry.after, newLang);
-      if (cov.hasRealUnmockedBoundary) anyRealUnmockedBoundaryTest = true;
-      else if (cov.hasMock) mockedBoundaryTestFiles.push(newPath);
-    }
-    const prev = extractTestCases(entry.before || '', oldLang), next = extractTestCases(entry.after || '', newLang);
-    if (prev.tableCaseCount > next.tableCaseCount) tableDrops.push({ path: activePath, before: prev.tableCaseCount, after: next.tableCaseCount });
-
-    const isFileRename = Boolean(oldPath && newPath && oldPath !== newPath);
-    const prevMap = new Map(prev.cases.map(c => [c.name, c])), nextMap = new Map(next.cases.map(c => [c.name, c]));
-    for (const c of prev.cases) {
-      if (!nextMap.has(c.name)) {
-        const rec = { name: c.name, path: oldPath || activePath, line: c.line };
-        removedTests.push(rec);
-        if (!removedByName.has(c.name)) removedByName.set(c.name, []);
-        removedByName.get(c.name).push(rec);
-      }
-    }
-    for (const c of next.cases) {
-      if (!prevMap.has(c.name)) {
-        const rec = { name: c.name, path: newPath || activePath, line: c.line };
-        addedTests.push(rec);
-        if (!addedByName.has(c.name)) addedByName.set(c.name, []);
-        addedByName.get(c.name).push(rec);
-        for (const sk of c.skips) newSkips.push({ path: newPath, name: c.name, line: c.line, marker: sk });
-      } else {
-        if (isFileRename) movedTests.push({ name: c.name, from: oldPath, to: newPath });
-        const oldCase = prevMap.get(c.name);
-        if (c.assertions.length < oldCase.assertions.length) assertionDrops.push({ path: newPath, name: c.name, before: oldCase.assertions.length, after: c.assertions.length });
-        const oldSkips = new Set(oldCase.skips);
-        for (const sk of c.skips) if (!oldSkips.has(sk)) newSkips.push({ path: newPath, name: c.name, line: c.line, marker: sk });
-      }
-    }
   }
-
-  const movedKeys = new Set();
-  for (const [name, remList] of removedByName.entries()) {
-    const addList = addedByName.get(name);
-    if (!addList?.length) continue;
-    for (let i = 0; i < Math.min(remList.length, addList.length); i++) {
-      movedTests.push({ name, from: remList[i].path, to: addList[i].path });
-      movedKeys.add(`${remList[i].path}\0${name}`);
-    }
-  }
-  const genuinelyRemoved = removedTests.filter(r => !movedKeys.has(`${r.path}\0${r.name}`));
 
   const advisories = [];
-  if (genuinelyRemoved.length) advisories.push(`Diff spotlight: ${genuinelyRemoved.length} test(s) removed (${genuinelyRemoved.slice(0, 6).map(r => `${r.path}::${r.name}`).join(', ')})`);
-  if (movedTests.length) advisories.push(`Diff spotlight: ${movedTests.length} test(s) moved across files (${movedTests.slice(0, 4).map(m => `${m.name}: ${m.from} -> ${m.to}`).join(', ')})`);
-  if (newSkips.length) advisories.push(`Diff spotlight: ${newSkips.length} new skip(s) introduced (${newSkips.slice(0, 6).map(s => `${s.path}:${s.line} ${s.name}`).join(', ')})`);
-  if (assertionDrops.length) advisories.push(`Diff spotlight: ${assertionDrops.length} kept test(s) with fewer assertions (${assertionDrops.slice(0, 6).map(a => `${a.path}::${a.name} ${a.before}->${a.after}`).join(', ')})`);
-  if (tableDrops.length) advisories.push(`Diff spotlight: table-driven case count dropped in ${tableDrops.map(t => `${t.path} (${t.before}->${t.after})`).join(', ')}`);
   if (snapshotEdits.length) advisories.push(`Diff spotlight: snapshot file(s) modified (${snapshotEdits.join(', ')})`);
   if (harnessEdits.length) advisories.push(`Diff spotlight: test harness / CI config edited (${harnessEdits.join(', ')})`);
-  if (boundaryProdFiles.length > 0 && mockedBoundaryTestFiles.length > 0 && !anyRealUnmockedBoundaryTest) {
-    const sortedProd = [...new Set(boundaryProdFiles)].sort();
-    const sortedTests = [...new Set(mockedBoundaryTestFiles)].sort();
-    mockOnlyBoundaryTests.push({ prodFiles: sortedProd, testFiles: sortedTests });
-    advisories.push(`Diff spotlight: [diff-mock-only-boundary] Changed I/O/subprocess boundary file(s) (${sortedProd.join(', ')}) are only covered by mocked tests (${sortedTests.join(', ')}) with zero real unmocked boundary calls`);
-  }
 
-  return { ok: errors.length === 0, errors, advisories, removedTests: genuinelyRemoved, movedTests, addedTests, newSkips, assertionDrops, tableDrops, snapshotEdits, harnessEdits, mockOnlyBoundaryTests };
+  return {
+    ok: errors.length === 0,
+    errors,
+    advisories,
+    removedTests: [],
+    movedTests: [],
+    addedTests: [],
+    newSkips: [],
+    assertionDrops: [],
+    tableDrops: [],
+    snapshotEdits,
+    harnessEdits,
+    mockOnlyBoundaryTests: [],
+  };
 }
 
 function baseUnavailableResult(baseRef, reason) {
@@ -564,7 +173,9 @@ export function runDiffSpotlight({ cwd, baseRef, filterPaths = null } = {}) {
   for (let i = 0; i < fields.length;) {
     const st = fields[i++], first = fields[i++], second = st.startsWith('R') || st.startsWith('C') ? fields[i++] : first;
     const oldPath = st === 'A' ? '' : first, newPath = st === 'D' ? '' : second;
-    const before = oldPath ? (spawnSync('git', ['show', `${baseSha}:${oldPath}`], { cwd: realRoot, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).stdout ?? '') : '';
+    const before = oldPath && oldPath.endsWith('package.json')
+      ? (spawnSync('git', ['show', `${baseSha}:${oldPath}`], { cwd: realRoot, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).stdout ?? '')
+      : '';
     const after = newPath ? (readSafeUtf8(realRoot, newPath) ?? '') : '';
     entries.push({ status: st, oldPath, newPath, before, after });
     if (newPath) { seenPaths.add(newPath); seenNewPaths.add(newPath); }

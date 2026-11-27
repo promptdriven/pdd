@@ -363,13 +363,7 @@ test('Planted Trap 7: backside deterministic lint (silent-validation-skip, works
       rules: {
         'silent-validation-skip': 'error',
       },
-      custom_rules: [{
-        id: 'no-skip-comment',
-        target: 'code',
-        severity: 'error',
-        forbid_pattern: 'DISABLE_REAL_E2E',
-        message: 'Never disable real E2E in production code.',
-      }],
+
     }),
   );
   // Plant a symlinked rule file inside rules/lint/ to verify symlink safety guard skips it safely
@@ -821,9 +815,9 @@ test('MF-8 & Minor Notes: empty changedFiles fail closed, word-boundary surfaces
   // Minor Note 1: `pdd lint --local` detects workspace-local rules/lint/*.json even without `"lint"` in pdd.json
   const repo = makeTempGitRepo(t, 'pdd-mf8-cli-rules-');
   writeFile(repo, 'pdd.json', JSON.stringify({ name: 'demo' }));
-  const longFence = ['```js', ...Array.from({ length: 20 }, (_, i) => `const x${i} = ${i};`), '```'].join('\n');
-  writeFile(repo, 'prompts/adapter.prompt.md', `# Adapter\n\n${longFence}\n\n## Dependencies\n\nNone.\n`);
-  writeFile(repo, 'rules/lint/10-strict.json', JSON.stringify({ rules: { 'prompt-code-fence-length': 'error' } }));
+  writeFile(repo, 'prompts/adapter.prompt.md', '# Adapter\n\nOwn `src/adapter.mjs`.\n');
+  writeFile(repo, 'src/adapter.mjs', '// Prompt: prompts/adapter.prompt.md\nexport const ok = true;\n');
+  writeFile(repo, 'rules/lint/10-strict.json', JSON.stringify({ rules: { 'prompt-missing-dependencies': 'error' } }));
   commitAll(repo, 'rules without pdd.json lint key');
 
   let exitCode = 0;
@@ -839,7 +833,7 @@ test('MF-8 & Minor Notes: empty changedFiles fail closed, word-boundary surfaces
     combined = `${err.stdout ?? ''}\n${err.stderr ?? ''}`;
   }
   assert.notEqual(exitCode, 0, 'pdd lint --local must enforce rules/lint/*.json error even without lint key in pdd.json');
-  assert.match(combined, /prompt-code-fence-length/);
+  assert.match(combined, /prompt-missing-dependencies/);
 });
 
 test('R2-1a (MF-1 base control): links node_modules into controlTree and treats missing non-changed package as not-run', async (t) => {

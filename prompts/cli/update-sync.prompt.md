@@ -61,4 +61,4 @@ Map touched repository files (explicit paths, a Git `--from RANGE`, `--branch`, 
 
 - [File owner lookup](file-owner.prompt.md): `findOwners`, `headerEntries`, `headerHashState`, `isTestOwnedPath`, `isTestPromptPath`, `promptClaims`, and `promptHeaderHash`.
 - Layer-0 shared primitives: `src/shared/git-context.mjs` (`gitFiles`), `src/shared/safe-read.mjs` (`isSecretPath`), and `src/shared/workspace-policy.mjs` (`allowsRuntimePath`).
-- Layer-1 core helpers: `src/core/lint/diagnostics.mjs` (`resolveDefaultBaseRef`) and `src/core/lint/regex-safety.mjs` (`compileGlobMatcher`).
+- Layer-1 core helpers: `src/core/lint/diagnostics.mjs` (`resolveDefaultBaseRef`) and `src/shared/glob-match.mjs` (`compileGlobMatcher`).

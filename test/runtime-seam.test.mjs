@@ -1341,7 +1341,7 @@ test('SEAM9 (R2-2): seam preserves legacy port overrides and ignores own undefin
   mkdirSync(join(svgRepo, 'tests'), { recursive: true });
   mkdirSync(join(svgRepo, 'src'), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: svgRepo });
-  writeFileSync(join(svgRepo, 'prompts/views/card.ui.svg'), '<svg viewBox="0 0 100 40"><text>Visible</text></svg>\n');
+  writeFileSync(join(svgRepo, 'prompts/views/card.ui.svg'), '<svg viewBox="0 0 0 40"><text>Visible</text></svg>\n');
   writeFileSync(join(svgRepo, 'prompts/card.prompt.md'), '# Card\n\n![Card](views/card.ui.svg)\n\nRender the card.\n\n## Dependencies\n\nNone.\n');
   writeFileSync(join(svgRepo, 'src/card.mjs'), '// Generated from prompts/card.prompt.md\nexport const card = 1;\n');
   writeFileSync(join(svgRepo, 'user_stories/card.md'), '# Card\n\nI can view card.\n\n## Acceptance criteria\n\n1. Card renders.\n');
@@ -1386,7 +1386,7 @@ test('SEAM9 (R2-2): seam preserves legacy port overrides and ignores own undefin
   assert.equal(checkCode, 0, errText);
   const parsedCheck = JSON.parse(outJson);
   assert.ok(
-    Array.isArray(parsedCheck.warnings) && parsedCheck.warnings.some(w => w.includes('Visible')),
+    Array.isArray(parsedCheck.warnings) && parsedCheck.warnings.some(w => w.includes('viewBox')),
     `expected SVG Visible warning with lintSvgLayouts: undefined, got: ${JSON.stringify(parsedCheck.warnings)}`,
   );
 
@@ -2614,7 +2614,7 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   mkdirSync(join(cardRepo, 'tests'), { recursive: true });
   writeFileSync(
     join(cardRepo, 'prompts/ui/views/card__stacked.ui.svg'),
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 40"><title>Card</title><desc>Card</desc><g id="unmentioned-card-box"><text x="10" y="20">Hello</text></g></svg>\n',
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 0 40"><title>Card</title><desc>Card</desc><g id="card-box"><text x="10" y="20">Hello</text></g></svg>\n',
   );
   const rawPrompt = [
     '# Card view',
@@ -2671,7 +2671,7 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   assert.equal(lintCode, 0);
   const lintReport = JSON.parse(lintOut);
   assert.ok(
-    lintReport.warnings.some(w => String(w).includes('unmentioned-card-box')),
+    lintReport.warnings.some(w => String(w).includes('viewBox')),
     `expected SVG layout warning from seam.lint, got: ${JSON.stringify(lintReport.warnings)}`,
   );
 

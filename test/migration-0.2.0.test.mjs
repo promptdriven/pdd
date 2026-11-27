@@ -245,7 +245,7 @@ test('spawned bin/pdd.mjs lint, lint --diff, native Story lint STORY, and prove 
   // 1. Spawned `bin/pdd.mjs lint` (offline, 0 AI/network)
   const lintAll = spawnSync(process.execPath, [BIN, 'lint'], { cwd: repo, env, encoding: 'utf8', timeout: 15000 });
   assert.equal(lintAll.status, 0, lintAll.stderr);
-  assert.match(lintAll.stdout, /Local lint: 0 errors/);
+  assert.match(lintAll.stdout, /Lint OK: .*validated offline \(0 errors,/);
 
   // 2. Spawned `bin/pdd.mjs lint --diff <baseSha>`
   const lintDiff = spawnSync(process.execPath, [BIN, 'lint', '--diff', baseSha], { cwd: repo, env, encoding: 'utf8', timeout: 15000 });
@@ -254,7 +254,7 @@ test('spawned bin/pdd.mjs lint, lint --diff, native Story lint STORY, and prove 
   // 3. Spawned native Story `bin/pdd.mjs lint user_stories/add-numbers.md`
   const lintStory = spawnSync(process.execPath, [BIN, 'lint', 'user_stories/add-numbers.md'], { cwd: repo, env, encoding: 'utf8', timeout: 15000 });
   assert.equal(lintStory.status, 0, lintStory.stderr);
-  assert.match(lintStory.stdout, /Local lint: 0 errors/);
+  assert.match(lintStory.stdout, /Lint OK: .*validated offline \(0 errors,/);
 
   // 4. Spawned `bin/pdd.mjs prove --base <baseSha> --test "node --test test/math.test.mjs" --expect "BUG_WRONG_SUM"`
   const proveRes = spawnSync(

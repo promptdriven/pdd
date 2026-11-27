@@ -16,7 +16,7 @@ import { gitFiles } from '../shared/git-context.mjs';
 import { isSecretPath } from '../shared/safe-read.mjs';
 import { allowsRuntimePath } from '../shared/workspace-policy.mjs';
 import { resolveDefaultBaseRef } from './lint/diagnostics.mjs';
-import { compileGlobMatcher } from './lint/regex-safety.mjs';
+import { compileGlobMatcher } from '../shared/glob-match.mjs';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_BINDINGS_BYTES = 65_536;

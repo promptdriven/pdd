@@ -121,7 +121,7 @@ test('AC1 & AC2: pdd lint warns non-blocking on 16-step scenario and stays silen
   const rHealthy = runCli(['lint'], healthy.repo, healthy.home);
   assert.equal(rHealthy.status, 0, rHealthy.stderr);
   assert.doesNotMatch(rHealthy.stdout + rHealthy.stderr, /scenario-oversized/);
-  assert.match(rHealthy.stdout, /Local lint: 0 errors, 0 warnings\./);
+  assert.match(rHealthy.stdout, /Lint OK: .*validated offline \(0 errors, 0 warnings\)/);
 });
 
 test('AC3: pdd lint warns non-blocking when serialized initial_world + seeds exceed 16,384 bytes', t => {
