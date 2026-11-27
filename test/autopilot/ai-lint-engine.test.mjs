@@ -200,6 +200,22 @@ test('ai-lint-engine: adaptive checklist router picks exact checklists (design O
   });
   assert.match(finderPrompt, /AT MOST ONE finding per root defect/i);
   assert.match(finderPrompt, /"interfaces" > "abuse" > "trace" > "contract" > "design"/);
+  assert.doesNotMatch(finderPrompt, /REQUIRED TOOL STEP \(interfaces\)/);
+  assert.doesNotMatch(finderPrompt, /REQUIRED TOOL STEP \(trace\)/);
+
+  const crossFinderPrompt = buildAdaptiveLintPrompt({
+    mode: 'adaptive',
+    checklistDocs: [
+      { name: 'contract', text: '# Contract' },
+      { name: 'interfaces', text: '# Interfaces' },
+      { name: 'trace', text: '# Trace' },
+    ],
+    targets: [plainTarget],
+    manifest: { outgoing_links: ['prompts/other.prompt.md'], paired_scenarios: ['tests/greet.json'] },
+    graphFacts: {},
+  });
+  assert.match(crossFinderPrompt, /REQUIRED TOOL STEP \(interfaces\): Before emitting JSON, actually read the linked neighbor prompts\/contracts/);
+  assert.match(crossFinderPrompt, /REQUIRED TOOL STEP \(trace\): Before emitting JSON, actually read the paired Stories and scenario\/test JSON files/);
 
   const verifyPrompt = buildVerifierPrompt({
     candidates: [{ id: 'C1', checklist: 'trace', file: 'prompts/a.prompt.md', line: 1, quote: 'q', message: 'm' }],
