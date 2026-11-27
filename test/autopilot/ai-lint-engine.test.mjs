@@ -8,6 +8,8 @@ import { dirname, join } from 'node:path';
 import {
   MAX_AI_LINT_FINDINGS,
   applyVerifierDecisions,
+  buildAdaptiveLintPrompt,
+  buildVerifierPrompt,
   collectLinkedManifest,
   loadBaseTrustedReviewScope,
   normalizeQuoteText,
@@ -168,8 +170,43 @@ test('ai-lint-engine: adaptive checklist router picks exact checklists (design O
     graphFacts: { native_only_targets: [] },
   });
   assert.deepEqual(rich.checklists, ['contract', 'interfaces', 'trace', 'abuse']);
-  assert.ok(rich.reasons.abuse.includes('ports'));
+  assert.equal(rich.reasons.abuse.includes('ports'), false, 'generic ports alone must not trigger abuse');
   assert.ok(rich.reasons.abuse.includes('money_pricing'));
+
+  // 2b. Harmless pure prompt mentioning ## Ports with no auth/money/security/native-only -> does NOT trigger abuse
+  const portsOnlyTarget = {
+    path: 'prompts/weather.prompt.md',
+    kind: 'prompt',
+    raw: '# Weather\n\nFetch forecast via `weather.get`.\n\n## Ports\n\n- `weather.get`\n',
+    lines: 12,
+    isNew: false,
+    nativeOnly: false,
+  };
+  const portsOnly = selectReviewChecklists({
+    mode: 'adaptive',
+    targets: [portsOnlyTarget],
+    manifest: {},
+    graphFacts: {},
+  });
+  assert.deepEqual(portsOnly.checklists, ['contract']);
+
+  // 2c. Finder prompt enforces single-finding-per-root-defect priority and verify prompt explicitly keeps valid trace findings
+  const finderPrompt = buildAdaptiveLintPrompt({
+    mode: 'adaptive',
+    checklistDocs: [{ name: 'contract', text: '# Contract' }],
+    targets: [plainTarget],
+    manifest: {},
+    graphFacts: {},
+  });
+  assert.match(finderPrompt, /AT MOST ONE finding per root defect/i);
+  assert.match(finderPrompt, /"interfaces" > "abuse" > "trace" > "contract" > "design"/);
+
+  const verifyPrompt = buildVerifierPrompt({
+    candidates: [{ id: 'C1', checklist: 'trace', file: 'prompts/a.prompt.md', line: 1, quote: 'q', message: 'm' }],
+    targets: [plainTarget],
+    manifest: {},
+  });
+  assert.match(verifyPrompt, /For "trace" findings: KEEP if a concrete prompt rule, Story acceptance criterion, or product\/map\.md rule genuinely has no covering test\/scenario step or contradicts its paired Story\/test/i);
 
   // 3. Brand-new prompt -> adds design
   const newRes = selectReviewChecklists({

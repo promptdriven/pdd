@@ -27,7 +27,6 @@ import {
   isCustomRuleTestFile,
   scenarioPromptRefs,
 } from '../core/lint/lint-scope.mjs';
-import { extractDeclaredPorts } from '../core/lint/port-declarations.mjs';
 import { lintRepoProject } from '../core/lint/project-lint.mjs';
 import {
   countFileLines,
@@ -57,9 +56,9 @@ const PRODUCT_DOC_RE = /^product\/(?:map|plan)\.md$/i;
 const APP_MAP_RE = /(?:^|\/)(?:app-map|[^/]+\.app-map)\.json$|(?:^|\/)app\/maps\/[^/]+\.json$/i;
 const SVG_RE = /\.ui\.svg$/i;
 const CODE_EXT_RE = /\.(?:[cm]?[jt]s|[jt]sx|py|go|rs|rb|java|kt|cs|php|sh|zsh|bash|c|cc|cpp|h|hpp|swift|scala|sql)$/i;
-const AUTH_TRUST_RE = /\b(?:auth|oauth|jwt|token|session|credential|password|passwd|rbac|acl|permission|role|trust|tenant|sign(?:ature|ed|ing)?|hmac|verify_token|caller[-_ ]?trust|enrolled|enrollment|secret|api[_-]?key|cookie|csrf|cors)\b/i;
-const MONEY_PRICING_RE = /\b(?:money|price|pricing|billing|invoice|payment|ledger|balance|credit|debit|refund|charge|fee|discount|tax|currency|cents|minor[_ ]?units|arbitrage|quota|cap|payout|escrow|wallet|subscription)\b/i;
-const SECURITY_RE = /\b(?:security|sandbox|symlink|traversal|injection|sql|xss|ssrf|rce|escape|redact|redaction|encrypt|decrypt|hash|sha256|tls|ssl|cert|certificate|rate[-_ ]?limit|idempoten(?:t|cy)|audit[-_ ]?log|fail[-_ ]?closed|privilege)\b/i;
+const AUTH_TRUST_RE = /\b(?:auth(?:enticat[a-z]*|oriz[a-z]*)?|oauth|jwt|identity|identities|credential|credentials|password|passwd|rbac|acl|permission|permissions|caller[-_ ]?role|role[-_ ]?(?:based|check|guard|grant)|tenant|multi[-_ ]?tenant|trust[-_ ]?boundary|hmac|verify[-_ ]?token|bearer|api[-_ ]?key|csrf|cors)\b/i;
+const MONEY_PRICING_RE = /\b(?:money|price|pricing|billing|invoice|payment|payments|ledger|balance|balances|refund|refunds|payout|escrow|wallet|subscription|currency|cents|minor[-_ ]?units|arbitrage|exercise[-_ ]?price|strike[-_ ]?price)\b/i;
+const SECURITY_RE = /\b(?:security|crypto(?:graph[a-z]*)?|secret|secrets|sandbox|path[-_ ]?traversal|symlink[-_ ]?(?:attack|escape|traversal)|injection|sql[-_ ]?injection|xss|ssrf|rce|csp|content[-_ ]?security[-_ ]?policy|encrypt(?:ion|ed)?|decrypt(?:ion|ed)?|tls|ssl|certificate|privilege|cross[-_ ]?tenant)\b/i;
 
 const SEVERITY_RANK = Object.freeze({ high: 0, medium: 1, low: 2 });
 const CHECKLIST_RANK = Object.freeze({ abuse: 0, contract: 1, interfaces: 2, trace: 3, design: 4 });
@@ -712,12 +711,22 @@ export function selectReviewChecklists({ mode = 'adaptive', targets = [], manife
   }
 
   for (const t of targets) {
-    if (t.kind !== 'prompt') continue;
+    if (t.kind !== 'prompt' && t.kind !== 'code') continue;
     const raw = String(t.raw ?? '');
     if (t.nativeOnly) add('abuse', 'native_only');
-    const declaredPorts = extractDeclaredPorts(raw, { isPrompt: true, path: t.path });
-    if ((declaredPorts?.size ?? 0) > 0 || /^ {0,3}##\s+ports\b/im.test(raw)) add('abuse', 'ports');
-    const combined = `${t.path}\n${raw}`;
+    let scanText = raw;
+    if (t.kind === 'prompt') {
+      const { proseLines } = scanMarkdownLinesAndFences(raw);
+      let inDeps = false;
+      const kept = [];
+      for (const { text: line } of proseLines) {
+        const h2 = /^ {0,3}##\s+(.+)$/.exec(line);
+        if (h2) { inDeps = /^dependencies\b/i.test(h2[1].trim()); continue; }
+        if (!inDeps) kept.push(line);
+      }
+      scanText = kept.join('\n');
+    }
+    const combined = `${t.path}\n${scanText}`;
     if (AUTH_TRUST_RE.test(combined)) add('abuse', 'auth_trust');
     if (MONEY_PRICING_RE.test(combined)) add('abuse', 'money_pricing');
     if (SECURITY_RE.test(combined)) add('abuse', 'security');
@@ -944,6 +953,7 @@ export function buildAdaptiveLintPrompt({
     '- Every finding MUST include an exact verbatim "quote" copied from "file" with its 1-based "line" number. Unverified quotes are dropped automatically.',
     '- Every "interfaces" finding (and any cross-file contradiction) MUST read BOTH files on disk and include "cross_file", "cross_file_line", and exact verbatim "cross_file_quote" from the second file.',
     '- Every "abuse" finding MUST include a concrete executable "test_idea" (adversarial input/sequence + expected refusal/invariant) for `pdd prove`.',
+    '- Emit AT MOST ONE finding per root defect: pick the single strongest checklist tag ("interfaces" > "abuse" > "trace" > "contract" > "design") instead of reporting the same defect multiple times across checklists.',
     '- Rank findings highest-impact first ("high", "medium", "low").',
     `Mode: ${mode}. Active checklists: ${checklistDocs.map(c => c.name).join(', ')}.`,
     '',
@@ -1024,7 +1034,8 @@ export function buildVerifierPrompt({ candidates = [], targets = [], manifest = 
     '  2. Stylistic, wording preference, or speculative ("might be nice to clarify") without a concrete behavioral flaw.',
     '  3. Out of scope or a duplicate of a stronger candidate.',
     '  4. From checklist "abuse" without a concrete executable "test_idea".',
-    '- Mark "verdict": "keep" ONLY if the defect is real, grounded in the files, and would cause a real bug, contract mismatch, silent failure, exploit, or major structural flaw.',
+    '- Mark "verdict": "keep" ONLY if the defect is real, grounded in the files, and would cause a real bug, contract mismatch, traceability gap, silent failure, exploit, or major structural flaw.',
+    '- For "trace" findings: KEEP if a concrete prompt rule, Story acceptance criterion, or product/map.md rule genuinely has no covering test/scenario step or contradicts its paired Story/test (verify on disk). Drop only if a test/step already covers it.',
     '- Emit exactly one decision for EVERY candidate id listed below.',
     '',
     'Return ONLY a single valid JSON object matching this exact schema (no prose outside JSON):',
