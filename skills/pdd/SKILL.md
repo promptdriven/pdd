@@ -36,7 +36,7 @@ In PDD, **Prompts** (`prompts/*.prompt.md`) are the source of truth for owned mo
 
 ## Step 3 — Pre-code check, prompt approval, and 1 PR
 
-- Before writing implementation code, pause with a 1-screen plain-English Story/cases check unless the person said *"all the way"* (pure code bugs and `small-change` skip this pause). For UI work, recommend `pdd <PROMPT.md|STORY>` so the person can try the live screen first.
+- Before writing implementation code, pause with a 1-screen plain-English Story/cases check unless the person said *"all the way"* (pure code bugs and `small-change` skip this pause). For UI work, recommend `pdd <PROMPT.md|STORY>` so the person can try the live screen first. For pricing/economic, security/auth, stateful multi-party, or external-assumption prompts, run an independent [references/adversarial-audit.md](references/adversarial-audit.md) pass before codegen (skip as `not-applicable` on docs/UI/simple CRUD).
 - Prompt approvals happen directly in chat or GitHub PR review — never invent a person's decision or auto-merge without explicit permission (see [references/prompting.md §5](references/prompting.md#5-expected-values-approvals-and-merges)).
 - Deliver **1 PR** when authorized to open a PR (never 2 stacked PRs; the only exception is a multi-part product run using `Through: prompt-pr` / `pdd product start RUN --through prompt-pr`, which explicitly stages a prompt PR first). Never merge unless explicitly requested by the person.
 
@@ -68,3 +68,4 @@ Load [references/verification.md](references/verification.md) before finalizing 
 | Root-cause issue fixing, 10-line Fork Cards & real-artifact verification | [references/SOLVE.md](references/SOLVE.md) |
 | Clean-context independent break-testing & 4-item evidence standard | [references/BREAK-IT.md](references/BREAK-IT.md) |
 | One-pass advisory prompt & Story design review checklist (12 rules) | [references/PROMPT-REVIEW-RULES.md](references/PROMPT-REVIEW-RULES.md) |
+| Adversarial & external-premise audit (abuse/arbitrage, baselines, provenance, kill criteria) | [references/adversarial-audit.md](references/adversarial-audit.md) |
