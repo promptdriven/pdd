@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { proseSha256 } from '../src/runtime-seam.mjs';
+import { jsonRow, proseSha256 } from '../src/runtime-seam.mjs';
 import { compareTargets, runTargetBoth } from '../src/core/target-both.mjs';
 
 const bin = join(process.cwd(), 'bin/pdd.mjs');
@@ -111,6 +111,37 @@ test('3296: steps either side did not run are listed as not compared, never as a
   assert.equal(refused.report.stories[0].status, 'not compared');
   assert.equal(refused.report.summary.not_compared, 4);
   assert.match(refused.report.stories[0].not_compared[0].reason, /^The interpreter reported refused: The scenario names an unknown operation\.$/);
+});
+
+test('3296: a refusal reason in the real pdd test --json row shape (why null, reason {code, message}) is kept', async () => {
+  const shaped = jsonRow({ story: 'demo', test: 'tests/demo.json', state: 'refused', failed_checks: [], calls: 0, reason: { code: 'admission-refused', message: 'The scenario names an unknown operation.' } });
+  assert.equal(shaped.why, null);
+  assert.deepEqual(shaped.reason, { code: 'admission-refused', message: 'The scenario names an unknown operation.' });
+  const { code, report } = await both(project(), fakeInterpreter([shaped]));
+  assert.equal(code, 1);
+  assert.equal(report.summary.not_compared, 4);
+  assert.ok(report.stories[0].not_compared.every(item => item.reason === 'The interpreter reported refused: The scenario names an unknown operation.'), JSON.stringify(report.stories[0].not_compared));
+});
+
+test('3296: an interpreter failure that does not name every failed check is not compared, never agreeing', async () => {
+  const failedCheck = { criterion_id: 'AC2', step_id: 'digits', target: 'result', path: '/stdout', expected: 'A1\n', actual: 'A\n' };
+  const cases = {
+    'no failed checks': row('failed', []),
+    'a failed check without a step': row('failed', [{ ...failedCheck, step_id: null }]),
+    'a failed check the code step does not have': row('failed', [{ ...failedCheck, path: '/stderr' }]),
+    'fewer failed checks than the counts say': row('failed', [failedCheck], { checks: { passed: 2, total: 4 } }),
+  };
+  for (const [name, interpreterRow] of Object.entries(cases)) {
+    const { code, out } = await both(project(), fakeInterpreter([interpreterRow]), { json: false });
+    assert.equal(code, 1, name);
+    assert.doesNotMatch(out, /^AGREE/m, `${name}\n${out}`);
+    // Checks the row names as failed are still compared; every other check is not compared.
+    assert.match(out, /· 0 agree · [34] not compared ·/, `${name}\n${out}`);
+    assert.match(out, /not compared: interpreter not run: The interpreter reported failed but did not name every failed check/, `${name}\n${out}`);
+  }
+  // Fully named failures still compare check by check.
+  const named = await both(project(), fakeInterpreter([row('failed', [failedCheck], { checks: { passed: 3, total: 4 } })]));
+  assert.deepEqual(named.report.summary, { compared: 4, agree: 3, disagree: 1, not_compared: 0 });
 });
 
 test('3296: when the interpreter reports nothing, its exit code is returned after the code results are shown', async () => {

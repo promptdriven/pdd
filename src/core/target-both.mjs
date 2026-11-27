@@ -28,8 +28,13 @@ function interpreterTests(report) {
       if (!failed.has(key)) failed.set(key, []);
       failed.get(key).push(check);
     }
-    const reason = row.why ?? row.reason ?? row.note?.message ?? null;
-    tests.set(row.test, { state: typeof row.state === 'string' ? row.state : 'unknown', failed, reason: typeof reason === 'string' ? reason : null, cached: row.cached === true });
+    // pdd test --json prints `reason` as {code, message}; older rows may carry a string.
+    const reason = [row.why, row.reason, row.reason?.message, row.note?.message].find(text => typeof text === 'string' && text) ?? null;
+    const listed = Array.isArray(row.failed_checks) ? row.failed_checks.length : 0;
+    const named = [...failed.values()].reduce((sum, list) => sum + list.length, 0);
+    const counts = Number.isSafeInteger(row.checks?.passed) && Number.isSafeInteger(row.checks?.total) ? row.checks.total - row.checks.passed : null;
+    tests.set(row.test, { state: typeof row.state === 'string' ? row.state : 'unknown', failed, reason, cached: row.cached === true,
+      complete: named > 0 && named === listed && (counts === null || counts === named), namesEvery: true });
   }
   return tests;
 }
@@ -40,6 +45,7 @@ function interpreterCheck(test, stepId, check, seen) {
   const key = checkKey(stepId, check), list = test.failed.get(key) ?? [], index = seen.get(key) ?? 0;
   seen.set(key, index + 1);
   if (test.state === 'failed' && index < list.length) return { status: 'failed', actual: list[index].actual };
+  if (test.state === 'failed' && !test.namesEvery) return { status: 'not run', reason: `The interpreter reported failed but did not name every failed check${test.reason ? `: ${test.reason.replace(/\.$/, '')}` : ''}.` };
   // A passed equals check means the interpreter's value is the expected value.
   return { status: 'passed', actual: check.expected };
 }
@@ -51,8 +57,29 @@ const groupOf = (code, interpreter) => {
   return 'agree';
 };
 
+// A failed row names every failure only when each failed check points at a check of a code step (or a step the code did not run).
+function markUnnamedFailures(tests, codeReport) {
+  const codeSteps = new Map();
+  for (const story of Array.isArray(codeReport?.stories) ? codeReport.stories : []) for (const step of Array.isArray(story.steps) ? story.steps : []) {
+    if (typeof step.scenario !== 'string') continue;
+    const keys = new Map();
+    for (const check of Array.isArray(step.checks) ? step.checks : []) { const key = checkKey(step.step_id, { ...check, target: 'result' }); keys.set(key, (keys.get(key) ?? 0) + 1); }
+    if (!codeSteps.has(step.scenario)) codeSteps.set(step.scenario, new Map());
+    codeSteps.get(step.scenario).set(step.step_id, { ran: step.status !== 'not run', keys });
+  }
+  for (const [scenario, test] of tests) {
+    if (test.state !== 'failed') continue;
+    const steps = codeSteps.get(scenario) ?? new Map();
+    test.namesEvery = test.complete && [...test.failed].every(([key, list]) => {
+      const step = steps.get(list[0].step_id);
+      return step && (!step.ran || (step.keys.get(key) ?? 0) >= list.length);
+    });
+  }
+}
+
 export function compareTargets(codeReport, interpreterReport) {
   const tests = interpreterTests(interpreterReport), used = new Set();
+  markUnnamedFailures(tests, codeReport);
   const stories = (Array.isArray(codeReport?.stories) ? codeReport.stories : []).map(story => {
     const checks = [], notCompared = [], states = new Map();
     for (const step of Array.isArray(story.steps) ? story.steps : []) {
