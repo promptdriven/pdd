@@ -1,12 +1,12 @@
 // A small offline world for the Autopilot core tick: a fake GitHub (one work repository and the
 // promptdriven/pdd report repository), a real local Git origin and clone, a fake clock and a scripted
 // agent job runner. No network, no real agent, no timer.
-import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createGithubRepoFake } from './github-repo-fake.mjs';
-import { gitTemplateDir, rewriteGitConfigUrl } from './git-template.mjs';
+import { copyTemplateDir, gitTemplateDir, rewriteGitConfigUrl } from './git-template.mjs';
 import { tickCore, coreSettings } from '../../src/autopilot-core.mjs';
 
 const endpointOf = args => args.find((word, index) => index > 0 && /^repos\//.test(word));
@@ -209,12 +209,14 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
     const tpl = gitTemplateDir('core-world', d => {
       const origin = join(d, 'origin.git'), seed = join(d, 'clone');
       git(d, 'init', '-q', '--bare', '-b', 'main', origin);
+      git(origin, 'config', 'gc.auto', '0'); git(origin, 'config', 'maintenance.auto', 'false');
       git(d, 'clone', '-q', origin, seed);
+      git(seed, 'config', 'gc.auto', '0'); git(seed, 'config', 'maintenance.auto', 'false');
       writeFileSync(join(seed, 'README.md'), 'value 1\n'); git(seed, 'add', '.'); git(seed, 'commit', '-qm', 'seed'); git(seed, 'push', '-q', 'origin', 'HEAD:main');
     });
     w.remote = join(dir, 'origin.git');
-    cpSync(join(tpl, 'origin.git'), w.remote, { recursive: true });
-    cpSync(join(tpl, 'clone'), w.cwd, { recursive: true });
+    copyTemplateDir(join(tpl, 'origin.git'), w.remote);
+    copyTemplateDir(join(tpl, 'clone'), w.cwd);
     rewriteGitConfigUrl(join(w.cwd, '.git/config'), join(tpl, 'origin.git'), w.remote);
     w.github = extend(createGithubRepoFake({ repository, owner: 'acme', issues: 0, now: w.now }), w);
     w.reports = extend(createGithubRepoFake({ repository: 'promptdriven/pdd', owner: 'promptdriven', issues: 0, now: w.now }), w);
