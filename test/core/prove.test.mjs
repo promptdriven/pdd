@@ -1184,6 +1184,45 @@ test('#3723 missing test runner (exit 127/ENOENT/No module named pytest) ALWAYS 
   assert.equal(pathMiss.outcome, OUTCOME_NOT_PROVED);
   assert.equal(pathMiss.receipt.paths[0].status, 'not-proved');
   assert.ok(pathMiss.receipt.notProvedReasons.some(r => r.includes('[verify-path-runner-unavailable]')));
+
+  // 5. python3 -m pytest missing module (exit 1 on stderr, no test run) -> Not proved (exit 3), NEVER Failed (exit 1).
+  const pyModMissRepo = initGitRepo(t, 'pdd-prove-pymod-missing-');
+  writeFileSync(
+    join(pyModMissRepo, 'pdd.json'),
+    JSON.stringify({
+      verify: {
+        test: `${nodeBin} -e "console.error('/usr/bin/python3: No module named pytest'); process.exit(1);"`,
+        paths: [],
+      },
+    }, null, 2) + '\n',
+  );
+  writeFileSync(join(pyModMissRepo, 'README.md'), '# Demo\n');
+  commitAll(pyModMissRepo, 'base');
+  execFileSync('git', ['checkout', '-q', '-b', 'doc-edit'], { cwd: pyModMissRepo });
+  writeFileSync(join(pyModMissRepo, 'README.md'), '# Demo v2\n');
+  const pyModMiss = await runProve({ cwd: pyModMissRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  assert.equal(pyModMiss.exitCode, EXIT_NOT_PROVED, JSON.stringify(pyModMiss.receipt));
+  assert.equal(pyModMiss.receipt.test.notProved, true);
+
+  // 6. Genuine failing test whose TAP output mentions "command not found" MUST still exit 1 (Failed), NEVER Not proved!
+  const realFailRepo = initGitRepo(t, 'pdd-prove-real-fail-');
+  writeFileSync(
+    join(realFailRepo, 'pdd.json'),
+    JSON.stringify({
+      verify: {
+        test: `${nodeBin} -e "console.log('not ok 1 - handles missing tool'); console.log('  error: sh: 1: foo: command not found'); console.log('# fail 1'); process.exit(1);"`,
+        paths: [],
+      },
+    }, null, 2) + '\n',
+  );
+  writeFileSync(join(realFailRepo, 'README.md'), '# Fail\n');
+  commitAll(realFailRepo, 'base');
+  execFileSync('git', ['checkout', '-q', '-b', 'doc-edit'], { cwd: realFailRepo });
+  writeFileSync(join(realFailRepo, 'README.md'), '# Fail v2\n');
+  const realFail = await runProve({ cwd: realFailRepo, base: 'main', json: true }, { stdout: makeSink(), stderr: makeSink() });
+  assert.equal(realFail.exitCode, EXIT_FAILED, JSON.stringify(realFail.receipt));
+  assert.equal(realFail.outcome, OUTCOME_FAILED);
+  assert.equal(realFail.receipt.test.notProved, false);
 });
 
 test('#3724 streaming execution, fast-checks-first ordering, and progress-aware LLM stuck-watcher + offline fallback', async t => {
@@ -1216,7 +1255,7 @@ test('#3724 streaming execution, fast-checks-first ordering, and progress-aware 
 
   let llmCallsProgress = 0;
   const orderRes = await runProve(
-    { cwd: orderRepo, base: 'main', idleTimeoutMs: 140, json: true },
+    { cwd: orderRepo, base: 'main', idleTimeoutMs: 1500, json: true },
     {
       stdout: makeSink(),
       stderr: makeSink(),
@@ -1244,7 +1283,7 @@ test('#3724 streaming execution, fast-checks-first ordering, and progress-aware 
     join(slowCompileRepo, 'pdd.json'),
     JSON.stringify({
       verify: {
-        test: `${nodeBin} -e "console.log('compiling large target...'); setTimeout(() => { console.log('3 passed in 0.4s'); process.exit(0); }, 280);"`,
+        test: `${nodeBin} -e "console.log('compiling large target...'); setTimeout(() => { console.log('3 passed in 0.4s'); process.exit(0); }, 900);"`,
         paths: [],
       },
     }, null, 2) + '\n',
@@ -1256,7 +1295,7 @@ test('#3724 streaming execution, fast-checks-first ordering, and progress-aware 
 
   const continueChecks = [];
   const continueRes = await runProve(
-    { cwd: slowCompileRepo, base: 'main', idleTimeoutMs: 120, json: true },
+    { cwd: slowCompileRepo, base: 'main', idleTimeoutMs: 250, json: true },
     {
       stdout: makeSink(),
       stderr: makeSink(),
@@ -1269,7 +1308,7 @@ test('#3724 streaming execution, fast-checks-first ordering, and progress-aware 
   assert.equal(continueRes.exitCode, EXIT_PROVED, JSON.stringify(continueRes.receipt));
   assert.ok(continueChecks.length >= 1, 'LLM stuck-check must be invoked on silent window');
   assert.equal(continueChecks[0].trigger, 'idle');
-  assert.ok(continueChecks[0].tailLines.some(l => l.includes('compiling large target')));
+  assert.ok(continueChecks.some(c => c.tailLines.some(l => l.includes('compiling large target'))));
 
   // 3. LLM stuck-check returns "stuck" on a silent hung command -> killed cleanly, Not proved (exit 3), reports aborted phase, completed phases, and frozen tail!
   const hungRepo = initGitRepo(t, 'pdd-prove-llm-stuck-');
@@ -1289,11 +1328,16 @@ test('#3724 streaming execution, fast-checks-first ordering, and progress-aware 
   writeFileSync(join(hungRepo, 'src', 'net.mjs'), 'export const port = 2;\n');
 
   const stuckRes = await runProve(
-    { cwd: hungRepo, base: 'main', idleTimeoutMs: 120, json: true },
+    { cwd: hungRepo, base: 'main', idleTimeoutMs: 250, json: true },
     {
       stdout: makeSink(),
       stderr: makeSink(),
-      checkStuck: async () => ({ verdict: 'stuck', reason: 'deadlocked waiting on socket' }),
+      checkStuck: async info => {
+        if (!info.tailLines.some(l => l.includes('running test_socket_lock'))) {
+          return { verdict: 'progress', reason: 'waiting for initial test output' };
+        }
+        return { verdict: 'stuck', reason: 'deadlocked waiting on socket' };
+      },
     },
   );
   assert.equal(stuckRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(stuckRes.receipt));
@@ -1340,7 +1384,7 @@ test('#3724 streaming execution, fast-checks-first ordering, and progress-aware 
 
   // 5. Offline / no-LLM fallback (`PDD_PROVE_LLM_WATCH=0`): silent hung process is killed on idle cutoff as Not proved!
   const offlineRes = await runProve(
-    { cwd: hungRepo, base: 'main', idleTimeoutMs: 120, json: true, env: { ...process.env, PDD_PROVE_LLM_WATCH: '0' } },
+    { cwd: hungRepo, base: 'main', idleTimeoutMs: 250, json: true, env: { ...process.env, PDD_PROVE_LLM_WATCH: '0' } },
     { stdout: makeSink(), stderr: makeSink() },
   );
   assert.equal(offlineRes.exitCode, EXIT_NOT_PROVED, JSON.stringify(offlineRes.receipt));

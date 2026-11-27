@@ -37,7 +37,18 @@ const FROZEN_TAIL_REPORT_LINES = 15;
 const KILL_GRACE_MS = 2000;
 
 const SETUP_FAILURE_LINE_RE = /^(?:(?:Error:\s*Cannot find module\b|Error \[ERR_MODULE_NOT_FOUND\]|ERR_MODULE_NOT_FOUND\b|Cannot find package\b|ModuleNotFoundError:|ImportError:|No module named\b|SyntaxError:|FileNotFoundError:|Error:\s*ENOENT\b|ENOENT:|ERROR collecting\b|command not found\b|not recognized as an internal\b|cannot find package\b|no Go files\b|error\[E\d+\]:|failed to compile\b)|.*\[build failed\])/i;
-const MISSING_RUNNER_OUTPUT_RE = /(?:^|\n)\s*(?:.*:\s*)?(?:No module named ['"]?(?:pytest|unittest)['"]?|command not found\b|not recognized as an internal\b|executable file not found in \$PATH\b)/i;
+const TEST_RUNNER_EXECUTION_RE = /(?:^|\n)(?:not ok \d+|ok \d+|#\s*(?:tests|pass|fail)\s+\d+|===+\s+test session starts\s+===+|collected \d+ items?|(?:ok|FAIL)\s+\S+\s+[\d.]+s|test result:\s+(?:ok|FAILED)\.|Test (?:Files|Suites:)\s+\d+)/m;
+const MISSING_RUNNER_LINE_RE = /^(?:(?:[^\n:]*python[^\n:]*:\s*)?No module named ['"]?(?:pytest|unittest)['"]?|(?:\/[\w/.-]*sh|bash|zsh|dash|ash|ksh|fish|sh):\s*(?:line\s+\d+:\s*|\d+:\s*)?[^:\n]+:\s*(?:command )?not found\b|'[^']+'\s+is not recognized as an internal or external command\b|exec:\s*"[^"]+":\s*executable file not found in \$PATH\b|error:\s*Failed to spawn:\s*`[^`]+`)/i;
+
+function hasMissingRunnerOutput(stderr, stdout) {
+  if (TEST_RUNNER_EXECUTION_RE.test(stdout || '')) return false;
+  const target = String(stderr || '').trim() ? String(stderr) : String(stdout || '');
+  for (const rawLine of target.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line && MISSING_RUNNER_LINE_RE.test(line)) return true;
+  }
+  return false;
+}
 const DIAG_PREFIX_RE = /^\s*(?:#\s*|E\s+)?/;
 const TARGETABLE_ERROR_CLASS_RE = /^(SyntaxError|ImportError|FileNotFoundError):/i;
 const COLOCATED_TEST_RE = COLOCATED_TEST_PATH_RE;
@@ -147,7 +158,7 @@ function buildShellResult({
     !ok
     && !timedOut
     && !stuck
-    && (hardSetupFailure || MISSING_RUNNER_OUTPUT_RE.test(`${stderr}\n${stdout}`)),
+    && (hardSetupFailure || hasMissingRunnerOutput(stderr, stdout)),
   );
   const setupFailure = exitCode !== 0 && !hardSetupFailure && !timedOut && !stuck ? findSetupFailureLine(stderr, stdout) : null;
   const setupError = procError && !timedOut && !stuck
@@ -310,6 +321,7 @@ async function execShellCommand(
     let lastActivityAt = started;
     let lastNormLine = '';
     let repeatCount = 0;
+    let nextRepeatTrigger = effectiveRepeat;
     let checkingStuck = false;
     let llmContinueCount = 0;
     let silentContinueCount = 0;
@@ -400,6 +412,10 @@ async function execShellCommand(
         verdictObj = null;
       }
       if (settled || stopping) return;
+      if (trigger === 'idle' && lastActivityAt > now) {
+        checkingStuck = false;
+        return;
+      }
 
       if (verdictObj && verdictObj.verdict === 'stuck') {
         stuck = true;
@@ -426,6 +442,7 @@ async function execShellCommand(
         }
         lastActivityAt = Date.now();
         repeatCount = 0;
+        nextRepeatTrigger = effectiveRepeat;
         checkingStuck = false;
         return;
       }
@@ -447,6 +464,7 @@ async function execShellCommand(
         killChildGroup();
         return;
       }
+      nextRepeatTrigger = offlineRepeatKill;
       checkingStuck = false;
     };
 
@@ -482,6 +500,7 @@ async function execShellCommand(
           } else {
             lastNormLine = norm;
             repeatCount = 1;
+            nextRepeatTrigger = effectiveRepeat;
             lastActivityAt = Date.now();
             silentContinueCount = 0;
           }
@@ -491,7 +510,7 @@ async function execShellCommand(
         }
       }
 
-      if (!timeoutMs && !stopping && !checkingStuck && repeatCount >= effectiveRepeat) {
+      if (!timeoutMs && !stopping && !checkingStuck && repeatCount >= nextRepeatTrigger) {
         void evaluateStuck('repeat-loop');
       }
     };
@@ -1000,7 +1019,7 @@ async function runBugContrastProve(
     timedOut: p.timedOut,
     stuck: Boolean(p.stuck),
     ...(p.stuckReason ? { stuckReason: p.stuckReason } : {}),
-    ...(p.frozenTail?.length ? { frozenTail: p.frozenTail } : {}),
+    ...(p.timedOut || p.stuck || p.frozenTail?.length ? { frozenTail: p.frozenTail ?? [] } : {}),
     durationMs: p.durationMs,
     setupError: p.setupError,
     expectedFound: Boolean(p.expectedFound),
@@ -1271,7 +1290,7 @@ export async function runProve(
         timedOut: r.timedOut,
         stuck: r.stuck,
         ...(r.stuckReason ? { stuckReason: r.stuckReason } : {}),
-        ...(r.frozenTail.length ? { frozenTail: r.frozenTail } : {}),
+        ...(r.timedOut || r.stuck || r.frozenTail.length ? { frozenTail: r.frozenTail } : {}),
         hardSetupFailure: r.hardSetupFailure,
         notProved: isNotProved,
         exitCode: r.exitCode,
