@@ -120,28 +120,20 @@ test('3362/3642 lintStory keeps structural/clarity rules and allows legitimate d
   assert.equal(cleanRes.ok, true, formatStoryLint(cleanRes));
   assert.deepEqual(cleanRes.problems, []);
 
-  const vagueRoleStory = [
+  const missingCriteriaStory = [
     '# Update profile',
     '',
-    'As a user, I want profile saves, so that settings persist.',
-    '',
-    '## Acceptance criteria',
-    '',
-    '1. Saving settings handles errors gracefully.',
-    '2. Profile loads as expected.',
+    'As an account holder, I want profile saves, so that settings persist.',
   ].join('\n');
 
-  const res = lintStory(vagueRoleStory, { path: 'user_stories/vague.md' });
+  const res = lintStory(missingCriteriaStory, { path: 'user_stories/missing-ac.md' });
   assert.equal(res.ok, false);
-  const codes = new Set(res.problems.map(item => item.code));
-  assert.deepEqual([...codes].sort(), ['story-generic-role', 'story-vague-criterion']);
-  assert.ok(res.problems.some(p => p.line === 3 && p.code === 'story-generic-role'));
-  assert.ok(res.problems.some(p => p.line === 7 && p.code === 'story-vague-criterion'));
-  assert.ok(res.problems.some(p => p.line === 8 && p.code === 'story-vague-criterion'));
+  assert.deepEqual(res.problems.map(item => item.code), ['story-missing-criteria']);
+  assert.equal(res.problems[0].line, 1);
 
   const formatted = formatStoryLint(res);
   assert.match(formatted, /^Story quality check failed:/);
-  assert.match(formatted, /user_stories\/vague\.md:7 \[story-vague-criterion\]/);
+  assert.match(formatted, /user_stories\/missing-ac\.md:1 \[story-missing-criteria\]/);
   assert.match(formatted, /Rewrite the Story in user-observable terms/);
 });
 

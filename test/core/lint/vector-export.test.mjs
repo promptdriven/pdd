@@ -233,7 +233,7 @@ test('AC3: 20 cases refuse without --split and split into pdd lint-clean 15+5 co
   execFileSync('git', ['add', 'tests/option-grant.formal-01.json', 'tests/option-grant.formal-02.json'], { cwd: repo });
   const lint = runCli(['lint'], { cwd: repo, home });
   assert.equal(lint.status, 0, lint.stderr);
-  assert.match(lint.stdout, /Local lint: 0 errors, 0 warnings\./);
+  assert.match(lint.stdout, /Lint OK: .*validated offline \(0 errors, 0 warnings\)/);
 });
 
 test('AC4 & safety: refuses missing checks, invalid pointers, patch-null-deletes-key, missing --out, traversal, and symlink targets without writing', t => {

@@ -10,7 +10,7 @@ import { causeText } from '../shared/safe-read.mjs';
 import { COLOCATED_TEST_PATH_RE, TEST_SCENARIO_JSON_RE, TEST_TARGET_FILE_RE, detectPytestConfigEdits, isConfiguredTestPath, readPytestTestpaths } from '../shared/test-paths.mjs';
 import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBaseRef, scrubChildEnv } from './lint/diagnostics.mjs';
 import { lintRepoProject } from './lint/project-lint.mjs';
-import { compileGlobMatcher } from './lint/regex-safety.mjs';
+import { compileGlobMatcher } from '../shared/glob-match.mjs';
 import { detectShadowBinaries, runDiffSpotlight } from './lint/test-inventory.mjs';
 import { runFormalVerification } from './formal-verify.mjs';
 import { classifyVerifyPathTier, detectHostCapabilities, formatProofTiersLine, inspectMultiPartIntegrationGuard, loadVerifyConfig, matchCapabilities, matchVerifyPaths, summarizeProofTiers } from './verify-paths.mjs';

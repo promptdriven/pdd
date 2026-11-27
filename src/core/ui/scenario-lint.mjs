@@ -1,24 +1,12 @@
 // Generated from prompts/cli/svg-layout.prompt.md.
-// Scenario schema_version, simulation/override alignment, and native-only dependency preflight.
+// Structural scenario schema_version, simulation/override schema alignment, and native-only layering preflight.
 import { dirname, relative, resolve, sep } from 'node:path';
 import { compileScenario, isShortScenarioDoc, needsScenarioCompile, SHORT_SCENARIO_SCHEMA, V1_SCENARIO_SCHEMA } from '../../scenario-compile.mjs';
 import { workspace } from '../../shared/workspace-policy.mjs';
 import { hasPointer, isFixturePath, setPointer } from './app-map-lint.mjs';
-import { escaped } from './svg-controls.mjs';
 
 const ROOT_PLACEHOLDER = '/__pdd_root__';
 const PORT_OP_RE = /^[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*$/;
-
-function proseMentionsPortOp(prose, opKey) {
-  if (prose.includes(opKey)) return true;
-  const dot = opKey.indexOf('.');
-  if (dot <= 0) return false;
-  const port = opKey.slice(0, dot);
-  const op = opKey.slice(dot + 1);
-  const portRe = new RegExp(`(?<![A-Za-z0-9_-])${escaped(port)}(?![A-Za-z0-9_-])`, 'i');
-  const opRe = new RegExp(`(?<![A-Za-z0-9_-])${escaped(op)}(?![A-Za-z0-9_-])`, 'i');
-  return portRe.test(prose) && opRe.test(prose);
-}
 
 function resolveInitialWorld(root, testFile, initialWorld, safeRead) {
   if (!initialWorld || typeof initialWorld !== 'object' || Array.isArray(initialWorld)) {
@@ -118,11 +106,9 @@ export function lintScenarioFiles({
       if (resultSchema && typeof resultSchema === 'object' && !resultSchemas.has(key)) resultSchemas.set(key, resultSchema);
     };
     let hasPlainPrompt = false;
-    const proseChunks = [];
     for (const p of closureSet) {
       const meta = getMeta(p);
       if (!meta) continue;
-      proseChunks.push(meta.prose);
       if (!meta.hasEmbeddedInterface) hasPlainPrompt = true;
       for (const res of Array.isArray(meta.iface?.resources) ? meta.iface.resources : []) {
         if (res?.kind === 'port' && typeof res.name === 'string' && Array.isArray(res.operations)) {
@@ -136,7 +122,7 @@ export function lintScenarioFiles({
         }
       }
     }
-    return { resources, resultSchemas, hasPlainPrompt, combinedProse: proseChunks.join('\n') };
+    return { resources, resultSchemas, hasPlainPrompt };
   };
 
   for (const testFile of testJsonPaths) {
@@ -237,7 +223,6 @@ export function lintScenarioFiles({
       }
     }
     if (isFixtureJson || isNativeCaseDoc || !doc || typeof doc !== 'object' || doc.schema_version !== V1_SCENARIO_SCHEMA || !Array.isArray(doc.steps)) continue;
-    // Always populate full-repo checkableScenarioEntries lookup index (used by promptFilter-scoped inverted native-only check below).
     for (const mapCandidate of Array.isArray(doc.app_maps) ? doc.app_maps : []) {
       const mapDoc = typeof mapCandidate === 'string' ? parsedAppMaps.get(mapCandidate.trim().replace(/^\.\//, '')) : null;
       if (!mapDoc) continue;
@@ -279,9 +264,6 @@ export function lintScenarioFiles({
             warnings.push({ key: `${testFile}\0simfmt\0${opKey}`, text: `Warning: ${testFile}: simulation key "${opKey}" must have <port>.<operation> form` });
           }
           continue;
-        }
-        if (wholeSummary.hasPlainPrompt && !wholeSummary.resources.has(opKey) && !proseMentionsPortOp(wholeSummary.combinedProse, opKey)) {
-          warnings.push({ key: `${testFile}\0simprose\0${opKey}`, text: `Warning: ${testFile}: simulation port "${opKey}" is not mentioned in reachable prompt prose; name ${opKey} explicitly so lazy interface synthesis binds the port` });
         }
         const simBinding = rawSim?.binding && typeof rawSim.binding === 'object' ? rawSim.binding : rawSim;
         const rvp = typeof simBinding?.result_value_pointer === 'string' ? simBinding.result_value_pointer : null;
@@ -329,8 +311,6 @@ export function lintScenarioFiles({
         if (!declared) {
           if (!summary.hasPlainPrompt) {
             warnings.push({ key: `${testFile}\0ovres\0${stepLabel}\0${rowKey}`, text: `Warning: ${testFile} (${stepLabel}): simulation_overrides port "${opKey}" is not declared in reachable Runtime interface resources for ${step.entry_path}` });
-          } else if (!proseMentionsPortOp(summary.combinedProse, opKey)) {
-            warnings.push({ key: `${testFile}\0ovprose\0${stepLabel}\0${rowKey}`, text: `Warning: ${testFile} (${stepLabel}): simulation_overrides port "${opKey}" is not mentioned in reachable prompt prose (${step.entry_path}); name ${opKey} explicitly so lazy interface synthesis binds the port` });
           }
         } else if (binding?.action === 'port.write' && !declared.has('read') && !declared.has('write') && !declared.has('read_write')) {
           warnings.push({ key: `${testFile}\0ovacc\0${stepLabel}\0${rowKey}`, text: `Warning: ${testFile} (${stepLabel}): port.write simulation_overrides on "${opKey}" requires read or write port access in reachable Runtime interface resources` });

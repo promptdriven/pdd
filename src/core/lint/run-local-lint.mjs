@@ -1,6 +1,6 @@
 // Prompt: prompts/cli/repo-hygiene-lint.prompt.md
 
-// 100% offline (<1s) CLI handler for `local: 'lint'` (0 AI, 0 network, 0 batch-state writes, PDD files only + --diff).
+// 100% offline (<1s) CLI handler for `local: 'lint'` (0 AI, 0 network, 0 batch-state writes, structural PDD lint + --diff).
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { lintSvgLayouts as defaultLintSvgLayouts } from '../../svg-layout.mjs';
@@ -25,9 +25,17 @@ function resolveGitRoot(cwd) {
   }
 }
 
+function formatOfflineSummary({ ok, counts, errorCount, warningCount }) {
+  const errLabel = `${errorCount} ${errorCount === 1 ? 'error' : 'errors'}`;
+  const warnLabel = `${warningCount} ${warningCount === 1 ? 'warning' : 'warnings'}`;
+  const status = ok ? 'Lint OK' : 'Lint FAILED';
+  const storyScenarioCount = (counts.stories ?? 0) + (counts.scenarios ?? 0);
+  return `${status}: ${counts.prompts ?? 0} prompt(s), ${storyScenarioCount} story/scenario(s), ${counts.app_maps ?? 0} app-map(s), ${counts.drawings ?? 0} drawing(s) validated offline (${errLabel}, ${warnLabel})`;
+}
+
 /**
  * Run deterministic offline PDD lint with 0 network calls, 0 AI calls, and 0 batch-state writes.
- * Clean repos print `Local lint: 0 errors, 0 warnings. (0 AI calls, 0 network calls)` to stdout with empty stderr.
+ * Clean repos print `Lint OK: N prompt(s), M story/scenario(s), K app-map(s), J drawing(s) validated offline (0 errors, 0 warnings)` to stdout with empty stderr.
  */
 export function runLocalLint(
   {
@@ -39,7 +47,7 @@ export function runLocalLint(
     runCommands = false,
     trustWorkingTree = false,
     includeSvg = true,
-    includeUpstream = true,
+    includeUpstream = false,
     config,
     workspaceRoot,
     workspacePolicy,
@@ -75,15 +83,15 @@ export function runLocalLint(
     if (diffResult && diffResult.baseAvailable === false) {
       const problems = diffResult.errors.map(e => e.formatted);
       const warnings = diffResult.advisories.map(a => `Warning: ${a}`);
-      const errLabel = `${problems.length} ${problems.length === 1 ? 'error' : 'errors'}`;
-      const warnLabel = `${warnings.length} ${warnings.length === 1 ? 'warning' : 'warnings'}`;
-      const summaryLine = `Local lint: ${errLabel}, ${warnLabel}. (0 AI calls, 0 network calls)`;
+      const counts = { prompts: 0, stories: 0, scenarios: 0, app_maps: 0, drawings: 0 };
+      const summaryLine = formatOfflineSummary({ ok: false, counts, errorCount: problems.length, warningCount: warnings.length });
       const payload = {
         schema_version: 'pdd.local-lint.v1',
         ok: false,
         exit_code: 1,
         local_only: true,
         summary_line: summaryLine,
+        counts,
         problems,
         warnings,
         findings: [],
@@ -115,7 +123,7 @@ export function runLocalLint(
 
   if (scope.unmatched.length > 0) {
     const problems = scope.unmatched.map(w => `No prompt, Story, or test matched "${w}". Run \`pdd files\` to list available Stories and prompts.`);
-    const summaryLine = `Local lint: ${problems.length} unmatched target${problems.length === 1 ? '' : 's'}. (0 AI calls, 0 network calls)`;
+    const summaryLine = `Lint FAILED: ${problems.length} unmatched target${problems.length === 1 ? '' : 's'} validated offline (0 AI calls, 0 network calls)`;
     if (json) stdout.write(`${JSON.stringify({ schema_version: 'pdd.local-lint.v1', ok: false, exit_code: 2, local_only: true, summary_line: summaryLine, problems, unmatched: scope.unmatched, warnings: [], findings: [] }, null, 2)}\n`);
     else { for (const p of problems) stderr.write(`${p}\n`); }
     return 2;
@@ -135,6 +143,10 @@ export function runLocalLint(
     diffResult = (ports.runDiffSpotlight ?? runDiffSpotlight)({ cwd: root, baseRef: resolvedDiffBase, filterPaths: scopePaths });
   }
 
+  // Share a single-pass read cache across lintRepoProject and lintSvgLayouts even in full-repo mode.
+  if (!scope.caches) {
+    scope.caches = { promptCache: new Map(), headCache: new Map(), fullCache: new Map() };
+  }
   const effectiveFiles = scope.effectiveFiles;
 
   // 3. Run deterministic project lint strictly scoped while keeping full-repo lookup index intact.
@@ -149,14 +161,16 @@ export function runLocalLint(
     trustBaseRef: resolvedDiffBase,
   });
 
-  // 4. Run SVG/app-map/scenario layout checks strictly scoped while keeping full-repo lookup index intact.
+  // 4. Run structural SVG/app-map/scenario checks strictly scoped while keeping full-repo lookup index intact.
   const svgWarnings = [];
   const scenarioErrors = [];
+  const svgStats = { appMaps: 0, drawings: 0 };
   if (includeSvg && effectiveFiles.length > 0) {
     try {
       const lintSvg = ports.lintSvgLayouts ?? defaultLintSvgLayouts;
+      const sharedReadCache = new Map([...scope.caches.promptCache, ...scope.caches.fullCache]);
       const svgArgs = scope.fullRepo
-        ? { root, files: effectiveFiles, includeShortDiagnostics: true }
+        ? { root, files: effectiveFiles, includeShortDiagnostics: true, readCache: sharedReadCache, statsOut: svgStats }
         : {
             root,
             files: effectiveFiles,
@@ -164,6 +178,8 @@ export function runLocalLint(
             appMapPaths: [...scope.appMaps].sort(),
             scenarioPaths: [...scope.scenarios].sort(),
             includeShortDiagnostics: true,
+            readCache: sharedReadCache,
+            statsOut: svgStats,
           };
       const rawSvg = lintSvg(svgArgs);
       if (Array.isArray(rawSvg)) {
@@ -233,9 +249,14 @@ export function runLocalLint(
   ];
   const exitCode = problems.length > 0 ? 1 : 0;
   const ok = exitCode === 0;
-  const errLabel = `${problems.length} ${problems.length === 1 ? 'error' : 'errors'}`;
-  const warnLabel = `${warnings.length} ${warnings.length === 1 ? 'warning' : 'warnings'}`;
-  const summaryLine = `Local lint: ${errLabel}, ${warnLabel}. (0 AI calls, 0 network calls)`;
+  const counts = {
+    prompts: project.counts?.prompts ?? 0,
+    stories: project.counts?.stories ?? 0,
+    scenarios: project.counts?.scenarios ?? 0,
+    app_maps: svgStats.appMaps,
+    drawings: svgStats.drawings,
+  };
+  const summaryLine = formatOfflineSummary({ ok, counts, errorCount: problems.length, warningCount: warnings.length });
 
   const payload = {
     schema_version: 'pdd.local-lint.v1',
@@ -243,6 +264,7 @@ export function runLocalLint(
     exit_code: exitCode,
     local_only: true,
     summary_line: summaryLine,
+    counts,
     problems,
     warnings,
     findings: project.findings,

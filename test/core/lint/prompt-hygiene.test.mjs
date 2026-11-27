@@ -7,9 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { lintRepoProject } from '../../../src/core/lint/project-lint.mjs';
 import { formatDiagnosticLine } from '../../../src/core/lint/diagnostics.mjs';
-import { matchesAnyCustomRule, loadProjectLintConfig } from '../../../src/core/lint/project-config.mjs';
 import { lintRepoAntiPatterns } from '../../../src/repo-hygiene-lint.mjs';
-import { lintPromptSize } from '../../../src/core/lint/prompt-rules.mjs';
 import { lintTestFixedSleeps, lintTestUnexcusedSkips } from '../../../src/autopilot/lint-sleep-skip.mjs';
 
 function initGitRepo(t, prefix) {
@@ -32,12 +30,10 @@ test('broken-prompt-header fails as error on nonexistent prompt path with 4-part
   mkdirSync(join(repo, 'src'), { recursive: true });
 
   writeFileSync(join(repo, 'prompts', 'ok.prompt.md'), '# Ok\n\nOwn `src/ok.mjs`.\n\n## Dependencies\nNone.\n');
-  // Existing prompt with an intentionally stale sha256 must NOT trigger broken-prompt-header (path-only check).
   writeFileSync(
     join(repo, 'src', 'ok.mjs'),
     `// Generated from prompts/ok.prompt.md (sha256: ${'0'.repeat(64)}).\nexport const ok = () => 1;\n`,
   );
-  // Missing prompt path MUST fail as hard error with 4-part teaching diagnostic.
   writeFileSync(
     join(repo, 'src', 'orphan.mjs'),
     '// Generated from prompts/deleted-module.prompt.md.\nexport const orphan = () => 0;\n',
@@ -84,41 +80,6 @@ test('broken-dependency-link accepts existing files and directories, fails close
   const cycles = report.findings.filter(f => f.code === 'prompt-dependency-cycle');
   assert.equal(cycles.length, 1);
   assert.equal(cycles[0].severity, 'warn');
-});
-
-test('prompt-larger-than-code skips tiny shims under the 25-line floor and flags oversized prompts at >= 25 code lines', t => {
-  const repo = initGitRepo(t, 'pdd-core-size-');
-  mkdirSync(join(repo, 'prompts'), { recursive: true });
-  mkdirSync(join(repo, 'src'), { recursive: true });
-
-  // Tiny 4-line shim with 12-line prompt -> skipped by 25-line floor in lintRepoProject.
-  writeFileSync(
-    join(repo, 'prompts', 'shim.prompt.md'),
-    `# Shim\n\nOwn \`src/shim.mjs\`.\n${Array.from({ length: 10 }, (_, i) => `- Rule ${i}`).join('\n')}\n\n## Dependencies\nNone.\n`,
-  );
-  writeFileSync(join(repo, 'src', 'shim.mjs'), '// Generated from prompts/shim.prompt.md\nexport const shim = x => x;\n');
-
-  // 26-line module with 32-line prompt -> flagged by prompt-larger-than-code.
-  writeFileSync(
-    join(repo, 'prompts', 'heavy.prompt.md'),
-    `# Heavy\n\nOwn \`src/heavy.mjs\`.\n${Array.from({ length: 28 }, (_, i) => `- Detail ${i}`).join('\n')}\n\n## Dependencies\nNone.\n`,
-  );
-  writeFileSync(
-    join(repo, 'src', 'heavy.mjs'),
-    `// Generated from prompts/heavy.prompt.md\nexport function heavy(n) {\n${Array.from({ length: 24 }, (_, i) => `  const v${i} = n + ${i}; void v${i};`).join('\n')}\n  return n;\n}\n`,
-  );
-  commitAll(repo);
-
-  const report = lintRepoProject({ root: repo });
-  const sizeHits = report.findings.filter(f => f.code === 'prompt-larger-than-code');
-  assert.equal(sizeHits.length, 1);
-  assert.equal(sizeHits[0].path, 'prompts/heavy.prompt.md');
-
-  // Direct lintPromptSize with explicit minCodeLines: 25 matches the same floor.
-  assert.deepEqual(
-    lintPromptSize('# P\nline1\nline2\nline3\nline4\nline5\n', [{ path: 'src/s.mjs', text: 'export const x = 1;\n' }], { minCodeLines: 25 }),
-    [],
-  );
 });
 
 test('structural Story hard error (story-missing-criteria) fails closed while domain specs pass cleanly in lintRepoProject', t => {
@@ -190,36 +151,26 @@ test('Layer-2 autopilot/lint-sleep-skip catches unexcused JS/Python skips and At
   assert.match(sleepWarns[1], /:5 \[test-fixed-sleep\]/);
 });
 
-test('Astra #13: custom-rule glob pre-filter, lintRepoAntiPatterns compat export, and 4-part fallback with separate Rerun:', t => {
-  const cfg = loadProjectLintConfig({
-    lint: {
-      custom_rules: [
-        { id: 'only-billing', target: 'code', include: ['src/billing/*.mjs'], exclude: ['src/billing/ignored.mjs'], severity: 'error', forbid_pattern: 'BAD', message: 'No BAD token' },
-      ],
-    },
-  });
-  assert.equal(matchesAnyCustomRule(cfg.customRules, 'code', 'src/billing/tax.mjs'), true);
-  assert.equal(matchesAnyCustomRule(cfg.customRules, 'code', 'src/billing/ignored.mjs'), false);
-  assert.equal(matchesAnyCustomRule(cfg.customRules, 'code', 'src/unrelated/huge.mjs'), false);
-
+test('Astra #13: lintRepoAntiPatterns compat export and 4-part fallback with separate Rerun:', t => {
   const line = formatDiagnosticLine(
-    { filePath: 'src/billing/tax.mjs', line: 9, code: 'only-billing', category: 'custom rule', detail: 'No BAD token' },
+    { filePath: 'src/billing/tax.mjs', line: 9, code: 'broken-prompt-header', category: 'prompt ownership', detail: 'Missing owner prompt' },
     'error',
   );
-  assert.match(line, /^Error: custom rule: src\/billing\/tax\.mjs:9 \[only-billing\] No BAD token\. Fix: Update src\/billing\/tax\.mjs:9 to satisfy custom rule "only-billing"\. Rerun: `pdd lint`\.$/);
+  assert.match(line, /^Error: prompt ownership: src\/billing\/tax\.mjs:9 \[broken-prompt-header\] Missing owner prompt\. Fix: Update src\/billing\/tax\.mjs:9 to fix prompt ownership rule "broken-prompt-header".*\. Rerun: `pdd lint`\.$/);
 
   const warnWithFix = formatDiagnosticLine(
-    { filePath: 'prompts/billing.prompt.md', line: 4, code: 'prompt-missing-diagram', category: 'prompt structure', detail: 'Missing diagram', fix: 'Add a mermaid flowchart near prompts/billing.prompt.md:4' },
+    { filePath: 'prompts/billing.prompt.md', line: 1, code: 'prompt-missing-dependencies', category: 'prompt structure', detail: 'Missing Dependencies', fix: 'Add a `## Dependencies` section' },
     'warn',
   );
-  assert.match(warnWithFix, /^Warning: prompt structure: prompts\/billing\.prompt\.md:4 \[prompt-missing-diagram\] Missing diagram\. Fix: Add a mermaid flowchart near prompts\/billing\.prompt\.md:4\. Rerun: `pdd lint`\.$/);
+  assert.match(warnWithFix, /^Warning: prompt structure: prompts\/billing\.prompt\.md:1 \[prompt-missing-dependencies\] Missing Dependencies\. Fix: Add a `## Dependencies` section\. Rerun: `pdd lint`\.$/);
 
   const repo = initGitRepo(t, 'pdd-compat-export-');
   mkdirSync(join(repo, 'prompts'), { recursive: true });
-  const longFence = ['```js', ...Array.from({ length: 20 }, (_, i) => `const v${i} = ${i};`), '```'].join('\n');
-  writeFileSync(join(repo, 'prompts', 'long-fence.prompt.md'), `# Long fence\n\nOwn \`src/long.mjs\`.\n\n${longFence}\n\n## Dependencies\nNone.\n`);
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'prompts', 'no-deps.prompt.md'), '# No Deps\n\nOwn `src/no-deps.mjs`.\n');
+  writeFileSync(join(repo, 'src', 'no-deps.mjs'), '// Prompt: prompts/no-deps.prompt.md\nexport const x = 1;\n');
   commitAll(repo);
   const compatWarns = lintRepoAntiPatterns({ root: repo });
   assert.deepEqual(compatWarns, lintRepoProject({ root: repo }).warnings);
-  assert.ok(compatWarns.some(w => w.includes('[prompt-code-fence-length]')));
+  assert.ok(compatWarns.some(w => w.includes('[prompt-missing-dependencies]')));
 });

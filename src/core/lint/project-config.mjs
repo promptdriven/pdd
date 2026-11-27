@@ -1,20 +1,16 @@
 // Prompt: prompts/cli/repo-hygiene-lint.prompt.md
 
-// Project lint configuration loader (`pdd.json` "lint" + `rules/lint/*.json`), 100-rule cap, id dedup, base-trusted lint.commands.
+// Project lint configuration loader (`pdd.json` "lint" + `rules/lint/*.json`), base-trusted lint.commands & overrides.
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildLineStarts, lineNumberAt, readSafeUtf8, resolveDefaultBaseRef } from './diagnostics.mjs';
-import { countFileLines, countPromptProseLines, stripPromptMetadataPreservingLines } from './prompt-metadata.mjs';
-import { compileGlobMatcher, parseRegexSafe } from './regex-safety.mjs';
+import { readSafeUtf8, resolveDefaultBaseRef } from './diagnostics.mjs';
 
-export const MAX_CUSTOM_RULES = 100;
 const MAX_LINT_COMMANDS = 16;
 const RULE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
-const VALID_TARGETS = new Set(['prompt', 'story', 'test', 'code', 'all']);
 const VALID_SEVERITIES = new Set(['off', 'warn', 'error']);
 
-function mergeLintConfigSection(rawLint, { sourcePath, allowCommands = true, disabledRules, ruleSeverities, customRuleMap, commandMap, mutationCommandRef, scenarioConfigRef, configErrors }) {
+function mergeLintConfigSection(rawLint, { sourcePath, allowCommands = true, disabledRules, ruleSeverities, commandMap, mutationCommandRef, scenarioConfigRef, configErrors }) {
   const addConfigError = detail => configErrors.push({
     filePath: sourcePath,
     line: 1,
@@ -109,108 +105,6 @@ function mergeLintConfigSection(rawLint, { sourcePath, allowCommands = true, dis
       mutationCommandRef.value = rawLint.mutation_command.trim();
     }
   }
-
-  if (rawLint.custom_rules !== undefined) {
-    if (!Array.isArray(rawLint.custom_rules)) {
-      addConfigError(`"lint.custom_rules" in ${sourcePath} must be an array of rule objects.`);
-    } else {
-      for (let idx = 0; idx < rawLint.custom_rules.length; idx++) {
-        const rawRule = rawLint.custom_rules[idx];
-        if (!rawRule || typeof rawRule !== 'object' || Array.isArray(rawRule)) {
-          addConfigError(`Entry ${idx} in "lint.custom_rules" must be an object.`);
-          continue;
-        }
-        const id = rawRule.id;
-        if (typeof id !== 'string' || !RULE_ID_RE.test(id)) {
-          addConfigError(`Entry ${idx} in "lint.custom_rules" requires a valid "id" (letters, digits, "-", "_", ".").`);
-          continue;
-        }
-        if (!customRuleMap.has(id) && customRuleMap.size >= MAX_CUSTOM_RULES) {
-          addConfigError(`"lint.custom_rules" exceeds the maximum of ${MAX_CUSTOM_RULES} custom rules (while adding "${id}").`);
-          continue;
-        }
-        const rawTarget = rawRule.target ?? (rawRule.include ? 'all' : 'prompt');
-        const targetList = Array.isArray(rawTarget) ? rawTarget : [rawTarget];
-        if (!targetList.length || targetList.some(t => typeof t !== 'string' || !VALID_TARGETS.has(t))) {
-          addConfigError(`Custom rule "${id}" has invalid "target" (choose "prompt", "story", "test", "code", or "all").`);
-          continue;
-        }
-        const severity = rawRule.severity ?? 'warn';
-        if (!VALID_SEVERITIES.has(severity)) {
-          addConfigError(`Custom rule "${id}" has invalid "severity" (choose "off", "warn", or "error").`);
-          continue;
-        }
-
-        const toGlobs = (val, fieldName) => {
-          if (val === undefined) return [];
-          const arr = typeof val === 'string' ? [val] : (Array.isArray(val) ? val : null);
-          if (!arr || arr.some(g => typeof g !== 'string')) {
-            addConfigError(`Custom rule "${id}" field "${fieldName}" must be a glob string or array of strings.`);
-            return null;
-          }
-          const compiled = arr.map(compileGlobMatcher);
-          if (compiled.some(r => r === null)) {
-            addConfigError(`Custom rule "${id}" field "${fieldName}" contains an invalid glob.`);
-            return null;
-          }
-          return compiled;
-        };
-
-        const includeMatchers = toGlobs(rawRule.include, 'include');
-        const excludeMatchers = toGlobs(rawRule.exclude, 'exclude');
-        if (includeMatchers === null || excludeMatchers === null) continue;
-
-        let forbidRegex = null;
-        if (rawRule.forbid_pattern !== undefined) {
-          forbidRegex = parseRegexSafe(rawRule.forbid_pattern, rawRule.flags ?? '');
-          if (!forbidRegex) { addConfigError(`Custom rule "${id}" has an invalid "forbid_pattern" regular expression.`); continue; }
-        }
-        let requireRegex = null;
-        if (rawRule.require_pattern !== undefined) {
-          requireRegex = parseRegexSafe(rawRule.require_pattern, rawRule.flags ?? '');
-          if (!requireRegex) { addConfigError(`Custom rule "${id}" has an invalid "require_pattern" regular expression.`); continue; }
-        }
-        let requireHeading = null;
-        if (rawRule.require_heading !== undefined) {
-          if (typeof rawRule.require_heading !== 'string' || !rawRule.require_heading.trim()) {
-            addConfigError(`Custom rule "${id}" field "require_heading" must be a nonblank string.`);
-            continue;
-          }
-          requireHeading = rawRule.require_heading.trim();
-        }
-        let maxLines = null;
-        if (rawRule.max_lines !== undefined) {
-          if (!Number.isInteger(rawRule.max_lines) || rawRule.max_lines < 1) {
-            addConfigError(`Custom rule "${id}" field "max_lines" must be a positive integer.`);
-            continue;
-          }
-          maxLines = rawRule.max_lines;
-        }
-        if (!forbidRegex && !requireRegex && !requireHeading && maxLines === null) {
-          addConfigError(`Custom rule "${id}" must specify at least one check ("forbid_pattern", "require_pattern", "require_heading", or "max_lines").`);
-          continue;
-        }
-
-        const message = typeof rawRule.message === 'string' && rawRule.message.trim()
-          ? rawRule.message.trim()
-          : `Custom project lint rule "${id}" failed.`;
-
-        // Deduplicate by `id`: later overrides replace earlier definitions cleanly.
-        customRuleMap.set(id, {
-          id,
-          targets: new Set(targetList),
-          severity,
-          includeMatchers,
-          excludeMatchers,
-          forbidRegex,
-          requireRegex,
-          requireHeading,
-          maxLines,
-          message,
-        });
-      }
-    }
-  }
 }
 
 function loadWorkspaceLintRuleFiles(realRoot, target) {
@@ -253,13 +147,8 @@ function loadWorkspaceLintRuleFiles(realRoot, target) {
       });
       continue;
     }
-    const section = Array.isArray(parsed)
-      ? { custom_rules: parsed }
-      : (parsed && typeof parsed === 'object' && typeof parsed.id === 'string'
-        && !Object.hasOwn(parsed, 'disable') && !Object.hasOwn(parsed, 'rules') && !Object.hasOwn(parsed, 'custom_rules')
-        ? { custom_rules: [parsed] }
-        : parsed);
-    mergeLintConfigSection(section, { sourcePath: relPath, allowCommands: false, ...target });
+    if (Array.isArray(parsed)) continue;
+    mergeLintConfigSection(parsed, { sourcePath: relPath, allowCommands: false, ...target });
   }
   return loadedAny;
 }
@@ -267,12 +156,12 @@ function loadWorkspaceLintRuleFiles(realRoot, target) {
 export function loadProjectLintConfig(rootOrObject) {
   const empty = { configured: false, disabledRules: new Set(), ruleSeverities: new Map(), customRules: [], commands: [], mutationCommand: null, scenarioConfig: { maxSteps: null, maxWorldBytes: null }, configErrors: [] };
   if (!rootOrObject) return empty;
-  const target = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, scenarioConfigRef: { maxSteps: null, maxWorldBytes: null }, configErrors: [] };
+  const target = { disabledRules: new Set(), ruleSeverities: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, scenarioConfigRef: { maxSteps: null, maxWorldBytes: null }, configErrors: [] };
   const finalize = configured => ({
     configured,
     disabledRules: target.disabledRules,
     ruleSeverities: target.ruleSeverities,
-    customRules: [...target.customRuleMap.values()],
+    customRules: [],
     commands: [...target.commandMap.values()],
     mutationCommand: target.mutationCommandRef.value,
     scenarioConfig: { ...target.scenarioConfigRef },
@@ -312,19 +201,6 @@ export function loadProjectLintConfig(rootOrObject) {
   return empty;
 }
 
-function headingMatches(contentText, requiredHeading) {
-  const hasHashes = /^#{1,6}\s+/.test(requiredHeading);
-  const lower = requiredHeading.toLowerCase();
-  for (const line of contentText.split(/\r?\n/)) {
-    if (hasHashes) { if (line.trim().toLowerCase() === lower) return true; }
-    else {
-      const m = /^ {0,3}#{1,6}\s+(.+)$/.exec(line);
-      if (m && m[1].trim().toLowerCase() === lower) return true;
-    }
-  }
-  return false;
-}
-
 export function loadBaseTrustedLintCommands(root, { baseRef } = {}) {
   let realRoot;
   try { realRoot = realpathSync(root); } catch { return { baseSha: null, source: null, commands: [], mutationCommand: null, skippedUntrusted: false }; }
@@ -334,7 +210,7 @@ export function loadBaseTrustedLintCommands(root, { baseRef } = {}) {
   if (wtRaw !== null) {
     try {
       const wtParsed = JSON.parse(wtRaw);
-      const wtTarget = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, configErrors: [] };
+      const wtTarget = { disabledRules: new Set(), ruleSeverities: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, configErrors: [] };
       if (wtParsed?.lint?.commands !== undefined || wtParsed?.lint?.mutation_command !== undefined) {
         mergeLintConfigSection({ commands: wtParsed.lint.commands, mutation_command: wtParsed.lint.mutation_command }, { sourcePath: 'pdd.json', allowCommands: true, ...wtTarget });
       }
@@ -359,7 +235,7 @@ export function loadBaseTrustedLintCommands(root, { baseRef } = {}) {
     try {
       const parsed = JSON.parse(show.stdout);
       if (parsed?.lint && typeof parsed.lint === 'object' && !Array.isArray(parsed.lint)) {
-        const t = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, configErrors: [] };
+        const t = { disabledRules: new Set(), ruleSeverities: new Map(), commandMap: new Map(), mutationCommandRef: { value: null }, configErrors: [] };
         mergeLintConfigSection({ commands: parsed.lint.commands, mutation_command: parsed.lint.mutation_command }, { sourcePath: `${baseSha}:pdd.json`, allowCommands: true, ...t });
         baseCommands.push(...t.commandMap.values());
         baseMutationCommand = t.mutationCommandRef.value;
@@ -387,7 +263,7 @@ export function loadBaseTrustedLintOverrides(root, { baseRef } = {}) {
   if (mb.status !== 0 || !mb.stdout.trim()) return empty;
   const baseSha = mb.stdout.trim();
 
-  const target = { disabledRules: new Set(), ruleSeverities: new Map(), customRuleMap: new Map(), commandMap: new Map(), scenarioConfigRef: { maxSteps: null, maxWorldBytes: null }, configErrors: [] };
+  const target = { disabledRules: new Set(), ruleSeverities: new Map(), commandMap: new Map(), scenarioConfigRef: { maxSteps: null, maxWorldBytes: null }, configErrors: [] };
   const lsRules = spawnSync('git', ['ls-tree', '--name-only', baseSha, '--', 'rules/lint/'], {
     cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -400,13 +276,8 @@ export function loadBaseTrustedLintOverrides(root, { baseRef } = {}) {
       if (showRule.status !== 0 || typeof showRule.stdout !== 'string') continue;
       try {
         const parsed = JSON.parse(showRule.stdout);
-        const section = Array.isArray(parsed)
-          ? { custom_rules: parsed }
-          : (parsed && typeof parsed === 'object' && typeof parsed.id === 'string'
-            && !Object.hasOwn(parsed, 'disable') && !Object.hasOwn(parsed, 'rules') && !Object.hasOwn(parsed, 'custom_rules')
-            ? { custom_rules: [parsed] }
-            : parsed);
-        mergeLintConfigSection(section, { sourcePath: `${baseSha}:${relPath}`, allowCommands: false, ...target });
+        if (Array.isArray(parsed)) continue;
+        mergeLintConfigSection(parsed, { sourcePath: `${baseSha}:${relPath}`, allowCommands: false, ...target });
       } catch {}
     }
   }
@@ -424,50 +295,4 @@ export function loadBaseTrustedLintOverrides(root, { baseRef } = {}) {
   }
 
   return { baseAvailable: true, baseSha, disabledRules: target.disabledRules, ruleSeverities: target.ruleSeverities, scenarioConfig: { ...target.scenarioConfigRef } };
-}
-
-export function matchesAnyCustomRule(customRules, kind, filePath) {
-  for (const rule of customRules) {
-    if (rule.severity === 'off') continue;
-    if (!rule.targets.has('all') && !rule.targets.has(kind)) continue;
-    if (rule.includeMatchers.length && !rule.includeMatchers.some(m => m.test(filePath))) continue;
-    if (rule.excludeMatchers.some(m => m.test(filePath))) continue;
-    return true;
-  }
-  return false;
-}
-
-export function evaluateCustomRulesOnFile(customRules, { filePath, kind, rawText }) {
-  const findings = [];
-  const inspectText = kind === 'prompt' ? stripPromptMetadataPreservingLines(rawText) : rawText;
-  const lineCount = kind === 'prompt' ? countPromptProseLines(rawText) : countFileLines(rawText);
-  const lineStarts = buildLineStarts(inspectText);
-
-  for (let idx = 0; idx < customRules.length; idx++) {
-    const rule = customRules[idx];
-    if (rule.severity === 'off') continue;
-    if (!rule.targets.has('all') && !rule.targets.has(kind)) continue;
-    if (rule.includeMatchers.length && !rule.includeMatchers.some(m => m.test(filePath))) continue;
-    if (rule.excludeMatchers.some(m => m.test(filePath))) continue;
-
-    if (rule.forbidRegex) {
-      const m = rule.forbidRegex.exec(inspectText);
-      if (m) {
-        findings.push({
-          filePath, line: lineNumberAt(lineStarts, m.index), order: 50 + idx,
-          code: rule.id, category: 'custom rule', defaultSeverity: rule.severity, detail: rule.message,
-        });
-      }
-    }
-    if (rule.requireRegex && !rule.requireRegex.test(inspectText)) {
-      findings.push({ filePath, line: 1, order: 50 + idx, code: rule.id, category: 'custom rule', defaultSeverity: rule.severity, detail: rule.message });
-    }
-    if (rule.requireHeading && !headingMatches(inspectText, rule.requireHeading)) {
-      findings.push({ filePath, line: 1, order: 50 + idx, code: rule.id, category: 'custom rule', defaultSeverity: rule.severity, detail: rule.message });
-    }
-    if (rule.maxLines !== null && lineCount > rule.maxLines) {
-      findings.push({ filePath, line: 1, order: 50 + idx, code: rule.id, category: 'custom rule', defaultSeverity: rule.severity, detail: `${rule.message} (${lineCount} lines > max ${rule.maxLines}).` });
-    }
-  }
-  return findings;
 }

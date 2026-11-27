@@ -158,11 +158,11 @@ test('3578 pdd lint --local enforces default-on structural errors without pdd.js
   mkdirSync(join(repo, 'prompts/trust'), { recursive: true });
   writeFileSync(
     join(repo, 'prompts/trust/access.prompt.md'),
-    '# Access\n\nOwn `src/access.mjs`. Use `store.load` and `store.save`.\n\n## Dependencies\n\nNone.\n',
+    '# Access\n\nOwn `src/access.mjs`.\n\n## Dependencies\n\nNone.\n',
   );
   writeFileSync(
     join(repo, 'prompts/trust/service.prompt.md'),
-    '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Service\n\n## Ports\n\n- `store.load`\n- `access.commit`\n\n## Dependencies\n\n- [access](access.prompt.md)\n',
+    '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Service\n\n## Dependencies\n\n- [missing](missing.prompt.md)\n',
   );
   execFileSync('git', ['init', '-q'], { cwd: repo });
   execFileSync('git', ['add', '.'], { cwd: repo });
@@ -172,11 +172,11 @@ test('3578 pdd lint --local enforces default-on structural errors without pdd.js
   const errOut = capture(), errErr = capture();
   const failCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: errOut, stderr: errErr });
   assert.equal(failCode, 1);
-  assert.match(errErr.text, /Error:.*\[native-only-unknown-port\].*"access\.commit"/);
+  assert.match(errErr.text, /Error:.*\[broken-dependency-link\].*missing\.prompt\.md/);
 
   writeFileSync(
     join(repo, 'prompts/trust/service.prompt.md'),
-    '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Service\n\n## Ports\n\n- `store.load`\n- `store.save`\n\n## Dependencies\n\n- [access](access.prompt.md)\n',
+    '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Service\n\n## Dependencies\n\n- [access](access.prompt.md)\n',
   );
   const okOut = capture(), okErr = capture();
   const okCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: okOut, stderr: okErr });

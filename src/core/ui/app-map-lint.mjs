@@ -1,7 +1,6 @@
 // Generated from prompts/cli/svg-layout.prompt.md.
-// Single-pass test-JSON / app-map discovery and app-map preflight validation.
+// Single-pass test-JSON / app-map discovery and app-map structural schema/timer/state_schema preflight.
 import { workspace } from '../../shared/workspace-policy.mjs';
-import { lintScreenDesign } from './screen-design-check.mjs';
 
 export const APP_MAP_PATH_RE = /(?:^|\/)(?:app-map\.json|app\/maps\/[^/]+\.json)$/;
 export const APP_MAP_SCHEMA_VERSIONS = new Set(['prompt-runtime.app-map.v1', 'prompt-runtime.app-map.v2']);
@@ -95,9 +94,6 @@ export function setPointer(obj, pointer, value) {
   }
 }
 
-/**
- * Single-pass disk scan for test JSON files and app-map JSON files (replaces 3x redundant scans).
- */
 export function discoverTestAndAppMaps({ root, files, policy, safeRead }) {
   const testJsonPaths = files.filter(path => TEST_JSON_PATH_RE.test(path));
   const parsedTests = new Map();
@@ -135,75 +131,25 @@ export function discoverTestAndAppMaps({ root, files, policy, safeRead }) {
   return { testJsonPaths, parsedTests, mapPaths, parsedAppMaps, appMapParseErrors };
 }
 
-/**
- * Run stylesheet/class design lint and app-map schema/timer/state_schema preflight using single-pass parsed maps.
- */
 export function lintAppMaps({
   root,
-  promptRecords,
+  safeRead,
   promptFilter,
   appMapFilter = null,
   parsedAppMaps,
   appMapParseErrors,
   mapPaths,
-  safeRead,
   promptExists,
   promptDeclaresOp,
+  drawingsByPrompt = null,
   warnings,
 }) {
-  if (promptRecords.some(record => record.drawings.length > 0)) {
-    const appMaps = [];
-    const cssPaths = new Set();
-    const inspectedPrompts = new Set(promptRecords.map(record => record.path));
-    for (const mapPath of [...mapPaths].sort()) {
-      if (appMapFilter && !appMapFilter.has(mapPath)) continue;
-      const doc = parsedAppMaps.get(mapPath);
-      if (
-        !doc
-        || typeof doc !== 'object'
-        || Array.isArray(doc)
-        || !isValidAppMapSchemaVersion(doc)
-        || (Object.hasOwn(doc, 'name') && (typeof doc.name !== 'string' || !doc.name))
-        || !Array.isArray(doc.screens)
-      ) continue;
-      const topSheets = Array.isArray(doc.stylesheets) ? doc.stylesheets.filter(item => typeof item === 'string') : [];
-      const screens = doc.screens
-        .map((screen, idx) => [screen, idx])
-        .filter(([screen]) => screen && typeof screen === 'object' && !Array.isArray(screen) && typeof screen.prompt_path === 'string')
-        .map(([screen, idx]) => {
-          const source = typeof screen.source === 'string' ? screen.source : 'operation';
-          const format = typeof screen.format === 'string' ? screen.format : (source === 'mockup' ? 'svg' : 'html');
-          const id = typeof screen.id === 'string' && screen.id ? screen.id : (idx === 0 ? 'main' : `screen-${idx + 1}`);
-          return {
-            id,
-            prompt_path: screen.prompt_path,
-            source,
-            format,
-            stylesheets: Array.isArray(screen.stylesheets) ? screen.stylesheets.filter(item => typeof item === 'string') : [],
-          };
-        });
-      for (const screen of screens) {
-        if (screen.source === 'operation' && screen.format === 'html' && inspectedPrompts.has(screen.prompt_path)) {
-          for (const cssPath of [...topSheets, ...screen.stylesheets]) cssPaths.add(cssPath);
-        }
-      }
-      appMaps.push({ path: mapPath, stylesheets: topSheets, screens });
-    }
-    if (appMaps.length) {
-      const stylesheets = [...cssPaths].sort().map(cssPath => {
-        try { return { path: cssPath, content: safeRead(root, cssPath), error: null }; }
-        catch (error) { return { path: cssPath, content: null, error: error.message }; }
-      });
-      for (const text of lintScreenDesign({ appMaps, stylesheets, prompts: promptRecords }).warnings) {
-        warnings.push({ key: text, text });
-      }
-    }
-  }
-
+  let inspectedCount = 0;
   for (const mapPath of [...mapPaths].sort()) {
     if (appMapFilter && !appMapFilter.has(mapPath)) continue;
     if (appMapParseErrors.has(mapPath)) {
       if (appMapFilter || !promptFilter) {
+        inspectedCount++;
         const text = `Warning: ${mapPath}: app-map.json is not valid JSON; fix syntax (omit "schema_version" for compact app-map.json or set "schema_version": "prompt-runtime.app-map.v1").`;
         warnings.push({ key: `${mapPath}\0mapjson`, text });
       }
@@ -224,6 +170,7 @@ export function lintAppMaps({
       ]);
       if (![...referenced].some(p => promptFilter.has(p))) continue;
     }
+    inspectedCount++;
     if (Object.hasOwn(mapDoc, 'schema_version') && !APP_MAP_SCHEMA_VERSIONS.has(mapDoc.schema_version)) {
       const text = `Warning: ${mapPath}: app-map schema_version ${JSON.stringify(mapDoc.schema_version ?? null)} is invalid; set "schema_version": "prompt-runtime.app-map.v1" (or omit it for compact app-map.json).`;
       warnings.push({ key: `${mapPath}\0mapschema`, text });
@@ -248,6 +195,35 @@ export function lintAppMaps({
         warnings.push({ key: `${mapPath}\0mapscreenmissing\0${sIdx}`, text });
       }
     }
+    if (root && typeof safeRead === 'function') {
+      const cssPaths = new Set(Array.isArray(mapDoc.stylesheets) ? mapDoc.stylesheets.filter(item => typeof item === 'string' && item) : []);
+      for (const [screen] of screenEntries) {
+        if (Array.isArray(screen?.stylesheets)) {
+          for (const css of screen.stylesheets) if (typeof css === 'string' && css) cssPaths.add(css);
+        }
+      }
+      for (const cssPath of [...cssPaths].sort()) {
+        try { safeRead(root, cssPath); }
+        catch (error) {
+          const text = `Warning: SVG layout ${mapPath} -> ${cssPath}: stylesheet: ${error.message}.`;
+          warnings.push({ key: `${mapPath}\0css\0${cssPath}`, text });
+        }
+      }
+    }
+    if (drawingsByPrompt) {
+      const topSheets = Array.isArray(mapDoc.stylesheets) ? mapDoc.stylesheets.filter(item => typeof item === 'string' && item) : [];
+      for (const [screen, sIdx] of screenEntries) {
+        if (screen.format !== 'html' || typeof screen.prompt_path !== 'string') continue;
+        const linkedDrawings = drawingsByPrompt.get(screen.prompt_path);
+        if (!Array.isArray(linkedDrawings) || !linkedDrawings.length) continue;
+        const screenSheets = Array.isArray(screen.stylesheets) ? screen.stylesheets.filter(item => typeof item === 'string' && item) : [];
+        if (topSheets.length === 0 && screenSheets.length === 0) {
+          const sId = typeof screen.id === 'string' && screen.id ? screen.id : (sIdx === 0 ? 'main' : `screen-${sIdx + 1}`);
+          const text = `Warning: SVG layout ${mapPath} -> ${screen.prompt_path}: stylesheets: HTML screen "${sId}" links ${linkedDrawings[0]} with no stylesheet in "stylesheets".`;
+          warnings.push({ key: `${mapPath}\0emptycss\0${sIdx}`, text });
+        }
+      }
+    }
     const hasStateSchema = Boolean(mapDoc.state_schema && typeof mapDoc.state_schema === 'object' && !Array.isArray(mapDoc.state_schema));
     if (Object.hasOwn(mapDoc, 'state_schema') && !hasStateSchema) {
       const text = `Warning: ${mapPath}: state_schema must be a JSON Schema object (or omit it for compact app-map.json).`;
@@ -260,6 +236,7 @@ export function lintAppMaps({
       lintStateSchemaRefs({ mapPath, mapDoc, screenEntries, warnings });
     }
   }
+  return inspectedCount;
 }
 
 function lintTimers({ mapPath, mapDoc, validScreenIds, screenPromptById, hasStateSchema, promptExists, promptDeclaresOp, warnings }) {
@@ -368,4 +345,67 @@ function lintStateSchemaRefs({ mapPath, mapDoc, screenEntries, warnings }) {
     checkStateRefs(timer.state, tLabel);
     checkStateTargets(timer.state, tLabel);
   }
+}
+
+/**
+ * Flag forbidden whole-event pointer `{"$ref": "/event"}` inside app-map handler/timer inputs (#3648).
+ * Handler inputs must reference a specific event field (e.g. `"/event/value"`, `"/event/key"`) or pass a literal value.
+ */
+export function collectAppMapWholeEventRefFindings({ appMapPaths = [], readFile } = {}) {
+  const findings = [];
+  if (typeof readFile !== 'function') return findings;
+
+  const findWholeEventRefs = (node, contextLabel, jsonPath, hits) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const [i, item] of node.entries()) findWholeEventRefs(item, contextLabel, `${jsonPath}[${i}]`, hits);
+      return;
+    }
+    const keys = Object.keys(node);
+    if (keys.length === 1 && node.$ref === '/event') {
+      hits.push({ contextLabel, jsonPath });
+      return;
+    }
+    for (const [k, v] of Object.entries(node)) {
+      findWholeEventRefs(v, contextLabel, `${jsonPath}.${k}`, hits);
+    }
+  };
+
+  for (const mapPath of appMapPaths) {
+    const raw = readFile(mapPath);
+    if (typeof raw !== 'string') continue;
+    let doc;
+    try { doc = JSON.parse(raw); } catch { continue; }
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) continue;
+
+    const hits = [];
+    for (const [hIdx, handler] of (Array.isArray(doc.handlers) ? doc.handlers : []).entries()) {
+      if (!handler || typeof handler !== 'object' || Array.isArray(handler)) continue;
+      const hLabel = typeof handler.id === 'string' && handler.id ? `handler "${handler.id}"` : `handlers[${hIdx}]`;
+      findWholeEventRefs(handler.input, hLabel, `handlers[${hIdx}].input`, hits);
+      for (const [aIdx, afterStep] of (Array.isArray(handler.after) ? handler.after : []).entries()) {
+        if (!afterStep || typeof afterStep !== 'object' || Array.isArray(afterStep)) continue;
+        findWholeEventRefs(afterStep.input, `${hLabel} after[${aIdx}]`, `handlers[${hIdx}].after[${aIdx}].input`, hits);
+      }
+    }
+    for (const [tIdx, timer] of (Array.isArray(doc.timers) ? doc.timers : []).entries()) {
+      if (!timer || typeof timer !== 'object' || Array.isArray(timer)) continue;
+      const tLabel = typeof timer.id === 'string' && timer.id ? `timer "${timer.id}"` : `timers[${tIdx}]`;
+      findWholeEventRefs(timer.input, tLabel, `timers[${tIdx}].input`, hits);
+    }
+
+    for (const hit of hits) {
+      findings.push({
+        filePath: mapPath,
+        line: 1,
+        order: 0,
+        code: 'app-map-whole-event-ref',
+        category: 'app map',
+        defaultSeverity: 'error',
+        detail: `Forbidden whole-event pointer {"$ref": "/event"} in ${hit.contextLabel} (${hit.jsonPath}): app-map handler inputs must reference a specific event field (such as "/event/value" or "/event/key") or pass a literal value.`,
+        fix: `Replace {"$ref": "/event"} at ${hit.jsonPath} in ${mapPath} with a specific field pointer such as {"$ref": "/event/value"}, {"$ref": "/event/key"}, or a literal value`,
+      });
+    }
+  }
+  return findings;
 }
