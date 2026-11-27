@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.54, as `pdd --help` and `pdd <command> --help` show it. The command tables below are generated from `PUBLIC_COMMAND_MANIFEST` (`src/command-catalog.mjs`) by `node scripts/generate-cli-docs.mjs` and verified by `test/docs-commands.test.mjs` (`node scripts/generate-cli-docs.mjs --check`).
+This page lists every command of pdd 0.1.55, as `pdd --help` and `pdd <command> --help` show it. The command tables below are generated from `PUBLIC_COMMAND_MANIFEST` (`src/command-catalog.mjs`) by `node scripts/generate-cli-docs.mjs` and verified by `test/docs-commands.test.mjs` (`node scripts/generate-cli-docs.mjs --check`).
 
 You need the pdd command for local inspection (`pdd status`, `pdd files`, `pdd owner`, `pdd update`, `pdd lint`, `pdd prove`), remote checks and direct prompt execution (`pdd test`, `pdd lint --remote`, `pdd <PROMPT.md|STORY|.>`), and headless Autopilot issue runs (`pdd autopilot`). Install the single `/pdd` skill globally with `pdd setup` (or `npx skills add promptdriven/pdd -g`), and set up each repository once with `pdd init`. For sessions that your agent drives, use the Try tools in `pdd mcp`. Call the skill with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
