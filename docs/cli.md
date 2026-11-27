@@ -682,6 +682,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | Command | What it does |
 |---|---|
 | `pdd test --target code [PATH\|STORY...] [--json]` | Run Story or individual scenario JSON (tests/<file>.json) cases against declared CLI code without AI calls. |
+| `pdd test --target both [STORY...] [--fresh] [--max-calls N] [--timeout MIN] [--json]` | Run the same Story cases on declared CLI code, then on the interpreter, and report every step and criterion where the two disagree. The interpreter run reuses unchanged passing Stories like pdd test unless --fresh. |
 | `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every affected Story with conservative full fallback and a separate historical baseline report; required full-pass gates still apply. Also accepts --fresh and --batch-timeout MIN. |
 | `pdd test --affected --files [--app-map PATH] [--json]` | Dry-run affected Story selection and list the exact upload files and byte sizes for affected Stories; 0 AI calls, 0 network calls. |
 | `pdd test --journeys [JOURNEY] [--max-calls N]` | Check all root product journeys or one journey. Also accepts --fresh and --batch-timeout MIN. |
@@ -730,6 +731,14 @@ Other checks, HTTP and call entries, and world or port simulations without a
 native bridge report `not run` with a reason. Results are saved in
 `.pdd/code-test/latest.json` with the commit and worktree dirty state; a failed
 or unrun Story makes the command nonzero.
+
+`--target both` runs the code target first; a selection error stops before any
+interpreter call. It then runs the same Stories on the interpreter exactly like
+`pdd test` (unchanged passing Stories are reused unless `--fresh`) and matches
+each check by scenario file, step, criterion and path. A check is `disagree`
+when one side passed and the other failed, or both failed with different
+values. The report lists each disagreement with the expected value and both
+actual values.
 
 Ordinary `pdd test` reuses complete unchanged Story passes from the Git-ignored `.pdd/cache/test/` folder, showing their previous pass time and zero current AI calls. `pdd test --lf` selects the last known failures; a later attempt without a verdict keeps a failure selected until it passes. With no failures in the selected scope it uses the normal selection, including unchanged-pass reuse. Completed saved reads populate the cache after source verification, dated from the original batch start, never the later read time. `pdd test --cache-clear` discards prior local evidence and runs the normal selected scope; it takes precedence over `--lf`. It sends again and prints one stderr notice with the selected Story count; the interpreter may return a saved answer for the same key.
 

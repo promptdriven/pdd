@@ -1194,6 +1194,11 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           const { runCompiledTest } = await import('./compiled-test.mjs');
           return await runCompiledTest({ root: cwd, words: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
         }
+        if (plan.local === 'runtime-check' && plan.options['--target'] === 'both') {
+          if (Object.keys(plan.options).some(key => !['--target', '--json', '--fresh', '--max-calls', '--timeout'].includes(key))) { line(stderr, 'pdd test --target both accepts only --fresh, --max-calls, --timeout, --json and Story selections.'); return 2; }
+          const { runTargetBoth } = await import('./core/target-both.mjs');
+          return await runTargetBoth({ root: cwd, words: [...plan.operands], options: { ...plan.options }, json: !!plan.options['--json'] }, { stdout, stderr, env });
+        }
         const runtime = await import('./runtime-seam.mjs');
         if (plan.local === 'runtime-check') {
           const inverted = findInvertedNativeOnlyStory(runtime, cwd, [...plan.operands], { ...plan.options });

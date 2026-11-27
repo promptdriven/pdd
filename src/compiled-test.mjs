@@ -193,7 +193,7 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
     groups.set(story,steps);
   }
   const stories = [...groups].map(([story,entries]) => {
-    const steps = entries.map(entry => entry.step);
+    const steps = entries.map(entry => entry.scenario ? {...entry.step, scenario:entry.scenario} : entry.step);
     return {story, status:steps.some(s=>s.status==='failed')?'failed':steps.every(s=>s.status==='passed')?'passed':'not run',steps};
   });
   const report = {target:'code',commit,dirty,ai_calls:0,stories};

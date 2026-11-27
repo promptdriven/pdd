@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { captureSource, executableInterfaceText, findTests, interfaceBlocks, preflight, proseSha256 } from '../src/runtime-seam.mjs';
+import { runCompiledTest } from '../src/compiled-test.mjs';
 const bin = join(process.cwd(), 'bin/pdd.mjs');
 const roots = [];
 after(() => { for (const root of roots) rmSync(root,{recursive:true,force:true}); });
@@ -309,4 +310,11 @@ test('3641 non-CLI plain-prompt steps without pdd.json report input or check ref
  const nonCliCheck=outcome(plainProject({commands:null,change:doc=>{doc.steps[0].checks[0].path='/body';}}));
  assert.equal(nonCliCheck.data.stories[0].steps[0].status,'not run');
  assert.equal(nonCliCheck.data.stories[0].steps[0].reason,'A check is unsupported.');
+});
+test('3296: each step names its scenario file so --target both can match it to the interpreter row', async () => {
+ const root=project({change:d=>{d.steps.push({...structuredClone(d.steps[0]),step_id:'two'});}});
+ let out=''; const sink={write(s){out+=s;return true;}};
+ const code=await runCompiledTest({root,words:['demo'],json:true},{stdout:sink,stderr:sink});
+ assert.equal(code,0,out);
+ assert.deepEqual(JSON.parse(out).stories[0].steps.map(step=>[step.step_id,step.scenario]),[['one','tests/demo.json'],['two','tests/demo.json']]);
 });
