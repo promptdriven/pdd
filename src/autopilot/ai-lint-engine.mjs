@@ -128,18 +128,37 @@ function normalizeMode(rawMode, env = {}) {
 }
 
 function resolveMergeBaseSha(realRoot, baseRef) {
-  const ref = (typeof baseRef === 'string' && baseRef.trim()) ? baseRef.trim() : resolveDefaultBaseRef(realRoot);
-  if (!ref) return { baseRef: null, baseSha: null };
-  const resolved = spawnSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], {
+  const explicit = typeof baseRef === 'string' && baseRef.trim().length > 0;
+  const ref = explicit ? baseRef.trim() : resolveDefaultBaseRef(realRoot);
+  if (!ref) return { ok: true, explicit: false, baseRef: null, baseSha: null, error: null };
+  const hasControlChar = str => [...str].some(ch => { const c = ch.charCodeAt(0); return c < 0x20 || c === 0x7f; });
+  if (ref.startsWith('-') || hasControlChar(ref)) {
+    return {
+      ok: false,
+      explicit,
+      baseRef: ref,
+      baseSha: null,
+      error: `Invalid base ref "${ref}": base ref cannot start with "-" or contain control characters.`,
+    };
+  }
+  const resolved = spawnSync('git', ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], {
     cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000,
   });
-  if (resolved.status !== 0 || !resolved.stdout.trim()) return { baseRef: ref, baseSha: null };
+  if (resolved.status !== 0 || !resolved.stdout.trim()) {
+    return {
+      ok: !explicit,
+      explicit,
+      baseRef: ref,
+      baseSha: null,
+      error: explicit ? `Base ref "${ref}" could not be resolved to a commit.` : null,
+    };
+  }
   const commit = resolved.stdout.trim();
   const mb = spawnSync('git', ['merge-base', 'HEAD', commit], {
     cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000,
   });
-  if (mb.status === 0 && mb.stdout.trim()) return { baseRef: ref, baseSha: mb.stdout.trim() };
-  return { baseRef: ref, baseSha: commit };
+  if (mb.status === 0 && mb.stdout.trim()) return { ok: true, explicit, baseRef: ref, baseSha: mb.stdout.trim(), error: null };
+  return { ok: true, explicit, baseRef: ref, baseSha: commit, error: null };
 }
 
 function parseReviewScopeSpec(rawScope) {
@@ -161,7 +180,9 @@ function parseReviewScopeSpec(rawScope) {
 }
 
 export function loadBaseTrustedReviewScope(realRoot, { baseRef, baseSha: knownBaseSha } = {}) {
+  const explicit = typeof baseRef === 'string' && baseRef.trim().length > 0;
   const baseSha = knownBaseSha !== undefined ? knownBaseSha : resolveMergeBaseSha(realRoot, baseRef).baseSha;
+  if (explicit && !baseSha) return null;
   if (baseSha) {
     const shown = spawnSync('git', ['show', `${baseSha}:pdd.json`], {
       cwd: realRoot, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000,
@@ -834,10 +855,12 @@ export function verifyQuoteOnDisk({ realRoot, relPath, quote, hintLine = 1, poli
   return { verified: false, reason: 'quote_not_found' };
 }
 
-export function verifyCandidateFindings({ realRoot, candidates = [], policy = null } = {}) {
+export function verifyCandidateFindings({ realRoot, candidates = [], policy = null, preserveIds = false } = {}) {
   const verified = [];
   const dropped = [];
   const fileCache = new Map();
+  const usedIds = new Set();
+  let nextAutoId = 1;
 
   for (const rawItem of Array.isArray(candidates) ? candidates : []) {
     if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) {
@@ -882,7 +905,7 @@ export function verifyCandidateFindings({ realRoot, candidates = [], policy = nu
         dropped.push({ file, line: primary.matchedLine, checklist, reason: 'missing_cross_file_quote' });
         continue;
       }
-      if (checklist === 'interfaces' && crossFile === file) {
+      if (crossFile === file) {
         dropped.push({ file, line: primary.matchedLine, checklist, reason: 'same_cross_file' });
         continue;
       }
@@ -896,8 +919,17 @@ export function verifyCandidateFindings({ realRoot, candidates = [], policy = nu
       verifiedCrossLine = crossRes.matchedLine;
     }
 
+    const rawId = preserveIds && typeof rawItem.id === 'string' ? rawItem.id.trim() : '';
+    let assignedId = rawId && !usedIds.has(rawId) ? rawId : '';
+    while (!assignedId) {
+      const candId = `C${nextAutoId}`;
+      nextAutoId += 1;
+      if (!usedIds.has(candId)) assignedId = candId;
+    }
+    usedIds.add(assignedId);
+
     verified.push({
-      id: `C${verified.length + 1}`,
+      id: assignedId,
       checklist,
       severity,
       file,
@@ -1188,11 +1220,42 @@ function readAiLintCache(realRoot, cacheKey) {
   }
 }
 
+function seedPddGitignore(realRoot) {
+  const pddDir = join(realRoot, '.pdd');
+  try {
+    const dirStat = lstatSync(pddDir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  const giPath = join(pddDir, '.gitignore');
+  try {
+    const giStat = lstatSync(giPath);
+    if (giStat.isSymbolicLink() || !giStat.isFile()) return false;
+    return true;
+  } catch (err) {
+    if (err?.code !== 'ENOENT') return false;
+  }
+  try {
+    writeFileSync(giPath, '*\n', { encoding: 'utf8', flag: 'wx' });
+    return true;
+  } catch (err) {
+    if (err?.code !== 'EEXIST') return false;
+    try {
+      const giStat = lstatSync(giPath);
+      return !giStat.isSymbolicLink() && giStat.isFile();
+    } catch {
+      return false;
+    }
+  }
+}
+
 function writeAiLintCache(realRoot, cacheKey, record) {
   const loc = safeCachePath(realRoot, cacheKey);
   if (!loc) return false;
   try {
     mkdirSync(loc.dir, { recursive: true });
+    if (!seedPddGitignore(realRoot)) return false;
     const tmp = join(loc.dir, `.${cacheKey}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`);
     writeFileSync(tmp, `${JSON.stringify({ schema_version: 'pdd.ai-lint-cache.v1', cache_key: cacheKey, ...record }, null, 2)}\n`, 'utf8');
     renameSync(tmp, loc.file);
@@ -1274,7 +1337,22 @@ function resolveAdaptiveTargets({ realRoot, cwdBase, allowedFiles, words, isDiff
     const diff = collectDiffFiles(realRoot, baseSha);
     addedSet = diff.added;
     const diffAllowed = [...diff.changed].filter(f => allowedSet.has(f)).sort();
-    selectedPaths = diffAllowed.filter(f => isExplicitTargetPath(f) && matchesReviewScope(f, reviewScope));
+    const boundModules = new Set();
+    if (allowedSet.has('pdd-bindings.json')) {
+      const bindingsRaw = readSafeUtf8(realRoot, 'pdd-bindings.json');
+      if (typeof bindingsRaw === 'string') {
+        for (const b of extractBoundModules(bindingsRaw)) {
+          if (b.prompt && b.module) boundModules.add(b.module);
+        }
+      }
+    }
+    const isOwnedChangedCode = relPath => {
+      if (relPath.startsWith('.pdd/') || FIXTURE_DIR.test(relPath) || relPath.endsWith('.md') || relPath.endsWith('.json') || SVG_RE.test(relPath)) return false;
+      if (boundModules.has(relPath)) return true;
+      const head = readSafeHeadUtf8(realRoot, relPath);
+      return Boolean(head && headerEntries(head).length > 0);
+    };
+    selectedPaths = diffAllowed.filter(f => (isExplicitTargetPath(f) || isOwnedChangedCode(f)) && matchesReviewScope(f, reviewScope));
     changedSupportFiles = diffAllowed.filter(f => !selectedPaths.includes(f));
   } else {
     selectedPaths = allowedFiles.filter(f => isPrimaryTargetPath(f) && matchesReviewScope(f, reviewScope));
@@ -1451,7 +1529,12 @@ export async function runAdaptiveAiLint(
   const resolvedBaseRef = typeof diff === 'string' && diff.trim()
     ? diff.trim()
     : (typeof baseRef === 'string' && baseRef.trim() ? baseRef.trim() : undefined);
-  const { baseSha } = resolveMergeBaseSha(realRoot, resolvedBaseRef);
+  const baseInfo = resolveMergeBaseSha(realRoot, resolvedBaseRef);
+  if (!baseInfo.ok) {
+    writeErr(baseInfo.error || `Base ref "${resolvedBaseRef}" could not be resolved.`);
+    return 2;
+  }
+  const { baseSha } = baseInfo;
   const reviewScope = loadBaseTrustedReviewScope(realRoot, { baseRef: resolvedBaseRef, baseSha });
 
   const resolved = resolveAdaptiveTargets({ realRoot, cwdBase, allowedFiles, words, isDiff, baseSha, reviewScope, policy });
@@ -1468,6 +1551,8 @@ export async function runAdaptiveAiLint(
         files: effectiveAllowedFiles,
         promptPaths: hasExplicitFilter ? targetPromptPaths : undefined,
         tests: hasExplicitFilter ? targetStoryPaths : undefined,
+        enforceBaseTrust: isDiff,
+        ...(resolvedBaseRef ? { trustBaseRef: resolvedBaseRef } : {}),
       })
     : { errors: [], warnings: [], findings: [] };
   const tier0Errors = deterministic.errors ?? [];
@@ -1567,12 +1652,16 @@ export async function runAdaptiveAiLint(
     const verifyPackObj = parsed.verify_pack?.schema_version === 'pdd.ai-lint-verify-pack.v1'
       ? parsed.verify_pack
       : (parsed.candidates?.schema_version === 'pdd.ai-lint-verify-pack.v1' ? parsed.candidates : null);
+    if (verifyPackObj && typeof verifyPackObj.cache_key === 'string' && verifyPackObj.cache_key !== cacheKey) {
+      writeErr('Stale verify_pack: cache_key does not match current repository inputs; re-run --ai-emit-pack and --ai-emit-verify.');
+      return 2;
+    }
     const rawCandidates = verifyPackObj
       ? verifyPackObj.candidates
       : (Array.isArray(parsed.findings)
         ? parsed.findings
         : (Array.isArray(parsed.candidates?.findings) ? parsed.candidates.findings : parsed.candidates));
-    const qv = verifyCandidateFindings({ realRoot, candidates: rawCandidates, policy });
+    const qv = verifyCandidateFindings({ realRoot, candidates: rawCandidates, policy, preserveIds: true });
     const priorDropped = Number.isInteger(verifyPackObj?.funnel?.quote_dropped) ? verifyPackObj.funnel.quote_dropped : 0;
     const totalRawCandidates = verifyPackObj && Number.isInteger(verifyPackObj?.funnel?.raw_candidates)
       ? Math.max(verifyPackObj.funnel.raw_candidates, qv.raw_candidates + priorDropped)
@@ -1583,10 +1672,29 @@ export async function runAdaptiveAiLint(
     let verifierRan = false;
     let verifierKept = working.length;
     let verifierDropped = 0;
-    const rawVerifier = parsed.verifier ?? parsed.decisions;
-    if (rawVerifier && resolvedMode !== 'single') {
-      const decisions = Array.isArray(rawVerifier) ? rawVerifier : (Array.isArray(rawVerifier?.decisions) ? rawVerifier.decisions : null);
-      if (decisions) {
+    let applyAiStatus = 'ok';
+    let applyAiWarning = null;
+    const rawVerifier = Object.hasOwn(parsed, 'verifier')
+      ? parsed.verifier
+      : (Object.hasOwn(parsed, 'decisions') ? parsed.decisions : undefined);
+    if (rawVerifier !== undefined && rawVerifier !== null && resolvedMode !== 'single') {
+      let decisions = null;
+      if (Array.isArray(rawVerifier)) decisions = rawVerifier;
+      else if (typeof rawVerifier === 'string') {
+        const unwrapped = extractJsonObject(rawVerifier, { accept: doc => Array.isArray(doc?.decisions) });
+        if (unwrapped && Array.isArray(unwrapped.decisions)) decisions = unwrapped.decisions;
+      } else if (rawVerifier && typeof rawVerifier === 'object' && Array.isArray(rawVerifier.decisions)) {
+        decisions = rawVerifier.decisions;
+      }
+      const validDecisions = Array.isArray(decisions) && decisions.every(d => (
+        d && typeof d === 'object' && !Array.isArray(d)
+        && typeof d.id === 'string' && d.id.trim().length > 0
+        && ['keep', 'drop'].includes(String(d.verdict ?? '').trim().toLowerCase())
+      ));
+      if (!validDecisions) {
+        applyAiStatus = 'incomplete';
+        applyAiWarning = 'malformed verifier payload supplied to --ai-apply';
+      } else {
         verifierRan = true;
         const applied = applyVerifierDecisions(working, decisions);
         working = applied.kept;
@@ -1606,12 +1714,13 @@ export async function runAdaptiveAiLint(
       cap7_dropped: capped.cap7_dropped,
       final_count: capped.findings.length,
     };
-    if (!noCache) {
+    const verifierRequired = resolvedMode !== 'single' && qv.verified.length >= verifyMin;
+    if (applyAiStatus === 'ok' && !noCache && (!verifierRequired || verifierRan)) {
       writeAiLintCache(realRoot, cacheKey, { ai_status: 'ok', funnel, findings: capped.findings });
     }
     return renderAdaptiveResult({
       stdout, stderr, json, mode: resolvedMode, provider: resolvedProvider, model: resolvedModel,
-      cached: false, cacheKey, aiStatus: 'ok', aiWarning: null,
+      cached: false, cacheKey, aiStatus: applyAiStatus, aiWarning: applyAiWarning,
       checklists, checklistReasons, targets, manifest, graphFacts,
       funnel, findings: capped.findings, tier0Errors, warnings: tier0Warnings, redact,
     });

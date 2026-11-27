@@ -857,3 +857,229 @@ test('ai-lint-engine: accepts scenario .json, .ui.svg, app-map.json, app/maps/*.
   assert.equal(missingRes.code, 2);
   assert.match(missingRes.err, /Target path not found/);
 });
+
+test('ai-lint-engine: blind-review #1 — writeAiLintCache seeds .pdd/.gitignore (*\\n) so clean git repos stay clean and refuses symlinked .pdd/.gitignore', async t => {
+  const { repo, scratch, env } = makeTempRepo(t, 'pdd-ai-gitignore-');
+  writeRepoFile(repo, 'prompts/clean.prompt.md', '# Clean\n\nReturn ok.\n\n## Dependencies\n\nNone.\n');
+  initGitRepo(repo);
+
+  const out = sink(), err = sink();
+  const code = await runAdaptiveAiLint(
+    { cwd: repo, words: ['prompts/clean.prompt.md'], provider: 'claude', json: true, env },
+    {
+      stdout: out,
+      stderr: err,
+      runAgentProcess: async () => ({ code: 0, stdout: JSON.stringify({ result: JSON.stringify({ findings: [] }) }), stderr: '' }),
+    },
+  );
+  assert.equal(code, 0, err.text);
+  const parsed = JSON.parse(out.text);
+  assert.equal(existsSync(join(repo, '.pdd', '.gitignore')), true);
+  assert.equal(readFileSync(join(repo, '.pdd', '.gitignore'), 'utf8'), '*\n');
+  assert.equal(existsSync(join(repo, '.pdd', 'cache', 'lint', `${parsed.cache_key}.json`)), true);
+  // Clean repo MUST have zero untracked files after read-only pdd lint --ai!
+  const gitStatus = execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }).trim();
+  assert.equal(gitStatus, '', `pdd lint --ai must not dirty clean git repo, got: ${gitStatus}`);
+
+  // Symlinked .pdd/.gitignore is refused without following the symlink or writing cache
+  const { repo: symRepo, env: symEnv } = makeTempRepo(t, 'pdd-ai-gitignore-sym-');
+  writeRepoFile(symRepo, 'prompts/clean.prompt.md', '# Clean\n\nReturn ok.\n\n## Dependencies\n\nNone.\n');
+  initGitRepo(symRepo);
+  const targetOutside = join(scratch, 'outside-gitignore');
+  writeFileSync(targetOutside, 'original\n');
+  mkdirSync(join(symRepo, '.pdd'), { recursive: true });
+  const { symlinkSync } = await import('node:fs');
+  symlinkSync(targetOutside, join(symRepo, '.pdd', '.gitignore'));
+
+  const symOut = sink();
+  const symCode = await runAdaptiveAiLint(
+    { cwd: symRepo, words: ['prompts/clean.prompt.md'], provider: 'claude', json: true, env: symEnv },
+    {
+      stdout: symOut,
+      stderr: sink(),
+      runAgentProcess: async () => ({ code: 0, stdout: JSON.stringify({ result: JSON.stringify({ findings: [] }) }), stderr: '' }),
+    },
+  );
+  assert.equal(symCode, 0);
+  const symParsed = JSON.parse(symOut.text);
+  assert.equal(readFileSync(targetOutside, 'utf8'), 'original\n');
+  assert.equal(existsSync(join(symRepo, '.pdd', 'cache', 'lint', `${symParsed.cache_key}.json`)), false, 'symlinked .pdd/.gitignore must refuse cache write');
+});
+
+test('ai-lint-engine: blind-review #2 — fails closed on leading-dash or unresolvable --diff/--base REF and enforces base trust on pdd.json under --diff', async t => {
+  const { repo, env } = makeTempRepo(t, 'pdd-ai-base-trust-');
+  writeRepoFile(repo, 'pdd.json', JSON.stringify({ review: { scope: ['prompts/**', 'user_stories/**'] } }, null, 2));
+  writeRepoFile(repo, 'prompts/app.prompt.md', '# App\n\nReturn ok.\n\n## Dependencies\n\nNone.\n');
+  const gitEnv = initGitRepo(repo);
+
+  // Leading-dash and nonexistent explicit --diff / --base refs MUST fail closed with exit 2 (never fallback to HEAD!)
+  for (const opts of [
+    { diff: '--upload-pack=evil' },
+    { baseRef: '-n' },
+    { diff: 'nonexistent-branch-ref' },
+    { baseRef: 'nonexistent-branch-ref' },
+  ]) {
+    const err = sink();
+    const code = await runAdaptiveAiLint({ cwd: repo, emitPack: true, env, ...opts }, { stdout: sink(), stderr: err });
+    assert.equal(code, 2, `${JSON.stringify(opts)} must fail closed with exit 2`);
+    assert.match(err.text, /Invalid base ref|could not be resolved/i);
+  }
+  assert.equal(loadBaseTrustedReviewScope(repo, { baseRef: 'nonexistent-branch-ref' }), null, 'unresolvable explicit baseRef must not fall back to working-tree pdd.json');
+
+  // Feature branch tries to silence Tier-0 story-missing-criteria via working-tree pdd.json -> enforceBaseTrust blocks it under --diff!
+  execFileSync('git', ['checkout', '-q', '-b', 'feat/disable-tier0'], { cwd: repo, env: gitEnv });
+  writeRepoFile(repo, 'pdd.json', JSON.stringify({ lint: { disable: ['story-missing-criteria'], rules: { 'story-missing-criteria': 'off' } } }, null, 2));
+  writeRepoFile(repo, 'user_stories/broken.md', '# Broken\n\nAs a shopper, I forgot acceptance criteria.\n');
+
+  const diffOut = sink(), diffErr = sink();
+  const diffCode = await runAdaptiveAiLint(
+    { cwd: repo, diff: 'main', provider: 'claude', json: true, env: { ...env, PDD_AI_LINT_NO_CACHE: '1' } },
+    {
+      stdout: diffOut,
+      stderr: diffErr,
+      runAgentProcess: async () => ({ code: 0, stdout: JSON.stringify({ result: JSON.stringify({ findings: [] }) }), stderr: '' }),
+    },
+  );
+  assert.equal(diffCode, 1, 'enforceBaseTrust under --diff must prevent feature-branch pdd.json from silencing Tier-0 errors');
+  const parsedDiff = JSON.parse(diffOut.text);
+  assert.equal(parsedDiff.ok, false);
+  assert.ok(parsedDiff.tier0_errors.some(e => e.includes('story-missing-criteria') || e.includes('lint-config-untrusted')));
+});
+
+test('ai-lint-engine: blind-review #3 — --diff selects changed owned code files (// Prompt: header and pdd-bindings.json) while ignoring unowned code files', async t => {
+  const { repo, env } = makeTempRepo(t, 'pdd-ai-diff-owned-');
+  writeRepoFile(repo, 'prompts/delivery.prompt.md', '# Delivery\n\nOwn `src/delivery.mjs` and `bin/pdd.mjs`. Deliver notifications.\n\n## Dependencies\n\nNone.\n');
+  writeRepoFile(repo, 'src/delivery.mjs', '// Prompt: prompts/delivery.prompt.md\n\nexport const deliver = () => "v1";\n');
+  writeRepoFile(repo, 'bin/pdd.mjs', '#!/usr/bin/env node\nconsole.log("v1");\n');
+  writeRepoFile(repo, 'src/unowned.mjs', 'export const helper = () => 1;\n');
+  writeRepoFile(repo, 'pdd-bindings.json', JSON.stringify({
+    schema_version: 'pdd.bindings.v1',
+    modules: [{ module: 'bin/pdd.mjs', prompt: 'prompts/delivery.prompt.md' }],
+  }, null, 2));
+  const gitEnv = initGitRepo(repo);
+
+  execFileSync('git', ['checkout', '-q', '-b', 'feat/code-only'], { cwd: repo, env: gitEnv });
+  writeRepoFile(repo, 'src/delivery.mjs', '// Prompt: prompts/delivery.prompt.md\n\nexport const deliver = () => "v2";\n');
+  writeRepoFile(repo, 'bin/pdd.mjs', '#!/usr/bin/env node\nconsole.log("v2");\n');
+  writeRepoFile(repo, 'src/unowned.mjs', 'export const helper = () => 2;\n');
+
+  const out = sink(), err = sink();
+  const code = await runAdaptiveAiLint(
+    { cwd: repo, diff: 'main', emitPack: true, env: { ...env, PDD_AI_LINT_NO_CACHE: '1' } },
+    { stdout: out, stderr: err },
+  );
+  assert.equal(code, 0, err.text);
+  const pack = JSON.parse(out.text);
+  assert.deepEqual(pack.targets.map(x => x.path), ['bin/pdd.mjs', 'src/delivery.mjs']);
+  assert.ok(pack.manifest.outgoing_links.includes('prompts/delivery.prompt.md'));
+  assert.ok(pack.checklists.includes('interfaces'));
+});
+
+test('ai-lint-engine: blind-review #4 & #5a — --ai-apply blocks malformed verifier/unverified cache poisoning, preserves candidate IDs, rejects stale verify_pack, and rejects cross_file === file on all checklists', async t => {
+  const { repo, scratch, env } = makeTempRepo(t, 'pdd-ai-apply-hardening-');
+  writeRepoFile(repo, 'prompts/app.prompt.md', '# App\n\nRule A: reject empty names.\nRule B: reject negative counts.\n\n## Dependencies\n\nNone.\n');
+  initGitRepo(repo);
+
+  // Polish #5a: cross_file === file is rejected on ALL checklists (not only interfaces)
+  const sameFileTrace = verifyCandidateFindings({
+    realRoot: repo,
+    candidates: [{
+      checklist: 'trace',
+      severity: 'medium',
+      file: 'prompts/app.prompt.md',
+      line: 3,
+      quote: 'Rule A: reject empty names.',
+      cross_file: 'prompts/app.prompt.md',
+      cross_file_line: 4,
+      cross_file_quote: 'Rule B: reject negative counts.',
+      message: 'Same file cross quote.',
+      suggestion: 'Fix.',
+    }],
+  });
+  assert.equal(sameFileTrace.quote_verified, 0);
+  assert.equal(sameFileTrace.dropped[0].reason, 'same_cross_file');
+
+  // Preserve IDs: if C1 is dropped on re-verification, C2 keeps id "C2" (never shifts to "C1"!)
+  const preserved = verifyCandidateFindings({
+    realRoot: repo,
+    preserveIds: true,
+    candidates: [
+      { id: 'C1', checklist: 'contract', severity: 'high', file: 'prompts/app.prompt.md', line: 3, quote: 'NO LONGER ON DISK', message: 'Stale C1.', suggestion: 'Fix.' },
+      { id: 'C2', checklist: 'contract', severity: 'high', file: 'prompts/app.prompt.md', line: 4, quote: 'Rule B: reject negative counts.', message: 'Real C2.', suggestion: 'Fix.' },
+    ],
+  });
+  assert.equal(preserved.verified.length, 1);
+  assert.equal(preserved.verified[0].id, 'C2');
+
+  const twoValidFindings = [
+    { id: 'C1', checklist: 'contract', severity: 'high', file: 'prompts/app.prompt.md', line: 3, quote: 'Rule A: reject empty names.', message: 'First issue.', suggestion: 'Fix A.' },
+    { id: 'C2', checklist: 'contract', severity: 'medium', file: 'prompts/app.prompt.md', line: 4, quote: 'Rule B: reject negative counts.', message: 'Second issue.', suggestion: 'Fix B.' },
+  ];
+
+  // 4a. Unverified Pass-1 applied when verifier is required (adaptive mode, 2 >= verifyMin=2) MUST NOT poison cache!
+  const unverifiedFile = join(scratch, 'unverified.json');
+  writeFileSync(unverifiedFile, JSON.stringify({ findings: twoValidFindings }));
+  const unvOut = sink();
+  const unvCode = await runAdaptiveAiLint(
+    { cwd: repo, words: ['prompts/app.prompt.md'], applyPath: unverifiedFile, json: true, env },
+    { stdout: unvOut, stderr: sink() },
+  );
+  assert.equal(unvCode, 0);
+  const unvJson = JSON.parse(unvOut.text);
+  assert.equal(unvJson.ai_status, 'ok');
+  assert.equal(unvJson.funnel.verifier_ran, false);
+  assert.equal(existsSync(join(repo, '.pdd', 'cache', 'lint', `${unvJson.cache_key}.json`)), false, 'unverified Pass-1 must NOT write verified cache');
+
+  // 4b. Explicitly supplied malformed verifier payload -> ai_status: "incomplete" and NEVER cached!
+  const malformedVerFile = join(scratch, 'malformed-ver.json');
+  writeFileSync(malformedVerFile, JSON.stringify({ candidates: twoValidFindings, verifier: { decisions: [{ id: 'C1', verdict: 'not-a-verdict' }] } }));
+  const malOut = sink();
+  const malCode = await runAdaptiveAiLint(
+    { cwd: repo, words: ['prompts/app.prompt.md'], applyPath: malformedVerFile, json: true, env },
+    { stdout: malOut, stderr: sink() },
+  );
+  assert.equal(malCode, 0);
+  const malJson = JSON.parse(malOut.text);
+  assert.equal(malJson.ai_status, 'incomplete');
+  assert.match(malJson.ai_warning, /malformed verifier/i);
+  assert.equal(existsSync(join(repo, '.pdd', 'cache', 'lint', `${malJson.cache_key}.json`)), false, 'malformed verifier must NOT cache');
+
+  // 4c. Stale verify_pack.cache_key !== current cacheKey -> refused cleanly with exit 2 and zero cache write!
+  const stalePackFile = join(scratch, 'stale-verify.json');
+  writeFileSync(stalePackFile, JSON.stringify({
+    verify_pack: {
+      schema_version: 'pdd.ai-lint-verify-pack.v1',
+      cache_key: '0'.repeat(64),
+      candidates: twoValidFindings,
+      funnel: { raw_candidates: 2, quote_verified: 2, quote_dropped: 0 },
+    },
+    verifier: { decisions: [{ id: 'C1', verdict: 'keep' }, { id: 'C2', verdict: 'keep' }] },
+  }));
+  const staleErr = sink();
+  const staleCode = await runAdaptiveAiLint(
+    { cwd: repo, words: ['prompts/app.prompt.md'], applyPath: stalePackFile, json: true, env },
+    { stdout: sink(), stderr: staleErr },
+  );
+  assert.equal(staleCode, 2);
+  assert.match(staleErr.text, /Stale verify_pack/);
+
+  // 4d. Re-verifying candidates where C1 disappeared still applies C2's decision accurately (no C2 -> C1 shift!)
+  const shiftFile = join(scratch, 'shift-check.json');
+  writeFileSync(shiftFile, JSON.stringify({
+    candidates: [
+      { id: 'C1', checklist: 'contract', severity: 'high', file: 'prompts/app.prompt.md', line: 3, quote: 'REMOVED QUOTE', message: 'Gone.', suggestion: 'None.' },
+      { id: 'C2', checklist: 'contract', severity: 'high', file: 'prompts/app.prompt.md', line: 4, quote: 'Rule B: reject negative counts.', message: 'Real C2.', suggestion: 'Fix B.' },
+    ],
+    verifier: {
+      decisions: [
+        { id: 'C1', verdict: 'drop', reason: 'C1 was weak.' },
+        { id: 'C2', verdict: 'keep', reason: 'C2 is real.' },
+      ],
+    },
+  }));
+  const shiftOut = sink();
+  assert.equal(await runAdaptiveAiLint({ cwd: repo, words: ['prompts/app.prompt.md'], applyPath: shiftFile, json: true, env }, { stdout: shiftOut, stderr: sink() }), 0);
+  const shiftJson = JSON.parse(shiftOut.text);
+  assert.equal(shiftJson.findings.length, 1);
+  assert.equal(shiftJson.findings[0].message, 'Real C2.');
+});

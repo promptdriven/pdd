@@ -895,6 +895,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, `Use --provider only with pdd ${NAMES.lint} --ai [STORY...] [--diff [BASE]] [--provider codex|claude|gemini] [--json] [--timeout MIN].`);
         return 2;
       }
+      if (plan.options['--model'] !== undefined && !isAdaptiveAi) {
+        line(stderr, `Use --model only with pdd ${NAMES.lint} --ai [STORY...] [--diff [BASE]] [--provider codex|claude|gemini] [--json] [--timeout MIN].`);
+        return 2;
+      }
       if (isAdaptiveAi) {
         const allowedAiKeys = new Set(['--lint', '--ai', '--provider', '--model', '--ai-emit-pack', '--ai-emit-verify', '--ai-apply', '--diff', '--base', '--json', '--timeout']);
         if (Object.keys(plan.options).some(key => !allowedAiKeys.has(key))) {
@@ -1117,7 +1121,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           return 2;
         }
       }
-      if (plan.local === 'runtime-check' && (plan.options['--ai'] === true || plan.options['--provider'] !== undefined || plan.options['--ai-emit-pack'] === true || plan.options['--ai-emit-verify'] !== undefined || plan.options['--ai-apply'] !== undefined)) {
+      if (plan.local === 'runtime-check' && (plan.options['--ai'] === true || plan.options['--provider'] !== undefined || plan.options['--model'] !== undefined || plan.options['--ai-emit-pack'] === true || plan.options['--ai-emit-verify'] !== undefined || plan.options['--ai-apply'] !== undefined)) {
         line(stderr, `Use pdd ${NAMES.lint} --ai [STORY...] [--diff [BASE]] [--provider codex|claude|gemini] [--json] [--timeout MIN].`);
         return 2;
       }
