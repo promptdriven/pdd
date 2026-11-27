@@ -11,6 +11,7 @@ import { collectMarkdownIntegrityFindings, collectOperationsTableIntegrityFindin
 import { collectAppMapWholeEventRefFindings } from '../../../src/core/ui/app-map-lint.mjs';
 import { collectStoryUnboundCriteriaFindings } from '../../../src/core/lint/story-criteria-parity.mjs';
 import { lintRepoProject } from '../../../src/core/lint/project-lint.mjs';
+import { analyzeDiffEntries, findExecutableOnlyMarkers } from '../../../src/core/lint/test-inventory.mjs';
 import { runLocalLint } from '../../../src/core/lint/run-local-lint.mjs';
 
 function makeSink() {
@@ -403,4 +404,46 @@ test('Wave 2 Check 4 (#3661): malformed Operations Calls/Error-codes trailing pa
   assert.equal(f2.length, 2, JSON.stringify(f2));
 
   assert.deepEqual(collectOperationsTableIntegrityFindings(cleanDelivery, { path: 'prompts/clean.prompt.md' }), []);
+});
+
+test('diff-focus-only: catches executable .only / fit / fdescribe / @pytest.mark.only while ignoring comments and strings', () => {
+  const jsSource = [
+    '// it.only("commented out")',
+    'const sample = "describe.only(\'in string\')";',
+    'const re = /test\\.only\\(/;',
+    'describe.only("focused suite", () => {',
+    '  it.only("focused test", () => {});',
+    '  fit("jasmine fit", () => {});',
+    '  fdescribe("jasmine fdescribe", () => {});',
+    '});',
+  ].join('\n');
+  const jsHits = findExecutableOnlyMarkers(jsSource, 'test/sample.test.mjs');
+  assert.deepEqual(jsHits.map(h => [h.line, h.marker]), [
+    [4, 'describe.only'],
+    [5, 'it.only'],
+    [6, 'fit'],
+    [7, 'fdescribe'],
+  ]);
+
+  const pySource = [
+    '# @pytest.mark.only',
+    '@pytest.mark.only',
+    'def test_focused():',
+    '    assert True',
+  ].join('\n');
+  assert.deepEqual(findExecutableOnlyMarkers(pySource, 'tests/test_sample.py'), [
+    { path: 'tests/test_sample.py', line: 2, marker: '@pytest.mark.only' },
+  ]);
+
+  // Helper/fixture files and non-test production files must not trigger diff-focus-only.
+  assert.deepEqual(findExecutableOnlyMarkers('it.only("fixture", () => {});', 'test/fixtures/sample.test.mjs'), []);
+  assert.deepEqual(findExecutableOnlyMarkers('it.only("prod", () => {});', 'src/app.mjs'), []);
+
+  const diffReport = analyzeDiffEntries([
+    { status: 'M', oldPath: 'test/sample.test.mjs', newPath: 'test/sample.test.mjs', before: '', after: 'test.only("focused", () => {});\n' },
+  ]);
+  assert.equal(diffReport.ok, false);
+  assert.equal(diffReport.errors.length, 1);
+  assert.equal(diffReport.errors[0].code, 'diff-focus-only');
+  assert.match(diffReport.errors[0].formatted, /\[diff-focus-only\]/);
 });

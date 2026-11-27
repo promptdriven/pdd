@@ -1,20 +1,77 @@
 // Prompt: prompts/cli/repo-hygiene-lint.prompt.md
 
-// Structural `pdd lint --diff [BASE]` checks: BASE..WORKTREE diff, conflict markers, shadow binaries, and harness/snapshot edits.
+// Structural `pdd lint --diff [BASE]` checks: BASE..WORKTREE diff, focused-test .only markers, conflict markers, shadow binaries, and harness/snapshot edits.
 import { spawnSync } from 'node:child_process';
 import { lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { isTestPromptPath } from '../../file-owner.mjs';
+import { isJsTestPath } from '../../shared/test-paths.mjs';
 import { causeText } from '../../shared/safe-read.mjs';
-import { formatTeachingDetail, readSafeUtf8, resolveDefaultBaseRef } from './diagnostics.mjs';
+import { buildLineStarts, formatTeachingDetail, lineNumberAt, readSafeUtf8, resolveDefaultBaseRef } from './diagnostics.mjs';
 
 export { resolveDefaultBaseRef };
 
+const UTILITY_TEST_DIR = /(?:^|\/)(?:helpers?|fixtures?|mocks?|__mocks__|__fixtures__)\//i;
 const DOC_OR_FIXTURE_PATH = /(?:^|\/)(?:docs?|fixtures?|__fixtures__)\/|\.md$/i;
 const SNAPSHOT_PATH = /\.snap$|(?:^|\/)__snapshots__\//i;
 const HARNESS_PATH = /(?:^|\/)(?:pdd\.json|rules\/lint\/[^/]+\.json|package\.json|vitest\.config\.[^/]+|jest\.config\.[^/]+|pytest\.ini|pyproject\.toml|conftest\.py|tox\.ini|setup\.cfg|\.github\/workflows\/[^/]+\.ya?ml)$/i;
 const SHADOW_BIN_PATH_RE = /(?:^|\/)(?:node_modules\/\.bin|\.venv\/bin|venv\/bin)\/.+/;
 export const SHADOW_RUNTIME_BINS = ['node', 'npm', 'python', 'python3', 'pytest', 'go', 'cargo', 'sh', 'bash'];
+
+function maskJsNonCode(source) {
+  let out = '', i = 0, prev = '';
+  const canRegex = () => !prev || '(=:,[!&|?{};+*%<>^~'.includes(prev) || /^(?:return|throw|case|in|of|typeof|void|delete|await|yield)$/.test(prev);
+  while (i < source.length) {
+    const ch = source[i], next = source[i + 1];
+    if (ch === '/' && next === '/') { const e = source.indexOf('\n', i + 2); i = e < 0 ? source.length : e; continue; }
+    if (ch === '/' && next === '*') { const e = source.indexOf('*/', i + 2); out += (e < 0 ? source.slice(i) : source.slice(i, e + 2)).replace(/[^\n]/g, ' '); i = e < 0 ? source.length : e + 2; continue; }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      let j = i + 1;
+      while (j < source.length) { if (source[j] === '\\') { j += 2; continue; } if (source[j] === ch) { j++; break; } j++; }
+      const marker = ch === '`' ? '`' : 'q';
+      out += `${marker}${source.slice(i + 1, j).replace(/[^\n]/g, ' ')}`; prev = 'q'; i = j; continue;
+    }
+    if (ch === '/' && next !== '/' && next !== '*' && canRegex()) {
+      let j = i + 1, cls = false, closed = false;
+      while (j < source.length && source[j] !== '\n') {
+        if (source[j] === '\\') { j += 2; continue; }
+        if (source[j] === '[') cls = true; else if (source[j] === ']') cls = false;
+        else if (source[j] === '/' && !cls) { closed = true; j++; break; }
+        j++;
+      }
+      if (closed) { while (j < source.length && /[A-Za-z]/.test(source[j])) j++; out += 'r'; prev = 'r'; i = j; continue; }
+    }
+    if (/[A-Za-z_$]/.test(ch)) {
+      let j = i + 1; while (j < source.length && /[A-Za-z0-9_$]/.test(source[j])) j++;
+      prev = source.slice(i, j); out += prev; i = j; continue;
+    }
+    out += ch; if (!/\s/.test(ch)) prev = ch; i++;
+  }
+  return out;
+}
+
+export function findExecutableOnlyMarkers(source, filePath) {
+  if (!source || DOC_OR_FIXTURE_PATH.test(filePath) || UTILITY_TEST_DIR.test(filePath)) return [];
+  const base = filePath.split('/').at(-1);
+  if (/^(?:test_.*|.*_test)\.py$/.test(base)) {
+    const lines = source.split(/\r?\n/), hits = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (/^\s*#/.test(lines[i])) continue;
+      if (/^\s*@pytest\.mark\.only\b/.test(lines[i])) hits.push({ path: filePath, line: i + 1, marker: '@pytest.mark.only' });
+    }
+    return hits;
+  }
+  if (!isJsTestPath(filePath)) return [];
+  const masked = maskJsNonCode(source), ls = buildLineStarts(masked), hits = [], seen = new Set();
+  const onlyRe = /(?<![.\w$])(?:(?:test|it|describe|suite|context)\s*\.\s*only(?:\s*\.\s*each(?=\s*[(`])|(?=\s*\())|(?:fit|fdescribe)(?=\s*\())/g;
+  for (const m of masked.matchAll(onlyRe)) {
+    const line = lineNumberAt(ls, m.index);
+    if (seen.has(line)) continue;
+    seen.add(line);
+    hits.push({ path: filePath, line, marker: m[0].replace(/\s+/g, '') });
+  }
+  return hits;
+}
 
 export function findConflictMarkers(source, filePath) {
   if (!source || DOC_OR_FIXTURE_PATH.test(filePath)) return [];
@@ -100,6 +157,10 @@ export function analyzeDiffEntries(entries = []) {
       errors.push({ path: newPath, line: 1, code: 'diff-shadow-bin', formatted: `Error: diff gate: ${newPath}:1 [diff-shadow-bin] ${detail}` });
     }
     if (newPath && entry.after) {
+      for (const hit of findExecutableOnlyMarkers(entry.after, newPath)) {
+        const detail = formatTeachingDetail({ invariant: `Executable focus marker "${hit.marker}(" in ${hit.path}:${hit.line} skips the rest of the test suite`, fix: `Remove ".only" / "${hit.marker}" at ${hit.path}:${hit.line}`, rerun: 'pdd lint --diff' });
+        errors.push({ path: hit.path, line: hit.line, code: 'diff-focus-only', formatted: `Error: diff gate: ${hit.path}:${hit.line} [diff-focus-only] ${detail}` });
+      }
       for (const hit of findConflictMarkers(entry.after, newPath)) {
         const detail = formatTeachingDetail({ invariant: `Unresolved merge conflict marker at ${hit.path}:${hit.line}`, fix: `Resolve the conflict block at ${hit.path}:${hit.line} and remove conflict markers`, rerun: 'pdd lint --diff' });
         errors.push({ path: hit.path, line: hit.line, code: 'diff-conflict-marker', formatted: `Error: diff gate: ${hit.path}:${hit.line} [diff-conflict-marker] ${detail}` });
