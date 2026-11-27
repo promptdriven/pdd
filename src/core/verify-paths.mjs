@@ -498,7 +498,7 @@ function summarizeTierGroup(label, { testResult = null, paths = [] } = {}) {
 
   if (testResult) {
     runs.push(testResult.command);
-    if (testResult.timedOut) hasNotProved = true;
+    if (testResult.timedOut || testResult.stuck || testResult.notProved || testResult.hardSetupFailure) hasNotProved = true;
     else if (testResult.ok) hasProved = true;
     else hasFailed = true;
   }

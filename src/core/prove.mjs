@@ -1,12 +1,14 @@
 // Prompt: prompts/cli/prove.prompt.md
 
 // Unified stateless `pdd prove` (G1): zero-flag merge-base verification + 5-bug-fixed bug-contrast mode.
-import { spawnSync } from 'node:child_process';
-import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 import { isTestOwnedPath } from '../file-owner.mjs';
+import { READONLY_PROVIDERS, redactReadonlyOutput, runReadonlyAgent } from '../shared/readonly-agent.mjs';
 import { causeText } from '../shared/safe-read.mjs';
+import { executableMissing } from '../shared/subprocess.mjs';
 import { COLOCATED_TEST_PATH_RE, TEST_SCENARIO_JSON_RE, TEST_TARGET_FILE_RE, detectPytestConfigEdits, isConfiguredTestPath, readPytestTestpaths } from '../shared/test-paths.mjs';
 import { canonicalRepoPath, formatTeachingDetail, readSafeUtf8, resolveDefaultBaseRef, scrubChildEnv } from './lint/diagnostics.mjs';
 import { lintRepoProject } from './lint/project-lint.mjs';
@@ -23,10 +25,46 @@ export const EXIT_FAILED = 1;
 export const EXIT_USAGE = 2;
 export const EXIT_NOT_PROVED = 3;
 
+const DEFAULT_IDLE_WINDOW_MS = 5 * 60_000;
+const DEFAULT_REPEAT_LOOP_THRESHOLD = 50;
+const DEFAULT_OFFLINE_REPEAT_FLOOR = 200;
+const DEFAULT_MAX_LLM_CONTINUES = 6;
+const DEFAULT_MAX_SILENT_LLM_CONTINUES = 3;
+const MAX_CAPTURE_BYTES = 16 * 1024 * 1024;
+const TAIL_CAPTURE_BYTES = 2 * 1024 * 1024;
+const STUCK_CHECK_TAIL_LINES = 50;
+const FROZEN_TAIL_REPORT_LINES = 15;
+const KILL_GRACE_MS = 2000;
+
 const SETUP_FAILURE_LINE_RE = /^(?:(?:Error:\s*Cannot find module\b|Error \[ERR_MODULE_NOT_FOUND\]|ERR_MODULE_NOT_FOUND\b|Cannot find package\b|ModuleNotFoundError:|ImportError:|No module named\b|SyntaxError:|FileNotFoundError:|Error:\s*ENOENT\b|ENOENT:|ERROR collecting\b|command not found\b|not recognized as an internal\b|cannot find package\b|no Go files\b|error\[E\d+\]:|failed to compile\b)|.*\[build failed\])/i;
+const TEST_RUNNER_EXECUTION_RE = /(?:^|\n)(?:not ok \d+|ok \d+|#\s*(?:tests|pass|fail)\s+\d+|===+\s+test session starts\s+===+|collected \d+ items?|(?:ok|FAIL)\s+\S+\s+[\d.]+s|test result:\s+(?:ok|FAILED)\.|Test (?:Files|Suites:)\s+\d+)/m;
+const MISSING_RUNNER_LINE_RE = /^(?:(?:[^\n:]*python[^\n:]*:\s*)?No module named ['"]?(?:pytest|unittest)['"]?|(?:\/[\w/.-]*sh|bash|zsh|dash|ash|ksh|fish|sh):\s*(?:line\s+\d+:\s*|\d+:\s*)?[^:\n]+:\s*(?:command )?not found\b|'[^']+'\s+is not recognized as an internal or external command\b|exec:\s*"[^"]+":\s*executable file not found in \$PATH\b|error:\s*Failed to spawn:\s*`[^`]+`)/i;
+
+function hasMissingRunnerOutput(stderr, stdout) {
+  if (TEST_RUNNER_EXECUTION_RE.test(stdout || '')) return false;
+  const target = String(stderr || '').trim() ? String(stderr) : String(stdout || '');
+  for (const rawLine of target.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line && MISSING_RUNNER_LINE_RE.test(line)) return true;
+  }
+  return false;
+}
 const DIAG_PREFIX_RE = /^\s*(?:#\s*|E\s+)?/;
 const TARGETABLE_ERROR_CLASS_RE = /^(SyntaxError|ImportError|FileNotFoundError):/i;
 const COLOCATED_TEST_RE = COLOCATED_TEST_PATH_RE;
+
+const DEP_MANIFEST_OR_LOCKFILE_RE = /(?:^|\/)(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(?:\.lock)?|setup\.(?:py|cfg)|requirements(?:[-_.][^/]*)?\.txt)$/;
+const LOCAL_DEP_DIRS = Object.freeze(['node_modules', '.venv', 'venv']);
+
+const STUCK_CHECK_SCHEMA = Object.freeze({
+  type: 'object',
+  required: ['verdict', 'reason'],
+  additionalProperties: false,
+  properties: {
+    verdict: { type: 'string', enum: ['progress', 'stuck'] },
+    reason: { type: 'string', minLength: 1, maxLength: 300 },
+  },
+});
 
 function findSetupFailureLine(stderr, stdout) {
   // Scan stderr first so an actual diagnostic on stderr is NEVER shadowed by an arbitrary stdout banner.
@@ -48,50 +86,516 @@ const resolveGitRoot = cwd => { const r = gitExec(cwd, ['rev-parse', '--show-top
 const resolveCommit = (root, ref) => { const r = gitExec(root, ['rev-parse', '--verify', `${ref}^{commit}`]); return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null; };
 
 const SEPARATOR_LINE_RE = /^[=\-*_~#\s]+$/;
-const TEST_SUMMARY_LINE_RE = /\b(?:\d+\s+(?:passed|failed|passing|failing|errors?|skipped)|tests?\s+\d+|fail\s+\d+|pass\s+\d+|FAILED\b|ERROR\b|test result:|ok\s+\S+|FAIL\s+\S+)/i;
+const WARNING_LINE_RE = /^(?:[A-Za-z0-9_.-]*Warning:|\[?WARN(?:ING)?\]?[:\s]|WARNING\b|DeprecationWarning:|PendingDeprecationWarning:|UserWarning:|RuntimeWarning:|ResourceWarning:|FutureWarning:|Pytest[A-Za-z]*Warning:)|\b(?:Pytest[A-Za-z]*Warning|DeprecationWarning|PendingDeprecationWarning|UserWarning|ResourceWarning|FutureWarning|RuntimeWarning):/i;
+const CANONICAL_SUMMARY_LINE_RE = /(?:^=+\s+.*\b\d+\s+(?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|deselected|warnings?)\b.*=+$|\b\d+\s+(?:passed|failed|passing|failing|errors?|skipped)\b|^#\s*(?:tests|pass|fail)\s+\d+\b|^test result:\s+(?:ok|FAILED)\.|^(?:ok|FAIL)\s+\S+(?:\s+[\d.]+s|\s+\[)|^(?:Test Files|Tests|Test Suites:)\s+\d+|\b\d+\s+examples?,\s+\d+\s+failures?\b|\bTests run:\s*\d+,\s*Failures:\s*\d+|\b\d+%\s+tests passed,\s+\d+\s+tests failed out of\s+\d+|\bExecuted\s+\d+\s+tests?,\s+with\s+\d+\s+failures?\b)/i;
+const GENERIC_SUMMARY_LINE_RE = /(?:\b(?:tests?\s+\d+|fail\s+\d+|pass\s+\d+|test result:)|\bFAILED\b|\bERROR\b|^(?:ok|FAIL)\s+\S+)/;
 
-function summarizeTestOutput(stdout, stderr, setupError, timedOut) {
+export function summarizeTestOutput(stdout, stderr, setupError, timedOut, stuckReason = '') {
   const combined = `${stdout || ''}\n${stderr || ''}`
     .split(/\r?\n/)
     .map(l => l.trim())
     .filter(l => l && !SEPARATOR_LINE_RE.test(l));
-  for (let i = combined.length - 1; i >= 0; i--) {
-    if (TEST_SUMMARY_LINE_RE.test(combined[i])) return causeText(combined[i]);
+  const nonWarning = combined.filter(l => !WARNING_LINE_RE.test(l));
+  for (let i = nonWarning.length - 1; i >= 0; i--) {
+    if (CANONICAL_SUMMARY_LINE_RE.test(nonWarning[i])) return causeText(nonWarning[i]);
   }
+  for (let i = nonWarning.length - 1; i >= 0; i--) {
+    if (GENERIC_SUMMARY_LINE_RE.test(nonWarning[i])) return causeText(nonWarning[i]);
+  }
+  if (nonWarning.length > 0) return causeText(nonWarning.at(-1));
   if (combined.length > 0) return causeText(combined.at(-1));
-  return causeText(setupError || (timedOut ? 'command timed out' : ''));
+  return causeText(stuckReason || setupError || (timedOut ? 'command timed out' : ''));
 }
 
-function execShellCommand(command, { cwd, env, timeoutMs, preScrubbed = false }, ports = {}) {
-  const runner = ports.spawnSync ?? spawnSync;
-  const started = Date.now();
-  const proc = runner(command, { cwd, env: preScrubbed ? env : scrubChildEnv(env), shell: true, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
-  const stdout = String(proc.stdout ?? ''), stderr = String(proc.stderr ?? '');
-  const timedOut = proc.error?.code === 'ETIMEDOUT';
-  const exitCode = typeof proc.status === 'number' ? proc.status : null;
-  const signal = proc.signal ?? '';
+const TIMESTAMP_PREFIX_RE = /^(?:\[?\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\]?\s*|\[\d{2}:\d{2}:\d{2}(?:\.\d+)?\]\s*|\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+)/;
+const DOTS_OR_SPINNER_RE = /^[.\s|/\\-]+$/;
+
+function normalizeProgressLine(line) {
+  const trimmed = String(line ?? '').trim();
+  if (!trimmed || trimmed.length < 4 || SEPARATOR_LINE_RE.test(trimmed) || DOTS_OR_SPINNER_RE.test(trimmed)) return '';
+  return trimmed.replace(TIMESTAMP_PREFIX_RE, '').trim();
+}
+
+function formatDurationBrief(ms) {
+  const totalSec = Math.max(0, Math.round(ms / 1000));
+  if (totalSec < 60) return `${totalSec}s`;
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+}
+
+function formatCompletedPhases(completedPhases) {
+  if (!Array.isArray(completedPhases) || completedPhases.length === 0) return 'none';
+  return completedPhases.map(p => `${p.phase} (${p.status})`).join(', ');
+}
+
+function formatFrozenTail(frozenTail) {
+  if (!Array.isArray(frozenTail) || frozenTail.length === 0) return '(no output captured)';
+  return causeText(frozenTail.slice(-5).join(' | '));
+}
+
+function getTailLines(recentLines, stdoutCarry, stderrCarry, maxLines) {
+  const merged = [...recentLines];
+  for (const carry of [stdoutCarry, stderrCarry]) {
+    const t = String(carry ?? '').trim();
+    if (t) merged.push(t.slice(0, 500));
+  }
+  return merged.slice(-maxLines);
+}
+
+function buildShellResult({
+  command, stdout, stderr, exitCode, signal, procError, timedOut, stuck, stuckReason, stuckTrigger, stuckSource,
+  frozenTail, durationMs,
+}) {
+  const ok = exitCode === 0 && !procError && !signal && !timedOut && !stuck;
   const hardSetupFailure = Boolean(
-    (proc.error && !timedOut)
-    || (signal && !timedOut)
+    (procError && !timedOut && !stuck)
+    || (signal && !timedOut && !stuck)
     || (exitCode !== null && exitCode >= 129 && exitCode <= 192)
     || [126, 127].includes(exitCode),
   );
-  const setupFailure = exitCode !== 0 && !hardSetupFailure ? findSetupFailureLine(stderr, stdout) : null;
-  const setupError = proc.error && !timedOut
-    ? causeText(proc.error.message)
-    : (signal && !timedOut
+  const missingRunnerFailure = Boolean(
+    !ok
+    && !timedOut
+    && !stuck
+    && (hardSetupFailure || hasMissingRunnerOutput(stderr, stdout)),
+  );
+  const setupFailure = exitCode !== 0 && !hardSetupFailure && !timedOut && !stuck ? findSetupFailureLine(stderr, stdout) : null;
+  const setupError = procError && !timedOut && !stuck
+    ? causeText(procError.message)
+    : (signal && !timedOut && !stuck
         ? `Process terminated by signal ${signal}`
         : (exitCode !== null && exitCode >= 129 && exitCode <= 192
             ? `Command terminated by signal (exit ${exitCode})`
             : ([126, 127].includes(exitCode) ? `Command exited ${exitCode}` : (setupFailure ? causeText(setupFailure.normalizedLine) : ''))));
   return {
-    command, ok: exitCode === 0 && !proc.error && !signal, exitCode, signal, timedOut,
-    durationMs: Math.max(0, Date.now() - started), stdout, stderr, setupError, setupFailure, hardSetupFailure,
-    summary: summarizeTestOutput(stdout, stderr, setupError, timedOut),
+    command,
+    ok,
+    exitCode,
+    signal,
+    timedOut,
+    stuck,
+    stuckReason,
+    stuckTrigger,
+    stuckSource,
+    frozenTail,
+    durationMs,
+    stdout,
+    stderr,
+    setupError,
+    setupFailure,
+    hardSetupFailure,
+    missingRunnerFailure,
+    summary: summarizeTestOutput(stdout, stderr, setupError, timedOut, stuckReason),
   };
 }
 
-export function detectRepoTestCommand(root) {
+async function defaultStuckCheck({ phase, command, trigger, idleMs, elapsedMs, tailLines, cwd, env, signal }) {
+  if (String(env?.PDD_PROVE_LLM_WATCH ?? '').trim() === '0') return null;
+  const preferred = String(env?.PDD_PROVE_LLM_PROVIDER ?? '').trim().toLowerCase();
+  const ordered = [
+    ...(READONLY_PROVIDERS.includes(preferred) ? [preferred] : []),
+    ...READONLY_PROVIDERS.filter(p => p !== preferred),
+  ];
+  const provider = ordered.find(p => !executableMissing(p, { cwd, env }));
+  if (!provider) return null;
+
+  const redactedTail = redactReadonlyOutput((tailLines ?? []).slice(-STUCK_CHECK_TAIL_LINES).join('\n'), { env });
+  const triggerText = trigger === 'repeat-loop'
+    ? 'repeated identical output lines in a tight loop'
+    : `produced no new output for ${formatDurationBrief(idleMs)}`;
+  const prompt = [
+    'You are monitoring a running command for `pdd prove`.',
+    `Phase: ${phase}`,
+    `Command: ${command}`,
+    `Elapsed: ${formatDurationBrief(elapsedMs)}`,
+    `Observation: ${triggerText}`,
+    '',
+    'Last ~50 output lines:',
+    '```',
+    redactedTail || '(no output)',
+    '```',
+    '',
+    'Decide whether this command is making genuine slow progress (compiling, linking, or running a large test) or is stuck/hung/deadlocked/looping.',
+    'Reply strictly with JSON: {"verdict":"progress"|"stuck","reason":"<one short sentence>"}',
+  ].join('\n');
+
+  try {
+    const res = await runReadonlyAgent({
+      provider,
+      prompt,
+      cwd,
+      env,
+      signal,
+      timeoutMs: 30_000,
+      disableTools: true,
+      jsonSchema: STUCK_CHECK_SCHEMA,
+    });
+    if (res?.ok && (res.parsed?.verdict === 'progress' || res.parsed?.verdict === 'stuck')) {
+      return {
+        verdict: res.parsed.verdict,
+        reason: String(res.parsed.reason || '').trim() || res.parsed.verdict,
+        source: `llm:${provider}`,
+      };
+    }
+  } catch {
+    // Fall back cleanly to offline idle policy.
+  }
+  return null;
+}
+
+function appendBounded(current, chunkText) {
+  const next = current + chunkText;
+  if (next.length <= MAX_CAPTURE_BYTES) return next;
+  return next.slice(next.length - TAIL_CAPTURE_BYTES);
+}
+
+async function execShellCommand(
+  command,
+  {
+    cwd,
+    env,
+    rawEnv = env,
+    timeoutMs = null,
+    idleTimeoutMs = DEFAULT_IDLE_WINDOW_MS,
+    repeatLoopThreshold = DEFAULT_REPEAT_LOOP_THRESHOLD,
+    explicitRepeatThreshold = false,
+    phase = 'command',
+    preScrubbed = false,
+  },
+  ports = {},
+) {
+  const childEnv = preScrubbed ? env : scrubChildEnv(env);
+  if (typeof ports.spawnSync === 'function') {
+    const started = Date.now();
+    const proc = ports.spawnSync(command, {
+      cwd,
+      env: childEnv,
+      shell: true,
+      encoding: 'utf8',
+      ...(timeoutMs ? { timeout: timeoutMs } : {}),
+      maxBuffer: MAX_CAPTURE_BYTES,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const stdout = String(proc.stdout ?? '');
+    const stderr = String(proc.stderr ?? '');
+    const timedOut = proc.error?.code === 'ETIMEDOUT';
+    const exitCode = typeof proc.status === 'number' ? proc.status : null;
+    const signal = proc.signal ?? '';
+    const lines = `${stdout}\n${stderr}`.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    return buildShellResult({
+      command,
+      stdout,
+      stderr,
+      exitCode,
+      signal,
+      procError: proc.error ?? null,
+      timedOut,
+      stuck: false,
+      stuckReason: '',
+      stuckTrigger: null,
+      stuckSource: null,
+      frozenTail: timedOut ? lines.slice(-FROZEN_TAIL_REPORT_LINES) : [],
+      durationMs: Math.max(0, Date.now() - started),
+    });
+  }
+
+  const spawner = ports.spawn ?? spawn;
+  const stuckChecker = typeof ports.checkStuck === 'function'
+    ? ports.checkStuck
+    : (typeof ports.stuckCheck === 'function' ? ports.stuckCheck : defaultStuckCheck);
+  const effectiveIdleMs = Math.max(25, Number.isFinite(idleTimeoutMs) && idleTimeoutMs > 0 ? idleTimeoutMs : DEFAULT_IDLE_WINDOW_MS);
+  const effectiveRepeat = Math.max(2, Number.isInteger(repeatLoopThreshold) && repeatLoopThreshold > 0 ? repeatLoopThreshold : DEFAULT_REPEAT_LOOP_THRESHOLD);
+  const offlineRepeatKill = explicitRepeatThreshold ? effectiveRepeat : Math.max(effectiveRepeat, DEFAULT_OFFLINE_REPEAT_FLOOR);
+  const maxLlmContinues = Number.isInteger(ports.maxLlmContinues) && ports.maxLlmContinues > 0 ? ports.maxLlmContinues : DEFAULT_MAX_LLM_CONTINUES;
+  const maxSilentContinues = Number.isInteger(ports.maxSilentContinues) && ports.maxSilentContinues > 0 ? ports.maxSilentContinues : DEFAULT_MAX_SILENT_LLM_CONTINUES;
+
+  return new Promise(resolveRun => {
+    const started = Date.now();
+    let child = null;
+    let stdout = '';
+    let stderr = '';
+    let stdoutCarry = '';
+    let stderrCarry = '';
+    const recentLines = [];
+    let lastActivityAt = started;
+    let lastNormLine = '';
+    let repeatCount = 0;
+    let nextRepeatTrigger = effectiveRepeat;
+    let checkingStuck = false;
+    let llmContinueCount = 0;
+    let silentContinueCount = 0;
+    let hadNewBytesSinceCheck = false;
+    let settled = false;
+    let stopping = false;
+    let timedOut = false;
+    let stuck = false;
+    let stuckReason = '';
+    let stuckTrigger = null;
+    let stuckSource = null;
+    let hardTimer = null;
+    let idleInterval = null;
+    let killTimer = null;
+    let failsafeTimer = null;
+    const stuckAbort = new AbortController();
+
+    const clearAllTimers = () => {
+      if (hardTimer) { clearTimeout(hardTimer); hardTimer = null; }
+      if (idleInterval) { clearInterval(idleInterval); idleInterval = null; }
+      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
+      if (failsafeTimer) { clearTimeout(failsafeTimer); failsafeTimer = null; }
+      if (!stuckAbort.signal.aborted) stuckAbort.abort();
+    };
+
+    const finish = (procError, exitCode, signal) => {
+      if (settled) return;
+      settled = true;
+      clearAllTimers();
+      const tail = (timedOut || stuck) ? getTailLines(recentLines, stdoutCarry, stderrCarry, FROZEN_TAIL_REPORT_LINES) : [];
+      resolveRun(buildShellResult({
+        command,
+        stdout,
+        stderr,
+        exitCode: typeof exitCode === 'number' ? exitCode : null,
+        signal: signal ?? '',
+        procError: procError ?? null,
+        timedOut,
+        stuck,
+        stuckReason,
+        stuckTrigger,
+        stuckSource,
+        frozenTail: tail,
+        durationMs: Math.max(0, Date.now() - started),
+      }));
+    };
+
+    const killChildGroup = () => {
+      if (!child || stopping) return;
+      stopping = true;
+      const sendSig = sig => {
+        try {
+          if (process.platform !== 'win32' && Number.isInteger(child.pid) && child.pid > 0) {
+            process.kill(-child.pid, sig);
+            return;
+          }
+        } catch {}
+        try { child.kill(sig); } catch {}
+      };
+      sendSig('SIGTERM');
+      killTimer = setTimeout(() => sendSig('SIGKILL'), KILL_GRACE_MS);
+      killTimer.unref();
+      failsafeTimer = setTimeout(() => finish(null, null, 'SIGKILL'), KILL_GRACE_MS + 1000);
+      failsafeTimer.unref();
+    };
+
+    const evaluateStuck = async trigger => {
+      if (settled || stopping || checkingStuck) return;
+      checkingStuck = true;
+      const now = Date.now();
+      const idleMs = Math.max(0, now - lastActivityAt);
+      const elapsedMs = Math.max(0, now - started);
+      const tailLines = getTailLines(recentLines, stdoutCarry, stderrCarry, STUCK_CHECK_TAIL_LINES);
+      let verdictObj = null;
+      try {
+        verdictObj = await stuckChecker({
+          phase,
+          command,
+          trigger,
+          idleMs,
+          elapsedMs,
+          tailLines,
+          cwd,
+          env: rawEnv,
+          signal: stuckAbort.signal,
+        });
+      } catch {
+        verdictObj = null;
+      }
+      if (settled || stopping) return;
+      if (trigger === 'idle' && lastActivityAt > now) {
+        checkingStuck = false;
+        return;
+      }
+
+      if (verdictObj && verdictObj.verdict === 'stuck') {
+        stuck = true;
+        stuckTrigger = trigger;
+        stuckSource = verdictObj.source || 'llm';
+        stuckReason = String(verdictObj.reason || '').trim() || 'process appears stuck';
+        killChildGroup();
+        return;
+      }
+
+      if (verdictObj && verdictObj.verdict === 'progress') {
+        llmContinueCount += 1;
+        if (trigger === 'idle') {
+          silentContinueCount = hadNewBytesSinceCheck ? 1 : silentContinueCount + 1;
+        }
+        hadNewBytesSinceCheck = false;
+        if (silentContinueCount > maxSilentContinues || llmContinueCount > maxLlmContinues) {
+          stuck = true;
+          stuckTrigger = trigger;
+          stuckSource = 'llm-limit';
+          stuckReason = String(verdictObj.reason || '').trim() || `process remained ${trigger === 'repeat-loop' ? 'looping' : 'idle'} across consecutive checks`;
+          killChildGroup();
+          return;
+        }
+        lastActivityAt = Date.now();
+        repeatCount = 0;
+        nextRepeatTrigger = effectiveRepeat;
+        checkingStuck = false;
+        return;
+      }
+
+      // Offline / no-LLM fallback policy (never kills actively progressing runs).
+      if (trigger === 'idle') {
+        stuck = true;
+        stuckTrigger = 'idle';
+        stuckSource = 'offline-idle';
+        stuckReason = `no output for ${formatDurationBrief(idleMs)}`;
+        killChildGroup();
+        return;
+      }
+      if (repeatCount >= offlineRepeatKill) {
+        stuck = true;
+        stuckTrigger = 'repeat-loop';
+        stuckSource = 'offline-repeat';
+        stuckReason = `repeated identical output line ${repeatCount} times`;
+        killChildGroup();
+        return;
+      }
+      nextRepeatTrigger = offlineRepeatKill;
+      checkingStuck = false;
+    };
+
+    const handleChunk = (streamName, chunk) => {
+      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      if (!text) return;
+      hadNewBytesSinceCheck = true;
+      if (streamName === 'stdout') stdout = appendBounded(stdout, text);
+      else stderr = appendBounded(stderr, text);
+
+      const combined = (streamName === 'stdout' ? stdoutCarry : stderrCarry) + text;
+      const parts = combined.split(/\r?\n/);
+      const carry = parts.pop() ?? '';
+      if (streamName === 'stdout') stdoutCarry = carry;
+      else stderrCarry = carry;
+
+      if (parts.length === 0) {
+        // Inline progress output (e.g. pytest dots without trailing newline) still counts as activity.
+        lastActivityAt = Date.now();
+        silentContinueCount = 0;
+        return;
+      }
+
+      for (const rawLine of parts) {
+        const trimmed = rawLine.trim();
+        if (!trimmed) continue;
+        recentLines.push(trimmed.slice(0, 500));
+        if (recentLines.length > 80) recentLines.shift();
+        const norm = normalizeProgressLine(trimmed);
+        if (norm) {
+          if (norm === lastNormLine) {
+            repeatCount += 1;
+          } else {
+            lastNormLine = norm;
+            repeatCount = 1;
+            nextRepeatTrigger = effectiveRepeat;
+            lastActivityAt = Date.now();
+            silentContinueCount = 0;
+          }
+        } else {
+          lastActivityAt = Date.now();
+          silentContinueCount = 0;
+        }
+      }
+
+      if (!timeoutMs && !stopping && !checkingStuck && repeatCount >= nextRepeatTrigger) {
+        void evaluateStuck('repeat-loop');
+      }
+    };
+
+    try {
+      child = spawner(command, {
+        cwd,
+        env: childEnv,
+        shell: true,
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      finish(err, null, '');
+      return;
+    }
+
+    if (timeoutMs) {
+      hardTimer = setTimeout(() => {
+        timedOut = true;
+        killChildGroup();
+      }, timeoutMs);
+      hardTimer.unref();
+    } else {
+      const pollMs = Math.max(20, Math.min(5000, Math.floor(effectiveIdleMs / 4)));
+      idleInterval = setInterval(() => {
+        if (settled || stopping || checkingStuck) return;
+        if (Date.now() - lastActivityAt >= effectiveIdleMs) {
+          void evaluateStuck('idle');
+        }
+      }, pollMs);
+      idleInterval.unref();
+    }
+
+    child.stdout?.on('data', chunk => handleChunk('stdout', chunk));
+    child.stderr?.on('data', chunk => handleChunk('stderr', chunk));
+    child.on('error', err => finish(err, null, ''));
+    child.on('close', (code, sig) => finish(null, code, sig));
+  });
+}
+
+function lstatSafe(fullPath) {
+  try { return lstatSync(fullPath); }
+  catch (err) { if (err?.code === 'ENOENT') return null; throw err; }
+}
+
+function resolveSafeLocalVenvPytest(root) {
+  const inGitRepo = existsSync(join(root, '.git'));
+  for (const venvDir of ['.venv', 'venv']) {
+    const dirPath = join(root, venvDir);
+    const binDir = join(dirPath, 'bin');
+    const candidate = join(binDir, 'pytest');
+    const dst = lstatSafe(dirPath);
+    if (!dst || dst.isSymbolicLink() || !dst.isDirectory()) continue;
+    const bst = lstatSafe(binDir);
+    if (!bst || bst.isSymbolicLink() || !bst.isDirectory()) continue;
+    const fst = lstatSafe(candidate);
+    if (!fst || fst.isSymbolicLink() || !fst.isFile()) continue;
+    if (inGitRepo) {
+      const rel = `${venvDir}/bin/pytest`;
+      const tracked = gitExec(root, ['ls-files', '--error-unmatch', '--', rel]);
+      if (tracked.status !== 1) continue;
+    }
+    return `${venvDir}/bin/pytest`;
+  }
+  return null;
+}
+
+function canExecuteBin(bin, { root, env, probe }) {
+  if (typeof probe === 'function') return Boolean(probe(bin));
+  return !executableMissing(bin, { cwd: root, env });
+}
+
+function python3HasPytest({ root, env, probe }) {
+  if (typeof probe === 'function') return Boolean(probe('python3 -m pytest'));
+  if (!canExecuteBin('python3', { root, env })) return false;
+  const res = spawnSync(
+    'python3',
+    ['-c', 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("pytest") else 1)'],
+    { cwd: root, env, stdio: ['ignore', 'ignore', 'ignore'], timeout: 5000 },
+  );
+  return res.status === 0;
+}
+
+export function detectRepoTestCommand(root, { env = process.env, probe } = {}) {
   const pkgRaw = readSafeUtf8(root, 'package.json');
   if (pkgRaw) {
     try {
@@ -100,16 +604,46 @@ export function detectRepoTestCommand(root) {
       if (testScript && !/no test specified/i.test(testScript)) {
         if (existsSync(join(root, 'pnpm-lock.yaml'))) return 'pnpm test';
         if (existsSync(join(root, 'yarn.lock'))) return 'yarn test';
+        if (existsSync(join(root, 'bun.lock')) || existsSync(join(root, 'bun.lockb'))) return 'bun run test';
         return 'npm test';
       }
       if (pkg?.dependencies?.vitest || pkg?.devDependencies?.vitest) return 'npx vitest run';
+      if (existsSync(join(root, 'bun.lock')) || existsSync(join(root, 'bun.lockb'))) return 'bun test';
     } catch {}
   }
   if (existsSync(join(root, 'go.mod'))) return 'go test ./...';
   if (existsSync(join(root, 'Cargo.toml'))) return 'cargo test';
-  if (existsSync(join(root, 'pyproject.toml')) || existsSync(join(root, 'pytest.ini')) || existsSync(join(root, 'setup.cfg'))) {
-    return existsSync(join(root, 'src')) ? 'PYTHONPATH=src pytest' : 'pytest';
+  if (
+    existsSync(join(root, 'pyproject.toml'))
+    || existsSync(join(root, 'pytest.ini'))
+    || existsSync(join(root, 'setup.cfg'))
+    || existsSync(join(root, 'conftest.py'))
+  ) {
+    const prefix = existsSync(join(root, 'src')) ? 'PYTHONPATH=src ' : '';
+    const venvPytest = resolveSafeLocalVenvPytest(root);
+    if (venvPytest) return `${prefix}${venvPytest}`;
+    const pyprojectText = readSafeUtf8(root, 'pyproject.toml') ?? '';
+    if ((existsSync(join(root, 'uv.lock')) || /\[tool\.uv\b/i.test(pyprojectText)) && canExecuteBin('uv', { root, env, probe })) {
+      return `${prefix}uv run pytest`;
+    }
+    if ((existsSync(join(root, 'poetry.lock')) || /\[tool\.poetry\b/i.test(pyprojectText)) && canExecuteBin('poetry', { root, env, probe })) {
+      return `${prefix}poetry run pytest`;
+    }
+    if (!canExecuteBin('pytest', { root, env, probe }) && python3HasPytest({ root, env, probe })) {
+      return `${prefix}python3 -m pytest`;
+    }
+    return `${prefix}pytest`;
   }
+  if (
+    existsSync(join(root, 'Gemfile'))
+    && (existsSync(join(root, '.rspec')) || existsSync(join(root, 'spec')) || /\brspec\b/i.test(readSafeUtf8(root, 'Gemfile') ?? ''))
+  ) {
+    return 'bundle exec rspec';
+  }
+  if (existsSync(join(root, 'Package.swift'))) return 'swift test';
+  if (existsSync(join(root, 'gradlew'))) return './gradlew test';
+  if (existsSync(join(root, 'pom.xml'))) return 'mvn test';
+  if (existsSync(join(root, 'CTestTestfile.cmake')) || existsSync(join(root, 'CMakeLists.txt'))) return 'ctest';
   return null;
 }
 
@@ -124,11 +658,6 @@ function listChangedFiles(root, ref) {
   if (untracked.status !== 0) throw new Error(`git ls-files failed: ${causeText(untracked.stderr || 'unknown error')}`);
   if (untracked.stdout) for (const p of untracked.stdout.split('\0').filter(Boolean)) seen.add(p);
   return [...seen].filter(canonicalRepoPath).sort();
-}
-
-function lstatSafe(fullPath) {
-  try { return lstatSync(fullPath); }
-  catch (err) { if (err?.code === 'ENOENT') return null; throw err; }
 }
 
 function assertDirWithin(baseReal, fullPath, relPath) {
@@ -202,6 +731,34 @@ function copyWorkingTreeOverlay(root, worktree, relPaths, { deleteMissing = fals
   return mirrored;
 }
 
+function symlinkLocalDependencyDirs(root, worktrees, changedFromBase) {
+  if (changedFromBase.some(f => DEP_MANIFEST_OR_LOCKFILE_RE.test(f))) return { links: [], dirs: [] };
+  const rootReal = realpathSync(root);
+  const links = [];
+  const dirs = [];
+  for (const dirName of LOCAL_DEP_DIRS) {
+    const srcPath = join(rootReal, dirName);
+    const srcStat = lstatSafe(srcPath);
+    if (!srcStat || srcStat.isSymbolicLink() || !srcStat.isDirectory()) continue;
+    const tracked = gitExec(rootReal, ['ls-files', '--error-unmatch', '--', dirName]);
+    if (tracked.status === 0) continue;
+    let linkedAny = false;
+    for (const wt of worktrees) {
+      const dstPath = join(wt, dirName);
+      if (lstatSafe(dstPath)) continue;
+      try {
+        symlinkSync(srcPath, dstPath, 'dir');
+        links.push(dstPath);
+        linkedAny = true;
+      } catch {
+        // Skip silently when symlinking is unavailable on the filesystem.
+      }
+    }
+    if (linkedAny) dirs.push(dirName);
+  }
+  return { links, dirs };
+}
+
 function rawVerifyFingerprint(rawText) {
   if (typeof rawText !== 'string') return null;
   try {
@@ -222,7 +779,7 @@ function extractReferencedNpmScripts(commands = []) {
   const names = new Set(['test', 'pretest', 'posttest']);
   for (const cmd of commands) {
     if (typeof cmd !== 'string' || !cmd.trim()) continue;
-    for (const m of cmd.matchAll(/(?:^|[;&|]\s*)(?:npm|pnpm|yarn)\s+(?:run\s+)?([A-Za-z0-9_.:-]+)/g)) {
+    for (const m of cmd.matchAll(/(?:^|[;&|]\s*)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([A-Za-z0-9_.:-]+)/g)) {
       const token = m[1];
       if (!token || token.startsWith('-') || NPM_BUILTIN_SUBCMDS.has(token)) continue;
       const script = (token === 't' || token === 'tst') ? 'test' : token;
@@ -315,13 +872,16 @@ function detectUntrustedPackageTestScriptEdits(root, baseSha, commands) {
   return changed;
 }
 
-function runBugContrastProve({ root, base, test, expect, overlay, setup, timeoutMinutes, json, env }, ports = {}) {
+async function runBugContrastProve(
+  { root, base, test, expect, overlay, setup, timeoutMinutes, idleTimeoutMs, repeatLoopThreshold, explicitRepeatThreshold, json, env },
+  ports = {},
+) {
   const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr;
   if (typeof test !== 'string' || !test.trim() || typeof expect !== 'string' || !expect.trim()) {
     stderr.write('pdd prove bug-contrast mode requires nonblank --test CMD and --expect TEXT.\n');
     return { exitCode: EXIT_USAGE, outcome: OUTCOME_FAILED, receipt: null };
   }
-  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 120) {
+  if (timeoutMinutes !== null && timeoutMinutes !== undefined && (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 120)) {
     stderr.write('pdd prove --timeout takes whole minutes from 1 to 120.\n');
     return { exitCode: EXIT_USAGE, outcome: OUTCOME_FAILED, receipt: null };
   }
@@ -349,11 +909,13 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
     return { exitCode: EXIT_USAGE, outcome: OUTCOME_FAILED, receipt: null };
   }
 
-  const timeoutMs = timeoutMinutes * 60_000;
+  const explicitTimeoutMs = Number.isInteger(timeoutMinutes) ? timeoutMinutes * 60_000 : null;
   const worktreeParent = mkdtempSync(join(tmpdir(), 'pdd-prove-'));
   const baseWorktree = join(worktreeParent, 'base');
   const headWorktree = join(worktreeParent, 'head');
   const createdWorktrees = [];
+  let linkedDepLinks = [];
+  let linkedDepDirs = [];
   let basePhase = null, headPhase = null, setupError = '', copiedPaths = [];
 
   try {
@@ -374,15 +936,28 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
     createdWorktrees.push(headWorktree);
     copyWorkingTreeOverlay(root, headWorktree, listChangedFiles(root, headSha), { deleteMissing: true });
 
+    const execOpts = {
+      env,
+      rawEnv: env,
+      timeoutMs: explicitTimeoutMs,
+      idleTimeoutMs,
+      repeatLoopThreshold,
+      explicitRepeatThreshold,
+    };
+
     if (setup) {
-      const baseSetup = execShellCommand(setup, { cwd: baseWorktree, env, timeoutMs }, ports);
+      const baseSetup = await execShellCommand(setup, { ...execOpts, cwd: baseWorktree, phase: 'bug-contrast:base-setup' }, ports);
       if (!baseSetup.ok) throw new Error(`base --setup failed (exit ${baseSetup.exitCode}): ${baseSetup.summary}`);
-      const headSetup = execShellCommand(setup, { cwd: headWorktree, env, timeoutMs }, ports);
+      const headSetup = await execShellCommand(setup, { ...execOpts, cwd: headWorktree, phase: 'bug-contrast:head-setup' }, ports);
       if (!headSetup.ok) throw new Error(`head --setup failed (exit ${headSetup.exitCode}): ${headSetup.summary}`);
+    } else {
+      const linked = symlinkLocalDependencyDirs(root, [baseWorktree, headWorktree], changedFromBase);
+      linkedDepLinks = linked.links;
+      linkedDepDirs = linked.dirs;
     }
 
-    basePhase = execShellCommand(test, { cwd: baseWorktree, env, timeoutMs }, ports);
-    const baseTextHasExpect = !basePhase.signal && !basePhase.timedOut && (basePhase.stdout.includes(expect) || basePhase.stderr.includes(expect));
+    basePhase = await execShellCommand(test, { ...execOpts, cwd: baseWorktree, phase: 'bug-contrast:base' }, ports);
+    const baseTextHasExpect = !basePhase.signal && !basePhase.timedOut && !basePhase.stuck && (basePhase.stdout.includes(expect) || basePhase.stderr.includes(expect));
     // Clear SyntaxError/ImportError/FileNotFoundError ONLY when --expect names that error class WITH detail
     // (never bare class alone) AND matches the ACTUAL normalized diagnostic error line (never a separate banner).
     const trimmedExpect = expect.trim();
@@ -397,22 +972,35 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
     );
     if (expectTargetsErrorClass) basePhase.setupError = '';
     basePhase.expectedFound = !basePhase.setupError && baseTextHasExpect;
-    headPhase = execShellCommand(test, { cwd: headWorktree, env, timeoutMs }, ports);
+    headPhase = await execShellCommand(test, { ...execOpts, cwd: headWorktree, phase: 'bug-contrast:head' }, ports);
   } catch (err) {
     setupError = causeText(err?.message || String(err));
   } finally {
+    // Explicitly unlink temporary dependency symlinks BEFORE removing worktrees so caller deps can NEVER be touched.
+    for (const linkPath of linkedDepLinks) {
+      try {
+        if (lstatSafe(linkPath)?.isSymbolicLink()) unlinkSync(linkPath);
+      } catch {}
+    }
     for (const wt of createdWorktrees) gitExec(root, ['worktree', 'remove', '--force', wt]);
     rmSync(worktreeParent, { recursive: true, force: true });
   }
 
   let outcome, reason, exitCode;
   const notProvedReasons = [];
-  if (setupError || basePhase?.setupError || headPhase?.setupError || (!basePhase?.timedOut && basePhase?.signal) || (!headPhase?.timedOut && headPhase?.signal)) {
+  if (setupError || basePhase?.setupError || headPhase?.setupError || (!basePhase?.timedOut && !basePhase?.stuck && basePhase?.signal) || (!headPhase?.timedOut && !headPhase?.stuck && headPhase?.signal)) {
     outcome = OUTCOME_NOT_PROVED; reason = 'setup-error'; exitCode = EXIT_NOT_PROVED;
     notProvedReasons.push(`Setup/dependency/compile failure prevented causal bug-contrast proof: ${setupError || basePhase?.setupError || headPhase?.setupError || basePhase?.signal || headPhase?.signal}. Pass --setup CMD if dependencies must be installed in fresh worktrees.`);
   } else if (basePhase?.timedOut || headPhase?.timedOut) {
+    const phaseName = basePhase?.timedOut ? 'base' : 'head';
+    const tail = basePhase?.timedOut ? basePhase.frozenTail : headPhase.frozenTail;
     outcome = OUTCOME_NOT_PROVED; reason = basePhase?.timedOut ? 'base-timeout' : 'head-timeout'; exitCode = EXIT_NOT_PROVED;
-    notProvedReasons.push(`Bug-contrast ${basePhase?.timedOut ? 'base' : 'head'} run timed out after ${timeoutMinutes} min; rerun with --timeout MIN.`);
+    notProvedReasons.push(`Bug-contrast ${phaseName} run timed out after ${timeoutMinutes} min; rerun with --timeout MIN. Frozen log tail: ${formatFrozenTail(tail)}`);
+  } else if (basePhase?.stuck || headPhase?.stuck) {
+    const phaseName = basePhase?.stuck ? 'base' : 'head';
+    const aborted = basePhase?.stuck ? basePhase : headPhase;
+    outcome = OUTCOME_NOT_PROVED; reason = basePhase?.stuck ? 'base-stuck' : 'head-stuck'; exitCode = EXIT_NOT_PROVED;
+    notProvedReasons.push(`Bug-contrast ${phaseName} run aborted as stuck (${aborted.stuckReason || 'no progress'}). Frozen log tail: ${formatFrozenTail(aborted.frozenTail)}`);
   } else if (!headPhase?.ok) {
     outcome = OUTCOME_FAILED; reason = 'head-fails'; exitCode = EXIT_FAILED;
   } else if (basePhase?.ok) {
@@ -424,10 +1012,24 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
     outcome = OUTCOME_PROVED; reason = 'proved'; exitCode = EXIT_PROVED;
   }
 
-  const summarize = p => p ? { exitCode: p.exitCode, signal: p.signal || null, ok: p.ok, timedOut: p.timedOut, durationMs: p.durationMs, setupError: p.setupError, expectedFound: Boolean(p.expectedFound), summary: p.summary } : null;
+  const summarize = p => p ? {
+    exitCode: p.exitCode,
+    signal: p.signal || null,
+    ok: p.ok,
+    timedOut: p.timedOut,
+    stuck: Boolean(p.stuck),
+    ...(p.stuckReason ? { stuckReason: p.stuckReason } : {}),
+    ...(p.timedOut || p.stuck || p.frozenTail?.length ? { frozenTail: p.frozenTail ?? [] } : {}),
+    durationMs: p.durationMs,
+    setupError: p.setupError,
+    expectedFound: Boolean(p.expectedFound),
+    summary: p.summary,
+  } : null;
   const receipt = {
     schema_version: 'pdd.prove.v1', mode: 'bug-contrast', outcome, reason, exit_code: exitCode,
-    baseRef: requestedBase, baseSha, headSha, overlayPaths: copiedPaths, test, expect,
+    baseRef: requestedBase, baseSha, headSha, overlayPaths: copiedPaths,
+    ...(linkedDepDirs.length ? { linkedDependencyDirs: linkedDepDirs } : {}),
+    test, expect,
     base: summarize(basePhase), head: summarize(headPhase), notProvedReasons,
   };
   if (json) stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
@@ -436,14 +1038,36 @@ function runBugContrastProve({ root, base, test, expect, overlay, setup, timeout
   return { exitCode, outcome, receipt };
 }
 
-export function runProve(
-  { cwd = process.cwd(), base, test, expect, overlay, setup, timeoutMinutes = 10, json = false, capabilities, env = process.env } = {},
+export async function runProve(
+  {
+    cwd = process.cwd(),
+    base,
+    test,
+    expect,
+    overlay,
+    setup,
+    timeoutMinutes = null,
+    idleTimeoutMs,
+    repeatLoopThreshold,
+    json = false,
+    capabilities,
+    env = process.env,
+  } = {},
   ports = {},
 ) {
   const stdout = ports.stdout ?? process.stdout, stderr = ports.stderr ?? process.stderr;
   const root = resolveGitRoot(cwd);
-  if (test !== undefined || expect !== undefined) return runBugContrastProve({ root, base, test, expect, overlay, setup, timeoutMinutes, json, env }, ports);
-  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 120) {
+  const resolvedIdleMs = idleTimeoutMs ?? ports.idleTimeoutMs ?? DEFAULT_IDLE_WINDOW_MS;
+  const explicitRepeatThreshold = repeatLoopThreshold !== undefined || ports.repeatLoopThreshold !== undefined;
+  const resolvedRepeat = repeatLoopThreshold ?? ports.repeatLoopThreshold ?? DEFAULT_REPEAT_LOOP_THRESHOLD;
+
+  if (test !== undefined || expect !== undefined) {
+    return runBugContrastProve(
+      { root, base, test, expect, overlay, setup, timeoutMinutes, idleTimeoutMs: resolvedIdleMs, repeatLoopThreshold: resolvedRepeat, explicitRepeatThreshold, json, env },
+      ports,
+    );
+  }
+  if (timeoutMinutes !== null && timeoutMinutes !== undefined && (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 120)) {
     stderr.write('pdd prove --timeout takes whole minutes from 1 to 120.\n');
     return { exitCode: EXIT_USAGE, outcome: OUTCOME_FAILED, receipt: null };
   }
@@ -453,10 +1077,13 @@ export function runProve(
   const baseCommit = baseRef ? resolveCommit(root, baseRef) : null;
   const mb = baseCommit && headSha ? gitExec(root, ['merge-base', headSha, baseCommit]) : null;
   const baseSha = mb?.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : null;
-  const timeoutMs = timeoutMinutes * 60_000;
+  const explicitTimeoutMs = Number.isInteger(timeoutMinutes) ? timeoutMinutes * 60_000 : null;
+  const completedPhases = [];
 
   const lint = lintRepoProject({ root, enforceBaseTrust: true, trustBaseRef: baseSha || baseRef || undefined, requireFullStoryCriteria: true });
+  completedPhases.push({ phase: 'lint', status: lint.ok ? 'ok' : 'failed' });
   const diff = runDiffSpotlight({ cwd: root, baseRef: baseSha || baseRef || undefined });
+  completedPhases.push({ phase: 'diff', status: diff.ok ? 'ok' : 'failed' });
   const notProvedReasons = [];
 
   if (!baseSha || !diff.baseAvailable) {
@@ -464,6 +1091,7 @@ export function runProve(
     const receipt = {
       schema_version: 'pdd.prove.v1', mode: 'verify', outcome: OUTCOME_NOT_PROVED, exit_code: EXIT_NOT_PROVED,
       baseRef: baseRef ?? null, baseSha: null, headSha, configSource: null, touchedFiles: [], changedSurfaces: [],
+      completedPhases,
       lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
       diff: { ok: false, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
       test: null, formal: null, paths: [], notProvedReasons,
@@ -488,7 +1116,7 @@ export function runProve(
     notProvedReasons.push(`Working-tree/branch lint overrides (${lint.untrustedConfigOverrides.join(', ')}) are not yet trusted on merge base; human review required.`);
   }
 
-  const testCommand = baseVerify.test || detectRepoTestCommand(root);
+  const testCommand = baseVerify.test || detectRepoTestCommand(root, { env, probe: ports.probeRunner });
   const allVerifyCommands = [
     testCommand,
     baseVerify.formalCommand,
@@ -537,6 +1165,7 @@ export function runProve(
 
   let testResult = null;
   let formalResult = null;
+  let abortedPhase = null;
   const { matched, changedSurfaces, unmappedSurfaces } = matchVerifyPaths(baseVerify, diff.touchedFiles, { root, baseSha });
   const pathResults = [];
   const scrubbedBaseEnv = scrubChildEnv(env);
@@ -545,18 +1174,9 @@ export function runProve(
       ? ports.envForStep({ phase, recipeId, command, baseEnv: scrubbedBaseEnv })
       : scrubbedBaseEnv
   );
-  if (shadowBins.length === 0 && changedPkgScripts.length === 0 && changedReferencedScripts.length === 0 && changedPytestConfigs.length === 0) {
-    if (testCommand) {
-      const testEnv = resolveStepEnv('test', null, testCommand);
-      const r = execShellCommand(testCommand, { cwd: root, env: testEnv, timeoutMs, preScrubbed: true }, ports);
-      testResult = { command: testCommand, ok: r.ok, timedOut: r.timedOut, exitCode: r.exitCode, durationMs: r.durationMs, setupError: r.setupError, summary: r.summary };
-      if (r.timedOut) {
-        notProvedReasons.push(`Test suite timed out after ${timeoutMinutes} min (\`${testCommand}\`); rerun with --timeout MIN.`);
-      }
-    } else {
-      notProvedReasons.push('No verify.test command configured in merge-base pdd.json and no standard test runner detected.');
-    }
 
+  if (shadowBins.length === 0 && changedPkgScripts.length === 0 && changedReferencedScripts.length === 0 && changedPytestConfigs.length === 0) {
+    // 1. Run fast targeted checks first: matched verify.paths recipes, then formal verification, BEFORE the full test suite.
     const capState = detectHostCapabilities(matched.flatMap(r => r.needs), { env, capabilities, probe: ports.probeCapability, isTTY: ports.isTTY });
     for (const recipe of matched) {
       const { satisfied, missing } = matchCapabilities(recipe.needs, capState);
@@ -568,13 +1188,65 @@ export function runProve(
         continue;
       }
       const recipeEnv = resolveStepEnv('path', recipe.id, recipe.run);
-      const r = execShellCommand(recipe.run, { cwd: root, env: recipeEnv, timeoutMs, preScrubbed: true }, ports);
+      const r = await execShellCommand(
+        recipe.run,
+        {
+          cwd: root,
+          env: recipeEnv,
+          rawEnv: env,
+          timeoutMs: explicitTimeoutMs,
+          idleTimeoutMs: resolvedIdleMs,
+          repeatLoopThreshold: resolvedRepeat,
+          explicitRepeatThreshold,
+          phase: `path:${recipe.id}`,
+          preScrubbed: true,
+        },
+        ports,
+      );
       if (r.timedOut) {
-        pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: 'not-proved', timedOut: true, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary });
-        notProvedReasons.push(`Verify path "${recipe.id}" timed out after ${timeoutMinutes} min (\`${recipe.run}\`); rerun with --timeout MIN.`);
+        abortedPhase = `path:${recipe.id}`;
+        pathResults.push({
+          id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs,
+          status: 'not-proved', timedOut: true, stuck: false, frozenTail: r.frozenTail, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary,
+        });
+        notProvedReasons.push(`Verify path "${recipe.id}" timed out after ${timeoutMinutes} min (\`${recipe.run}\`); rerun with --timeout MIN. Completed phases: ${formatCompletedPhases(completedPhases)}. Frozen log tail: ${formatFrozenTail(r.frozenTail)}`);
         continue;
       }
-      pathResults.push({ id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs, status: r.ok ? 'proved' : 'failed', timedOut: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary });
+      if (r.stuck) {
+        abortedPhase = `path:${recipe.id}`;
+        pathResults.push({
+          id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs,
+          status: 'not-proved', timedOut: false, stuck: true, stuckReason: r.stuckReason, frozenTail: r.frozenTail, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary,
+        });
+        notProvedReasons.push(`Verify path "${recipe.id}" aborted as stuck (${r.stuckReason || 'no progress'}) (\`${recipe.run}\`). Completed phases: ${formatCompletedPhases(completedPhases)}. Frozen log tail: ${formatFrozenTail(r.frozenTail)}`);
+        continue;
+      }
+      if (r.missingRunnerFailure) {
+        pathResults.push({
+          id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs,
+          status: 'not-proved', timedOut: false, stuck: false, hardSetupFailure: r.hardSetupFailure, setupError: r.setupError, exitCode: r.exitCode, durationMs: r.durationMs, ok: false, summary: r.summary,
+        });
+        const detail = formatTeachingDetail({
+          invariant: `Verify path "${recipe.id}" runner unavailable or environment setup failed (\`${recipe.run}\`, exit ${r.exitCode ?? 'error'}): ${r.setupError || r.summary || 'command failed to start'}`,
+          fix: 'Install the required runner or local environment on PATH and ensure the command in pdd.json verify.paths is executable',
+          rerun: 'pdd prove',
+        });
+        notProvedReasons.push(`[verify-path-runner-unavailable] ${detail}`);
+        continue;
+      }
+      pathResults.push({
+        id: recipe.id, name: recipe.name, ...tierMeta, run: recipe.run, matchedFiles: recipe.matchedFiles, needs: recipe.needs,
+        status: r.ok ? 'proved' : 'failed', timedOut: false, stuck: false, exitCode: r.exitCode, durationMs: r.durationMs, ok: r.ok, summary: r.summary,
+      });
+    }
+    if (matched.length > 0) {
+      const okCount = pathResults.filter(p => p.status === 'proved').length;
+      const failCount = pathResults.filter(p => p.status === 'failed').length;
+      const npCount = pathResults.filter(p => p.status === 'not-proved').length;
+      completedPhases.push({
+        phase: 'paths',
+        status: failCount > 0 ? `${okCount}/${matched.length} ok, ${failCount} failed` : (npCount > 0 ? `${okCount}/${matched.length} ok, ${npCount} not-proved` : `${okCount}/${matched.length} ok`),
+      });
     }
 
     const formalEnv = resolveStepEnv('formal', null, baseVerify.formalCommand || '');
@@ -583,13 +1255,68 @@ export function runProve(
         root,
         touchedFiles: diff.touchedFiles,
         baseVerify,
-        timeoutMs,
+        ...(explicitTimeoutMs ? { timeoutMs: explicitTimeoutMs } : {}),
         env: formalEnv,
       },
       ports,
     );
+    completedPhases.push({ phase: 'formal', status: formalResult.state || 'not-applicable' });
     if (formalResult.notProvedReasons?.length) {
       notProvedReasons.push(...formalResult.notProvedReasons);
+    }
+
+    // 2. Run the full repository test suite after fast checks complete.
+    if (testCommand) {
+      const testEnv = resolveStepEnv('test', null, testCommand);
+      const r = await execShellCommand(
+        testCommand,
+        {
+          cwd: root,
+          env: testEnv,
+          rawEnv: env,
+          timeoutMs: explicitTimeoutMs,
+          idleTimeoutMs: resolvedIdleMs,
+          repeatLoopThreshold: resolvedRepeat,
+          explicitRepeatThreshold,
+          phase: 'test',
+          preScrubbed: true,
+        },
+        ports,
+      );
+      const isNotProved = Boolean(r.timedOut || r.stuck || r.missingRunnerFailure);
+      testResult = {
+        command: testCommand,
+        ok: r.ok,
+        timedOut: r.timedOut,
+        stuck: r.stuck,
+        ...(r.stuckReason ? { stuckReason: r.stuckReason } : {}),
+        ...(r.timedOut || r.stuck || r.frozenTail.length ? { frozenTail: r.frozenTail } : {}),
+        hardSetupFailure: r.hardSetupFailure,
+        notProved: isNotProved,
+        exitCode: r.exitCode,
+        durationMs: r.durationMs,
+        setupError: r.setupError,
+        summary: r.summary,
+      };
+      if (r.timedOut) {
+        abortedPhase = 'test';
+        notProvedReasons.push(`Test suite timed out after ${timeoutMinutes} min during phase "test" (\`${testCommand}\`); rerun with --timeout MIN. Completed phases: ${formatCompletedPhases(completedPhases)}. Frozen log tail: ${formatFrozenTail(r.frozenTail)}`);
+      } else if (r.stuck) {
+        abortedPhase = 'test';
+        notProvedReasons.push(`Test suite aborted as stuck (${r.stuckReason || 'no progress'}) during phase "test" (\`${testCommand}\`). Completed phases: ${formatCompletedPhases(completedPhases)}. Frozen log tail: ${formatFrozenTail(r.frozenTail)}`);
+      } else if (r.missingRunnerFailure) {
+        const detail = formatTeachingDetail({
+          invariant: `Test runner unavailable or environment setup failed (\`${testCommand}\`, exit ${r.exitCode ?? 'error'}): ${r.setupError || r.summary || 'command failed to start'}`,
+          fix: 'Install the test runner on PATH, create a repo-local environment (such as .venv), or configure "verify": { "test": "<command>" } in pdd.json',
+          rerun: 'pdd prove',
+        });
+        notProvedReasons.push(`[test-runner-unavailable] ${detail}`);
+        completedPhases.push({ phase: 'test', status: 'not-proved' });
+      } else {
+        completedPhases.push({ phase: 'test', status: r.ok ? 'ok' : 'failed' });
+      }
+    } else {
+      notProvedReasons.push('No verify.test command configured in merge-base pdd.json and no standard test runner detected.');
     }
   }
   if (unmappedSurfaces.length > 0) notProvedReasons.push(`No verify.paths recipe covers changed production surface(s): ${unmappedSurfaces.join(', ')}.`);
@@ -637,7 +1364,7 @@ export function runProve(
     ...lint.errors,
     ...diff.errors.filter(e => e.code !== 'diff-base-unavailable').map(e => e.formatted),
     ...extraShadowErrors,
-    ...(testResult && !testResult.ok && !testResult.timedOut ? [`Test suite failed (\`${testResult.command}\`, exit ${testResult.exitCode}): ${testResult.summary}`] : []),
+    ...(testResult && !testResult.ok && !testResult.notProved ? [`Test suite failed (\`${testResult.command}\`, exit ${testResult.exitCode}): ${testResult.summary}`] : []),
     ...pathResults.filter(p => p.status === 'failed').map(p => `Verify path "${p.id}" failed (\`${p.run}\`, exit ${p.exitCode}): ${p.summary}`),
     ...(formalResult?.errors ?? []),
   ];
@@ -650,6 +1377,8 @@ export function runProve(
     schema_version: 'pdd.prove.v1', mode: 'verify', outcome, exit_code: exitCode, baseRef, baseSha, headSha,
     dirty, proofScope, ...(dirtyFiles.length ? { dirtyFiles: dirtyFiles.slice(0, 12) } : {}),
     configSource: baseVerify.configured ? baseVerify.source : (testCommand ? 'auto-detected' : null), touchedFiles: diff.touchedFiles, changedSurfaces,
+    completedPhases,
+    ...(abortedPhase ? { abortedPhase } : {}),
     lint: { ok: lint.ok, errors: lint.errors, warnings: lint.warnings },
     diff: { ok: diff.ok, errors: diff.errors.map(e => e.formatted), advisories: diff.advisories },
     test: testResult, formal: formalResult, paths: pathResults, proofTiers, notProvedReasons,

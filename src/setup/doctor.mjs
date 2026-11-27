@@ -640,17 +640,17 @@ function checkMcpHealth({ cwd, env, home, fs, platform, installDiagnosis }) {
       continue;
     }
 
-    if (!candidate.toml && raw.trim().length === 0) {
-      const fix = `Fix or remove empty ${shortFile}, then run: pdd setup --yes`;
-      remediations.add(fix);
-      agents.push({ name: candidate.name, file: candidate.file, status: 'empty', configured_bin: null, detail: '0-byte / empty JSON file', remediation: fix });
-      findings.push({ check: 'mcp', severity: 'error', code: 'mcp-empty', message: `${candidate.name} (${shortFile}): 0-byte / empty JSON file`, path: candidate.file, remediation: fix });
+    const jsonText = candidate.toml ? raw : raw.replace(/^\uFEFF/, '');
+    if (!candidate.toml && jsonText.trim().length === 0) {
+      remediations.add('pdd setup --yes');
+      agents.push({ name: candidate.name, file: candidate.file, status: 'empty', configured_bin: null, detail: 'empty JSON file (PDD MCP not registered)', remediation: 'pdd setup --yes' });
+      findings.push({ check: 'mcp', severity: 'warn', code: 'mcp-empty', message: `${candidate.name} (${shortFile}): empty JSON file (PDD MCP not registered)`, path: candidate.file, remediation: 'pdd setup --yes' });
       continue;
     }
 
     let data;
     try {
-      data = candidate.toml ? parseToml(raw) : JSON.parse(raw);
+      data = candidate.toml ? parseToml(raw) : JSON.parse(jsonText);
     } catch {
       const kindLabel = candidate.toml ? 'TOML' : 'JSON';
       const fix = `Fix malformed ${kindLabel} in ${shortFile}, then run: pdd setup`;

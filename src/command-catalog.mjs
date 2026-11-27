@@ -137,8 +137,8 @@ const routes = [
   { id: 'prove', prefix: ['prove'], local: 'prove', operands: [],
     options: [{ name: '--base', kind: 'text' }, { name: '--test', kind: 'text' }, { name: '--expect', kind: 'text' }, { name: '--overlay', kind: 'text' }, { name: '--setup', kind: 'text' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--json', kind: 'flag' }],
     forms: [
-      form('pdd prove [--base REF] [--timeout MIN] [--json]', 'Run offline lint, diff checks, repository tests, and merge-base trusted verify.paths recipes against REF (default timeout: 10 min per step). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
-      form('pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]', 'Run isolated base-vs-head bug-contrast proof in temporary worktrees: proves CMD fails on base with TEXT and passes on head (default timeout: 10 min per phase; --overlay adds extra files alongside changed tests). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
+      form('pdd prove [--base REF] [--timeout MIN] [--json]', 'Run offline lint, diff checks, matched verify.paths recipes, formal checks, and repository tests against REF with progress-aware streaming watch (pass --timeout MIN for a hard per-step limit). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
+      form('pdd prove --base REF --test CMD --expect TEXT [--overlay GLOB] [--setup CMD] [--timeout MIN] [--json]', 'Run isolated base-vs-head bug-contrast proof in temporary worktrees: proves CMD fails on base with TEXT and passes on head (progress-aware watch by default or --timeout MIN; --overlay adds extra files alongside changed tests). Exits 0 Proved, 1 Failed, 2 Usage, 3 Not proved.'),
     ] },
   // Direct Prompt Interpreter execution (empty prefix): pdd [OPTIONS] <PROMPT.md|STORY|.> [ARGS...]
   { id: 'try', prefix: [], local: 'runtime-try', operands: [{ name: 'target', type: 'text', optional: true, repeat: true }],

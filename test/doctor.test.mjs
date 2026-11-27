@@ -349,10 +349,15 @@ test('Test D (Stale MCP + 0-byte/malformed/symlink MCP + stale/retired skills + 
   const byAgent = new Map(report.checks.mcp.agents.map(a => [a.name, a]));
   assert.equal(byAgent.get('Claude Code')?.status, 'stale');
   assert.equal(byAgent.get('Gemini CLI')?.status, 'empty');
+  assert.equal(byAgent.get('Gemini CLI')?.remediation, 'pdd setup --yes');
+  const emptyFinding = report.findings.find(f => f.code === 'mcp-empty');
+  assert.equal(emptyFinding?.severity, 'warn');
+  assert.equal(emptyFinding?.remediation, 'pdd setup --yes');
   assert.equal(byAgent.get('Antigravity')?.status, 'malformed');
   assert.equal(byAgent.get('Codex')?.status, 'symlink');
   assert.ok(report.remediations.includes('pdd setup'));
   assert.ok(report.remediations.includes('pdd setup --yes'));
+  assert.equal(report.remediations.some(r => /Fix or remove empty/i.test(r)), false);
 
   // Incompatible Node check via DI
   const oldNode = collectDoctorReport(
@@ -561,4 +566,117 @@ test('Adversarial hardening: ANSI/newline sanitization, broken MCP command/bare 
   assert.deepEqual(emptyHomeRes.checks.skills.roots, []);
   assert.deepEqual(emptyHomeRes.checks.mcp.agents, []);
   assert.deepEqual(snapshotTree(fx.cwd), beforeCwd, 'doctor never writes to cwd');
+});
+
+test('#3726 Bug 1: 0-byte, whitespace-only, and UTF-8 BOM-only JSON MCP configs emit warn + deduplicated pdd setup --yes, BOM JSON parses ok, and pdd setup --yes heals them', t => {
+  const fx = makeHealthyLaptop(t);
+
+  // Antigravity: 0-byte JSON (sync skills after creating .gemini/config so only MCP issues are present)
+  mkdirSync(join(fx.home, '.gemini/config'), { recursive: true });
+  writeFileSync(join(fx.home, '.gemini/config/mcp_config.json'), '');
+  setupSkills({ packageRoot: REPO_ROOT, cwd: fx.cwd, home: fx.home, env: { HOME: fx.home, PATH: '' } });
+  // Gemini CLI: UTF-8 BOM + whitespace-only JSON
+  writeFileSync(join(fx.home, '.gemini/settings.json'), '\uFEFF  \n\t ');
+  // Claude Code: valid JSON missing pdd entry (mcp-missing) to verify deduplication
+  writeFileSync(join(fx.home, '.claude.json'), '{}\n');
+
+  const beforeHome = snapshotTree(fx.home);
+  const res = runDoctor(
+    { cwd: fx.cwd, env: fx.env, packageRoot: REPO_ROOT, home: fx.home, systemRoots: [], checkLoginShells: false },
+    { nodeVersion: '22.20.0' },
+  );
+  assert.equal(res.exitCode, 1, res.output);
+  assert.deepEqual(snapshotTree(fx.home), beforeHome, 'doctor remains strictly read-only');
+
+  const byAgent = new Map(res.report.checks.mcp.agents.map(a => [a.name, a]));
+  assert.equal(byAgent.get('Antigravity')?.status, 'empty');
+  assert.equal(byAgent.get('Antigravity')?.remediation, 'pdd setup --yes');
+  assert.equal(byAgent.get('Gemini CLI')?.status, 'empty');
+  assert.equal(byAgent.get('Gemini CLI')?.remediation, 'pdd setup --yes');
+  assert.equal(byAgent.get('Claude Code')?.status, 'missing');
+
+  const emptyFindings = res.report.findings.filter(f => f.code === 'mcp-empty');
+  assert.equal(emptyFindings.length, 2, JSON.stringify(res.report.findings, null, 2));
+  for (const finding of emptyFindings) {
+    assert.equal(finding.severity, 'warn');
+    assert.equal(finding.remediation, 'pdd setup --yes');
+  }
+  assert.deepEqual(res.report.checks.mcp.remediations, ['pdd setup --yes']);
+  assert.deepEqual(res.report.remediations, ['pdd setup --yes']);
+  assert.doesNotMatch(res.output, /Fix or remove empty/i);
+  assert.match(res.output, /fix: pdd setup --yes/);
+
+  // Real pdd setup --yes repairs 0-byte & BOM-only JSON files directly without manual deletion.
+  const setupRes = spawnSync(process.execPath, [PDD_BIN, 'setup', '--yes'], {
+    cwd: fx.cwd,
+    env: fx.env,
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  assert.equal(setupRes.status, 0, setupRes.stderr);
+
+  const afterRes = runDoctor(
+    { cwd: fx.cwd, env: fx.env, packageRoot: REPO_ROOT, home: fx.home, systemRoots: [], checkLoginShells: false },
+    { nodeVersion: '22.20.0' },
+  );
+  assert.equal(afterRes.exitCode, 0, afterRes.output);
+  assert.equal(afterRes.report.checks.mcp.status, 'ok');
+
+  // UTF-8 BOM-prefixed valid JSON MCP config is parsed cleanly as ok (not malformed).
+  const agyPath = join(fx.home, '.gemini/config/mcp_config.json');
+  writeFileSync(agyPath, `\uFEFF${readFileSync(agyPath, 'utf8')}`);
+  const bomValidRes = runDoctor(
+    { cwd: fx.cwd, env: fx.env, packageRoot: REPO_ROOT, home: fx.home, systemRoots: [], checkLoginShells: false },
+    { nodeVersion: '22.20.0' },
+  );
+  assert.equal(bomValidRes.exitCode, 0, bomValidRes.output);
+  const bomAgy = bomValidRes.report.checks.mcp.agents.find(a => a.name === 'Antigravity');
+  assert.equal(bomAgy?.status, 'ok');
+});
+
+test('#3726 Bugs 2 & 3 in doctor: unexposed uv/pipx tool venvs stay green, and exposed uv venv reads dist-info METADATA statically without spawning hanging python', t => {
+  const fx = makeHealthyLaptop(t);
+
+  // Create internal uv and pipx venvs plus an intentional non-colliding ~/.local/bin/pdd-v1 wrapper,
+  // with NO ~/.local/bin/pdd entrypoint.
+  const uvVenv = join(fx.home, '.local/share/uv/tools/pdd-cli');
+  const uvBin = join(uvVenv, 'bin');
+  const uvDist = join(uvVenv, 'lib/python3.12/site-packages/pdd_cli-0.0.246.dist-info');
+  mkdirSync(uvBin, { recursive: true });
+  mkdirSync(uvDist, { recursive: true });
+  writeFileSync(join(uvBin, 'pdd'), `#!${join(uvBin, 'python3')}\nexec /bin/sleep 10\n`, { mode: 0o755 });
+  writeFileSync(join(uvDist, 'METADATA'), 'Metadata-Version: 2.3\nName: pdd-cli\nVersion: 0.0.246\n\n# Body\n');
+
+  const pipxBin = join(fx.home, '.local/pipx/venvs/pdd-cli/bin');
+  mkdirSync(pipxBin, { recursive: true });
+  writeFileSync(join(pipxBin, 'pdd'), '#!/usr/bin/env python3\nimport time; time.sleep(10)\n', { mode: 0o755 });
+
+  mkdirSync(join(fx.home, '.local/bin'), { recursive: true });
+  writeFileSync(join(fx.home, '.local/bin/pdd-v1'), `#!/bin/sh\nexec "${join(uvBin, 'pdd')}" "$@"\n`, { mode: 0o755 });
+
+  const isolatedRes = runDoctor(
+    { cwd: fx.cwd, env: fx.env, packageRoot: REPO_ROOT, home: fx.home, systemRoots: [], checkLoginShells: false },
+    { nodeVersion: '22.20.0' },
+  );
+  assert.equal(isolatedRes.exitCode, 0, isolatedRes.output);
+  assert.equal(isolatedRes.report.checks.installs.status, 'ok');
+  assert.equal(isolatedRes.report.checks.installs.duplicates.length, 0);
+
+  // Now expose uv tool via ~/.local/bin/pdd symlink -> doctor catches it immediately from METADATA with zero sleep!
+  symlinkSync(join(uvBin, 'pdd'), join(fx.home, '.local/bin/pdd'));
+  const start = Date.now();
+  const exposedRes = runDoctor(
+    { cwd: fx.cwd, env: fx.env, packageRoot: REPO_ROOT, home: fx.home, systemRoots: [], checkLoginShells: false, probeTimeoutMs: 400 },
+    { nodeVersion: '22.20.0' },
+  );
+  const elapsedMs = Date.now() - start;
+  assert.equal(exposedRes.exitCode, 1, exposedRes.output);
+  assert.ok(elapsedMs < 1000, `expected instant static METADATA read, took ${elapsedMs}ms`);
+  assert.equal(exposedRes.report.checks.installs.duplicates.length, 1);
+  assert.equal(exposedRes.report.checks.installs.duplicates[0].version, '0.0.246');
+  assert.equal(exposedRes.report.checks.installs.duplicates[0].versionTimedOut, false);
+  assert.equal(exposedRes.report.checks.installs.duplicates[0].remediation, 'uv tool uninstall pdd-cli');
+  assert.match(exposedRes.output, /0\.0\.246/);
+  assert.match(exposedRes.output, /uv tool uninstall pdd-cli/);
+  assert.doesNotMatch(exposedRes.output, /version timed out/);
 });

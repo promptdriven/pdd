@@ -14,6 +14,7 @@ export const EXCLUDED_TEST_FILES = Object.freeze([]);
 export const SERIAL_TEST_FILES = Object.freeze([
   'test/agent-job.test.mjs',
   'test/autopilot-gates-sigterm-repo-skip.test.mjs',
+  'test/autopilot-portability-wakeup-stamps.test.mjs',
   'test/product-saved-checks.test.mjs',
 ]);
 
