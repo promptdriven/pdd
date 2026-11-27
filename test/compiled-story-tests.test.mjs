@@ -237,3 +237,76 @@ test('embedded Runtime interface admits entries[].implementation and executableI
  assert.doesNotMatch(uploaded,/"implementation"/);
  assert.match(uploaded,/"max_steps":9007199254740993/);
 });
+
+// #3641: a plain-Markdown prompt (no Runtime interface, as the RUNBOOK says) is checked as a CLI from its steps,
+// with the command that runs the code from pdd.json code.commands.
+function plainProject({ commands = {'prompts/app.prompt.md':'node app.mjs'}, config, expected = 'hello\n', change = () => {}, app } = {}) {
+ const root=project({expected,change,...(app?{app}:{})});
+ writeFileSync(join(root,'prompts/app.prompt.md'),'# app\n\nA command-line program that prints its first word and then its stdin.\n\n## Operations and ports\n\n- `main({ argv: string[], stdin?: string }) -> { exit_code: integer, stdout: string, stderr: string }` (sync)\n');
+ if (config !== undefined) writeFileSync(join(root,'pdd.json'),config);
+ else if (commands !== null) writeFileSync(join(root,'pdd.json'),JSON.stringify({code:{commands}}));
+ spawnSync('git',['add','-A'],{cwd:root}); spawnSync('git',['-c','user.name=test','-c','user.email=test@example.com','commit','-qm','plain prompt'],{cwd:root});
+ return root;
+}
+test('3641 plain prompt without a Runtime interface runs from its steps with the pdd.json command',()=>{
+ const pass=outcome(plainProject());
+ assert.equal(pass.out.status,0,pass.out.stdout+pass.out.stderr);
+ assert.equal(pass.data.stories[0].status,'passed');
+ const fail=outcome(plainProject({expected:'wrong'}));
+ assert.equal(fail.out.status,1);
+ assert.equal(fail.data.stories[0].status,'failed');
+ assert.deepEqual(fail.data.stories[0].steps[0].checks.find(c=>c.path==='/stdout'),{criterion_id:'AC1',path:'/stdout',status:'failed',expected:'wrong',actual:'hello\n'});
+});
+test('3641 plain prompt without a command is not run and names the pdd.json setting',()=>{
+ for (const options of [{commands:null},{commands:{'prompts/other.prompt.md':'node app.mjs'}},{config:'{not json'}]) {
+  const {out,data}=outcome(plainProject(options));
+  assert.equal(out.status,1);
+  const step=data.stories[0].steps[0];
+  assert.equal(step.status,'not run');
+  assert.match(step.reason,/no Runtime interface/);
+  assert.match(step.reason,/pdd\.json/);
+  assert.match(step.reason,/"code": \{"commands": \{"prompts\/app\.prompt\.md": "COMMAND"\}\}/);
+ }
+});
+test('3641 plain prompt commands keep the no-shell rule and the step rules',()=>{
+ const unsafe=plainProject({commands:{'prompts/app.prompt.md':'node app.mjs; touch BAD'}});
+ const bad=outcome(unsafe);
+ assert.equal(bad.data.stories[0].steps[0].status,'not run');
+ assert.match(bad.data.stories[0].steps[0].reason,/command is missing or unsupported/);
+ assert.equal(existsSync(join(unsafe,'BAD')),false);
+ const extra=outcome(plainProject({change:doc=>{doc.steps[0].input.env='x';}}));
+ assert.equal(extra.data.stories[0].steps[0].status,'not run');
+ assert.equal(extra.data.stories[0].steps[0].reason,'CLI input is unsupported.');
+ const check=outcome(plainProject({change:doc=>{doc.steps[0].checks[0].op='contains';}}));
+ assert.equal(check.data.stories[0].steps[0].status,'not run');
+ assert.equal(check.data.stories[0].steps[0].reason,'A check is unsupported.');
+});
+test('3641 an embedded Runtime interface still decides the command; pdd.json does not override it',()=>{
+ const root=project({interfaceChange:i=>{delete i.entries[0].implementation;}});
+ writeFileSync(join(root,'pdd.json'),JSON.stringify({code:{commands:{'prompts/app.prompt.md':'node app.mjs'}}}));
+ spawnSync('git',['add','-A'],{cwd:root}); spawnSync('git',['-c','user.name=test','-c','user.email=test@example.com','commit','-qm','config'],{cwd:root});
+ const {data}=outcome(root);
+ assert.equal(data.stories[0].steps[0].status,'not run');
+ assert.equal(data.stories[0].steps[0].reason,'CLI implementation command is missing or unsupported.');
+});
+test('3641 a targeted plain-prompt scenario counts plain-prompt sibling scenarios toward Story coverage',()=>{
+ const criteria=[{id:'AC1',text:'A result.'},{id:'AC2',text:'Another result.'}];
+ const root=plainProject({change:doc=>{doc.criteria=criteria;}});
+ writeFileSync(join(root,'user_stories/demo.md'),'# Demo\n\n## Acceptance criteria\n\n1. A result.\n2. Another result.\n');
+ writeFileSync(join(root,'tests/demo.b.json'),JSON.stringify({schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/demo.md',criteria,initial_world:{},simulation:{},context:[],steps:[{step_id:'two',entry_path:'prompts/app.prompt.md',operation:'main',input:{argv:['bye']},checks:[{criterion_id:'AC2',target:'result',path:'/exit_code',op:'equals',value:0}]}]}));
+ spawnSync('git',['add','-A'],{cwd:root}); spawnSync('git',['-c','user.name=test','-c','user.email=test@example.com','commit','-qm','split'],{cwd:root});
+ const out=spawnSync(process.execPath,[bin,'test','--target','code','tests/demo.json','--json'],{cwd:root,encoding:'utf8',env:{...process.env,GH_TOKEN:'',GITHUB_TOKEN:'',PDD_RUNTIME_URL:'http://127.0.0.1:1'}});
+ assert.ok(out.stdout,out.stderr);
+ const data=JSON.parse(out.stdout);
+ assert.equal(out.status,0,out.stdout+out.stderr);
+ assert.equal(data.stories[0].status,'passed');
+ assert.deepEqual(data.stories[0].steps.map(s=>s.step_id),['one']);
+});
+test('3641 non-CLI plain-prompt steps without pdd.json report input or check refusal before asking for a command',()=>{
+ const nonCliInput=outcome(plainProject({commands:null,change:doc=>{doc.steps[0].input={amount:10};}}));
+ assert.equal(nonCliInput.data.stories[0].steps[0].status,'not run');
+ assert.equal(nonCliInput.data.stories[0].steps[0].reason,'CLI input is unsupported.');
+ const nonCliCheck=outcome(plainProject({commands:null,change:doc=>{doc.steps[0].checks[0].path='/body';}}));
+ assert.equal(nonCliCheck.data.stories[0].steps[0].status,'not run');
+ assert.equal(nonCliCheck.data.stories[0].steps[0].reason,'A check is unsupported.');
+});

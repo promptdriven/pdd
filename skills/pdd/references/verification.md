@@ -43,7 +43,7 @@ Maintain the repository **Feature Map** in `pdd.json` under `verify`:
 | **Bug fix** | **Red→Green TDD:** write the failing regression test first against unpatched code → observe the real failure matching the bug's symptom → state `Defect:` and `Not caught because:` → apply root fix → observe pass (and verify with `pdd prove --base ... --test ... --expect ...`). |
 | **Rules, invariants & formal-tested modules** *(state transitions, parsers/validators, auth/trust, math/metrics/money, locking/scheduling, `## Rules to check` / `## Domain decisions`, or modules with existing formal tests)* | Load [formal.md](formal.md): use an installed property library or a **zero-install seeded PRNG / finite exhaustive grid** directly against real production code (skip as `not-applicable` on docs/UI/glue/simple CRUD). |
 | **`kind: native-only` / OS-boundary code** | Executable, non-mocked real-host probes covering the actual boundary: live HTTP auth/CSRF/path-traversal/forged-body rejection, strict input coercion, real parsers, live CLI-to-server wiring, nested OS sandbox child execution, real `/dev/tty` permissions, multi-turn Turn 1 → Turn 2 CLI state, and payloads `> 4 KiB`. Mocked-only shells never prove OS or transport boundaries. |
-| **CLI apps** | Native integration tests spawning the real entry binary (plus optional `pdd test --target code` when the prompt declares a CLI runtime interface). |
+| **CLI apps** | Native integration tests spawning the real entry binary (plus optional `pdd test --target code`, with the command in `pdd.json` as `{"code": {"commands": {"prompts/<cmd>.prompt.md": "node bin/<cmd>.mjs"}}}`). |
 
 ## 4. Independent verification, Deliberate-Break Probe, and honest disclosure
 
