@@ -33,9 +33,10 @@ test('readonly-agent builds OS read-only sandbox flags for codex/claude/gemini (
   assert.equal(codex.args[codex.args.indexOf('--sandbox') + 1], 'read-only');
   assert.ok(codex.args.includes('--ignore-rules'));
   for (const feat of CODEX_DISABLED_FEATURES) assert.ok(codex.args.includes(`features.${feat}=false`));
+  assert.deepEqual(CODEX_TOOL_LOCKOUT_FEATURES, ['shell_tool', 'unified_exec', 'code_mode', 'code_mode_host']);
   for (const feat of CODEX_TOOL_LOCKOUT_FEATURES) assert.equal(codex.args.includes(`features.${feat}=false`), false, 'disableTools=false allows read-only sandbox file inspection');
   const codexLocked = buildReadonlyAgentArgs({ provider: 'codex', disableTools: true });
-  for (const feat of CODEX_TOOL_LOCKOUT_FEATURES) assert.ok(codexLocked.args.includes(`features.${feat}=false`), 'disableTools=true locks out shell_tool and unified_exec');
+  for (const feat of CODEX_TOOL_LOCKOUT_FEATURES) assert.ok(codexLocked.args.includes(`features.${feat}=false`), 'disableTools=true locks out shell_tool, unified_exec, code_mode, and code_mode_host');
   assert.deepEqual(codex.args.slice(-2), ['--', '-']);
   assert.equal(codex.args.includes('--model'), false);
 

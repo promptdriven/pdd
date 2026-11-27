@@ -10,9 +10,8 @@ export const READONLY_PROVIDERS = Object.freeze(['codex', 'claude', 'gemini']);
 export const CODEX_DISABLED_FEATURES = Object.freeze([
   'hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external',
   'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2',
-  'code_mode', 'code_mode_host',
 ]);
-export const CODEX_TOOL_LOCKOUT_FEATURES = Object.freeze(['shell_tool', 'unified_exec']);
+export const CODEX_TOOL_LOCKOUT_FEATURES = Object.freeze(['shell_tool', 'unified_exec', 'code_mode', 'code_mode_host']);
 export const GEMINI_DENY_ALL_POLICY = '[[rule]]\ntoolName = "*"\ndecision = "deny"\npriority = 900\n';
 
 const MAX_TIMER_MS = 2_147_483_647, DEFAULT_TIMEOUT_MS = 120_000, DEFAULT_MAX_BYTES = 262_144;
