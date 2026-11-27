@@ -11,6 +11,7 @@ const DEFAULT_TIMEOUT_MS = 1500;
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 5000;
 const MAX_WRAPPER_BYTES = 8192;
+const MAX_METADATA_HEADER_BYTES = 8192;
 const DEFAULT_MAX_VERSION_DIRS = 32;
 const DEFAULT_MAX_PROBES = 12;
 
@@ -344,7 +345,160 @@ function isPythonExecutable(binPath, realPath, { fs, env, platform }) {
     if (/^#!.*\bpython[0-9.]*\b/i.test(firstLine)) return true;
     if (/(?:from|import)\s+pdd(?:_cli|\b)/.test(head)) return true;
   }
+  if (extractPythonShebangPrefix(realPath, fs)) return true;
   return false;
+}
+
+function readMetadataHeader(filePath, fs = nativeFs) {
+  try {
+    const st = fs.statSync(filePath);
+    if (!st.isFile()) return null;
+    if (typeof fs.openSync === 'function' && typeof fs.readSync === 'function' && typeof fs.closeSync === 'function') {
+      const fd = fs.openSync(filePath, 'r');
+      try {
+        const size = Math.min(st.size, MAX_METADATA_HEADER_BYTES);
+        if (size <= 0) return '';
+        const buf = Buffer.alloc(size);
+        const bytesRead = fs.readSync(fd, buf, 0, size, 0);
+        return buf.subarray(0, bytesRead).toString('utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+    if (st.size > 512 * 1024) return null;
+    return fs.readFileSync(filePath, 'utf8').slice(0, MAX_METADATA_HEADER_BYTES);
+  } catch { return null; }
+}
+
+function parseDistInfoVersion(text) {
+  if (typeof text !== 'string' || !text) return null;
+  const normalized = text.replace(/^\uFEFF/, '');
+  if (/^\r?\n/.test(normalized)) return null;
+  const headerBlock = normalized.split(/\r?\n\r?\n/, 1)[0] ?? '';
+  for (const line of headerBlock.split(/\r?\n/)) {
+    const match = /^Version:\s*(.+?)\s*$/i.exec(line);
+    if (match?.[1]) {
+      const cleaned = clean(match[1]);
+      return cleaned || null;
+    }
+  }
+  return null;
+}
+
+function extractPythonShebangPrefix(realPath, fs = nativeFs) {
+  const head = readSmallText(realPath, 2048, fs);
+  if (!head) return null;
+  const lines = head.split(/\r?\n/, 4);
+  const first = lines[0] ?? '';
+  let rawInterp = null;
+  if (/^#!\s*\/bin\/sh\b/.test(first) && lines[1]) {
+    const execMatch = /^'''exec'\s+(?:'([^']+)'|"([^"]+)"|([^\s'"]+))(?:\s|$)/.exec(lines[1].trim());
+    rawInterp = execMatch?.[1] ?? execMatch?.[2] ?? execMatch?.[3] ?? null;
+  } else {
+    const direct = /^#!\s*(?:"([^"]+)"|'([^']+)'|([^\s#]+))(?:\s|$)/.exec(first);
+    rawInterp = direct?.[1] ?? direct?.[2] ?? direct?.[3] ?? null;
+  }
+  if (!rawInterp) return null;
+  if (!/^(?:\/|[A-Za-z]:[\\/])/.test(rawInterp)) return null;
+  if (/(?:^|[\\/])env$/i.test(rawInterp)) return null;
+  if (!/(?:^|[\\/])(?:python|pypy)[\d.t]*(?:\.exe)?$/i.test(rawInterp)) return null;
+  const interpNorm = rawInterp.replace(/\\/g, '/').replace(/\/+$/, '');
+  const lastSlash = interpNorm.lastIndexOf('/');
+  if (lastSlash <= 0) return null;
+  const prevSlash = interpNorm.lastIndexOf('/', lastSlash - 1);
+  const interpDirBase = interpNorm.slice(prevSlash + 1, lastSlash).toLowerCase();
+  if (interpDirBase !== 'bin' && interpDirBase !== 'scripts') return null;
+  const prefix = prevSlash > 0 ? rawInterp.slice(0, prevSlash) : '';
+  return prefix || null;
+}
+
+function findDistInfoVersionInPrefix(prefix, fs = nativeFs, platform = process.platform) {
+  const siteDirs = [];
+  const seen = new Set();
+  const pushSite = dir => {
+    const key = normPath(dir, platform);
+    if (seen.has(key)) return;
+    seen.add(key);
+    siteDirs.push(dir);
+  };
+
+  if (platform === 'win32') {
+    pushSite(join(prefix, 'Lib', 'site-packages'));
+    pushSite(join(prefix, 'lib', 'site-packages'));
+  }
+  for (const libName of ['lib', 'lib64']) {
+    const libDir = join(prefix, libName);
+    let entries;
+    try { entries = fs.readdirSync(libDir); } catch { continue; }
+    const pyDirs = entries
+      .filter(name => typeof name === 'string' && /^(?:python|pypy)(?:[\d.t]*)?$/i.test(name))
+      .sort((a, b) => compareSemverDesc(a.replace(/^(?:python|pypy)/i, ''), b.replace(/^(?:python|pypy)/i, '')))
+      .slice(0, 16);
+    for (const pyDir of pyDirs) {
+      pushSite(join(libDir, pyDir, 'site-packages'));
+      pushSite(join(libDir, pyDir, 'dist-packages'));
+    }
+  }
+  if (platform !== 'win32') {
+    pushSite(join(prefix, 'Lib', 'site-packages'));
+  }
+
+  for (const siteDir of siteDirs) {
+    let entries;
+    try { entries = fs.readdirSync(siteDir); } catch { continue; }
+    const distInfos = entries
+      .filter(name => typeof name === 'string' && /^pdd[_-]cli-.+\.dist-info$/i.test(name))
+      .sort((a, b) => compareSemverDesc(
+        a.replace(/^pdd[_-]cli-/i, '').replace(/\.dist-info$/i, ''),
+        b.replace(/^pdd[_-]cli-/i, '').replace(/\.dist-info$/i, ''),
+      ))
+      .slice(0, 8);
+    for (const dirName of distInfos) {
+      const version = parseDistInfoVersion(readMetadataHeader(join(siteDir, dirName, 'METADATA'), fs));
+      if (version) return version;
+    }
+  }
+  return null;
+}
+
+function inspectPythonPddInstall(binPath, realPath, { fs = nativeFs, platform = process.platform }) {
+  const prefixOfBin = target => {
+    const parent = dirname(target);
+    const base = basename(parent).toLowerCase();
+    return (base === 'bin' || base === 'scripts') ? dirname(parent) : parent;
+  };
+  const realPrefix = prefixOfBin(realPath);
+  const binPrefix = prefixOfBin(binPath);
+  const shebangPrefix = extractPythonShebangPrefix(realPath, fs);
+  const isSystemPrefix = p => /^\/(?:$|usr(?:\/local)?$)/.test(normPath(p, platform));
+
+  const candidatePrefixes = [];
+  const seen = new Set();
+  const pushPrefix = dir => {
+    if (typeof dir !== 'string' || !dir) return;
+    const key = normPath(dir, platform);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    candidatePrefixes.push(dir);
+  };
+
+  if (normPath(realPath, platform) !== normPath(binPath, platform)) {
+    pushPrefix(realPrefix);
+    if (shebangPrefix) pushPrefix(shebangPrefix);
+    pushPrefix(binPrefix);
+  } else if (shebangPrefix && !isSystemPrefix(shebangPrefix)) {
+    pushPrefix(shebangPrefix);
+    pushPrefix(realPrefix);
+  } else {
+    pushPrefix(realPrefix);
+    if (shebangPrefix) pushPrefix(shebangPrefix);
+  }
+
+  for (const prefix of candidatePrefixes) {
+    const version = findDistInfoVersionInPrefix(prefix, fs, platform);
+    if (version) return { prefix, version };
+  }
+  return { prefix: candidatePrefixes[0] ?? realPrefix, version: null };
 }
 
 function extractManagerPrefix(targetPath, platform = process.platform) {
@@ -394,7 +548,8 @@ function classifyBinaryInstall({ binPath, realPath, resolved, fs, env, uid, plat
       return { kind: 'pnpm', prefix: null, packageName, version: packageVersion };
     }
     if (classified.kind === 'pypi') {
-      return { kind: 'pypi', prefix: null, packageName, version: packageVersion };
+      const pyInfo = packageVersion ? null : inspectPythonPddInstall(binPath, realPath, { fs, platform });
+      return { kind: 'pypi', prefix: pyInfo?.prefix ?? null, packageName, version: packageVersion ?? pyInfo?.version ?? null };
     }
     if (packageName === 'pdd') {
       return {
@@ -424,7 +579,8 @@ function classifyBinaryInstall({ binPath, realPath, resolved, fs, env, uid, plat
     return { kind: 'pnpm', prefix: null, packageName, version: packageVersion };
   }
   if (isPythonExecutable(binPath, realPath, { fs, env, platform })) {
-    return { kind: 'pypi', prefix: dirname(dirname(binPath)), packageName: 'pdd-cli', version: packageVersion };
+    const pyInfo = inspectPythonPddInstall(binPath, realPath, { fs, platform });
+    return { kind: 'pypi', prefix: pyInfo.prefix, packageName: 'pdd-cli', version: packageVersion ?? pyInfo.version };
   }
   const normBin = normPath(binPath, platform);
   const normReal = normPath(realPath, platform);
@@ -455,10 +611,16 @@ function remediationForInstall(inst, { home, platform = process.platform }) {
       return inst.packageName === 'pdd' ? 'pnpm remove -g pdd' : 'pnpm remove -g @promptdriven/pdd';
     case 'homebrew':
       return 'brew uninstall pdd';
-    case 'pypi':
-      if (/\/uv\/tools\//i.test(normBin) || /\/uv\/tools\//i.test(normReal)) return 'uv tool uninstall pdd-cli';
-      if (/\/pipx\/venvs\//i.test(normBin) || /\/pipx\/venvs\//i.test(normReal)) return 'pipx uninstall pdd-cli';
+    case 'pypi': {
+      const normPrefix = normPath(inst.prefix ?? '', platform);
+      if (/\/uv\/tools(?:\/|$)/i.test(normBin) || /\/uv\/tools(?:\/|$)/i.test(normReal) || /\/uv\/tools(?:\/|$)/i.test(normPrefix)) {
+        return 'uv tool uninstall pdd-cli';
+      }
+      if (/\/pipx\/venvs(?:\/|$)/i.test(normBin) || /\/pipx\/venvs(?:\/|$)/i.test(normReal) || /\/pipx\/venvs(?:\/|$)/i.test(normPrefix)) {
+        return 'pipx uninstall pdd-cli';
+      }
       return 'pip uninstall pdd-cli';
+    }
     case 'git-checkout':
       return `Remove ${clean(shortenHomePath(dirname(inst.path), home))} from PATH (Git checkout)`;
     default:
@@ -631,15 +793,13 @@ function collectCandidatePaths({ cwd, env, home, fs, platform, systemRoots, maxV
     addDir(join(home, '.local', 'bin'), 'local-bin');
   }
 
-  // 8. Python / conda / uv / pipx
+  // 8. Python / conda (unexposed internal uv/pipx tool venvs are never scanned directly; exposed entrypoints are found via PATH, ~/.local/bin, or login shells)
   if (typeof env?.CONDA_PREFIX === 'string' && env.CONDA_PREFIX.trim()) addDir(join(env.CONDA_PREFIX.trim(), 'bin'), 'conda');
   if (typeof env?.VIRTUAL_ENV === 'string' && env.VIRTUAL_ENV.trim()) addDir(join(env.VIRTUAL_ENV.trim(), 'bin'), 'python');
   if (home) {
     for (const dir of ['miniconda3', 'anaconda3', 'miniforge3', 'mambaforge']) {
       addDir(join(home, dir, 'bin'), 'conda');
     }
-    addDir(join(home, '.local', 'share', 'uv', 'tools', 'pdd-cli', 'bin'), 'uv');
-    addDir(join(home, '.local', 'pipx', 'venvs', 'pdd-cli', 'bin'), 'pipx');
   }
 
   // 9. System / Homebrew roots
