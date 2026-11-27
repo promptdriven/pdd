@@ -31,11 +31,9 @@ function execute(step, doc, found, root, ports) {
   let prompt;
   try { prompt = readPrompt(root, found.visible, step.entry_path, found.workspace); } catch { return unrun(step, 'Entry prompt is unavailable.'); }
   if (Object.hasOwn(step, 'expected_error')) return unrun(step, 'Expected-error steps are unsupported.');
+  const plain = prompt.error === 'interface-missing' && prompt.interface === undefined;
   let words;
-  if (prompt.error === 'interface-missing' && prompt.interface === undefined) {
-    words = commandWords(Object.hasOwn(ports.commands, step.entry_path) ? ports.commands[step.entry_path] : undefined);
-    if (!words) return unrun(step, missingCommand(step.entry_path));
-  } else {
+  if (!plain) {
   const iface = prompt.interface;
   if (!object(iface) || !Array.isArray(iface.entries) || !iface.entries.every(object) ||
       !['resources', 'calls'].every(key => iface[key] === undefined || Array.isArray(iface[key])) ||
@@ -55,6 +53,10 @@ function execute(step, doc, found, root, ports) {
   }
   if (!step.input || !Array.isArray(step.input.argv) || !step.input.argv.every(x => typeof x === 'string') || (step.input.stdin !== undefined && typeof step.input.stdin !== 'string') || Object.keys(step.input).some(k => !['argv','stdin'].includes(k))) return unrun(step, 'CLI input is unsupported.');
   if (!step.checks?.length || step.checks.some(c => c.target !== 'result' || !['/stdout','/stderr','/exit_code'].includes(c.path) || c.op !== 'equals')) return unrun(step, 'A check is unsupported.');
+  if (plain) {
+    words = commandWords(ports.commands && Object.hasOwn(ports.commands, step.entry_path) ? ports.commands[step.entry_path] : undefined);
+    if (!words) return unrun(step, missingCommand(step.entry_path));
+  }
   let result;
   try { result = ports.spawn(words[0], [...words.slice(1), ...step.input.argv], { cwd:root, input:step.input.stdin ?? '', encoding:'utf8', timeout:600000, maxBuffer:10_485_760 }); }
   catch (error) { return unrun(step, `Command did not complete: ${error.message}`); }

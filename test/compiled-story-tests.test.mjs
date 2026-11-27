@@ -302,3 +302,11 @@ test('3641 a targeted plain-prompt scenario counts plain-prompt sibling scenario
  assert.equal(data.stories[0].status,'passed');
  assert.deepEqual(data.stories[0].steps.map(s=>s.step_id),['one']);
 });
+test('3641 non-CLI plain-prompt steps without pdd.json report input or check refusal before asking for a command',()=>{
+ const nonCliInput=outcome(plainProject({commands:null,change:doc=>{doc.steps[0].input={amount:10};}}));
+ assert.equal(nonCliInput.data.stories[0].steps[0].status,'not run');
+ assert.equal(nonCliInput.data.stories[0].steps[0].reason,'CLI input is unsupported.');
+ const nonCliCheck=outcome(plainProject({commands:null,change:doc=>{doc.steps[0].checks[0].path='/body';}}));
+ assert.equal(nonCliCheck.data.stories[0].steps[0].status,'not run');
+ assert.equal(nonCliCheck.data.stories[0].steps[0].reason,'A check is unsupported.');
+});
