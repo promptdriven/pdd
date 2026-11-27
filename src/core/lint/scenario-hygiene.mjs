@@ -1,6 +1,6 @@
 // Prompt: prompts/cli/scenario-hygiene.prompt.md
 
-// Offline scenario size & call-budget hygiene evaluator (Layer-1 Core: 0 AI, 0 network, 0 writes).
+// Offline scenario structural size hygiene evaluator (Layer-1 Core: 0 AI, 0 network, 0 writes).
 import { posix } from 'node:path';
 import { parseExactScenarioJson, stringifyExactScenarioJson } from '../../scenario-compile.mjs';
 import { TEST_SCENARIO_JSON_RE } from '../../shared/test-paths.mjs';
@@ -14,8 +14,6 @@ const TOOLING_CONFIG_JSON = new Set([
   'jsconfig.json', 'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'composer.json',
   'biome.json', 'deno.json', 'jsr.json', 'eslint.json', 'prettier.json', 'vitest.json', 'jest.json', 'babel.json',
 ]);
-const POSITIVE_CALLS_OPS = new Set(['equals', '=', '==', 'count', 'at_least', '>=', 'gte']);
-const STRICT_GT_CALLS_OPS = new Set(['gt', '>']);
 
 const isPlainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -27,69 +25,6 @@ function isCandidateScenarioPath(relPath) {
   if (TOOLING_CONFIG_JSON.has(base) || /^tsconfig.*\.json$/.test(base)) return false;
   if (base === 'cases.json' || base.endsWith('-cases.json')) return false;
   return true;
-}
-
-function isPositiveNumberLike(value, allowZero = false) {
-  if (typeof value === 'bigint') return allowZero ? value >= 0n : value > 0n;
-  if (typeof value === 'number' && Number.isFinite(value)) return allowZero ? value >= 0 : value > 0;
-  return false;
-}
-
-function isPositiveCallsCheck(check) {
-  if (Array.isArray(check)) {
-    // Short JSON tuple:
-    // - criterion-keyed map entry: ["calls", path, op, value]
-    // - array-form step.checks entry: [criterion, "calls", path, op, value]
-    if (check.length >= 4 && check[0] === 'calls') {
-      const op = check[2];
-      const val = check[3];
-      if (POSITIVE_CALLS_OPS.has(op)) return isPositiveNumberLike(val, false);
-      if (STRICT_GT_CALLS_OPS.has(op)) return isPositiveNumberLike(val, true);
-    } else if (check.length >= 5 && check[1] === 'calls') {
-      const op = check[3];
-      const val = check[4];
-      if (POSITIVE_CALLS_OPS.has(op)) return isPositiveNumberLike(val, false);
-      if (STRICT_GT_CALLS_OPS.has(op)) return isPositiveNumberLike(val, true);
-    }
-    return false;
-  }
-  if (isPlainObject(check) && check.target === 'calls') {
-    if (POSITIVE_CALLS_OPS.has(check.op)) return isPositiveNumberLike(check.value, false);
-    if (STRICT_GT_CALLS_OPS.has(check.op)) return isPositiveNumberLike(check.value, true);
-  }
-  return false;
-}
-
-function countStepPositiveCallsChecks(step) {
-  if (!isPlainObject(step)) return 0;
-  let total = 0;
-  const checks = step.checks;
-  if (Array.isArray(checks)) {
-    for (const item of checks) {
-      if (isPositiveCallsCheck(item)) total += 1;
-    }
-  } else if (isPlainObject(checks)) {
-    for (const entry of Object.values(checks)) {
-      if (Array.isArray(entry) && typeof entry[0] === 'string') {
-        if (isPositiveCallsCheck(entry)) total += 1;
-      } else if (Array.isArray(entry)) {
-        for (const item of entry) {
-          if (isPositiveCallsCheck(item)) total += 1;
-        }
-      } else if (isPositiveCallsCheck(entry)) {
-        total += 1;
-      }
-    }
-  }
-  return total;
-}
-
-function countStepOverrides(step) {
-  if (!isPlainObject(step)) return 0;
-  const ov = step.simulation_overrides;
-  if (Array.isArray(ov)) return ov.length;
-  if (isPlainObject(ov)) return Object.keys(ov).length;
-  return 0;
 }
 
 function serializedBytes(value) {
@@ -111,19 +46,6 @@ function companionPathHint(scenarioPath) {
   return `${prefix}/${storyStem}.<focus>.json`;
 }
 
-export function computeDefaultScenarioCallCap(doc) {
-  const steps = Array.isArray(doc?.steps) ? doc.steps.length : 0;
-  if (steps === 0) return 0;
-  const fallback = Math.min(1000, Math.max(18, steps * 12));
-  if (steps <= 2) return fallback;
-  const hasWorldOrPorts =
-    (isPlainObject(doc.initial_world) && Object.keys(doc.initial_world).length > 0) ||
-    (isPlainObject(doc.simulation) && Object.keys(doc.simulation).length > 0) ||
-    doc.steps.some(step => countStepOverrides(step) > 0);
-  const perStep = 4 + (hasWorldOrPorts ? 1 : 0);
-  return Math.min(fallback, Math.max(24, steps * perStep + 6));
-}
-
 export function evaluateScenarioHygiene(
   doc,
   {
@@ -132,7 +54,7 @@ export function evaluateScenarioHygiene(
     maxWorldBytes = DEFAULT_SCENARIO_MAX_WORLD_BYTES,
   } = {},
 ) {
-  const emptyMetrics = { steps: 0, state_bytes: 0, min_estimated_calls: 0, default_call_cap: 0 };
+  const emptyMetrics = { steps: 0, state_bytes: 0, simulated_ports: 0 };
   if (
     !isPlainObject(doc) ||
     !Array.isArray(doc.steps) ||
@@ -153,17 +75,12 @@ export function evaluateScenarioHygiene(
   if (Object.hasOwn(doc, 'seeds') && doc.seeds !== undefined) {
     stateBytes += serializedBytes(doc.seeds);
   }
+  const simulatedPorts = isPlainObject(doc.simulation) ? Object.keys(doc.simulation).length : 0;
 
-  let minEstimatedCalls = 0;
-  for (const step of doc.steps) {
-    minEstimatedCalls += 1 + countStepPositiveCallsChecks(step) + countStepOverrides(step);
-  }
-  const defaultCallCap = computeDefaultScenarioCallCap(doc);
   const metrics = {
     steps,
     state_bytes: stateBytes,
-    min_estimated_calls: minEstimatedCalls,
-    default_call_cap: defaultCallCap,
+    simulated_ports: simulatedPorts,
   };
 
   const reasons = [];
@@ -173,16 +90,16 @@ export function evaluateScenarioHygiene(
   if (stateBytes > effMaxWorldBytes) {
     reasons.push(`${stateBytes} serialized state bytes (limit: ${effMaxWorldBytes})`);
   }
-  if (defaultCallCap > 0 && minEstimatedCalls > defaultCallCap) {
-    reasons.push(`minimum ${minEstimatedCalls} estimated calls exceeding default per-request cap ${defaultCallCap}`);
-  }
 
   if (!reasons.length) {
     return { oversized: false, metrics, reasons: [], finding: null };
   }
 
   const companionHint = companionPathHint(path);
-  const detail = `Scenario "${path}" has ${reasons.join(' and ')} (default per-request cap: ${defaultCallCap} calls).`;
+  const portNote = simulatedPorts > 0
+    ? ` (${simulatedPorts} simulated ${simulatedPorts === 1 ? 'port' : 'ports'})`
+    : '';
+  const detail = `Scenario "${path}" has ${reasons.join(' and ')}${portNote}.`;
   const fix = `Split into focused companion scenarios (${companionHint}) or adjust "lint.scenario" in pdd.json`;
   return {
     oversized: true,

@@ -39,7 +39,6 @@ export {
 export {
   DEFAULT_SCENARIO_MAX_STEPS,
   DEFAULT_SCENARIO_MAX_WORLD_BYTES,
-  computeDefaultScenarioCallCap,
   evaluateScenarioHygiene,
   collectScenarioHygieneFindings,
 } from './core/lint/scenario-hygiene.mjs';
