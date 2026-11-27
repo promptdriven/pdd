@@ -297,7 +297,7 @@ test('3595/3596 pdd lint --local passes with 0 warnings on compact and v1 app-ma
           kind: 'button',
           match: { value: '*' },
           handler: { prompt_path: 'prompts/counter_ui.prompt.md', operation: 'handle_event' },
-          input: { state: { $ref: '/state' }, event: { $ref: '/event' } },
+          input: { state: { $ref: '/state' }, value: { $ref: '/event/value' } },
           state: { $ref: '/result/state' },
           next: { kind: 'same', screen: null, route_pointer: null },
         },

@@ -384,6 +384,7 @@ export function extractRelativeMarkdownLinks(raw, promptPath) {
   }
 
   let inDeps = false;
+  let inCallerNav = false;
   const seen = new Set();
   const links = [];
   const baseDir = posix.dirname(promptPath);
@@ -400,14 +401,16 @@ export function extractRelativeMarkdownLinks(raw, promptPath) {
     const key = `${resolved}:${lineNo}:${inDeps ? 1 : 0}`;
     if (!seen.has(key)) {
       seen.add(key);
-      links.push({ rawTarget: trimmed, target: resolved, canonical: canonicalRepoPath(resolved), line: lineNo, inDependencies: inDeps });
+      links.push({ rawTarget: trimmed, target: resolved, canonical: canonicalRepoPath(resolved), line: lineNo, inDependencies: inDeps, inCallerNavigation: inCallerNav });
     }
   };
 
   for (const { lineNo, text: line } of maskedLines) {
     const h2 = /^ {0,3}##\s+(.+)$/.exec(line);
     if (h2) {
-      inDeps = /^dependencies\b/i.test(h2[1].trim());
+      const title = h2[1].trim();
+      inDeps = /^dependencies\b/i.test(title);
+      inCallerNav = /^(?:caller|consumer)\s+navigation\b/i.test(title);
       continue;
     }
     if (REF_LINK_DEF_RE.test(line)) continue;

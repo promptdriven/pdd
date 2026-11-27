@@ -20,7 +20,13 @@ import {
   scenarioPromptRefs,
 } from './lint-scope.mjs';
 import { loadBaseTrustedLintCommands, loadBaseTrustedLintOverrides, loadProjectLintConfig } from './project-config.mjs';
-import { collectMarkdownIntegrityFindings, collectPromptDependencyFindings, collectPromptStructureFindings } from './prompt-rules.mjs';
+import { APP_MAP_PATH_RE, collectAppMapWholeEventRefFindings } from '../ui/app-map-lint.mjs';
+import {
+  collectMarkdownIntegrityFindings,
+  collectOperationsTableIntegrityFindings,
+  collectPromptDependencyFindings,
+  collectPromptStructureFindings,
+} from './prompt-rules.mjs';
 import { DEFAULT_SCENARIO_MAX_STEPS, DEFAULT_SCENARIO_MAX_WORLD_BYTES, collectScenarioHygieneFindings } from './scenario-hygiene.mjs';
 import { collectStoryUnboundCriteriaFindings, isCandidateScenarioJson } from './story-criteria-parity.mjs';
 
@@ -297,6 +303,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
 
     rawFindings.push(
       ...collectMarkdownIntegrityFindings(content, { path: promptPath }),
+      ...collectOperationsTableIntegrityFindings(content, { path: promptPath }),
       ...collectPromptStructureFindings(content, { path: promptPath, hasOwnedCode: ownedPaths.length > 0 }),
     );
   }
@@ -334,6 +341,31 @@ export function lintRepoProject({ root, files, promptPaths, tests, scope, config
         : scopedFiles.filter(isCandidateScenarioJson)));
   if (targetScenarios.length) {
     rawFindings.push(...collectScenarioHygieneFindings({ realRoot, scenarioPaths: targetScenarios, readFile: getFull, scenarioConfig: effectiveScenarioConfig }));
+  }
+
+  const appMapCandidates = new Set(
+    hasExplicitScope
+      ? [...(scope.appMaps ?? [])]
+      : (Array.isArray(tests)
+        ? tests.map(t => (typeof t === 'string' ? t : t?.path)).filter(p => typeof p === 'string' && APP_MAP_PATH_RE.test(p.replace(/^\.\//, ''))).map(p => p.replace(/^\.\//, ''))
+        : (Array.isArray(promptPaths) ? [] : scopedFiles.filter(p => APP_MAP_PATH_RE.test(p)))),
+  );
+  for (const sc of targetScenarios) {
+    const raw = getFull(sc);
+    if (!raw) continue;
+    try {
+      const doc = JSON.parse(raw);
+      for (const ref of Array.isArray(doc?.app_maps) ? doc.app_maps : []) {
+        if (typeof ref === 'string' && ref.trim()) {
+          const norm = ref.trim().replace(/^\.\//, '');
+          if (scopedSet.has(norm)) appMapCandidates.add(norm);
+        }
+      }
+    } catch {}
+  }
+  const targetAppMaps = [...appMapCandidates].filter(p => scopedSet.has(p)).sort();
+  if (targetAppMaps.length) {
+    rawFindings.push(...collectAppMapWholeEventRefFindings({ appMapPaths: targetAppMaps, readFile: getFull }));
   }
 
   const promptFilterSet = isReportingScoped ? targetPromptSet : null;

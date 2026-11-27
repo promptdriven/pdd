@@ -141,6 +141,7 @@ export function lintAppMaps({
   mapPaths,
   promptExists,
   promptDeclaresOp,
+  drawingsByPrompt = null,
   warnings,
 }) {
   let inspectedCount = 0;
@@ -206,6 +207,20 @@ export function lintAppMaps({
         catch (error) {
           const text = `Warning: SVG layout ${mapPath} -> ${cssPath}: stylesheet: ${error.message}.`;
           warnings.push({ key: `${mapPath}\0css\0${cssPath}`, text });
+        }
+      }
+    }
+    if (drawingsByPrompt) {
+      const topSheets = Array.isArray(mapDoc.stylesheets) ? mapDoc.stylesheets.filter(item => typeof item === 'string' && item) : [];
+      for (const [screen, sIdx] of screenEntries) {
+        if (screen.format !== 'html' || typeof screen.prompt_path !== 'string') continue;
+        const linkedDrawings = drawingsByPrompt.get(screen.prompt_path);
+        if (!Array.isArray(linkedDrawings) || !linkedDrawings.length) continue;
+        const screenSheets = Array.isArray(screen.stylesheets) ? screen.stylesheets.filter(item => typeof item === 'string' && item) : [];
+        if (topSheets.length === 0 && screenSheets.length === 0) {
+          const sId = typeof screen.id === 'string' && screen.id ? screen.id : (sIdx === 0 ? 'main' : `screen-${sIdx + 1}`);
+          const text = `Warning: SVG layout ${mapPath} -> ${screen.prompt_path}: stylesheets: HTML screen "${sId}" links ${linkedDrawings[0]} with no stylesheet in "stylesheets".`;
+          warnings.push({ key: `${mapPath}\0emptycss\0${sIdx}`, text });
         }
       }
     }
@@ -330,4 +345,67 @@ function lintStateSchemaRefs({ mapPath, mapDoc, screenEntries, warnings }) {
     checkStateRefs(timer.state, tLabel);
     checkStateTargets(timer.state, tLabel);
   }
+}
+
+/**
+ * Flag forbidden whole-event pointer `{"$ref": "/event"}` inside app-map handler/timer inputs (#3648).
+ * Handler inputs must reference a specific event field (e.g. `"/event/value"`, `"/event/key"`) or pass a literal value.
+ */
+export function collectAppMapWholeEventRefFindings({ appMapPaths = [], readFile } = {}) {
+  const findings = [];
+  if (typeof readFile !== 'function') return findings;
+
+  const findWholeEventRefs = (node, contextLabel, jsonPath, hits) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const [i, item] of node.entries()) findWholeEventRefs(item, contextLabel, `${jsonPath}[${i}]`, hits);
+      return;
+    }
+    const keys = Object.keys(node);
+    if (keys.length === 1 && node.$ref === '/event') {
+      hits.push({ contextLabel, jsonPath });
+      return;
+    }
+    for (const [k, v] of Object.entries(node)) {
+      findWholeEventRefs(v, contextLabel, `${jsonPath}.${k}`, hits);
+    }
+  };
+
+  for (const mapPath of appMapPaths) {
+    const raw = readFile(mapPath);
+    if (typeof raw !== 'string') continue;
+    let doc;
+    try { doc = JSON.parse(raw); } catch { continue; }
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) continue;
+
+    const hits = [];
+    for (const [hIdx, handler] of (Array.isArray(doc.handlers) ? doc.handlers : []).entries()) {
+      if (!handler || typeof handler !== 'object' || Array.isArray(handler)) continue;
+      const hLabel = typeof handler.id === 'string' && handler.id ? `handler "${handler.id}"` : `handlers[${hIdx}]`;
+      findWholeEventRefs(handler.input, hLabel, `handlers[${hIdx}].input`, hits);
+      for (const [aIdx, afterStep] of (Array.isArray(handler.after) ? handler.after : []).entries()) {
+        if (!afterStep || typeof afterStep !== 'object' || Array.isArray(afterStep)) continue;
+        findWholeEventRefs(afterStep.input, `${hLabel} after[${aIdx}]`, `handlers[${hIdx}].after[${aIdx}].input`, hits);
+      }
+    }
+    for (const [tIdx, timer] of (Array.isArray(doc.timers) ? doc.timers : []).entries()) {
+      if (!timer || typeof timer !== 'object' || Array.isArray(timer)) continue;
+      const tLabel = typeof timer.id === 'string' && timer.id ? `timer "${timer.id}"` : `timers[${tIdx}]`;
+      findWholeEventRefs(timer.input, tLabel, `timers[${tIdx}].input`, hits);
+    }
+
+    for (const hit of hits) {
+      findings.push({
+        filePath: mapPath,
+        line: 1,
+        order: 0,
+        code: 'app-map-whole-event-ref',
+        category: 'app map',
+        defaultSeverity: 'error',
+        detail: `Forbidden whole-event pointer {"$ref": "/event"} in ${hit.contextLabel} (${hit.jsonPath}): app-map handler inputs must reference a specific event field (such as "/event/value" or "/event/key") or pass a literal value.`,
+        fix: `Replace {"$ref": "/event"} at ${hit.jsonPath} in ${mapPath} with a specific field pointer such as {"$ref": "/event/value"}, {"$ref": "/event/key"}, or a literal value`,
+      });
+    }
+  }
+  return findings;
 }

@@ -9,6 +9,7 @@ import {
   extractRelativeMarkdownLinks,
   hasRuntimeInterfaceMetadata,
   isMarkdownTableSeparator,
+  isNativeOnlyPrompt,
   scanMarkdownLinesAndFences,
   splitMarkdownTableRow,
   stripFrontmatterPreservingLines,
@@ -109,6 +110,103 @@ export function collectMarkdownIntegrityFindings(text, { path = 'prompts/module.
   return findings;
 }
 
+/**
+ * Flag malformed Operations table cells (Calls / Error codes) and inline Calls: entries
+ * containing trailing parenthetical prose (e.g. `None (unknown inputs...)` or `` `store.save` (writes disk) ``)
+ * that cause runtime Calls/Operations parsers to fail closed.
+ */
+export function collectOperationsTableIntegrityFindings(text, { path = 'prompts/module.prompt.md' } = {}) {
+  const raw = String(text ?? '');
+  const cleaned = stripFrontmatterPreservingLines(raw);
+  const { proseLines } = scanMarkdownLinesAndFences(cleaned);
+  const findings = [];
+  let inOpsSection = false;
+
+  const pushCellFinding = (lineNo, colHeader, rawCell) => {
+    const excerpt = rawCell.length <= 80 ? rawCell : `${rawCell.slice(0, 79)}…`;
+    const detail = `Malformed Operations "${colHeader}" cell "${excerpt}" contains trailing parenthetical prose; use plain syntax such as \`None\` or comma-separated identifiers (runtime Calls/Operations parsers reject extra words in parentheses).`;
+    findings.push({
+      filePath: path,
+      line: lineNo,
+      order: 2,
+      code: 'prompt-malformed-operations-cell',
+      category: 'operations integrity',
+      defaultSeverity: 'error',
+      detail,
+      fix: `Remove the parenthetical prose from the "${colHeader}" cell at ${path}:${lineNo} (write plain \`None\` or comma-separated names, and move behavioral notes to prose below the table)`,
+    });
+  };
+
+  for (let i = 0; i < proseLines.length; i++) {
+    const cur = proseLines[i];
+    const h2 = /^ {0,3}##\s+(.+)$/.exec(cur.text);
+    if (h2) {
+      const title = h2[1].trim();
+      inOpsSection = /^(?:public\s+)?operations\b|^ports\b/i.test(title);
+      continue;
+    }
+
+    if (i < proseLines.length - 1) {
+      const sepRow = proseLines[i + 1];
+      if (sepRow.lineNo === cur.lineNo + 1 && cur.text.includes('|') && isMarkdownTableSeparator(sepRow.text)) {
+        const headerCols = splitMarkdownTableRow(cur.text);
+        const sepCols = splitMarkdownTableRow(sepRow.text);
+        if (headerCols && sepCols && sepCols.length >= 2) {
+          const isOpsTable = inOpsSection || /^operation$/i.test(headerCols[0].trim());
+          const callsCols = [];
+          const errorCols = [];
+          if (isOpsTable) {
+            for (let c = 0; c < headerCols.length; c++) {
+              const h = headerCols[c].trim();
+              if (/^calls$/i.test(h)) callsCols.push({ idx: c, header: h });
+              else if (/^errors?$|^error\s+codes?$/i.test(h)) errorCols.push({ idx: c, header: h });
+            }
+          }
+          let j = i + 2;
+          let prevLine = sepRow.lineNo;
+          while (j < proseLines.length) {
+            const row = proseLines[j];
+            const trimmed = row.text.trim();
+            if (row.lineNo !== prevLine + 1 || !trimmed || /^#{1,6}[ \t]+/.test(trimmed) || !trimmed.startsWith('|')) break;
+            if (callsCols.length || errorCols.length) {
+              const cells = splitMarkdownTableRow(row.text);
+              if (cells) {
+                for (const { idx, header } of callsCols) {
+                  const cell = (cells[idx] ?? '').trim();
+                  if (!cell) continue;
+                  const cleanedCell = cell.replace(/\[[^\]]+\]\([^)\s]+\)/g, 'LINK').replace(/`[^`]*`/g, 'CODE');
+                  if (/\(\s*[^()\s][^()]*\)/.test(cleanedCell)) pushCellFinding(row.lineNo, header, cell);
+                }
+                for (const { idx, header } of errorCols) {
+                  const cell = (cells[idx] ?? '').trim();
+                  if (!cell) continue;
+                  if (/^(?:`?none`?|`?n\/a`?)\s*\(\s*[^()\s]/i.test(cell)) pushCellFinding(row.lineNo, header, cell);
+                }
+              }
+            }
+            prevLine = row.lineNo;
+            j++;
+          }
+          i = j - 1;
+          continue;
+        }
+      }
+    }
+
+    const inlineCalls = /^\s*(?:[-*+]\s+)?(?:\*\*)?Calls(?:\*\*)?:\s*(.+)$/i.exec(cur.text);
+    if (inlineCalls) {
+      const val = inlineCalls[1].trim();
+      const cleanedVal = val.replace(/\[[^\]]+\]\([^)\s]+\)/g, 'LINK').replace(/`[^`]*`/g, 'CODE');
+      if (/^(?:none|n\/a)\s*\(\s*[^()\s]|(?:CODE|[a-zA-Z_][\w-]*\.[a-zA-Z_][\w-]*)\s+\(\s*[^()\s]/i.test(cleanedVal)) {
+        pushCellFinding(cur.lineNo, 'Calls', val);
+      }
+    }
+  }
+
+  findings.sort((a, b) => a.line - b.line || a.order - b.order);
+  return findings;
+}
+
 export function collectPromptStructureFindings(text, { path = 'prompts/module.prompt.md', hasOwnedCode = false } = {}) {
   const raw = String(text ?? '');
   const hasRuntimeInterface = hasRuntimeInterfaceMetadata(raw);
@@ -173,12 +271,21 @@ export function collectPromptDependencyFindings({ targetPrompts, allVisibleFiles
   const adj = new Map();
   const edgeLine = new Map();
   const targetSet = new Set(targetPrompts);
+  const nativeOnlyCache = new Map();
+  const isPromptNativeOnly = p => {
+    if (nativeOnlyCache.has(p)) return nativeOnlyCache.get(p);
+    const raw = getPromptText(p);
+    const res = typeof raw === 'string' ? isNativeOnlyPrompt(raw) : false;
+    nativeOnlyCache.set(p, res);
+    return res;
+  };
 
   for (const promptPath of targetPrompts) {
     const content = getPromptText(promptPath);
     if (typeof content !== 'string') continue;
     const links = extractRelativeMarkdownLinks(content, promptPath);
     const nextPrompts = [];
+    const seenInvertedTargets = new Set();
     for (const link of links) {
       const targetClean = link.target.replace(/\/+$/, '');
       const inIndex = link.canonical && (fileSet.has(targetClean) || dirSet.has(targetClean));
@@ -209,13 +316,55 @@ export function collectPromptDependencyFindings({ targetPrompts, allVisibleFiles
           defaultSeverity: 'error',
           detail: formatTeachingDetail({ invariant, fix, rerun: 'pdd lint' }),
         });
-      } else if (link.inDependencies && targetClean.endsWith('.prompt.md') && targetClean !== promptPath) {
-        nextPrompts.push(targetClean);
-        if (!edgeLine.has(`${promptPath}->${targetClean}`)) edgeLine.set(`${promptPath}->${targetClean}`, link.line);
+      } else if (targetClean.endsWith('.prompt.md') && targetClean !== promptPath) {
+        if (
+          link.inDependencies
+          && !seenInvertedTargets.has(targetClean)
+          && !isPromptNativeOnly(promptPath)
+          && isPromptNativeOnly(targetClean)
+        ) {
+          seenInvertedTargets.add(targetClean);
+          findings.push({
+            filePath: promptPath,
+            line: link.line,
+            order: 3,
+            code: 'inverted-native-only-dependency',
+            category: 'prompt dependency',
+            defaultSeverity: 'warn',
+            detail: formatTeachingDetail({
+              invariant: `Checkable prompt "${promptPath}" depends on native-only prompt "${targetClean}" (layering inversion: pure/checkable domain prompts must not import native-only host/IO adapters)`,
+              fix: `Invert the dependency by declaring an injected port in ${promptPath} and having ${targetClean} depend on ${promptPath} instead, or mark ${promptPath} with \`kind: native-only\` if it genuinely owns host IO`,
+              rerun: 'pdd lint',
+            }),
+          });
+        }
+        if (!link.inCallerNavigation) {
+          nextPrompts.push(targetClean);
+          const key = `${promptPath}->${targetClean}`;
+          if (!edgeLine.has(key) || link.inDependencies) edgeLine.set(key, link.line);
+        }
       }
     }
     adj.set(promptPath, [...new Set(nextPrompts)].sort());
   }
+
+  const getAdj = u => {
+    if (adj.has(u)) return adj.get(u);
+    const content = getPromptText(u);
+    if (typeof content !== 'string') { adj.set(u, []); return []; }
+    const next = [];
+    for (const link of extractRelativeMarkdownLinks(content, u)) {
+      if (link.inCallerNavigation || !link.canonical) continue;
+      const targetClean = link.target.replace(/\/+$/, '');
+      if (!targetClean.endsWith('.prompt.md') || targetClean === u || !fileSet.has(targetClean)) continue;
+      next.push(targetClean);
+      const key = `${u}->${targetClean}`;
+      if (!edgeLine.has(key) || link.inDependencies) edgeLine.set(key, link.line);
+    }
+    const deduped = [...new Set(next)].sort();
+    adj.set(u, deduped);
+    return deduped;
+  };
 
   const state = new Map();
   const stack = [];
@@ -223,22 +372,29 @@ export function collectPromptDependencyFindings({ targetPrompts, allVisibleFiles
   const dfs = u => {
     state.set(u, 1);
     stack.push(u);
-    for (const v of adj.get(u) ?? []) {
-      if (!targetSet.has(v)) continue;
+    for (const v of getAdj(u)) {
       if (state.get(v) === 1) {
         const cyclePath = [...stack.slice(stack.indexOf(v)), v];
-        const key = `${u}->${v}`;
+        if (!cyclePath.some(node => targetSet.has(node))) continue;
+        let reportFrom = u;
+        let reportTo = v;
+        if (!targetSet.has(reportFrom)) {
+          const idx = cyclePath.findIndex(node => targetSet.has(node));
+          reportFrom = cyclePath[idx];
+          reportTo = cyclePath[idx + 1] ?? v;
+        }
+        const key = `${reportFrom}->${reportTo}`;
         if (!reported.has(key)) {
           reported.add(key);
           findings.push({
-            filePath: u,
+            filePath: reportFrom,
             line: edgeLine.get(key) ?? 1,
-            order: 3,
+            order: 4,
             code: 'prompt-dependency-cycle',
             category: 'prompt dependency',
             defaultSeverity: 'warn',
             detail: `Prompt dependency cycle detected (${cyclePath.join(' -> ')}). Break the cycle by extracting a shared contract or inverting the dependency over an injected port.`,
-            fix: `Break the dependency cycle "${u} -> ${v}" by extracting a shared contract or injecting a <port>.<op> interface`,
+            fix: `Break the dependency cycle "${reportFrom} -> ${reportTo}" by extracting a shared contract or injecting a <port>.<op> interface`,
           });
         }
       } else if (!state.get(v)) dfs(v);

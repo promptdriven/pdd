@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { validateSvgViewBox } from '../../../src/core/ui/svg-xml.mjs';
 import { lintSvgLayouts } from '../../../src/core/ui/svg-layout.mjs';
-import { collectMarkdownIntegrityFindings, collectPromptDependencyFindings } from '../../../src/core/lint/prompt-rules.mjs';
+import { collectMarkdownIntegrityFindings, collectOperationsTableIntegrityFindings, collectPromptDependencyFindings } from '../../../src/core/lint/prompt-rules.mjs';
+import { collectAppMapWholeEventRefFindings } from '../../../src/core/ui/app-map-lint.mjs';
 import { collectStoryUnboundCriteriaFindings } from '../../../src/core/lint/story-criteria-parity.mjs';
 import { lintRepoProject } from '../../../src/core/lint/project-lint.mjs';
 import { runLocalLint } from '../../../src/core/lint/run-local-lint.mjs';
@@ -266,4 +267,140 @@ test('Improvement 5: unmistakable 1-line offline summary reports exact validated
   assert.equal(failCode, 1);
   assert.match(failErr.text, /\[truncated-markdown-fence\]/);
   assert.match(failOut.text, /Lint FAILED: 1 prompt\(s\), 2 story\/scenario\(s\), 1 app-map\(s\), 0 drawing\(s\) validated offline \(1 error, 0 warnings\)/);
+});
+
+test('Wave 2 Check 1 (#3648): app-map-whole-event-ref fails closed on {"$ref": "/event"} and allows specific /event/* field pointers', t => {
+  const repo = initRepo(t, {
+    'prompts/game.prompt.md': '# Game\n\n## Dependencies\nNone.\n',
+    'app-map.json': {
+      schema_version: 'prompt-runtime.app-map.v1',
+      name: 'Snake',
+      initial_screen: 'game',
+      screens: [{ id: 'game', prompt_path: 'prompts/game.prompt.md', operation: 'render', source: 'operation', format: 'html', input: {}, result_pointer: '/html' }],
+      handlers: [{
+        id: 'primary-click',
+        screen: 'game',
+        kind: 'region',
+        match: { region_id: 'primary' },
+        handler: { prompt_path: 'prompts/game.prompt.md', operation: 'transition' },
+        input: { state: { $ref: '/state' }, event: { $ref: '/event' } },
+        state: {},
+        next: { kind: 'stay' },
+      }],
+    },
+  });
+
+  const direct = collectAppMapWholeEventRefFindings({
+    appMapPaths: ['app-map.json'],
+    readFile: rel => readFileSync(join(repo, rel), 'utf8'),
+  });
+  assert.equal(direct.length, 1);
+  assert.equal(direct[0].code, 'app-map-whole-event-ref');
+  assert.equal(direct[0].defaultSeverity, 'error');
+  assert.match(direct[0].detail, /whole-event.*\$ref.*\/event/);
+  assert.match(direct[0].fix, /\/event\/value.*\/event\/key/);
+
+  const out = makeSink(), err = makeSink();
+  assert.equal(runLocalLint({ cwd: repo }, { stdout: out, stderr: err }), 1);
+  assert.match(err.text, /app-map\.json:1 \[app-map-whole-event-ref\]/);
+
+  // Replacing {"$ref": "/event"} with {"$ref": "/event/value"} clears the error cleanly.
+  writeFileSync(
+    join(repo, 'app-map.json'),
+    readFileSync(join(repo, 'app-map.json'), 'utf8').replace('"$ref": "/event"', '"$ref": "/event/value"'),
+  );
+  const okOut = makeSink(), okErr = makeSink();
+  assert.equal(runLocalLint({ cwd: repo }, { stdout: okOut, stderr: okErr }), 0, okErr.text);
+  assert.equal(okErr.text, '');
+});
+
+test('Wave 2 Check 2 (#3725): prompt-level checkable -> native-only layering inversion caught without needing a scenario', t => {
+  const repo = initRepo(t, {
+    'prompts/ledger/state.prompt.md': '---\nkind: native-only\nreason: Opens SQLite database transaction.\n---\n\n# Ledger state\n\n## Dependencies\nNone.\n',
+    'prompts/ledger/posting.prompt.md': '# Ledger posting\n\nPost issuances.\n\n## Dependencies\n- [Ledger state](state.prompt.md)\n',
+    'prompts/ledger/adapter.prompt.md': '---\nkind: native-only\nreason: Thin DB adapter.\n---\n\n# Ledger adapter\n\n## Dependencies\n- [Ledger posting](posting.prompt.md)\n',
+  });
+
+  const report = lintRepoProject({ root: repo });
+  const inv = report.findings.filter(f => f.code === 'inverted-native-only-dependency');
+  assert.equal(inv.length, 1, JSON.stringify(inv));
+  assert.equal(inv[0].path, 'prompts/ledger/posting.prompt.md');
+  assert.match(inv[0].message, /prompts\/ledger\/state\.prompt\.md/);
+  assert.match(inv[0].message, /native-only/);
+  assert.match(inv[0].message, /layering inversion/i);
+  // Reverse direction (native-only adapter -> checkable posting) must NOT warn.
+  assert.equal(inv.some(f => f.path === 'prompts/ledger/adapter.prompt.md'), false);
+});
+
+test('Wave 2 Check 3 (#3725): inline Markdown relative-link cycles caught while ignoring ## Caller navigation', t => {
+  const repo = initRepo(t, {
+    'prompts/continuity/intake.prompt.md': '# Intake\n\n## Ports\n- For the Document shape see [review](intake-review.prompt.md).\n\n## Dependencies\nNone.\n',
+    'prompts/continuity/intake-review.prompt.md': '# Intake review\n\n## Dependencies\n- [Intake](intake.prompt.md)\n',
+    'prompts/leaf.prompt.md': '# Leaf\n\n## Dependencies\nNone.\n\n## Caller navigation\nUsed by [Caller](caller.prompt.md).\n',
+    'prompts/caller.prompt.md': '# Caller\n\n## Dependencies\n- [Leaf](leaf.prompt.md)\n',
+  });
+
+  const report = lintRepoProject({ root: repo });
+  const cycles = report.findings.filter(f => f.code === 'prompt-dependency-cycle');
+  assert.equal(cycles.length, 1, JSON.stringify(cycles));
+  assert.match(cycles[0].message, /intake\.prompt\.md/);
+  assert.match(cycles[0].message, /intake-review\.prompt\.md/);
+  // Leaf <-> Caller only links back inside ## Caller navigation, so it must NOT trigger a cycle.
+  assert.equal(cycles.some(f => f.message.includes('leaf.prompt.md')), false);
+});
+
+test('Wave 2 Check 4 (#3661): malformed Operations Calls/Error-codes trailing parenthetical prose fails closed while clean cells pass', t => {
+  const badDelivery = [
+    '# Reply delivery',
+    '',
+    '## Operations',
+    '',
+    '| Operation | Input | Output | Error codes |',
+    '|---|---|---|---|',
+    '| `label` | `status` | `control` | None (unknown inputs fail closed with `control: null`, `keepDraft: true`) |',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const badCallsCol = [
+    '# Ledger',
+    '',
+    '## Operations and ports',
+    '',
+    '| Operation | Calls |',
+    '|---|---|',
+    '| `post` | `store.save` (persists to disk) |',
+    '| `read` | None (pure lookup) |',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const cleanDelivery = [
+    '# Reply delivery',
+    '',
+    '## Operations',
+    '',
+    '| Operation | Input | Output | Error codes | Calls |',
+    '|---|---|---|---|---|',
+    '| `label` | `status` (text) | `control` (text) | None | None |',
+    '| `sync` | `id` (text) | `ok` (boolean) | `unavailable` | `store.load`, `ports.atomic_operation()` |',
+    '',
+    '',
+    '- Calls: `ports.call("release.verify", {"id": inp["id"]})`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const f1 = collectOperationsTableIntegrityFindings(badDelivery, { path: 'prompts/delivery.prompt.md' });
+  assert.equal(f1.length, 1, JSON.stringify(f1));
+  assert.equal(f1[0].code, 'prompt-malformed-operations-cell');
+  assert.equal(f1[0].defaultSeverity, 'error');
+  assert.equal(f1[0].line, 7);
+  assert.match(f1[0].detail, /parenthetical prose/i);
+
+  const f2 = collectOperationsTableIntegrityFindings(badCallsCol, { path: 'prompts/ledger.prompt.md' });
+  assert.equal(f2.length, 2, JSON.stringify(f2));
+
+  assert.deepEqual(collectOperationsTableIntegrityFindings(cleanDelivery, { path: 'prompts/clean.prompt.md' }), []);
 });

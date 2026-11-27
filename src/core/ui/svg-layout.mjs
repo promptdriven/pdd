@@ -195,6 +195,7 @@ export function lintSvgLayouts({
   };
   const warnings = [];
   const validatedDrawings = new Set();
+  const drawingsByPrompt = new Map();
   const add = (prompt, drawing, part, reason) =>
     warnings.push({ key: `${prompt}\0${drawing}\0${part}\0${reason}`, text: `Warning: SVG layout ${prompt} -> ${drawing}: ${part}: ${reason}.` });
 
@@ -243,6 +244,8 @@ export function lintSvgLayouts({
     for (const drawing of resolvedLinks) {
       if (drawing && drawing !== '..' && !drawing.startsWith('../')) {
         validatedDrawings.add(drawing);
+        if (!drawingsByPrompt.has(prompt)) drawingsByPrompt.set(prompt, []);
+        drawingsByPrompt.get(prompt).push(drawing);
         if (!capturedSet.has(drawing)) {
           add(prompt, drawing, 'link syntax', 'plain Markdown link outside "## Dependencies" is skipped by scoped uploads (causes dependency-file-unreadable); use image syntax ![label](...) or link it under "## Dependencies"');
         }
@@ -309,6 +312,7 @@ export function lintSvgLayouts({
     mapPaths,
     promptExists,
     promptDeclaresOp,
+    drawingsByPrompt,
     warnings,
   });
 
