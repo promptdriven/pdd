@@ -682,6 +682,8 @@ Changed criterion text and other malformed test rules still refuse the test.
 | Command | What it does |
 |---|---|
 | `pdd test --target code [PATH\|STORY...] [--json]` | Run Story or individual scenario JSON (tests/<file>.json) cases against declared CLI code without AI calls. |
+| `pdd test --blind-build [STORY...] [--builds 1\|2] [--agent NAME] [--timeout MIN] [--json]` | Build CLI code from the prompts alone with fresh agents that never see the cases or the code, run the Story cases on it, and with 2 builds compare both builds on every case, decision and probe input. |
+| `pdd test --blind-build --resume ID [--timeout MIN] [--json]` | Continue the unfinished agents of a blind build run from their checkpoints, then check and compare again. |
 | `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every affected Story with conservative full fallback and a separate historical baseline report; required full-pass gates still apply. Also accepts --fresh and --batch-timeout MIN. |
 | `pdd test --affected --files [--app-map PATH] [--json]` | Dry-run affected Story selection and list the exact upload files and byte sizes for affected Stories; 0 AI calls, 0 network calls. |
 | `pdd test --journeys [JOURNEY] [--max-calls N]` | Check all root product journeys or one journey. Also accepts --fresh and --batch-timeout MIN. |

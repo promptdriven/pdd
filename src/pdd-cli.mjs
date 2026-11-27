@@ -1189,6 +1189,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         }
       }
       try {
+        if (plan.local === 'runtime-check' && plan.options['--blind-build']) {
+          if (Object.keys(plan.options).some(key => !['--blind-build', '--builds', '--agent', '--timeout', '--resume', '--json', '--target'].includes(key))) { line(stderr, 'pdd test --blind-build accepts only --builds, --agent, --timeout, --resume, --json and Story selections.'); return 2; }
+          if (plan.options['--resume'] !== undefined && (plan.operands.length || plan.options['--builds'] !== undefined || plan.options['--agent'] !== undefined)) { line(stderr, 'pdd test --blind-build --resume ID takes no Stories, --builds or --agent.'); return 2; }
+          const { runBlindBuild } = await import('./autopilot/blind-build.mjs');
+          return await runBlindBuild({ root: cwd, words: [...plan.operands], builds: Number(plan.options['--builds'] ?? 1), agent: plan.options['--agent'] ?? null, timeout: Number(plan.options['--timeout'] ?? 30), resume: plan.options['--resume'] ?? null, json: !!plan.options['--json'] }, { stdout, stderr, env });
+        }
         if (plan.local === 'runtime-check' && plan.options['--target'] === 'code') {
           if (Object.keys(plan.options).some(key => !['--target', '--json'].includes(key))) { line(stderr, 'pdd test --target code accepts only --json and Story selections.'); return 2; }
           const { runCompiledTest } = await import('./compiled-test.mjs');
