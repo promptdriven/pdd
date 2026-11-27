@@ -4652,3 +4652,112 @@ test('#3660: cold runMcp / createTryTools / readTryOwner compile Short JSON via 
   assert.equal(readFileSync(join(hFull.repo, 'tests/place-order.json'), 'utf8'), fullBefore, 'full-format v1 JSON must remain untouched');
   void execFileSync;
 });
+
+test('#3733: 6-step 10-port plain-prose scenario leaves --max-calls undefined unless explicitly passed', async t => {
+  const { writeFileSync } = await import('node:fs');
+  const { harbor, fakeRuntime, portsFor } = await import('./helpers/runtime-fake.mjs');
+  const { criterionContentId } = await import('../src/scenario-compile.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+
+  const storyLine = 'Each approved remote MCP chat turn succeeds across all ten simulated ports.';
+  const acId = criterionContentId(storyLine, 'user_stories/remote-mcp.md');
+  const simulation = Object.fromEntries(
+    Array.from({ length: 10 }, (_, idx) => [
+      `connector.port${idx + 1}`,
+      {
+        action: 'key-value.put',
+        world_pointer: '/kv',
+        key_argument_pointer: '/k',
+        value_argument_pointer: '/v',
+        result_template: { ok: true },
+        result_value_pointer: '/ok',
+      },
+    ]),
+  );
+  const steps = Array.from({ length: 6 }, (_, idx) => ({
+    id: `turn-${idx + 1}`,
+    op: 'approved_chat',
+    input: { turn: idx + 1 },
+    checks: { '1': [['result', '/ok', '=', true]] },
+  }));
+  const scenarioDoc = {
+    entry_path: 'prompts/remote_mcp.prompt.md',
+    initial_world: { kv: {} },
+    simulation,
+    steps,
+  };
+  const setup = harbor(t, repo => {
+    writeFileSync(
+      join(repo, 'prompts/remote_mcp.prompt.md'),
+      '# Remote MCP Connector\n\nHandle an approved chat turn by coordinating connector.port1 through connector.port10 and returning `{ "ok": true }`.\n\n## Dependencies\n\nNone.\n',
+    );
+    writeFileSync(
+      join(repo, 'user_stories/remote-mcp.md'),
+      `# Approved remote MCP chat\n\nAs a workspace operator, I want six multi-port chat turns to run without a 36-call clamp, so that port-heavy plain-prose scenarios finish cleanly.\n\n## Acceptance criteria\n\n1. ${storyLine}\n`,
+    );
+    writeFileSync(join(repo, 'tests/remote-mcp.json'), `${JSON.stringify(scenarioDoc, null, 2)}\n`);
+  });
+
+  const posted = [];
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'POST' && entry.command === 'lint') {
+      return {
+        status: 200,
+        json: f.lint(entry.request.requestId, [
+          { path: 'prompts/remote_mcp.prompt.md', state: 'approved', admission_state: 'approved', interface: { calls: [] } },
+        ]),
+      };
+    }
+    if (entry.method === 'POST' && entry.command === 'check') {
+      posted.push(entry.request);
+      return { status: 202, json: f.check(entry.request.requestId, 'queued') };
+    }
+    if (entry.method === 'GET') {
+      return {
+        status: 200,
+        json: f.check(entry.url.split('/').at(-1), 'passed', [
+          { criterion_id: acId, target: 'result', path: '/ok', op: 'equals', expected: true, actual: true, passed: true },
+        ]),
+      };
+    }
+    return f.normal(entry);
+  });
+  fake.capacity = () => ({ status: 200, json: { features: ['lazy-interfaces'] } });
+
+  // 1. Omitting --max-calls must leave --max-calls undefined (no client-side 36-call shrink-clamp).
+  const runDefault = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+  const defaultCode = await seam.check(
+    { cwd: setup.repo, words: ['remote-mcp'], options: { '--json': true } },
+    runDefault.ports,
+  );
+  assert.equal(defaultCode, 0, runDefault.ports.stderr.text);
+  assert.equal(posted.length, 1);
+  const defaultSummary = JSON.parse(runDefault.ports.stdout.text);
+  assert.equal(
+    defaultSummary.check_plan?.call_policy?.max_calls_override ?? null,
+    null,
+    'pdd must leave --max-calls undefined when omitted (no client-side 36-call shrink-clamp)',
+  );
+  const defaultSentCap = posted[0].max_calls;
+  assert.notEqual(defaultSentCap, 36, 'pdd must not clamp a 6-step 10-port scenario to 36 calls');
+  assert.ok(
+    defaultSentCap === undefined || defaultSentCap === seam.defaultMaxCalls(scenarioDoc),
+    `expected max_calls to be undefined or runtime-client default (${seam.defaultMaxCalls(scenarioDoc)}), got ${defaultSentCap}`,
+  );
+
+  // 2. Explicitly passing --max-calls forwards that exact ceiling.
+  const runExplicit = portsFor({
+    HOME: setup.home,
+    PDD_RUNTIME_URL: fake.origin,
+    PDD_STATE_DIR: join(setup.sandbox, 'state-explicit'),
+  });
+  const explicitCode = await seam.check(
+    { cwd: setup.repo, words: ['remote-mcp'], options: { '--json': true, '--max-calls': 80 } },
+    runExplicit.ports,
+  );
+  assert.equal(explicitCode, 0, runExplicit.ports.stderr.text);
+  assert.equal(posted.length, 2);
+  const explicitSummary = JSON.parse(runExplicit.ports.stdout.text);
+  assert.equal(explicitSummary.check_plan?.call_policy?.max_calls_override, 80);
+  assert.equal(posted[1].max_calls, 80, 'explicit --max-calls must be forwarded verbatim');
+});

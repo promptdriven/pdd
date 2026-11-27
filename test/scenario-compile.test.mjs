@@ -892,7 +892,7 @@ test('Audit fixes: composeProductTry (--product) and Simulator case import handl
   assert.equal(updatedDoc.steps.length, 2);
 });
 
-test('Graph-aware default --max-calls, lintSvgLayouts app-map /state checks, and __proto__ safety', async t => {
+test('Default --max-calls leaves cap unclamped, lintSvgLayouts app-map /state checks, and __proto__ safety', async t => {
   const orderInput = {
     customerName: 'Sam',
     pickupAt: '08:30',
@@ -988,7 +988,18 @@ test('Graph-aware default --max-calls, lintSvgLayouts app-map /state checks, and
   });
   const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
   assert.equal(await seam.check({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, ports), 0, ports.stderr.text);
-  assert.ok(requestedMaxCalls !== null && requestedMaxCalls <= 85, `expected graph-aware max_calls <= 85, got ${requestedMaxCalls}`);
+  const checkSummary = JSON.parse(ports.stdout.text);
+  assert.equal(
+    checkSummary.check_plan?.call_policy?.max_calls_override ?? null,
+    null,
+    'pdd must leave --max-calls undefined when omitted',
+  );
+  assert.notEqual(requestedMaxCalls, 66, 'pdd must not apply the removed 66-call shrink-clamp');
+  const expectedRuntimeDefault = seam.defaultMaxCalls({ steps: Array.from({ length: 15 }) });
+  assert.ok(
+    requestedMaxCalls === undefined || requestedMaxCalls === expectedRuntimeDefault,
+    `expected unclamped max_calls (undefined or ${expectedRuntimeDefault}), got ${requestedMaxCalls}`,
+  );
 
   const warnings = lintSvgLayouts({ root: setup.repo, files: [...seam.gitFiles(setup.repo), 'app-map.json'] });
   assert.equal(warnings.some(w => w.includes('tests/place-order.json') && w.includes('schema_version')), false);
