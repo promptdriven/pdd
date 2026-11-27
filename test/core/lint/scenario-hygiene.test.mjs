@@ -6,12 +6,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
+import * as scenarioHygiene from '../../../src/core/lint/scenario-hygiene.mjs';
+const {
   DEFAULT_SCENARIO_MAX_STEPS,
   DEFAULT_SCENARIO_MAX_WORLD_BYTES,
-  computeDefaultScenarioCallCap,
   evaluateScenarioHygiene,
-} from '../../../src/core/lint/scenario-hygiene.mjs';
+} = scenarioHygiene;
 import { lintRepoProject, runLocalLint } from '../../../src/repo-hygiene-lint.mjs';
 
 const BIN_PDD = fileURLToPath(new URL('../../../bin/pdd.mjs', import.meta.url));
@@ -26,7 +26,7 @@ function makeSteps(count, extraChecks = []) {
   }));
 }
 
-function initTempRepo(t, { steps = 15, initialWorld = { balance: 100 }, seeds = undefined, pddConfig = null } = {}) {
+function initTempRepo(t, { steps = 15, initialWorld = { balance: 100 }, seeds = undefined, simulation = undefined, pddConfig = null } = {}) {
   const scratch = mkdtempSync(join(tmpdir(), 'pdd-scenario-hygiene-'));
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
   const repo = join(scratch, 'repo');
@@ -50,6 +50,7 @@ function initTempRepo(t, { steps = 15, initialWorld = { balance: 100 }, seeds = 
     entry_path: 'prompts/ledger.prompt.md',
     initial_world: initialWorld,
     ...(seeds !== undefined ? { seeds } : {}),
+    ...(simulation !== undefined ? { simulation } : {}),
     steps: makeSteps(steps),
   };
   writeFileSync(join(repo, 'tests', 'ledger.json'), `${JSON.stringify(scenarioDoc, null, 2)}\n`);
@@ -73,7 +74,7 @@ function runCli(args, cwd, home) {
 
 test('vector replay: test/runtime/scenario-size-hygiene.json matches real evaluateScenarioHygiene 1-to-1', () => {
   const scenario = JSON.parse(readFileSync(SCENARIO_PATH, 'utf8'));
-  assert.equal(scenario.steps.length, 4);
+  assert.equal(scenario.steps.length, 5);
 
   for (const step of scenario.steps) {
     const res = evaluateScenarioHygiene(step.input.doc, step.input.options);
@@ -100,6 +101,11 @@ test('vector replay: test/runtime/scenario-size-hygiene.json matches real evalua
       assert.equal(res.finding.code, 'scenario-oversized');
       assert.equal(res.finding.defaultSeverity, 'warn');
       assert.match(res.finding.detail, /12 scenario steps \(limit: 10\)/);
+    } else if (step.id === 'healthy-6-steps-10-ports') {
+      assert.equal(res.oversized, false);
+      assert.equal(res.metrics.steps, 6);
+      assert.equal(res.metrics.simulated_ports, 10);
+      assert.equal(res.finding, null);
     }
   }
 });
@@ -204,10 +210,23 @@ test('merge-base trust rejects untrusted working-tree relaxation of lint.scenari
   assert.match(out.join(''), /lint\.scenario\.max_steps/);
 });
 
-test('lower-bound positive calls checks exceeding default per-request cap emit scenario-oversized without false positives on simulation declarations', () => {
+test('AC6: structural hygiene tracks simulated ports cleanly without a 36-call clamp assumption (#3733)', t => {
   assert.equal(DEFAULT_SCENARIO_MAX_STEPS, 15);
   assert.equal(DEFAULT_SCENARIO_MAX_WORLD_BYTES, 16384);
-  assert.equal(computeDefaultScenarioCallCap({ initial_world: { a: 1 }, steps: makeSteps(15) }), 81);
+  assert.equal('computeDefaultScenarioCallCap' in scenarioHygiene, false);
+
+  // 6-step, 10-port plain-prose scenario (#3733 repro) must stay clean with factual simulated_ports count
+  const sixStepsTenPorts = {
+    entry_path: 'prompts/remote_mcp.prompt.md',
+    initial_world: { ok: true },
+    simulation: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`connector.port${i + 1}`, { action: 'port.write', world_pointer: '/ok' }])),
+    steps: makeSteps(6),
+  };
+  const sixRes = evaluateScenarioHygiene(sixStepsTenPorts, { path: 'tests/P24-remote-mcp-connector.approved-chat.json' });
+  assert.equal(sixRes.oversized, false);
+  assert.equal(sixRes.metrics.steps, 6);
+  assert.equal(sixRes.metrics.simulated_ports, 10);
+  assert.equal(sixRes.finding, null);
 
   // Declaring 16 simulation ports on a 4-step scenario does NOT trigger false positives
   const manyDeclaredPorts = {
@@ -216,35 +235,59 @@ test('lower-bound positive calls checks exceeding default per-request cap emit s
     simulation: Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`p.op${i}`, { action: 'port.write', world_pointer: '/ok' }])),
     steps: makeSteps(4),
   };
-  assert.equal(evaluateScenarioHygiene(manyDeclaredPorts).oversized, false);
+  const manyPortsRes = evaluateScenarioHygiene(manyDeclaredPorts);
+  assert.equal(manyPortsRes.oversized, false);
+  assert.equal(manyPortsRes.metrics.simulated_ports, 16);
 
-  // Explicitly asserting 8 positive calls per step across 10 steps (min 90 > cap 56) DOES warn
+  // Positive calls checks on a 10-step scenario do NOT trigger a stale 56-call client clamp
   const heavyChecks = Array.from({ length: 8 }, (_, i) => ['calls', `p.op${i}`, '=', 1]);
   const heavyDoc = {
     entry_path: 'prompts/ledger.prompt.md',
     initial_world: { ok: true },
     steps: makeSteps(10, heavyChecks),
   };
-  const evaluated = evaluateScenarioHygiene(heavyDoc, { path: 'tests/heavy.json' });
-  assert.equal(evaluated.oversized, true);
-  assert.equal(evaluated.metrics.min_estimated_calls, 90);
-  assert.equal(evaluated.metrics.default_call_cap, 56);
-  assert.match(evaluated.finding.detail, /minimum 90 estimated calls exceeding default per-request cap 56/);
+  const heavyRes = evaluateScenarioHygiene(heavyDoc, { path: 'tests/heavy.json' });
+  assert.equal(heavyRes.oversized, false);
+  assert.equal(heavyRes.finding, null);
 
-  // Short JSON array-form 5-tuple calls checks ([criterion, "calls", path, op, value]) also count!
-  const arrayTupleSteps = Array.from({ length: 10 }, (_, idx) => ({
-    id: `a${idx + 1}`,
-    op: 'step',
-    input: { n: idx + 1 },
-    checks: Array.from({ length: 8 }, (_, i) => ['1', 'calls', `p.op${i}`, '=', 1]),
-  }));
-  const arrayEvaluated = evaluateScenarioHygiene(
-    { entry_path: 'prompts/ledger.prompt.md', initial_world: { ok: true }, steps: arrayTupleSteps },
-    { path: 'tests/heavy-array.json' },
+  // Oversized scenario with 10 simulated ports surfaces factual port context without fake default per-request cap text
+  const overWithPorts = evaluateScenarioHygiene(
+    { ...sixStepsTenPorts, steps: makeSteps(16) },
+    { path: 'tests/P24-remote-mcp-connector.approved-chat.json' },
   );
-  assert.equal(arrayEvaluated.oversized, true);
-  assert.equal(arrayEvaluated.metrics.min_estimated_calls, 90);
-  assert.equal(arrayEvaluated.metrics.default_call_cap, 56);
+  assert.equal(overWithPorts.oversized, true);
+  assert.equal(overWithPorts.metrics.steps, 16);
+  assert.equal(overWithPorts.metrics.simulated_ports, 10);
+  assert.match(overWithPorts.finding.detail, /16 scenario steps \(limit: 15\) \(10 simulated ports\)\./);
+  assert.doesNotMatch(overWithPorts.finding.detail, /default per-request cap/i);
+
+  // Singular simulated port wording and zero-port omission
+  const overOnePort = evaluateScenarioHygiene(
+    {
+      entry_path: 'prompts/ledger.prompt.md',
+      simulation: { 'store.save': { action: 'port.write', world_pointer: '/ok' } },
+      steps: makeSteps(16),
+    },
+    { path: 'tests/one-port.json' },
+  );
+  assert.match(overOnePort.finding.detail, /\(1 simulated port\)\.$/);
+
+  const overNoPorts = evaluateScenarioHygiene(
+    { entry_path: 'prompts/ledger.prompt.md', steps: makeSteps(16) },
+    { path: 'tests/no-ports.json' },
+  );
+  assert.doesNotMatch(overNoPorts.finding.detail, /simulated port/i);
+  assert.doesNotMatch(overNoPorts.finding.detail, /default per-request cap/i);
+
+  // AC6 real CLI check: 6-step, 10-port scenario exits 0 with zero scenario-oversized warnings
+  const sixPortRepo = initTempRepo(t, {
+    steps: 6,
+    initialWorld: { ok: true },
+    simulation: sixStepsTenPorts.simulation,
+  });
+  const rSixPorts = runCli(['lint'], sixPortRepo.repo, sixPortRepo.home);
+  assert.equal(rSixPorts.status, 0, rSixPorts.stderr);
+  assert.doesNotMatch(rSixPorts.stdout + rSixPorts.stderr, /scenario-oversized/);
 });
 
 test('lintRepoProject scopes scenario-oversized cleanly and does not leak non-scenario JSON', t => {

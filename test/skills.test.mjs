@@ -14,6 +14,7 @@ const EXPECTED_REFERENCES = [
   'BREAK-IT.md',
   'PROMPT-REVIEW-RULES.md',
   'SOLVE.md',
+  'adversarial-audit.md',
   'formal.md',
   'ports-and-cli.md',
   'product.md',
