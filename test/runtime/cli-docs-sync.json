@@ -1,0 +1,209 @@
+{
+  "entry_path": "prompts/cli/cli-docs-sync.prompt.md",
+  "seeds": {
+    "routes": [
+      {
+        "id": "autopilot.start",
+        "forms": [
+          {
+            "form": "pdd autopilot start [--mode auto|observe]",
+            "description": "Start headless Autopilot."
+          }
+        ]
+      },
+      {
+        "id": "setup",
+        "forms": [
+          {
+            "form": "pdd setup [--yes]",
+            "description": "Install skills.\nAdd project block. Use auto|observe."
+          }
+        ]
+      },
+      {
+        "id": "accounts.list",
+        "forms": [
+          {
+            "form": "pdd accounts list [--json]",
+            "description": "List enrolled Cloud accounts."
+          }
+        ]
+      }
+    ],
+    "current": {
+      "document": "# CLI reference\n\nHand-written intro.\n\n<!-- pdd:generated:cli-commands:start -->\n<!-- Auto-generated from the command catalog; update via sync, not by hand. -->\n\n### Core PDD workflow\n\n| Command | What it does |\n| --- | --- |\n| `pdd setup [--yes]` | Install skills. Add project block. Use auto\\|observe. |\n\n### Cloud accounts\n\n| Command | What it does |\n| --- | --- |\n| `pdd accounts list [--json]` | List enrolled Cloud accounts. |\n\n### Autopilot\n\n| Command | What it does |\n| --- | --- |\n| `pdd autopilot start [--mode auto\\|observe]` | Start headless Autopilot. |\n\n<!-- pdd:generated:cli-commands:end -->\n\n## Hand-written guide\n\nKeep this prose verbatim.\n",
+      "routes": { "$use": "routes" }
+    },
+    "stale": {
+      "document": "# CLI reference\n\nHand-written intro.\n\n<!-- pdd:generated:cli-commands:start -->\n<!-- Auto-generated from the command catalog; update via sync, not by hand. -->\n\n### Core PDD workflow\n\n| Command | What it does |\n| --- | --- |\n| `pdd setup [--yes]` | Install skills. Add project block. Use auto\\|observe. |\n| `pdd old-cmd` | Old removed command. |\n\n### Autopilot\n\n| Command | What it does |\n| --- | --- |\n| `pdd autopilot start [--mode auto\\|observe]` | Start headless Autopilot. |\n\n<!-- pdd:generated:cli-commands:end -->\n\n## Hand-written guide\n\nKeep this prose verbatim.\n",
+      "routes": { "$use": "routes" }
+    },
+    "inside_conflict": {
+      "document": "# CLI reference\n\nHand-written intro.\n\n<!-- pdd:generated:cli-commands:start -->\n<!-- Auto-generated from the command catalog; update via sync, not by hand. -->\n\n### Core PDD workflow\n\n| Command | What it does |\n| --- | --- |\n<<<<<<< HEAD\n| `pdd setup [--yes]` | Install skills. |\n=======\n| `pdd setup [--yes]` | Install skills. Add project block. |\n>>>>>>> feat/other\n\n<!-- pdd:generated:cli-commands:end -->\n\n## Hand-written guide\n\nKeep this prose verbatim.\n",
+      "routes": { "$use": "routes" }
+    },
+    "prose_conflict": {
+      "document": "# CLI reference\n\n<<<<<<< HEAD\nHand-written intro A.\n=======\nHand-written intro B.\n>>>>>>> feat/other\n\n<!-- pdd:generated:cli-commands:start -->\n<!-- Auto-generated from the command catalog; update via sync, not by hand. -->\n<!-- pdd:generated:cli-commands:end -->\n\n## Hand-written guide\n\nKeep this prose verbatim.\n",
+      "routes": { "$use": "routes" }
+    }
+  },
+  "steps": [
+    {
+      "id": "sync-generates-grouped-tables",
+      "op": "syncCliDocs",
+      "from": "stale",
+      "checks": {
+        "1": [
+          ["result", "/changed", "=", true],
+          ["result", "/resolvedConflicts", "=", false],
+          ["result", "/formCount", "=", 3],
+          ["result", "/groups", "=", ["Core PDD workflow", "Cloud accounts", "Autopilot"]],
+          ["result", "/document", "=", "# CLI reference\n\nHand-written intro.\n\n<!-- pdd:generated:cli-commands:start -->\n<!-- Auto-generated from the command catalog; update via sync, not by hand. -->\n\n### Core PDD workflow\n\n| Command | What it does |\n| --- | --- |\n| `pdd setup [--yes]` | Install skills. Add project block. Use auto\\|observe. |\n\n### Cloud accounts\n\n| Command | What it does |\n| --- | --- |\n| `pdd accounts list [--json]` | List enrolled Cloud accounts. |\n\n### Autopilot\n\n| Command | What it does |\n| --- | --- |\n| `pdd autopilot start [--mode auto\\|observe]` | Start headless Autopilot. |\n\n<!-- pdd:generated:cli-commands:end -->\n\n## Hand-written guide\n\nKeep this prose verbatim.\n"]
+        ]
+      }
+    },
+    {
+      "id": "check-current-document",
+      "op": "checkCliDocs",
+      "from": "current",
+      "checks": {
+        "2": [
+          ["result", "/ok", "=", true],
+          ["result", "/status", "=", "current"],
+          ["result", "/missingForms", "=", []],
+          ["result", "/extraForms", "=", []],
+          ["result", "/formCount", "=", 3]
+        ]
+      }
+    },
+    {
+      "id": "sync-idempotent-no-change",
+      "op": "syncCliDocs",
+      "from": "current",
+      "checks": {
+        "2": [
+          ["result", "/changed", "=", false],
+          ["result", "/resolvedConflicts", "=", false]
+        ]
+      }
+    },
+    {
+      "id": "check-stale-document",
+      "op": "checkCliDocs",
+      "from": "stale",
+      "checks": {
+        "3": [
+          ["result", "/ok", "=", false],
+          ["result", "/status", "=", "stale"],
+          ["result", "/missingForms", "=", ["pdd accounts list [--json]"]],
+          ["result", "/extraForms", "=", ["pdd old-cmd"]],
+          ["result", "/formCount", "=", 3]
+        ]
+      }
+    },
+    {
+      "id": "check-inside-conflict",
+      "op": "checkCliDocs",
+      "from": "inside_conflict",
+      "checks": {
+        "4": [
+          ["result", "/ok", "=", false],
+          ["result", "/status", "=", "conflict"],
+          ["result", "/missingForms", "=", []],
+          ["result", "/extraForms", "=", []]
+        ]
+      }
+    },
+    {
+      "id": "sync-refuses-inside-conflict-by-default",
+      "op": "syncCliDocs",
+      "from": "inside_conflict",
+      "error": "generated-conflict",
+      "checks": {
+        "4": [
+          ["error", "/code", "=", "generated-conflict"]
+        ]
+      }
+    },
+    {
+      "id": "sync-resolves-inside-conflict",
+      "op": "syncCliDocs",
+      "from": "inside_conflict",
+      "patch": { "allowInsideConflicts": true },
+      "checks": {
+        "4": [
+          ["result", "/changed", "=", true],
+          ["result", "/resolvedConflicts", "=", true],
+          ["result", "/formCount", "=", 3],
+          ["result", "/document", "not_contains", "<<<<<<< "],
+          ["result", "/document", "not_contains", "======="],
+          ["result", "/document", "not_contains", ">>>>>>> "],
+          ["result", "/document", "contains", "Keep this prose verbatim."]
+        ]
+      }
+    },
+    {
+      "id": "sync-refuses-prose-conflict",
+      "op": "syncCliDocs",
+      "from": "prose_conflict",
+      "patch": { "allowInsideConflicts": true },
+      "error": "prose-conflict",
+      "checks": {
+        "5": [
+          ["error", "/code", "=", "prose-conflict"]
+        ]
+      }
+    },
+    {
+      "id": "check-refuses-prose-conflict",
+      "op": "checkCliDocs",
+      "from": "prose_conflict",
+      "error": "prose-conflict",
+      "checks": {
+        "5": [
+          ["error", "/code", "=", "prose-conflict"]
+        ]
+      }
+    },
+    {
+      "id": "sync-refuses-missing-markers",
+      "op": "syncCliDocs",
+      "from": "current",
+      "patch": { "document": "# CLI reference\n\nHand-written intro.\n" },
+      "error": "missing-markers",
+      "checks": {
+        "6": [
+          ["error", "/code", "=", "missing-markers"]
+        ]
+      }
+    },
+    {
+      "id": "sync-refuses-duplicate-markers",
+      "op": "syncCliDocs",
+      "from": "current",
+      "patch": {
+        "document": "# CLI reference\n\n<!-- pdd:generated:cli-commands:start -->\n<!-- pdd:generated:cli-commands:start -->\n<!-- pdd:generated:cli-commands:end -->\n"
+      },
+      "error": "duplicate-markers",
+      "checks": {
+        "6": [
+          ["error", "/code", "=", "duplicate-markers"]
+        ]
+      }
+    },
+    {
+      "id": "sync-refuses-misordered-markers",
+      "op": "syncCliDocs",
+      "from": "current",
+      "patch": {
+        "document": "# CLI reference\n\n<!-- pdd:generated:cli-commands:end -->\n<!-- pdd:generated:cli-commands:start -->\n"
+      },
+      "error": "misordered-markers",
+      "checks": {
+        "6": [
+          ["error", "/code", "=", "misordered-markers"]
+        ]
+      }
+    }
+  ]
+}
